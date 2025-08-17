@@ -1,6 +1,7 @@
 using CSV, DataFrames 
 using Statistics, Dates
 using Turing, StatsPlots, LinearAlgebra, Distributions, Random, MCMCChains
+using Base.Threads
 # using Optim  # For MAP estimation
 # using Printf
 #
@@ -147,6 +148,11 @@ function display_scoreodds(data::DataStore, match_id::Int)
 end
 
 
+function display_team_matches(data, team_name::String) 
+  df = filter(row -> row.home_team_slug == team_name || row.away_team_slug == team_name, data.matches)
+  return df[:, [:home_team_slug, :away_team_slug, :home_score_ht, :away_score_ht, :home_score, :away_score, :winner_code]]
+end
+
 ########################################
 # features  setup 
 ########################################
@@ -227,7 +233,7 @@ end
 # model setup 
 ########################################
 
-@model function basic_maher_model(home_team_ids, away_team_ids, home_goals, away_goals, n_teams)
+@model function basic_maher_model_raw(home_team_ids, away_team_ids, home_goals, away_goals, n_teams)
     # PRIORS (in log space for positivity constraints)
     # Attack parameters: log(αᵢ) ~ Normal(0, σ)
     σ_attack ~ truncated(Normal(0, 1), 0, Inf)
@@ -269,15 +275,286 @@ end
     return (α = α, β = β, γ = γ)
 end
 
-@model function basic_maher_model(features::FeaturesBasicMaherModel) 
-  return basic_maher_model(
+struct BasicMaherModels
+    ht::Turing.Model
+    full::Turing.Model
+end
+
+function create_maher_models(features::FeaturesBasicMaherModel)
+    ht_model = basic_maher_model_raw(
         features.home_team_ids,
         features.away_team_ids,
-        features.home_goals,
-        features.away_goals,
-        features.n_teams  
+        features.home_goals_ht,  # Half-time goals
+        features.away_goals_ht,
+        features.n_teams
     )
+    
+    full_model = basic_maher_model_raw(
+        features.home_team_ids,
+        features.away_team_ids,
+        features.home_goals,     # Full-time goals
+        features.away_goals,
+        features.n_teams
+    )
+    
+    return BasicMaherModels(ht_model, full_model)
 end
+
+##################################################
+# train model 
+##################################################
+
+struct ModelTrainingConfig
+    steps::Int 
+    bar::Bool 
+    n_chains::Int
+    parallel::Bool
+    
+    # Constructor with keyword arguments (your existing one)
+    function ModelTrainingConfig( steps=2000, bar=true, n_chains=4, parallel=false)
+        new(steps, bar, n_chains, parallel)
+    end
+    
+    # Add constructor for all positional arguments
+    function ModelTrainingConfig(method::DynamicPPL.Sampler, steps::Int, bar::Bool, n_chains::Int, parallel::Bool)
+        new( steps, bar, n_chains, parallel)
+    end
+end
+
+
+struct ModelChain 
+  ht::Chains 
+  ft::Chains 
+end
+
+
+function train_maher_model(model::BasicMaherModels, cfg::ModelTrainingConfig) 
+    if cfg.parallel
+        # Multiple chains per model (sequential execution of models)
+        println("Training with $(cfg.n_chains) chains per model...")
+        start_time = time()
+        
+        ht_chain = sample(model.ht, NUTS(), MCMCThreads(), cfg.steps, cfg.n_chains, progress=cfg.bar)
+        ft_chain = sample(model.full, NUTS(), MCMCThreads(), cfg.steps, cfg.n_chains, progress=cfg.bar)
+        
+        total_time = time() - start_time
+        println("Training completed in $(round(total_time, digits=2)) seconds")
+    else
+        # Single chain per model (simultaneous execution)
+        println("Training models simultaneously...")
+        start_time = time()
+        
+        ht_task = Threads.@spawn sample(model.ht, NUTS(), cfg.steps, progress=cfg.bar)
+        ft_task = Threads.@spawn sample(model.full, NUTS(), cfg.steps, progress=cfg.bar)
+        
+        # Wait for both to complete
+        ht_chain = fetch(ht_task)
+        ft_chain = fetch(ft_task)
+        
+        total_time = time() - start_time
+        println("Simultaneous training completed in $(round(total_time, digits=2)) seconds")
+    end
+    return ModelChain(ht_chain, ft_chain) 
+end
+
+function extract_single_chain_with_intervals(single_chain::Chains, team_names::AbstractVector{<:AbstractString})
+    n_teams = length(team_names)
+    
+    # Use MCMCChains functionality to extract parameters more elegantly
+    log_α_raw_samples = zeros(size(single_chain, 1), n_teams)
+    log_β_raw_samples = zeros(size(single_chain, 1), n_teams)
+    
+    for i in 1:n_teams
+        # Extract using vec() to get a simple vector
+        log_α_raw_samples[:, i] = vec(single_chain[Symbol("log_α_raw[$i]")])
+        log_β_raw_samples[:, i] = vec(single_chain[Symbol("log_β_raw[$i]")])
+    end
+    
+    # Apply centering and transform to original scale
+    log_α_centered = log_α_raw_samples .- mean(log_α_raw_samples, dims=2)
+    log_β_centered = log_β_raw_samples .- mean(log_β_raw_samples, dims=2)
+    
+    α_samples = exp.(log_α_centered)
+    β_samples = exp.(log_β_centered)
+    
+    # Calculate statistics
+    α_mean = mean(α_samples, dims=1)[1, :]
+    β_mean = mean(β_samples, dims=1)[1, :]
+    
+    α_q025 = [quantile(α_samples[:, i], 0.025) for i in 1:n_teams]
+    α_q975 = [quantile(α_samples[:, i], 0.975) for i in 1:n_teams]
+    β_q025 = [quantile(β_samples[:, i], 0.025) for i in 1:n_teams]
+    β_q975 = [quantile(β_samples[:, i], 0.975) for i in 1:n_teams]
+    
+    # Gamma statistics
+    log_γ_samples = vec(single_chain[:log_γ])
+    γ_samples = exp.(log_γ_samples)
+    γ_stats = (
+        mean = mean(γ_samples),
+        q025 = quantile(γ_samples, 0.025),
+        q975 = quantile(γ_samples, 0.975)
+    )
+    
+    return α_mean, β_mean, α_q025, α_q975, β_q025, β_q975, γ_stats
+end
+
+function extract_team_parameters_with_intervals(chain::ModelChain, team_names::AbstractVector{<: AbstractString})
+    # Extract from both chains
+    α_ht, β_ht, α_ht_q025, α_ht_q975, β_ht_q025, β_ht_q975, γ_ht = extract_single_chain_with_intervals(chain.ht, team_names)
+    α_ft, β_ft, α_ft_q025, α_ft_q975, β_ft_q025, β_ft_q975, γ_ft = extract_single_chain_with_intervals(chain.ft, team_names)
+    
+    results = DataFrame(
+        team = team_names,
+        attack_α_ht = α_ht,
+        attack_α_ht_q025 = α_ht_q025,
+        attack_α_ht_q975 = α_ht_q975,
+        defense_β_ht = β_ht,
+        defense_β_ht_q025 = β_ht_q025,
+        defense_β_ht_q975 = β_ht_q975,
+        attack_α_ft = α_ft,
+        attack_α_ft_q025 = α_ft_q025,
+        attack_α_ft_q975 = α_ft_q975,
+        defense_β_ft = β_ft,
+        defense_β_ft_q025 = β_ft_q025,
+        defense_β_ft_q975 = β_ft_q975,
+        attack_rank_ht = sortperm(α_ht, rev=true),
+        defense_rank_ht = sortperm(β_ht),
+        attack_rank_ft = sortperm(α_ft, rev=true),
+        defense_rank_ft = sortperm(β_ft)
+    )
+    
+    return results, (ht = γ_ht, ft = γ_ft)
+end
+
+
+function extract_team_parameters_essential(chain::ModelChain, team_names::AbstractVector{<:AbstractString})
+    function extract_single_chain_essential(single_chain)
+        n_teams = length(team_names)
+        
+        # Extract and transform parameters (same as before)
+        log_α_raw_samples = zeros(size(single_chain, 1), n_teams)
+        log_β_raw_samples = zeros(size(single_chain, 1), n_teams)
+        
+        for i in 1:n_teams
+            log_α_raw_samples[:, i] = vec(single_chain[Symbol("log_α_raw[$i]")])
+            log_β_raw_samples[:, i] = vec(single_chain[Symbol("log_β_raw[$i]")])
+        end
+        
+        log_α_centered = log_α_raw_samples .- mean(log_α_raw_samples, dims=2)
+        log_β_centered = log_β_raw_samples .- mean(log_β_raw_samples, dims=2)
+        
+        α_samples = exp.(log_α_centered)
+        β_samples = exp.(log_β_centered)
+        
+        # Essential statistics only
+        α_median = [quantile(α_samples[:, i], 0.5) for i in 1:n_teams]
+        β_median = [quantile(β_samples[:, i], 0.5) for i in 1:n_teams]
+        
+        # 95% credible intervals
+        α_ci_lower = [quantile(α_samples[:, i], 0.025) for i in 1:n_teams]
+        α_ci_upper = [quantile(α_samples[:, i], 0.975) for i in 1:n_teams]
+        β_ci_lower = [quantile(β_samples[:, i], 0.025) for i in 1:n_teams]
+        β_ci_upper = [quantile(β_samples[:, i], 0.975) for i in 1:n_teams]
+        
+        return α_median, β_median, α_ci_lower, α_ci_upper, β_ci_lower, β_ci_upper
+    end
+
+    function categorize_uncertainty(median_val, ci_lower, ci_upper)
+        ci_width = ci_upper - ci_lower
+        relative_width = ci_width / median_val
+        return relative_width 
+        
+    end
+    
+    α_ht, β_ht, α_ht_low, α_ht_high, β_ht_low, β_ht_high = extract_single_chain_essential(chain.ht)
+    α_ft, β_ft, α_ft_low, α_ft_high, β_ft_low, β_ft_high = extract_single_chain_essential(chain.ft)
+    
+    results = DataFrame(
+        team = team_names,
+        attack_ht = α_ht,
+        attack_ht_ci = ["[$(round(α_ht_low[i], digits=2)), $(round(α_ht_high[i], digits=2))]" for i in 1:length(team_names)],
+        defense_ht = β_ht,
+        defense_ht_ci = ["[$(round(β_ht_low[i], digits=2)), $(round(β_ht_high[i], digits=2))]" for i in 1:length(team_names)],
+        attack_ft = α_ft,
+        attack_ft_ci = ["[$(round(α_ft_low[i], digits=2)), $(round(α_ft_high[i], digits=2))]" for i in 1:length(team_names)],
+        defense_ft = β_ft,
+        defense_ft_ci = ["[$(round(β_ft_low[i], digits=2)), $(round(β_ft_high[i], digits=2))]" for i in 1:length(team_names)],
+        attack_rank_ht = sortperm(α_ht, rev=true),
+        attack_rank_ft = sortperm(α_ft, rev=true)
+    )
+    results.attack_confidence_ht = [categorize_uncertainty(results.attack_ht[i], α_ht_low[i], α_ht_high[i]) for i in 1:nrow(results)]
+    
+    return results
+end
+
+
+function extract_team_parameters_essential(chain::ModelChain, mapping::MappedData)
+    # Get teams in the SAME ORDER as they were trained
+    teams_in_training_order = sort(collect(keys(mapping.team)), by = team -> mapping.team[team])
+    
+    function extract_single_chain_essential(single_chain)
+        n_teams = length(teams_in_training_order)
+        
+        # Extract parameters using the training indices (1, 2, 3, ...)
+        log_α_raw_samples = zeros(size(single_chain, 1), n_teams)
+        log_β_raw_samples = zeros(size(single_chain, 1), n_teams)
+        
+        for i in 1:n_teams
+            # i corresponds directly to the model parameter index
+            log_α_raw_samples[:, i] = vec(single_chain[Symbol("log_α_raw[$i]")])
+            log_β_raw_samples[:, i] = vec(single_chain[Symbol("log_β_raw[$i]")])
+        end
+        
+        # Apply centering and transform
+        log_α_centered = log_α_raw_samples .- mean(log_α_raw_samples, dims=2)
+        log_β_centered = log_β_raw_samples .- mean(log_β_raw_samples, dims=2)
+        
+        α_samples = exp.(log_α_centered)
+        β_samples = exp.(log_β_centered)
+        
+        # Calculate medians and confidence intervals
+        α_median = [quantile(α_samples[:, i], 0.5) for i in 1:n_teams]
+        β_median = [quantile(β_samples[:, i], 0.5) for i in 1:n_teams]
+        
+        α_ci_lower = [quantile(α_samples[:, i], 0.025) for i in 1:n_teams]
+        α_ci_upper = [quantile(α_samples[:, i], 0.975) for i in 1:n_teams]
+        β_ci_lower = [quantile(β_samples[:, i], 0.025) for i in 1:n_teams]
+        β_ci_upper = [quantile(β_samples[:, i], 0.975) for i in 1:n_teams]
+        
+        return α_median, β_median, α_ci_lower, α_ci_upper, β_ci_lower, β_ci_upper
+    end
+    
+    α_ht, β_ht, α_ht_low, α_ht_high, β_ht_low, β_ht_high = extract_single_chain_essential(chain.ht)
+    α_ft, β_ft, α_ft_low, α_ft_high, β_ft_low, β_ft_high = extract_single_chain_essential(chain.ft)
+
+    attack_rank_ht = invperm(sortperm(α_ht, rev=true))
+    defense_rank_ht = invperm(sortperm(β_ht))  # Lower β = better defense
+    attack_rank_ft = invperm(sortperm(α_ft, rev=true))
+    defense_rank_ft = invperm(sortperm(β_ft))
+    
+    results = DataFrame(
+        team = teams_in_training_order,
+        attack_ht = α_ht,
+        attack_ht_ci = ["[$(round(α_ht_low[i], digits=2)), $(round(α_ht_high[i], digits=2))]" for i in 1:length(teams_in_training_order)],
+        defense_ht = β_ht,
+        defense_ht_ci = ["[$(round(β_ht_low[i], digits=2)), $(round(β_ht_high[i], digits=2))]" for i in 1:length(teams_in_training_order)],
+        attack_ft = α_ft,
+        attack_ft_ci = ["[$(round(α_ft_low[i], digits=2)), $(round(α_ft_high[i], digits=2))]" for i in 1:length(teams_in_training_order)],
+        defense_ft = β_ft,
+        defense_ft_ci = ["[$(round(β_ft_low[i], digits=2)), $(round(β_ft_high[i], digits=2))]" for i in 1:length(teams_in_training_order)],
+        attack_rank_ht = attack_rank_ht,
+        defense_rank_ht = defense_rank_ht,
+        attack_rank_ft = attack_rank_ft,
+        defense_rank_ft = defense_rank_ft
+    )
+    
+    return results
+end
+
+# Add uncertainty categories to your results
+
+
+
 
 
 ##################################################
@@ -304,7 +581,7 @@ seasonid_to_year_map = Dict(
     17364 => "18/19",
     13448 => "17/18",
     11743 => "16/17"
-)
+) ;
 
 
 ##################################################
