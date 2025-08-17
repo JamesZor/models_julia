@@ -1,0 +1,52 @@
+name = "FootballModeling"
+uuid = "4fb1d021-117f-4b4c-bded-956dcfe0d213"  # Generate with: using UUIDs; uuid4()
+authors = ["Your Name <your.email@example.com>"]
+version = "0.1.0"
+
+[deps]
+# Core packages
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
+
+# Bayesian/Statistical
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+Turing = "fce5fe82-541a-59a6-adf8-730c64b5f9a0"
+MCMCChains = "c7f686f2-ff18-58e9-bc7b-31028e88f75d"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
+StatsPlots = "f3b207a7-027a-5e70-b257-86293d7955fd"
+Optim = "429524aa-4258-5aef-a3af-852621145aeb"
+
+# Data persistence
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+
+# Utilities
+ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
+CategoricalArrays = "324d7699-5711-5eae-9e2f-1d82baa6b597"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+
+# Optional: Visualization
+Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"  # Alternative to Plots
+
+[compat]
+julia = "1.9"
+CSV = "0.10"
+DataFrames = "1.6"
+Distributions = "0.25"
+Turing = "0.29"
+MCMCChains = "6"
+JLD2 = "0.4"
+StatsPlots = "0.15"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+
+[targets]
+test = ["Test", "BenchmarkTools"]
