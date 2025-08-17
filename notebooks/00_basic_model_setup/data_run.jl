@@ -8,4 +8,9 @@ println(data_files.odds)
 
 data_store = DataStore(data_files) 
 
+transformer = DataTransformers(create_list_mapping)
+mapping = MappedData(data_store, transformer)
+features = FeaturesBasicMaherModel(data_store, mapping)
+
+
 
