@@ -194,10 +194,12 @@ struct FeaturesBasicMaherModel
     home_team_ids::AbstractVector{Int}
     away_team_ids::AbstractVector{Int}
     league_ids::AbstractVector{Int}
-    home_goals::AbstractVector{Int}
+    home_goals::AbstractVector{Int} # full time - all game 0 -90
     away_goals::AbstractVector{Int}
-    home_goals_ht::AbstractVector{Int}
+    home_goals_ht::AbstractVector{Int} # half time - 0 -45
     away_goals_ht::AbstractVector{Int}
+    home_goals_st::AbstractVector{Int} # second half 45 till 90
+    away_goals_st::AbstractVector{Int}
     round::AbstractVector{Int}
 
     n_teams::Int
@@ -207,6 +209,8 @@ struct FeaturesBasicMaherModel
       home_teams_id = [ mapping.team[team_name] for team_name in data.matches.home_team_slug ]
       away_teams_id = [ mapping.team[team_name] for team_name in data.matches.away_team_slug ]
       leauge_ids = [mapping.league[string(league)] for league in data.matches.tournament_id] 
+      home_goals_st = data.matches.home_score - data.matches.home_score_ht
+      away_goals_st = data.matches.away_score - data.matches.away_score_ht
 
       n_teams = length(mapping.team)
       n_leagues = length(mapping.league)
@@ -219,13 +223,14 @@ struct FeaturesBasicMaherModel
         data.matches.away_score,
         data.matches.home_score_ht,
         data.matches.away_score_ht,
+        home_goals_st,
+        away_goals_st,
         data.matches.round,
         n_teams,
         n_leagues
       )
 
     end
-
 end
 
 
@@ -277,7 +282,8 @@ end
 
 struct BasicMaherModels
     ht::Turing.Model
-    full::Turing.Model
+    st::Turing.Model
+    ft::Turing.Model
 end
 
 function create_maher_models(features::FeaturesBasicMaherModel)
@@ -289,7 +295,14 @@ function create_maher_models(features::FeaturesBasicMaherModel)
         features.n_teams
     )
     
-    full_model = basic_maher_model_raw(
+    st_model = basic_maher_model_raw(
+        features.home_team_ids,
+        features.away_team_ids,
+        features.home_goals_st,  # Half-time goals
+        features.away_goals_st,
+        features.n_teams
+    )
+    ft_model = basic_maher_model_raw(
         features.home_team_ids,
         features.away_team_ids,
         features.home_goals,     # Full-time goals
@@ -297,7 +310,7 @@ function create_maher_models(features::FeaturesBasicMaherModel)
         features.n_teams
     )
     
-    return BasicMaherModels(ht_model, full_model)
+    return BasicMaherModels(ht_model, st_model,  ft_model)
 end
 
 ##################################################
@@ -324,6 +337,7 @@ end
 
 struct ModelChain 
   ht::Chains 
+  st::Chains
   ft::Chains 
 end
 
@@ -345,18 +359,22 @@ function train_maher_model(model::BasicMaherModels, cfg::ModelTrainingConfig)
         start_time = time()
         
         ht_task = Threads.@spawn sample(model.ht, NUTS(), cfg.steps, progress=cfg.bar)
-        ft_task = Threads.@spawn sample(model.full, NUTS(), cfg.steps, progress=cfg.bar)
+        st_task = Threads.@spawn sample(model.st, NUTS(), cfg.steps, progress=cfg.bar)
+        ft_task = Threads.@spawn sample(model.ft, NUTS(), cfg.steps, progress=cfg.bar)
         
         # Wait for both to complete
         ht_chain = fetch(ht_task)
+        st_chain = fetch(st_task)
         ft_chain = fetch(ft_task)
         
         total_time = time() - start_time
         println("Simultaneous training completed in $(round(total_time, digits=2)) seconds")
     end
-    return ModelChain(ht_chain, ft_chain) 
+    return ModelChain(ht_chain, st_chain, ft_chain) 
 end
 
+
+# TODO: update for st
 function extract_single_chain_with_intervals(single_chain::Chains, team_names::AbstractVector{<:AbstractString})
     n_teams = length(team_names)
     
@@ -487,7 +505,7 @@ function extract_team_parameters_essential(chain::ModelChain, team_names::Abstra
     return results
 end
 
-
+#### better one 
 function extract_team_parameters_essential(chain::ModelChain, mapping::MappedData)
     # Get teams in the SAME ORDER as they were trained
     teams_in_training_order = sort(collect(keys(mapping.team)), by = team -> mapping.team[team])
@@ -525,10 +543,13 @@ function extract_team_parameters_essential(chain::ModelChain, mapping::MappedDat
     end
     
     α_ht, β_ht, α_ht_low, α_ht_high, β_ht_low, β_ht_high = extract_single_chain_essential(chain.ht)
+    α_st, β_st, α_st_low, α_st_high, β_st_low, β_st_high = extract_single_chain_essential(chain.st)
     α_ft, β_ft, α_ft_low, α_ft_high, β_ft_low, β_ft_high = extract_single_chain_essential(chain.ft)
 
     attack_rank_ht = invperm(sortperm(α_ht, rev=true))
     defense_rank_ht = invperm(sortperm(β_ht))  # Lower β = better defense
+    attack_rank_st = invperm(sortperm(α_st, rev=true))
+    defense_rank_st = invperm(sortperm(β_st))  # Lower β = better defense
     attack_rank_ft = invperm(sortperm(α_ft, rev=true))
     defense_rank_ft = invperm(sortperm(β_ft))
     
@@ -538,17 +559,118 @@ function extract_team_parameters_essential(chain::ModelChain, mapping::MappedDat
         attack_ht_ci = ["[$(round(α_ht_low[i], digits=2)), $(round(α_ht_high[i], digits=2))]" for i in 1:length(teams_in_training_order)],
         defense_ht = β_ht,
         defense_ht_ci = ["[$(round(β_ht_low[i], digits=2)), $(round(β_ht_high[i], digits=2))]" for i in 1:length(teams_in_training_order)],
+        attack_st = α_st,
+        attack_st_ci = ["[$(round(α_st_low[i], digits=2)), $(round(α_st_high[i], digits=2))]" for i in 1:length(teams_in_training_order)],
+        defense_st = β_st,
+        defense_st_ci = ["[$(round(β_st_low[i], digits=2)), $(round(β_st_high[i], digits=2))]" for i in 1:length(teams_in_training_order)],
         attack_ft = α_ft,
         attack_ft_ci = ["[$(round(α_ft_low[i], digits=2)), $(round(α_ft_high[i], digits=2))]" for i in 1:length(teams_in_training_order)],
         defense_ft = β_ft,
         defense_ft_ci = ["[$(round(β_ft_low[i], digits=2)), $(round(β_ft_high[i], digits=2))]" for i in 1:length(teams_in_training_order)],
         attack_rank_ht = attack_rank_ht,
         defense_rank_ht = defense_rank_ht,
+        attack_rank_st = attack_rank_st,
+        defense_rank_st = defense_rank_st,
         attack_rank_ft = attack_rank_ft,
         defense_rank_ft = defense_rank_ft
     )
     
     return results
+end
+
+function extract_team_parameters(chain::ModelChain, mapping::MappedData)
+    # Get teams in the SAME ORDER as they were trained
+    teams_in_training_order = sort(collect(keys(mapping.team)), by = team -> mapping.team[team])
+    
+    function extract_single_chain_basic(single_chain)
+        n_teams = length(teams_in_training_order)
+        
+        # Extract parameters using the training indices (1, 2, 3, ...)
+        log_α_raw_samples = zeros(size(single_chain, 1), n_teams)
+        log_β_raw_samples = zeros(size(single_chain, 1), n_teams)
+        
+        for i in 1:n_teams
+            # i corresponds directly to the model parameter index
+            log_α_raw_samples[:, i] = vec(single_chain[Symbol("log_α_raw[$i]")])
+            log_β_raw_samples[:, i] = vec(single_chain[Symbol("log_β_raw[$i]")])
+        end
+        
+        # Apply centering and transform
+        log_α_centered = log_α_raw_samples .- mean(log_α_raw_samples, dims=2)
+        log_β_centered = log_β_raw_samples .- mean(log_β_raw_samples, dims=2)
+        
+        α_samples = exp.(log_α_centered)
+        β_samples = exp.(log_β_centered)
+        
+        # Calculate medians and confidence intervals
+        α_median = [quantile(α_samples[:, i], 0.5) for i in 1:n_teams]
+        β_median = [quantile(β_samples[:, i], 0.5) for i in 1:n_teams]
+
+        # gamma 
+        log_γ_samples = vec(single_chain[:log_γ])
+        γ_samples = exp.(log_γ_samples)
+        γ_median = quantile(γ_samples, 0.5) 
+        
+        return α_median, β_median, γ_median
+    end
+    
+    α_ht, β_ht, γ_ht = extract_single_chain_basic(chain.ht)
+    α_st, β_st, γ_st = extract_single_chain_basic(chain.st)
+    α_ft, β_ft, γ_ft = extract_single_chain_basic(chain.ft)
+    
+    results = DataFrame(
+        team = teams_in_training_order,
+        attack_ht = α_ht,
+        defense_ht = β_ht,
+        home_ht = γ_ht,
+        attack_st = α_st,
+        defense_st = β_st,
+        home_st = γ_st,
+        attack_ft = α_ft,
+        defense_ft = β_ft,
+        home_ft = γ_ft,
+    )
+    return results
+end
+
+
+
+##################################################
+# Predictions
+##################################################
+
+
+
+
+# old
+function predict_match(team1, team2, α, β, γ, team_to_idx; max_goals=5)
+    """Predict probabilities for team1 (home) vs team2 (away)"""
+    i = team_to_idx[team1]
+    j = team_to_idx[team2] 
+    
+    λ = α[i] * β[j] * γ  # Expected home goals
+    μ = α[j] * β[i]      # Expected away goals
+    
+    # Calculate score probabilities
+    probs = zeros(max_goals+1, max_goals+1)
+    for h in 0:max_goals
+        for a in 0:max_goals
+            probs[h+1, a+1] = pdf(Poisson(λ), h) * pdf(Poisson(μ), a)
+        end
+    end
+    
+    # Match outcome probabilities
+    home_win = sum(probs[i, j] for i in 2:(max_goals+1), j in 1:(i-1))
+    draw = sum(probs[i, i] for i in 1:(max_goals+1))
+    away_win = sum(probs[i, j] for i in 1:max_goals, j in (i+1):(max_goals+1))
+    
+    return (
+        λ = λ, μ = μ,
+        home_win_prob = home_win,
+        draw_prob = draw, 
+        away_win_prob = away_win,
+        score_probs = probs
+    )
 end
 
 # Add uncertainty categories to your results
