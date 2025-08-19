@@ -153,6 +153,69 @@ function display_team_matches(data, team_name::String)
   return df[:, [:home_team_slug, :away_team_slug, :home_score_ht, :away_score_ht, :home_score, :away_score, :winner_code]]
 end
 
+function get_1x2_ht_ft_gameline(id::Int, data::DataStore) 
+  df = filter(row -> row.sofa_match_id == id && row.minutes == 0 , data.odds) 
+    return df[:, [:home, :away, :draw, :ht_home, :ht_away, :ht_draw ]] 
+end
+
+function get_1x2_ht_ft_all(team1::String, team2::String, data::DataStore)
+  m = filter(row -> row.home_team_slug == team1 && row.away_team_slug == team2, data.matches  ) 
+  ids = m.match_id
+
+  r = get_1x2_ht_ft_gameline.( ids, data)
+
+  return r
+end
+
+
+function get_1x2_ht_ft_gameline(id::Int, data::DataStore) 
+    df = filter(row -> row.sofa_match_id == id && row.minutes == 0, data.odds) 
+    if nrow(df) == 0
+        # Return a row with missing odds if no odds found
+        return DataFrame(
+            home = missing, away = missing, draw = missing,
+            ht_home = missing, ht_away = missing, ht_draw = missing
+        )
+    end
+    return df[:, [:home, :away, :draw, :ht_home, :ht_away, :ht_draw]] 
+end
+
+function get_1x2_ht_ft_all(team1::String, team2::String, data::DataStore)
+    # Get matches between the two teams
+    m = filter(row -> row.home_team_slug == team1 && row.away_team_slug == team2, data.matches)
+    
+    if nrow(m) == 0
+        return DataFrame()  # Return empty DataFrame if no matches found
+    end
+    
+    # Select the match columns we want
+    match_info = select(m, :match_id, :home_team_slug, :away_team_slug, 
+                       :home_score, :away_score, :home_score_ht, :away_score_ht, :match_date)
+    
+    # Get odds for each match
+    odds_list = []
+    for match_id in m.match_id
+        odds_df = get_1x2_ht_ft_gameline(match_id, data)
+        if nrow(odds_df) > 0
+            odds_row = odds_df[1, :]  # Take first row if multiple
+        else
+            # Create row with missing values
+            odds_row = (home = missing, away = missing, draw = missing,
+                       ht_home = missing, ht_away = missing, ht_draw = missing)
+        end
+        push!(odds_list, odds_row)
+    end
+    
+    # Convert odds to DataFrame
+    odds_df = DataFrame(odds_list)
+    
+    # Combine match info with odds
+    result = hcat(match_info, odds_df)
+    
+    return result
+end
+
+
 ########################################
 # features  setup 
 ########################################
@@ -638,18 +701,41 @@ end
 ##################################################
 # Predictions
 ##################################################
-
-
-
-
-# old
-function predict_match(team1, team2, α, β, γ, team_to_idx; max_goals=5)
-    """Predict probabilities for team1 (home) vs team2 (away)"""
-    i = team_to_idx[team1]
-    j = team_to_idx[team2] 
+function predict_xG(team1::String, team2::String, model_results::DataFrame, max_goals = 6)
+    t1 = only(filter(:team => ==(team1), model_results))
+    t2 = only(filter(:team => ==(team2), model_results))
     
-    λ = α[i] * β[j] * γ  # Expected home goals
-    μ = α[j] * β[i]      # Expected away goals
+    λ = t1.attack_ft * t2.defense_ft * t1.home_ft
+    μ = t2.attack_ft * t1.defense_ft
+    
+    # Calculate score probabilities
+    probs = zeros(max_goals+1, max_goals+1)
+    for h in 0:max_goals
+        for a in 0:max_goals
+            probs[h+1, a+1] = pdf(Poisson(λ), h) * pdf(Poisson(μ), a)
+        end
+    end
+    
+    # Match outcome probabilities using masks
+    home_win = sum(probs[h, a] for h in 1:(max_goals+1), a in 1:(max_goals+1) if h > a)
+    draw = sum(probs[h, h] for h in 1:(max_goals+1))
+    away_win = sum(probs[h, a] for h in 1:(max_goals+1), a in 1:(max_goals+1) if a > h)
+    
+    return (
+        λ = λ, μ = μ,
+        home_win_prob = home_win,
+        draw_prob = draw, 
+        away_win_prob = away_win,
+        score_probs = probs
+    )
+end
+
+function predict_xG_odds(team1::String, team2::String, model_results::DataFrame, max_goals = 6)
+    t1 = only(filter(:team => ==(team1), model_results))
+    t2 = only(filter(:team => ==(team2), model_results))
+    
+    λ = t1.attack_ft * t2.defense_ft * t1.home_ft
+    μ = t2.attack_ft * t1.defense_ft
     
     # Calculate score probabilities
     probs = zeros(max_goals+1, max_goals+1)
@@ -660,18 +746,120 @@ function predict_match(team1, team2, α, β, γ, team_to_idx; max_goals=5)
     end
     
     # Match outcome probabilities
-    home_win = sum(probs[i, j] for i in 2:(max_goals+1), j in 1:(i-1))
-    draw = sum(probs[i, i] for i in 1:(max_goals+1))
-    away_win = sum(probs[i, j] for i in 1:max_goals, j in (i+1):(max_goals+1))
+    home_win = 0.0
+    for home_goals in 2:(max_goals+1)
+        for away_goals in 1:(home_goals-1)
+            home_win += probs[home_goals, away_goals]
+        end
+    end
+    
+    draw = 0.0
+    for goals in 1:(max_goals+1)
+        draw += probs[goals, goals]
+    end
+    
+    away_win = 0.0
+    for home_goals in 1:max_goals
+        for away_goals in (home_goals+1):(max_goals+1)
+            away_win += probs[home_goals, away_goals]
+        end
+    end
+    
+    # Calculate odds and round to 2 decimal places
+    home_win_odds = round(1/home_win, digits=2)
+    draw_odds = round(1/draw, digits=2)
+    away_win_odds = round(1/away_win, digits=2)
     
     return (
         λ = λ, μ = μ,
-        home_win_prob = home_win,
-        draw_prob = draw, 
-        away_win_prob = away_win,
-        score_probs = probs
+        home_win_odds = home_win_odds,
+        draw_odds = draw_odds,
+        away_win_odds = away_win_odds,
+        score_odds = 1 ./  probs
     )
 end
+
+function predict_xG_all(team1::String, team2::String, model_results::DataFrame) 
+  function predict( α1::Float64, β1::Float64, α2::Float64, β2::Float64, γ::Float64, max_goals = 6) 
+    λ = α1 * β2 * γ
+    μ = α2 * β1
+    # Calculate score probabilities
+    probs = zeros(max_goals+1, max_goals+1)
+    for h in 0:max_goals
+        for a in 0:max_goals
+            probs[h+1, a+1] = pdf(Poisson(λ), h) * pdf(Poisson(μ), a)
+        end
+    end
+    
+    # Match outcome probabilities
+    home_win = 0.0
+    for home_goals in 2:(max_goals+1)
+        for away_goals in 1:(home_goals-1)
+            home_win += probs[home_goals, away_goals]
+        end
+    end
+    
+    draw = 0.0
+    for goals in 1:(max_goals+1)
+        draw += probs[goals, goals]
+    end
+    
+    away_win = 0.0
+    for home_goals in 1:max_goals
+        for away_goals in (home_goals+1):(max_goals+1)
+            away_win += probs[home_goals, away_goals]
+        end
+    end
+    
+    # Calculate odds and round to 2 decimal places
+    home_win_odds = round(1/home_win, digits=2)
+    draw_odds = round(1/draw, digits=2)
+    away_win_odds = round(1/away_win, digits=2)
+    
+    return (
+        λ = λ, μ = μ,
+        home_win_odds = home_win_odds,
+        draw_odds = draw_odds,
+        away_win_odds = away_win_odds,
+        score_odds = 1 ./  probs
+    )
+  end 
+
+  t1 = only(filter(:team => ==(team1), model_results))
+  t2 = only(filter(:team => ==(team2), model_results))
+
+
+
+  ht_results = predict( t1.attack_ht, t1.defense_ht, t2.attack_ht, t2.defense_ht, t1.home_ht)
+  st_results = predict( t1.attack_st, t1.defense_st, t2.attack_st, t2.defense_st, t1.home_st)
+  ft_results = predict( t1.attack_ft, t1.defense_ft, t2.attack_ft, t2.defense_ft, t1.home_ft)
+
+  r =  DataFrame(
+      xG_home_ht = ht_results.λ,
+      xG_home_st = st_results.λ,
+      xG_home_ft = ft_results.λ,
+      xG_away_ht = ht_results.μ,
+      xG_away_st = st_results.μ,
+      xG_away_ft = ft_results.μ,
+
+      ht_home = ht_results.home_win_odds,
+      ht_away = ht_results.away_win_odds,
+      ht_draw = ht_results.draw_odds,
+
+      st_home = st_results.home_win_odds,
+      st_away = st_results.away_win_odds,
+      st_draw = st_results.draw_odds,
+
+      ft_home = ft_results.home_win_odds,
+      ft_away = ft_results.away_win_odds,
+      ft_draw = ft_results.draw_odds,
+     )
+
+
+  return r
+end
+
+
 
 # Add uncertainty categories to your results
 
