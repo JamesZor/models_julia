@@ -28,14 +28,16 @@ include("training/morphisms.jl")
 # include("training/sampling.jl")  # TODO: Create this file
 include("training/pipeline.jl")
 
+# Prediction 
+include("prediction/basic_maher.jl")
+
 # Evaluation - TODO: Create these files
 # include("evaluation/diagnostics.jl")
-# include("evaluation/metrics.jl")
-# include("evaluation/prediction.jl")
+include("evaluation/metrics.jl")
 
 # Experiments
 include("experiments/runner.jl")
-# include("experiments/persistence.jl")  # TODO: Create this file
+include("experiments/persistence.jl")  # TODO: Create this file
 # include("experiments/comparison.jl")  # TODO: Create this file
 
 # Export main API
@@ -48,7 +50,7 @@ export basic_maher_model_raw, feature_map_basic_maher_model
 export run_experiment, train_all_splits
 export create_experiment_config
 
-export DataFrames
+export DataFrames 
 
 # Export any additional functions you need
 export compose_training_morphism

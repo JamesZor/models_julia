@@ -5,7 +5,7 @@ function feature_map_basic_maher_model(data::SubDataFrame, mapping::MappedData)
     leauge_ids = [mapping.league[string(league)] for league in data.tournament_id] 
     home_goals_st = data.home_score - data.home_score_ht
     away_goals_st = data.away_score - data.away_score_ht
-    n_teams = length(unique(home_teams_id))
+    n_teams = length(mapping.team)
     n_leagues = length(unique(leauge_ids)) 
     
     return (

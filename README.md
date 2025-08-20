@@ -72,6 +72,7 @@ src/
 ├── features/       # Feature extraction morphisms
 ├── models/         # Turing model definitions
 ├── training/       # Training pipeline & morphisms
+├── prediction/       # Training pipeline & morphisms
 ├── evaluation/     # Metrics and diagnostics
 └── experiments/    # Experiment management
 

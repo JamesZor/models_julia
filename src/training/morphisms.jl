@@ -26,18 +26,18 @@ function models_morphism(model_config::ModelConfig)
     end
 end
 
-# Morphism: TuringModels -> Chains
+# TODO: add number of chains to config
+# Morphism: TuringModels -> Chains 
 function sampling_morphism(sample_config::ModelSampleConfig)
     return models -> begin
-        ht_chain = sample(models.ht, NUTS(), MCMCThreads(), 
+        ht_chain = sample(models.ht, NUTS(), MCMCSerial(), 
                          sample_config.steps, 1; 
                          progress=sample_config.bar)
-        ft_chain = sample(models.ft, NUTS(), MCMCThreads(), 
+        ft_chain = sample(models.ft, NUTS(), MCMCSerial(), 
                          sample_config.steps, 1;
                          progress=sample_config.bar)
         ModelChain(ht_chain, ft_chain)
     end
-
 end
 # Composed training morphism: SubDataFrame -> TrainedChains
 function compose_training_morphism(

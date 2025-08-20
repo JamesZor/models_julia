@@ -34,7 +34,7 @@ function main()
     )
     
     # Run experiment
-    println("Running experiment: $(config.name)")
+    println("Running experiment sequential: $(config.name)")
     result = train_all_splits(
         data_store,
         config.cv_config,
@@ -43,11 +43,22 @@ function main()
         config.mapping_funcs;
         parallel = false  # Start with sequential for debugging
     )
-    
     println("Experiment completed!")
     println("Total time: $(round(result.total_time, digits=2)) seconds")
     println("Number of splits: $(length(result.chains_sequence))")
     
+    println("Running experiment parallel: $(config.name)")
+    result = train_all_splits(
+        data_store,
+        config.cv_config,
+        config.model_config,
+        config.sample_config,
+        config.mapping_funcs;
+        parallel = true  # Start with sequential for debugging
+    )
+    println("Experiment completed!")
+    println("Total time: $(round(result.total_time, digits=2)) seconds")
+    println("Number of splits: $(length(result.chains_sequence))")
     # Save results
     save_path = "./experiments"
     !isdir(save_path) && mkpath(save_path)
