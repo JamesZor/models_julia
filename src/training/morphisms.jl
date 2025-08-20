@@ -4,7 +4,7 @@ function features_morphism(model_config::ModelConfig, mapping::MappedData)
 end
 
 # Morphism: Features -> TuringModels
-function models_morphism(model_config::ModelConfig)::BasicMaherModels
+function models_morphism(model_config::ModelConfig)
     return features -> begin
         ht_model = model_config.model(
             features.home_team_ids,
@@ -27,13 +27,13 @@ function models_morphism(model_config::ModelConfig)::BasicMaherModels
 end
 
 # Morphism: TuringModels -> Chains
-function sampling_morphism(sample_config::ModelSampleConfig)::ModelChain
+function sampling_morphism(sample_config::ModelSampleConfig)
     return models -> begin
         ht_chain = sample(models.ht, NUTS(), MCMCThreads(), 
-                         sample_config.steps, 4; 
+                         sample_config.steps, 1; 
                          progress=sample_config.bar)
         ft_chain = sample(models.ft, NUTS(), MCMCThreads(), 
-                         sample_config.steps, 4;
+                         sample_config.steps, 1;
                          progress=sample_config.bar)
         ModelChain(ht_chain, ft_chain)
     end
@@ -44,7 +44,7 @@ function compose_training_morphism(
     model_config::ModelConfig,
     sample_config::ModelSampleConfig,
     mapping::MappedData
-)::TrainedChains
+)
     # Compose the morphisms: data -> features -> models -> chains
     return (data, info) -> begin
         features = features_morphism(model_config, mapping)(data)
