@@ -50,6 +50,9 @@ export basic_maher_model_raw, feature_map_basic_maher_model
 export run_experiment, train_all_splits
 export create_experiment_config
 
+# experiments/persistence 
+export load_experiment, save_experiment
+
 export DataFrames 
 
 # Export any additional functions you need

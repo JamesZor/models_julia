@@ -1,5 +1,6 @@
 # src/evaluation/metrics.jl
 ## Model evaluation metrics
+using SpecialFunctions
 
 using Statistics
 
@@ -57,7 +58,7 @@ end
 
 Evaluate predictions using multiple metrics.
 """
-function evaluate_predictions(predictions_df::DataFrame)
+function evaluate_predictions(predictions_df::Union{DataFrame, SubDataFrame})
     # Remove any rows with missing predictions
     pred_complete = dropmissing(predictions_df)
     
@@ -159,6 +160,12 @@ function evaluate_by_round(predictions_df::DataFrame)
             push!(results, (
                 round = round_num,
                 n_matches = metrics.n_matches,
+                mae_home_ht = metrics.half_time.mae_home,
+                mae_away_ht = metrics.half_time.mae_away,
+                rmse_home_ht = metrics.half_time.rmse_home,
+                rmse_away_ht = metrics.half_time.rmse_away,
+                mae_total_ht = metrics.total_goals.mae_ht,
+                rmse_total_ht = metrics.total_goals.rmse_ht,
                 mae_home_ft = metrics.full_time.mae_home,
                 mae_away_ft = metrics.full_time.mae_away,
                 rmse_home_ft = metrics.full_time.rmse_home,
