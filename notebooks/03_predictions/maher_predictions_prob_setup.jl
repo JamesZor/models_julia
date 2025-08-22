@@ -53,8 +53,8 @@ end
 Generate match predictions using full posterior distribution.
 """
 function predict_match_full_posterior(
-    home_team::String,
-    away_team::String,
+    home_team::AbstractString,
+    away_team::AbstractString,
     posterior_samples::NamedTuple,
     max_goals::Int = 10
 )
@@ -143,14 +143,64 @@ end
 
 
 function predict_match_ht_ft(
-    home_team::String,
-    away_team::String,
+    home_team::AbstractString,
+    away_team::AbstractString,
     chain::TrainedChains,
     mapping::MappedData,
-    max_goals::Int = 10
 )
-ht_predict = predict_match_full_posterior(home_team, away_team, extract_posterior_samples(chain.ht, mapping), max_goals=max_goals)
-hf_predict = predict_match_full_posterior(home_team, away_team, extract_posterior_samples(chain.hf, mapping), max_goals=max_goals)
+  ht_predict = predict_match_full_posterior(home_team, away_team, extract_posterior_samples(chain.ht, mapping), 6)
+  ft_predict = predict_match_full_posterior(home_team, away_team, extract_posterior_samples(chain.ft, mapping), 6)
+
+  return (
+    ht=ht_predict, 
+    ft=ft_predict 
+   )
+end
+
+
+function predict_round(
+    split_chain::TrainedChains, 
+    next_round_matches::DataFrame,
+    mapping::MappedData
+  ) 
+  predictions = DataFrame() 
+
+  for row in eachrow(next_round_matches)
+    match_predict = predict_match_ht_ft(
+                            row.home_team,
+                            row.away_team,
+                            split_chain,
+                            mapping)
+    if !isnothing(match_predict)
+      push!(predictions, (
+              match_id = row.match_id,
+              home_team = row.home_team,
+              away_team = row.away_team,
+              round = row.round,
+              # Actual results
+              actual_home_ht = row.home_score_ht,
+              actual_away_ht = row.away_score_ht,
+              actual_home_ft = row.home_score,
+              actual_away_ft = row.away_score,
+              # point predictions 
+              pred_xG_home_ht_mean = match_predict.ht.xG_home.mean, 
+              pred_xG_away_ht_mean = match_predict.ht.xG_away.mean, 
+              pred_xG_home_ft_mean = match_predict.ft.xG_home.mean, 
+              pred_xG_away_ft_mean = match_predict.ft.xG_away.mean, 
+
+              home_ht = match_predict.ht.prob_home_win,
+              away_ht = match_predict.ht.prob_away_win,
+              draw_ht = match_predict.ht. prob_draw, 
+
+              home_ft = match_predict.ft.prob_home_win,
+              away_ft = match_predict.ft.prob_away_win,
+              draw_ft = match_predict.ft. prob_draw, 
+             )
+           )
+        end
+      end 
+    return predictions
+end
 
 
 """

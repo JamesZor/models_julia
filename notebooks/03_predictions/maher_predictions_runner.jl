@@ -130,8 +130,29 @@ a1 = predict_match_full_posterior("st-johnstone", "aberdeen", samples_posterior)
 ; 0.13080238255546633 0.13351732910743394 … 6.332209494471241e-7 7.094400919119031e-8; … ; 3.3318829270832244e-7 3.399524443933857e-7 … 1.5826902994746672e-12 1.764063534424161e-13; 3.4813958250781776e-8 3.5507918807614214e-8 … 1.6451106038923148e-13 1.83183719697
 74577e-14])
 =#
+a2 = predict_match_ht_ft("st-johnstone", "aberdeen", first_split, result.mapping)
 
-posterior_samples = extract_posterior_samples(first_split.ht, result.mapping)
+#### round 
+p_df_1 = predict_round(first_split, round_1_matches, result.mapping)
+#=
+ Row │ match_id  home_team            away_team             round  actual_home_ht  actual_away_ht  actual_home_ft  actual_away_ft  pred_xG_home_ht_mean  pred_xG_away_ht_mean  pred_xG_home_ft_mean  pred_xG_away_ft_mean  home_ht   away_ht    draw_ht   home_ft   away_ft    draw_ft  
+     │ Int64     String31             String31              Int64  Int64           Int64           Int64           Int64           Float64               Float64               Float64               Float64               Float64   Float64    Float64   Float64   Float64    Float64  
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ 12477140  st-johnstone         aberdeen                  1               0               1               1               2             0.440369               0.577004              0.948047              1.03208   0.224535  0.315406   0.460054  0.323032  0.367068   0.30971
+   2 │ 12477144  heart-of-midlothian  rangers                   1               0               0               0               0             0.617611               0.85491               1.02115               1.65646   0.246695  0.385433   0.367823  0.234156  0.519812   0.2441
+   3 │ 12477145  dundee-united        dundee-fc                 1               2               1               2               2             0.639642               0.507197              1.59845               1.01354   0.327366  0.242813   0.429812  0.507294  0.241484   0.249586
+   4 │ 12477146  celtic               kilmarnock                1               2               0               4               0             1.31724                0.289052              2.63425               0.53999   0.631776  0.0811724  0.286508  0.797359  0.0554382  0.127555
+   5 │ 12477147  st-mirren            hibernian                 1               0               0               3               0             0.539179               0.54411               1.12189               1.08862   0.275322  0.278681   0.445992  0.36298   0.346713   0.289941
+   6 │ 12477148  motherwell           ross-county               1               0               0               0               0             0.666366               0.486314              1.66292               0.975926  0.343669  0.228879   0.427441  0.53197   0.222515   0.243554
+   7 │ 12477136  partick-thistle      greenock-morton           1               0               0               0               0             0.743659               0.42558               1.62651               0.940223  0.391511  0.190623   0.417847  0.531975  0.219056   0.247224
+   8 │ 12477137  livingston           dunfermline-athletic      1               0               0               2               0             0.713126               0.524967              1.4447                0.840399  0.353358  0.237232   0.40939   0.510586  0.220413   0.268042
+   9 │ 12477138  hamilton-academical  ayr-united                1               0               1               0               2             0.559317               0.688728              1.22677               1.30677   0.254982  0.33559    0.409413  0.347274  0.385139   0.266757
+  10 │ 12477141  falkirk-fc           queens-park-fc            1               1               0               2               1             7.76061e6              0.88295               0.902005              0.657934  0.0       0.0        0.0       0.388397  0.26036    0.35093
+  11 │ 12477142  airdrieonians        raith-rovers              1               0               0               1               0             0.561116               0.672176              1.24497               0.985737  0.258461  0.328687   0.412834  0.420485  0.29417    0.284785
+=#
+
+
+posterior_samples = extract_posterior_samples(first_split.ht, result.mapping, 10)
 
 
 
@@ -157,3 +178,253 @@ hamilton-academical  ayr-united                     0           2
 falkirk-fc           queens-park-fc                 2           1 
 airdrieonians        raith-rovers                   1           0 
 =#
+
+
+
+
+
+
+##################################################
+#### P(home wins) = ∫∫∫ P(home wins | α, β, γ) × P(α, β, γ | data) dα dβ dγ
+#
+round_chain_split = result.chains_sequence[20]
+mapping = result.mapping
+round_20_matches = filter(row -> row.round == 20, target_matches)
+
+
+
+match_number = 1
+home_team = round_20_matches[match_number,:].home_team
+away_team = round_20_matches[match_number,:].away_team
+max_goals = 10
+
+
+teams_in_order = sort(collect(keys(mapping.team)), by = team -> mapping.team[team])
+n_teams = length(teams_in_order)
+
+# ft 
+chain = round_chain_split.ft
+n_samples = size(chain, 1) * size(chain, 3)  # samples × chains
+
+#
+posterior_samples = extract_posterior_samples(chain, mapping)
+
+
+home_idx = findfirst(==(home_team), posterior_samples.teams)
+away_idx = findfirst(==(away_team), posterior_samples.teams)
+
+
+home_win_probs = zeros(n_samples)
+draw_probs     = zeros(n_samples)
+away_win_probs = zeros(n_samples)
+
+# correct scores 
+
+
+
+
+
+# loop step 
+i = 1_000 
+α_h = posterior_samples.α[i, home_idx]
+β_h = posterior_samples.β[i, home_idx]
+α_a = posterior_samples.α[i, away_idx]
+β_a = posterior_samples.β[i, away_idx]
+γ = posterior_samples.γ[i]
+
+
+# compute xG
+λ_home = α_h * β_a * γ
+λ_away = α_a * β_h
+
+# wins p 
+hw = 0.0
+dr = 0.0
+aw = 0.0
+
+p = zeros(max_goals+1, max_goals+1)
+for h in 0:max_goals, a in 0:max_goals
+  p[h+1,a+1] = pdf(Poisson(λ_home), h) * pdf(Poisson(λ_away), a)
+  if h > a
+    hw += p[h+1, a+1]
+  elseif h == a
+    dr += p[h+1,a+1]
+  else
+    aw += p[h+1, a+1]
+  end
+end
+p[1:4, 1:4]
+
+# Let's assume you have your original 6x6 matrix p
+# The 'max_goals' from your initial code is 5
+max_display_goals = 3
+
+# Initialize the three 'other' probabilities
+any_other_home_win = 0.0
+any_other_away_win = 0.0
+any_other_draw = 0.0
+
+# Iterate through all possible score lines
+for h in 0:max_goals
+    for a in 0:max_goals
+        # Check if the score is not one of the explicitly listed ones (0-0 to 3-3)
+        if h > max_display_goals || a > max_display_goals
+            # Home Win
+            if h > a
+                any_other_home_win += p[h+1, a+1]
+            # Away Win
+            elseif a > h
+                any_other_away_win += p[h+1, a+1]
+            # Draw
+            else # h == a
+                any_other_draw += p[h+1, a+1]
+            end
+        end
+    end
+end
+any_other_away_win
+any_other_draw
+any_other_away_win
+
+hw
+aw
+dr
+
+function compute_xScore(λ_home::Number, λ_away::Number, max_goals::Int64)
+  p = zeros(max_goals+1, max_goals+1)
+  for h in 0:max_goals, a in 0:max_goals
+      p[h+1,a+1] = pdf(Poisson(λ_home), h) * pdf(Poisson(λ_away), a)
+  end 
+  return p
+end
+
+function calculate_1x2(p::Matrix{Float64}) 
+  hw = 0.0
+  dr = 0.0
+  aw = 0.0
+  for h in 1:(size(p,1)), a in 1:(size(p,2))
+    if h > a
+      hw += p[h, a]
+    elseif h == a
+      dr += p[h,a]
+    else
+      aw += p[h, a]
+    end 
+  end 
+  return (
+    hw = hw,
+    dr = dr, 
+    aw = aw 
+   )
+end
+
+function calculate_correct_score(p::Matrix{Float64}, max_display_goals::Int64=3) 
+  correct_scores =  p[1:max_display_goals, 1:max_display_goals]
+  # Initialize the three 'other' probabilities
+  any_other_home_win = 0.0
+  any_other_away_win = 0.0
+  any_other_draw = 0.0
+  max_goals = size(p,1)-1
+
+  for h in 0:max_goals, a in 0:max_goals
+      # Check if the score is not one of the explicitly listed ones (0-0 to 3-3)
+      if h > max_display_goals || a > max_display_goals
+          # Home Win
+          if h > a
+              any_other_home_win += p[h+1, a+1]
+          # Away Win
+          elseif a > h
+              any_other_away_win += p[h+1, a+1]
+          # Draw
+          else # h == a
+              any_other_draw += p[h+1, a+1]
+          end
+      end
+  end
+  return ( 
+      correct_scores = reshape(correct_scores, 1,:),
+      other_home_win = any_other_home_win, 
+      other_away_win = any_other_away_win,
+      other_draw = any_other_draw
+     )
+end
+
+
+
+
+function calculate_under_over_prob(p::Matrix{Float64}, threshold::Int)
+    prob_under = 0.0
+    max_goals = size(p,1)-1
+
+    for h in 0:max_goals, a in 0:max_goals
+          # Calculate the total goals for the score h-a
+          total_goals = h + a
+          
+          # Check if the total goals are under the threshold
+          if total_goals <= threshold
+              prob_under += p[h+1, a+1]
+        end
+    end
+    return (
+        p_under = prob_under,
+        p_over = 1- prob_under
+       )
+end
+
+
+
+
+# Assuming p is your matrix and max_goals is the dimension
+# (e.g., for a 6x6 matrix, max_goals = 5)
+
+# Calculate probabilities for Under/Over 0.5 Goals
+prob_under_0_5 = calculate_under_prob(p, max_goals, 0)
+
+
+
+prob_over_0_5 = 1 - prob_under_0_5
+
+# Calculate probabilities for Under/Over 2.5 Goals
+prob_under_2_5 = calculate_under_prob(p, max_goals, 2)
+prob_over_2_5 = 1 - prob_under_2_5
+
+# Calculate probabilities for Under/Over 4.5 Goals
+prob_under_4_5 = calculate_under_prob(p, max_goals, 4)
+prob_over_4_5 = 1 - prob_under_4_5
+
+println("Under 0.5 Goals: ", prob_under_0_5)
+println("Over 0.5 Goals: ", prob_over_0_5)
+println("Under 2.5 Goals: ", prob_under_2_5)
+println("Over 2.5 Goals: ", prob_over_2_5)
+println("Under 4.5 Goals: ", prob_under_4_5)
+println("Over 4.5 Goals: ", prob_over_4_5)
+
+#
+for i in 1:n_samples
+    α_h = posterior_samples.α[i, home_idx]
+    β_h = posterior_samples.β[i, home_idx]
+    α_a = posterior_samples.α[i, away_idx]
+    β_a = posterior_samples.β[i, away_idx]
+    γ = posterior_samples.γ[i]
+    
+    λ_home = α_h * β_a * γ
+    λ_away = α_a * β_h
+
+    hw = 0.0
+    dr = 0.0
+    aw = 0.0
+    for h in 0:max_goals, a in 0:max_goals
+        p = pdf(Poisson(λ_home), h) * pdf(Poisson(λ_away), a)
+        if h > a
+            hw += p
+        elseif h == a
+            dr += p
+        else
+            aw += p
+        end
+    end
+    home_win_probs[i] = hw
+    draw_probs[i]     = dr
+    away_win_probs[i] = aw
+end
+
