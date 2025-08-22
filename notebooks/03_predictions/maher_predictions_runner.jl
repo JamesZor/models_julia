@@ -196,235 +196,30 @@ round_20_matches = filter(row -> row.round == 20, target_matches)
 match_number = 1
 home_team = round_20_matches[match_number,:].home_team
 away_team = round_20_matches[match_number,:].away_team
-max_goals = 10
 
 
-teams_in_order = sort(collect(keys(mapping.team)), by = team -> mapping.team[team])
-n_teams = length(teams_in_order)
+t1 = predict_match_chain(home_team, away_team, chain, mapping )
 
-# ft 
-chain = round_chain_split.ft
-n_samples = size(chain, 1) * size(chain, 3)  # samples × chains
+round( 1 /mean(t1.under_15), digits=2)
+round(1 /median(t1.under_15), digits=2)
+round( 1/quantile(t1.under_15, 0.40), digits=2)
+round( 1/quantile(t1.under_15, 0.60), digits=2)
 
-#
-posterior_samples = extract_posterior_samples(chain, mapping)
+round( 1/quantile(t1.away_win_probs, 0.40), digits=2)
+round( 1/quantile(t1.away_win_probs, 0.60), digits=2)
 
-
-home_idx = findfirst(==(home_team), posterior_samples.teams)
-away_idx = findfirst(==(away_team), posterior_samples.teams)
+m1 = predict_match_ft_ht_chain(home_team, away_team, round_chain_split, mapping )
 
 
-home_win_probs = zeros(n_samples)
-draw_probs     = zeros(n_samples)
-away_win_probs = zeros(n_samples)
-
-# correct scores 
+### for a round 
+predict_round_chains( round_chain_split, round_20_matches, mapping)
 
 
-
-
-
-# loop step 
-i = 1_000 
-α_h = posterior_samples.α[i, home_idx]
-β_h = posterior_samples.β[i, home_idx]
-α_a = posterior_samples.α[i, away_idx]
-β_a = posterior_samples.β[i, away_idx]
-γ = posterior_samples.γ[i]
-
-
-# compute xG
-λ_home = α_h * β_a * γ
-λ_away = α_a * β_h
-
-# wins p 
-hw = 0.0
-dr = 0.0
-aw = 0.0
-
-p = zeros(max_goals+1, max_goals+1)
-for h in 0:max_goals, a in 0:max_goals
-  p[h+1,a+1] = pdf(Poisson(λ_home), h) * pdf(Poisson(λ_away), a)
-  if h > a
-    hw += p[h+1, a+1]
-  elseif h == a
-    dr += p[h+1,a+1]
-  else
-    aw += p[h+1, a+1]
-  end
-end
-p[1:4, 1:4]
-
-# Let's assume you have your original 6x6 matrix p
-# The 'max_goals' from your initial code is 5
-max_display_goals = 3
-
-# Initialize the three 'other' probabilities
-any_other_home_win = 0.0
-any_other_away_win = 0.0
-any_other_draw = 0.0
-
-# Iterate through all possible score lines
-for h in 0:max_goals
-    for a in 0:max_goals
-        # Check if the score is not one of the explicitly listed ones (0-0 to 3-3)
-        if h > max_display_goals || a > max_display_goals
-            # Home Win
-            if h > a
-                any_other_home_win += p[h+1, a+1]
-            # Away Win
-            elseif a > h
-                any_other_away_win += p[h+1, a+1]
-            # Draw
-            else # h == a
-                any_other_draw += p[h+1, a+1]
-            end
-        end
-    end
-end
-any_other_away_win
-any_other_draw
-any_other_away_win
-
-hw
-aw
-dr
-
-function compute_xScore(λ_home::Number, λ_away::Number, max_goals::Int64)
-  p = zeros(max_goals+1, max_goals+1)
-  for h in 0:max_goals, a in 0:max_goals
-      p[h+1,a+1] = pdf(Poisson(λ_home), h) * pdf(Poisson(λ_away), a)
-  end 
-  return p
+### for target season 
+matches_predictions  = Dict()
+for (round_idx, round_chains) in enumerate(result.chains_sequence)
+  round_matches = filter(row -> row.round==round_idx, target_matches) 
+  round_matches_predictions = predict_round_chains( round_chain_split, round_matches, mapping)
 end
 
-function calculate_1x2(p::Matrix{Float64}) 
-  hw = 0.0
-  dr = 0.0
-  aw = 0.0
-  for h in 1:(size(p,1)), a in 1:(size(p,2))
-    if h > a
-      hw += p[h, a]
-    elseif h == a
-      dr += p[h,a]
-    else
-      aw += p[h, a]
-    end 
-  end 
-  return (
-    hw = hw,
-    dr = dr, 
-    aw = aw 
-   )
-end
-
-function calculate_correct_score(p::Matrix{Float64}, max_display_goals::Int64=3) 
-  correct_scores =  p[1:max_display_goals, 1:max_display_goals]
-  # Initialize the three 'other' probabilities
-  any_other_home_win = 0.0
-  any_other_away_win = 0.0
-  any_other_draw = 0.0
-  max_goals = size(p,1)-1
-
-  for h in 0:max_goals, a in 0:max_goals
-      # Check if the score is not one of the explicitly listed ones (0-0 to 3-3)
-      if h > max_display_goals || a > max_display_goals
-          # Home Win
-          if h > a
-              any_other_home_win += p[h+1, a+1]
-          # Away Win
-          elseif a > h
-              any_other_away_win += p[h+1, a+1]
-          # Draw
-          else # h == a
-              any_other_draw += p[h+1, a+1]
-          end
-      end
-  end
-  return ( 
-      correct_scores = reshape(correct_scores, 1,:),
-      other_home_win = any_other_home_win, 
-      other_away_win = any_other_away_win,
-      other_draw = any_other_draw
-     )
-end
-
-
-
-
-function calculate_under_over_prob(p::Matrix{Float64}, threshold::Int)
-    prob_under = 0.0
-    max_goals = size(p,1)-1
-
-    for h in 0:max_goals, a in 0:max_goals
-          # Calculate the total goals for the score h-a
-          total_goals = h + a
-          
-          # Check if the total goals are under the threshold
-          if total_goals <= threshold
-              prob_under += p[h+1, a+1]
-        end
-    end
-    return (
-        p_under = prob_under,
-        p_over = 1- prob_under
-       )
-end
-
-
-
-
-# Assuming p is your matrix and max_goals is the dimension
-# (e.g., for a 6x6 matrix, max_goals = 5)
-
-# Calculate probabilities for Under/Over 0.5 Goals
-prob_under_0_5 = calculate_under_prob(p, max_goals, 0)
-
-
-
-prob_over_0_5 = 1 - prob_under_0_5
-
-# Calculate probabilities for Under/Over 2.5 Goals
-prob_under_2_5 = calculate_under_prob(p, max_goals, 2)
-prob_over_2_5 = 1 - prob_under_2_5
-
-# Calculate probabilities for Under/Over 4.5 Goals
-prob_under_4_5 = calculate_under_prob(p, max_goals, 4)
-prob_over_4_5 = 1 - prob_under_4_5
-
-println("Under 0.5 Goals: ", prob_under_0_5)
-println("Over 0.5 Goals: ", prob_over_0_5)
-println("Under 2.5 Goals: ", prob_under_2_5)
-println("Over 2.5 Goals: ", prob_over_2_5)
-println("Under 4.5 Goals: ", prob_under_4_5)
-println("Over 4.5 Goals: ", prob_over_4_5)
-
-#
-for i in 1:n_samples
-    α_h = posterior_samples.α[i, home_idx]
-    β_h = posterior_samples.β[i, home_idx]
-    α_a = posterior_samples.α[i, away_idx]
-    β_a = posterior_samples.β[i, away_idx]
-    γ = posterior_samples.γ[i]
-    
-    λ_home = α_h * β_a * γ
-    λ_away = α_a * β_h
-
-    hw = 0.0
-    dr = 0.0
-    aw = 0.0
-    for h in 0:max_goals, a in 0:max_goals
-        p = pdf(Poisson(λ_home), h) * pdf(Poisson(λ_away), a)
-        if h > a
-            hw += p
-        elseif h == a
-            dr += p
-        else
-            aw += p
-        end
-    end
-    home_win_probs[i] = hw
-    draw_probs[i]     = dr
-    away_win_probs[i] = aw
-end
-
+length(result.chains_sequence)
