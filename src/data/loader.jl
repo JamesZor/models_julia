@@ -9,6 +9,6 @@ end
 
 function DataStore(data_files::DataFiles)
     matches = CSV.read(data_files.match, DataFrame, header=1)
-    # odds = CSV.read(data_files.odds, DataFrame, header=1)
-    return DataStore(matches)
+    odds = CSV.read(data_files.odds, DataFrame, header=1)
+    return DataStore(matches, odds)
 end

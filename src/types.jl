@@ -8,7 +8,7 @@ end
 
 struct DataStore
     matches::DataFrame 
-    # odds::DataFrame
+    odds::DataFrame
 end
 
 # Mapping types

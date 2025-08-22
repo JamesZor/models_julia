@@ -20,7 +20,7 @@ experiment_config = r1[2]
 data_files = DataFiles("/home/james/bet_project/football_data/scot_nostats_20_to_24")
 data_store = DataStore(data_files)
 
-
+########
 # Configure prediction settings
 pred_config = PredictionConfig(
     quantile_levels = [0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975],
@@ -120,47 +120,9 @@ println("  Brier Score: $(round(summary.brier_score, digits=4))")
 =#
 
 samples_posterior = extract_posterior_samples(first_split.ft, result.mapping) 
-a1 = predict_match_full_posterior("st-johnstone", "aberdeen", samples_posterior)
-#=
-(xG_home = (mean = 0.9480469762937985, median = 0.942288306341767, q025 = 0.7529260029527372, q975 = 1.16507291793253, iqr = 0.14230634448470525, samples = [1.1444606741775138, 0.9689955194160086, 0.8846580919973533, 0.9838067930186961, 0.8792711218750776, 0.99455
-21467031542, 0.9172306984869868, 0.9154857130949108, 0.8268297478875968, 0.9594402795475448  …  0.85782598189629, 0.858130465507161, 1.1853734422459796, 0.8800273290611926, 1.103099632522014, 0.8137335811232622, 0.983812451024455, 0.855513478357179, 1.033140030943
-4013, 1.13326595462812]), xG_away = (mean = 1.0320811255924496, median = 1.028560906760572, q025 = 0.8391875354626425, q975 = 1.2567892182077585, iqr = 0.1409458204722147, samples = [1.1451103675469645, 0.8841688060047301, 1.0625897607709232, 1.0653540806282684, 0
-.9427063071938329, 1.1484930149610302, 0.9073320033757071, 1.1788216381152394, 0.9521528173555472, 1.1326820149775296  …  0.8561272637817396, 0.9681624777578948, 0.9395013545175992, 1.1098520177694167, 0.929073345479304, 1.0859082354373395, 1.0135645175277526, 0.9
-393594062830555, 1.111085360626344, 0.9958657755706163]), prob_home_win = 0.3231043464162192, prob_draw = 0.3097096068115074, prob_away_win = 0.3671860144771423, score_distribution = [0.13964099370677 0.14251961243406902 … 6.762723646140517e-7 7.579628278072614e-8
-; 0.13080238255546633 0.13351732910743394 … 6.332209494471241e-7 7.094400919119031e-8; … ; 3.3318829270832244e-7 3.399524443933857e-7 … 1.5826902994746672e-12 1.764063534424161e-13; 3.4813958250781776e-8 3.5507918807614214e-8 … 1.6451106038923148e-13 1.83183719697
-74577e-14])
-=#
-a2 = predict_match_ht_ft("st-johnstone", "aberdeen", first_split, result.mapping)
+
 
 #### round 
-p_df_1 = predict_round(first_split, round_1_matches, result.mapping)
-#=
- Row │ match_id  home_team            away_team             round  actual_home_ht  actual_away_ht  actual_home_ft  actual_away_ft  pred_xG_home_ht_mean  pred_xG_away_ht_mean  pred_xG_home_ft_mean  pred_xG_away_ft_mean  home_ht   away_ht    draw_ht   home_ft   away_ft    draw_ft  
-     │ Int64     String31             String31              Int64  Int64           Int64           Int64           Int64           Float64               Float64               Float64               Float64               Float64   Float64    Float64   Float64   Float64    Float64  
-─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-   1 │ 12477140  st-johnstone         aberdeen                  1               0               1               1               2             0.440369               0.577004              0.948047              1.03208   0.224535  0.315406   0.460054  0.323032  0.367068   0.30971
-   2 │ 12477144  heart-of-midlothian  rangers                   1               0               0               0               0             0.617611               0.85491               1.02115               1.65646   0.246695  0.385433   0.367823  0.234156  0.519812   0.2441
-   3 │ 12477145  dundee-united        dundee-fc                 1               2               1               2               2             0.639642               0.507197              1.59845               1.01354   0.327366  0.242813   0.429812  0.507294  0.241484   0.249586
-   4 │ 12477146  celtic               kilmarnock                1               2               0               4               0             1.31724                0.289052              2.63425               0.53999   0.631776  0.0811724  0.286508  0.797359  0.0554382  0.127555
-   5 │ 12477147  st-mirren            hibernian                 1               0               0               3               0             0.539179               0.54411               1.12189               1.08862   0.275322  0.278681   0.445992  0.36298   0.346713   0.289941
-   6 │ 12477148  motherwell           ross-county               1               0               0               0               0             0.666366               0.486314              1.66292               0.975926  0.343669  0.228879   0.427441  0.53197   0.222515   0.243554
-   7 │ 12477136  partick-thistle      greenock-morton           1               0               0               0               0             0.743659               0.42558               1.62651               0.940223  0.391511  0.190623   0.417847  0.531975  0.219056   0.247224
-   8 │ 12477137  livingston           dunfermline-athletic      1               0               0               2               0             0.713126               0.524967              1.4447                0.840399  0.353358  0.237232   0.40939   0.510586  0.220413   0.268042
-   9 │ 12477138  hamilton-academical  ayr-united                1               0               1               0               2             0.559317               0.688728              1.22677               1.30677   0.254982  0.33559    0.409413  0.347274  0.385139   0.266757
-  10 │ 12477141  falkirk-fc           queens-park-fc            1               1               0               2               1             7.76061e6              0.88295               0.902005              0.657934  0.0       0.0        0.0       0.388397  0.26036    0.35093
-  11 │ 12477142  airdrieonians        raith-rovers              1               0               0               1               0             0.561116               0.672176              1.24497               0.985737  0.258461  0.328687   0.412834  0.420485  0.29417    0.284785
-=#
-
-
-posterior_samples = extract_posterior_samples(first_split.ht, result.mapping, 10)
-
-
-
-
-
-
-
-
 #=
 round one
 home_team            away_team             home_score  away_score 
@@ -193,13 +155,15 @@ round_20_matches = filter(row -> row.round == 20, target_matches)
 
 
 
-match_number = 1
-home_team = round_20_matches[match_number,:].home_team
-away_team = round_20_matches[match_number,:].away_team
 
+match_number = 2
+home_team = String(round_20_matches[match_number,:].home_team)
+away_team = String(round_20_matches[match_number,:].away_team)
+match_id = only(round_20_matches[match_number,:].match_id)
 
-t1 = predict_match_chain(home_team, away_team, chain, mapping )
+t1 = predict_match_chain(home_team, away_team, round_chain_split.ht, mapping )
 
+# test
 round( 1 /mean(t1.under_15), digits=2)
 round(1 /median(t1.under_15), digits=2)
 round( 1/quantile(t1.under_15, 0.40), digits=2)
@@ -207,8 +171,214 @@ round( 1/quantile(t1.under_15, 0.60), digits=2)
 
 round( 1/quantile(t1.away_win_probs, 0.40), digits=2)
 round( 1/quantile(t1.away_win_probs, 0.60), digits=2)
+##################################
 
-m1 = predict_match_ft_ht_chain(home_team, away_team, round_chain_split, mapping )
+
+m1 = predict_match_ft_ht_chain(string(home_team), away_team, round_chain_split, mapping )
+
+1/mean(m1.ht.home)
+
+1/mean(m1.ht.draw)
+
+1/ mean(m1.ht.away)
+
+1/mean(m1.ft.home)
+
+1/mean(m1.ft.draw)
+
+1/mean(m1.ft.away)
+
+odds_m1 = filter(row -> ( row.sofa_match_id==match_id && row.minutes ≥ 0 && row.minutes ≤ 5), data_store.odds)
+last(odds_m1[:, [:ht_home, :ht_draw, :ht_away, :home, :draw, :away]])
+#= match 2 in round 20 
+julia> 1/mean(m1.ht.home)
+6.63482014503234
+
+julia> 1/mean(m1.ht.draw)
+3.020698035497948
+
+julia> 1/ mean(m1.ht.away)
+1.929642714985952
+
+julia> 1/mean(m1.ft.home)
+3.912454625322855
+
+julia> 1/mean(m1.ft.draw)
+3.901925538388655
+
+julia> 1/mean(m1.ft.away)
+2.048671002300172
+
+DataFrameRow
+ Row │ ht_home   ht_draw   ht_away   home      draw      away     
+     │ Float64?  Float64?  Float64?  Float64?  Float64?  Float64? 
+─────┼────────────────────────────────────────────────────────────
+ 336 │      4.4      2.32       3.3       7.6       4.8       1.5
+
+julia> round_20_matches[2, [:home_score_ht, :away_score_ht, :home_score, :away_score]]
+DataFrameRow
+ Row │ home_score_ht  away_score_ht  home_score  away_score 
+     │ Int64          Int64          Int64       Int64      
+─────┼──────────────────────────────────────────────────────
+   2 │             0              1           2           2
+
+=# 
+
+
+# under overs 
+1 / mean(m1.ft.under_05)
+1 / mean(1 .- m1.ft.under_05)
+
+1 / mean(m1.ft.under_15)
+1 / mean(1 .- m1.ft.under_15)
+
+1 / mean(m1.ft.under_25)
+1 / mean(1 .- m1.ft.under_25)
+
+1 / mean(m1.ft.under_35)
+1 / mean(1 .- m1.ft.under_35)
+
+1 / median(m1.ft.under_05)
+1 / median(1 .- m1.ft.under_05)
+
+1 / median(m1.ft.under_15)
+1 / median(1 .- m1.ft.under_15)
+
+1 / median(m1.ft.under_25)
+1 / median(1 .- m1.ft.under_25)
+
+1 / median(m1.ft.under_35)
+1 / median(1 .- m1.ft.under_35)
+odds_m1[100, [:minutes, :under_1_5, :over_1_5, :under_2_5, :over_2_5, :under_3_5, :over_3_5]]
+#=
+julia> 1 / mean(m1.ft.under_05)
+12.66621401878406
+
+julia> 1 / mean(1 .- m1.ft.under_05)
+1.085717611419598
+
+julia> 1 / mean(m1.ft.under_15)
+3.5955375781051306
+
+julia> 1 / mean(1 .- m1.ft.under_15)
+1.3852766411226647
+
+julia> 1 / mean(m1.ft.under_25)
+1.8845924186930474
+
+julia> 1 / mean(1 .- m1.ft.under_25)
+2.130464131127715
+
+julia> 1 / mean(m1.ft.under_35)
+1.3421255595601498
+
+julia> 1 / mean(1 .- m1.ft.under_35)
+3.9229035132178955
+
+julia> 1 / median(m1.ft.under_15)
+3.6084176878842475
+
+julia> 1 / median(1 .- m1.ft.under_15)
+1.3833741829941066
+
+julia> 1 / median(m1.ft.under_25)
+1.8833233890657175
+
+julia> 1 / median(1 .- m1.ft.under_25)
+2.1320882163639863
+
+julia> 1 / median(m1.ft.under_35)
+1.3390980317121945
+
+julia> 1 / median(1 .- m1.ft.under_35)
+3.948999718313723
+
+ Row │ minutes  under_1_5  over_1_5  under_2_5  over_2_5  under_3_5  over_3_5 
+     │ Int64    Float64?   Float64?  Float64?   Float64?  Float64?   Float64? 
+─────┼────────────────────────────────────────────────────────────────────────
+ 100 │       1        3.6      1.37       1.86      2.16       1.34       4.1
+=#
+
+# correct scores ft match 2 
+
+1 ./ mean(m1.ft.correct_score, dims=1)
+
+
+odds_m1[1,  ["0_0", "1_0", "2_0", "3_0", "0_1", "1_1", "2_1", "3_1", "0_2", "1_2", "2_2", "3_2", "0_3", "1_3", "2_3", "3_3"]]
+#=
+1×16 Matrix{Float64}:
+ 0-0      1-0     2-0      3-0      0-1      1-1      2-1      3-1      0-2      1-2      2-2      3-2      0-3      1-3      2-3      3-3 
+12.6662  12.4795  24.3115  70.237  8.40049  8.27466  16.1151  46.5401  11.0482  10.8803  21.1835  61.1558  21.6134  21.2804  41.4205  119.538
+
+DataFrameRow
+0_0       1_0       2_0       3_0       0_1       1_1       2_1       3_1       0_2       1_2       2_2       3_2       0_3       1_3       2_3       3_3      
+Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64? 
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 11.5      11.0      20.0      50.0       9.2       7.4      13.0      38.0      14.0      10.5      17.5      55.0      30.0      26.0      44.0     100.0
+=# 
+
+
+
+#=
+1/mean(m1.ht.home)
+3.6862132214127077
+
+1/mean(m1.ht.draw)
+2.7744829750142963 
+
+1/ mean(m1.ht.away)
+2.715241425539145
+
+ 1/mean(m1.ft.home)
+2.1459996484263986
+
+ 1/mean(m1.ft.draw)
+3.888273701644767
+
+ 1/mean(m1.ft.away)
+3.6122955866708932
+
+# under overs 
+1 / mean(m1.ft.under_05)
+13.18384427606017
+1 / mean(1 .- m1.ft.under_05)
+1.082075901278949
+
+
+1 / mean(m1.ft.under_15)
+3.701366609535103
+ 1 / mean(1 .- m1.ft.under_15)
+1.3701830016223147
+
+1 / mean(m1.ft.under_25)
+1.9217091054726365
+ 1 / mean(1 .- m1.ft.under_25)
+2.084941001518279
+
+1 / mean(m1.ft.under_35)
+1.3582558313096726
+1 / mean(1 .- m1.ft.under_35)
+3.791301390250394
+
+ 0-0      1-0     2-0      3-0      0-1      1-1      2-1      3-1      0-2      1-2      2-2      3-2      0-3      1-3      2-3      3-3 
+ 13.1838  8.9098  11.9209  23.6841  12.1826  8.23114  11.0103  21.8701  22.3098  15.0706  20.1552  40.0271  60.7257  41.0153  54.8448  108.901
+
+DataFrameRow
+ Row │ 0_0       1_0       2_0       3_0       0_1       1_1       2_1       3_1       0_2       1_2       2_2       3_2       0_3       1_3       2_3       3_3      
+     │ Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64?  Float64? 
+─────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │     14.5       9.2      11.5      21.0      15.0       8.2       9.8      19.5      29.0      16.0      17.5      36.0      85.0      50.0      55.0      95.0
+=# 
+names(data_store.odds)
+odds_m1 = filter(row -> ( row.sofa_match_id==match_id && row.minutes ≥ 0 && row.minutes ≤ 5), data_store.odds)
+
+odds_m1[:, [:ht_home, :ht_draw, :ht_away, :home, :draw, :away]]
+odds_m1[1, [:under_1_5, :over_1_5, :under_2_5, :over_2_5, :under_3_5, :over_3_5]]
+odds_m1[1,  ["0_0", "1_0", "2_0", "3_0", "0_1", "1_1", "2_1", "3_1", "0_2", "1_2", "2_2", "3_2", "0_3", "1_3", "2_3", "3_3"]]
+odds_m1[1,  ["0_0", "0_1",  "0_2",  "0_3",  "1_0", "1_1", "1_2", "1_3", "2_0", "2_1", "2_2", "2_3", "3_0", "3_1", "3_2", "3_3"]]
+ "any_other_away"
+ "any_other_draw"
+ "any_other_home"
 
 
 ### for a round 
