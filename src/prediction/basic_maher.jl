@@ -210,3 +210,48 @@ function predict_match_ft_ht_chain(
   ft_predict = predict_match_chain(home_team,away_team, round_chains.ft, mapping)
   return MatchPredict(ht_predict, ft_predict)
 end
+
+
+
+function predict_round_chains( 
+    round_chain_split::TrainedChains,
+    round_matches::Union{SubDataFrame,DataFrame},
+    mapping::MappedData
+  )
+
+  return Dict(row.match_id => predict_match_ft_ht_chain(row.home_team, row.away_team, round_chain_split, mapping) for row in eachrow(round_matches))
+end 
+
+function predict_target_season(
+    target_matches::DataFrame,
+    results::ExperimentResult,
+    mapping::MappedData,
+)
+    grouped_matches = groupby(target_matches, :round)
+    rounds_to_process = 1:nthreads() # Or however you want to chunk the work
+    
+    # This will be an array of dictionaries, one from each thread.
+    thread_results = Vector{Dict{Any, Any}}(undef, nthreads())
+
+    @threads for i in 1:nthreads()
+        # Each thread creates its own dictionary
+        local_dict = Dict()
+        
+        # This loop logic needs to be adjusted to split work between threads.
+        # A simple way is to have thread `i` handle every `nthreads`-th round.
+        for round_idx in i:nthreads():length(grouped_matches)
+            # This inner part is the same as before
+            round_predictions = predict_round_chains(
+                results.chains_sequence[round_idx],
+                grouped_matches[(round=round_idx,)],
+                mapping,
+            )
+            merge!(local_dict, round_predictions)
+        end
+        thread_results[i] = local_dict
+    end
+
+    # 3. Merge the results from all threads into one final dictionary
+    return merge(thread_results...)
+end
+

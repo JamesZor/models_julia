@@ -185,7 +185,7 @@ julia> filter(row -> row.match_id==match_id && row.incident_type=="goal", incide
 
 1 / median(m1.ft.under_35)
 1 / median(1 .- m1.ft.under_35)
-odds_m1[:, [:minutes, :under_1_5, :over_1_5, :under_2_5, :over_2_5, :under_3_5, :over_3_5]]
+sort(odds_m1[:, [:minutes, :under_1_5, :over_1_5, :under_2_5, :over_2_5, :under_3_5, :over_3_5]], :minutes)
 #=
 julia> 1 / mean(m1.ft.under_05)
 12.66621401878406
@@ -263,7 +263,7 @@ sort(odds_m1[:, [:minutes, :ht_under_0_5, :ht_over_0_5, :ht_under_1_5, :ht_over_
 
 1 ./ mean(m1.ft.correct_score, dims=1)
 
-reshape(1 ./ mean(m1.ft.correct_score, dims=1), (4,4)
+reshape(1 ./ mean(m1.ft.correct_score, dims=1), (4,4)) 
 
 odds_m1[1,  ["0_0", "1_0", "2_0", "3_0", "0_1", "1_1", "2_1", "3_1", "0_2", "1_2", "2_2", "3_2", "0_3", "1_3", "2_3", "3_3"]]
 #=
@@ -342,16 +342,13 @@ odds_m1[1,  ["0_0", "0_1",  "0_2",  "0_3",  "1_0", "1_1", "1_2", "1_3", "2_0", "
  "any_other_home"
 
 
+
+
 ### for a round 
-# TODO: finish this for the rounds
+#
+match_results = Dict(row.match_id => predict_match_ft_ht_chain(row.home_team, row.away_team, round_chain_split, mapping) for row in eachrow(round_20_matches))
 predict_round_chains( round_chain_split, round_20_matches, mapping)
 
 
-### for target season 
-matches_predictions  = Dict()
-for (round_idx, round_chains) in enumerate(result.chains_sequence)
-  round_matches = filter(row -> row.round==round_idx, target_matches) 
-  round_matches_predictions = predict_round_chains( round_chain_split, round_matches, mapping)
-end
+matches_results = predict_target_season(target_matches, result, mapping)
 
-length(result.chains_sequence)
