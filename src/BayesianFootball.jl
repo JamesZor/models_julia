@@ -32,6 +32,7 @@ include("training/pipeline.jl")
 # Prediction 
 include("prediction/basic_maher.jl")
 export extract_posterior_samples, extract_samples, predict_match_chain, predict_match_ft_ht_chain, predict_round_chains, predict_target_season
+export MatchPredict, MatchHalfChainPredicts
 
 # Evaluation - TODO: Create these files
 # include("evaluation/diagnostics.jl")
