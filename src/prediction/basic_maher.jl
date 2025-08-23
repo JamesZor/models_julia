@@ -1,203 +1,212 @@
-# prediction/basic_maher
-# Match prediction functions
 """
-    extract_team_parameters(chains, mapping)
+Extract all samples for parameters matching a base string, e.g., "log_α_raw".
+"""
+function extract_samples(chain::Chains, base::String)
+    nms = names(chain)
+    matches = filter(n -> occursin(base, String(n)), nms)
+    arr = Array(chain[matches])
+    reshape(arr, :, size(arr, 2))  # flatten iterations × chains in first dimension
+end
 
-Extract team parameters (attack, defense, home advantage) from MCMC chains.
 """
-function extract_team_parameters(chains::TrainedChains, mapping::MappedData)
-    # Get teams in training order
+    extract_posterior_samples(chain, mapping)
+    
+Extract all posterior samples preserving correlations.
+"""
+function extract_posterior_samples(chain, mapping::MappedData)
     teams_in_order = sort(collect(keys(mapping.team)), by = team -> mapping.team[team])
     n_teams = length(teams_in_order)
+    n_samples = size(chain, 1) * size(chain, 3)  # samples × chains
     
-    function extract_from_chain(chain)
-        # Extract raw samples
-        log_α_raw_samples = zeros(size(chain, 1), n_teams)
-        log_β_raw_samples = zeros(size(chain, 1), n_teams)
-        
-        for i in 1:n_teams
-            log_α_raw_samples[:, i] = vec(chain[Symbol("log_α_raw[$i]")])
-            log_β_raw_samples[:, i] = vec(chain[Symbol("log_β_raw[$i]")])
-        end
-        
-        # Apply centering
-        log_α_centered = log_α_raw_samples .- mean(log_α_raw_samples, dims=2)
-        log_β_centered = log_β_raw_samples .- mean(log_β_raw_samples, dims=2)
-        
-        # Transform to original scale
-        α_samples = exp.(log_α_centered)
-        β_samples = exp.(log_β_centered)
-        
-        # Get posterior medians
-        α_median = [median(α_samples[:, i]) for i in 1:n_teams]
-        β_median = [median(β_samples[:, i]) for i in 1:n_teams]
-        
-        # Home advantage
-        log_γ_samples = vec(chain[:log_γ])
-        γ_median = median(exp.(log_γ_samples))
-        
-        return α_median, β_median, γ_median
-    end
+    # Extract raw samples
+    log_α_raw = extract_samples(chain, "log_α_raw")
+    log_β_raw = extract_samples(chain, "log_β_raw")
+    log_γ = vec(Array(chain[:log_γ]))
     
-    # Extract for HT and FT
-    α_ht, β_ht, γ_ht = extract_from_chain(chains.ht)
-    α_ft, β_ft, γ_ft = extract_from_chain(chains.ft)
+    # Process each sample maintaining correlations
+    α_samples = zeros(n_samples, n_teams)
+    β_samples = zeros(n_samples, n_teams)
+    γ_samples = exp.(log_γ)
     
-    # Create parameter DataFrame
-    return DataFrame(
-        team = teams_in_order,
-        attack_ht = α_ht,
-        defense_ht = β_ht,
-        attack_ft = α_ft,
-        defense_ft = β_ft,
-        home_adv_ht = fill(γ_ht, n_teams),  # Same for all teams
-        home_adv_ft = fill(γ_ft, n_teams)
-    )
-end
+    # Centering: subtract row means from each element in the row
+    log_α_centered = log_α_raw .- mean(log_α_raw, dims=2)
+    log_β_centered = log_β_raw .- mean(log_β_raw, dims=2)
 
-"""
-    predict_match_xG(home_team, away_team, params_df)
+    # Exponentiation
+    α_samples = exp.(log_α_centered)
+    β_samples = exp.(log_β_centered)
 
-Predict expected goals for a single match.
-"""
-function predict_match_xG(home_team::AbstractString, away_team::AbstractString, params_df::DataFrame)
-    # Get team parameters
-    home_params = filter(row -> row.team == home_team, params_df)
-    away_params = filter(row -> row.team == away_team, params_df)
-    
-    if nrow(home_params) == 0 || nrow(away_params) == 0
-        return nothing  # Team not in training data
-    end
-    
-    home_params = home_params[1, :]
-    away_params = away_params[1, :]
-    
-    # Calculate expected goals
-    xG_home_ht = home_params.attack_ht * away_params.defense_ht * home_params.home_adv_ht
-    xG_away_ht = away_params.attack_ht * home_params.defense_ht
-    
-    xG_home_ft = home_params.attack_ft * away_params.defense_ft * home_params.home_adv_ft
-    xG_away_ft = away_params.attack_ft * home_params.defense_ft
-    
     return (
-        xG_home_ht = xG_home_ht,
-        xG_away_ht = xG_away_ht,
-        xG_home_ft = xG_home_ft,
-        xG_away_ft = xG_away_ft
+        α = α_samples,
+        β = β_samples,
+        γ = γ_samples,
+        teams = teams_in_order
     )
 end
 
-"""
-    predict_round_matches(split_chains, next_round_matches, mapping)
-
-Predict all matches in the next round using the current split's trained model.
-"""
-function predict_round_matches(
-    split_chains::TrainedChains,
-    next_round_matches::DataFrame,
-    mapping::MappedData
-)
-    # Extract parameters from this split's chains
-    params = extract_team_parameters(split_chains, mapping)
-    
-    predictions = DataFrame()
-    
-    for row in eachrow(next_round_matches)
-        pred = predict_match_xG(row.home_team, row.away_team, params)
-        
-        if !isnothing(pred)
-            push!(predictions, (
-                match_id = row.match_id,
-                home_team = row.home_team,
-                away_team = row.away_team,
-                round = row.round,
-                actual_home_ht = row.home_score_ht,
-                actual_away_ht = row.away_score_ht,
-                actual_home_ft = row.home_score,
-                actual_away_ft = row.away_score,
-                pred_xG_home_ht = pred.xG_home_ht,
-                pred_xG_away_ht = pred.xG_away_ht,
-                pred_xG_home_ft = pred.xG_home_ft,
-                pred_xG_away_ft = pred.xG_away_ft
-            ))
-        end
-    end
-    
-    return predictions
+function compute_xScore(λ_home::Number, λ_away::Number, max_goals::Int64)
+  p = zeros(max_goals+1, max_goals+1)
+  for h in 0:max_goals, a in 0:max_goals
+      p[h+1,a+1] = pdf(Poisson(λ_home), h) * pdf(Poisson(λ_away), a)
+  end 
+  return p
 end
 
-"""
-    predict_all_rounds(experiment_result, data_store, cv_config)
-
-Generate predictions for all rounds using the expanding window CV approach.
-"""
-function predict_all_rounds(
-    experiment_result::ExperimentResult,
-    data_store::DataStore,
-    cv_config::TimeSeriesSplitsConfig
-)
-    all_predictions = DataFrame()
-    
-    # Get target season data
-    target_matches = filter(row -> row.season == cv_config.target_season, data_store.matches)
-    rounds = sort(unique(target_matches.round))
-    
-    # For each split, predict the corresponding round
-    for (i, split_chains) in enumerate(experiment_result.chains_sequence)
-        if i == 1
-            # First split (base only) predicts round 1
-            next_round = rounds[1]
-        elseif i <= length(rounds)
-            # Subsequent splits predict the next round
-            next_round = rounds[i]
-        else
-            break  # No more rounds to predict
-        end
-        
-        # Get matches for this round
-        round_matches = filter(row -> row.round == next_round, target_matches)
-        
-        if nrow(round_matches) > 0
-            round_preds = predict_round_matches(
-                split_chains,
-                round_matches,
-                experiment_result.mapping
-            )
-            
-            if nrow(round_preds) > 0
-                round_preds[!, :split_idx] .= i
-                round_preds[!, :split_info] .= split_chains.round_info
-                append!(all_predictions, round_preds)
-            end
-        end
-    end
-    
-    return all_predictions
+function calculate_1x2(p::Matrix{Float64}) 
+  hw = 0.0
+  dr = 0.0
+  aw = 0.0
+  for h in 1:(size(p,1)), a in 1:(size(p,2))
+    if h > a
+      hw += p[h, a]
+    elseif h == a
+      dr += p[h,a]
+    else
+      aw += p[h, a]
+    end 
+  end 
+  return (
+    hw = hw,
+    dr = dr, 
+    aw = aw 
+   )
 end
 
-"""
-    calculate_match_probabilities(xG_home, xG_away, max_goals=10)
+function calculate_correct_score(p::Matrix{Float64}, max_display_goals::Int64=3) 
+  correct_scores =  p[1:max_display_goals+1, 1:max_display_goals+1]
+  # Initialize the three 'other' probabilities
+  any_other_home_win = 0.0
+  any_other_away_win = 0.0
+  any_other_draw = 0.0
+  max_goals = size(p,1)-1
 
-Calculate match outcome probabilities from expected goals.
-"""
-function calculate_match_probabilities(xG_home::Float64, xG_away::Float64; max_goals::Int=10)
-    # Calculate score probabilities
-    probs = zeros(max_goals+1, max_goals+1)
-    for h in 0:max_goals
-        for a in 0:max_goals
-            probs[h+1, a+1] = pdf(Poisson(xG_home), h) * pdf(Poisson(xG_away), a)
+  for h in 0:max_goals, a in 0:max_goals
+      # Check if the score is not one of the explicitly listed ones (0-0 to 3-3)
+      if h > max_display_goals || a > max_display_goals
+          # Home Win
+          if h > a
+              any_other_home_win += p[h+1, a+1]
+          # Away Win
+          elseif a > h
+              any_other_away_win += p[h+1, a+1]
+          # Draw
+          else # h == a
+              any_other_draw += p[h+1, a+1]
+          end
+      end
+  end
+  return ( 
+      correct_scores = reshape(correct_scores, 1,:),
+      other_home_win = any_other_home_win, 
+      other_away_win = any_other_away_win,
+      other_draw = any_other_draw
+     )
+end
+
+function calculate_under_prob(p::Matrix{Float64}, threshold::Int)
+    prob_under = 0.0
+    max_goals = size(p,1)-1
+
+    for h in 0:max_goals, a in 0:max_goals
+          # Calculate the total goals for the score h-a
+          total_goals = h + a
+          
+          # Check if the total goals are under the threshold
+          if total_goals <= threshold
+              prob_under += p[h+1, a+1]
         end
     end
-    
-    # Match outcome probabilities
-    home_win = sum(probs[h, a] for h in 2:(max_goals+1) for a in 1:(h-1))
-    draw = sum(probs[i, i] for i in 1:(max_goals+1))
-    away_win = sum(probs[h, a] for h in 1:max_goals for a in (h+1):(max_goals+1))
-    
-    return (
-        home_win = home_win,
-        draw = draw,
-        away_win = away_win,
-        score_matrix = probs
-    )
+    return prob_under
+end
+
+function predict_match_chain(
+    home_team::AbstractString, 
+    away_team::AbstractString,
+    chain::Chains,
+    mapping::MappedData,
+  )
+  n_samples = size(chain, 1) * size(chain, 3)  # samples × chains
+
+  posterior_samples = extract_posterior_samples(chain, mapping)
+
+  home_idx = findfirst(==(home_team), posterior_samples.teams)
+  away_idx = findfirst(==(away_team), posterior_samples.teams)
+
+  # define lines 
+  home_win_probs = zeros(n_samples)
+  draw_probs     = zeros(n_samples)
+  away_win_probs = zeros(n_samples)
+
+  correct_score =  zeros(n_samples, 16)
+  other_home_win_score = zeros(n_samples)
+  other_away_win_score = zeros(n_samples)
+  other_draw_score = zeros(n_samples)
+
+  under_05 = zeros(n_samples)
+  under_15 = zeros(n_samples)
+  under_25 = zeros(n_samples)
+  under_35 = zeros(n_samples)
+
+  for i in 1:n_samples
+    α_h = posterior_samples.α[i, home_idx]
+    β_h = posterior_samples.β[i, home_idx]
+    α_a = posterior_samples.α[i, away_idx]
+    β_a = posterior_samples.β[i, away_idx]
+    γ = posterior_samples.γ[i]
+
+    # compute xG
+    λ_home = α_h * β_a * γ
+    λ_away = α_a * β_h
+
+    p = compute_xScore(λ_home, λ_away, 10)
+    hda = calculate_1x2(p)
+    cs = calculate_correct_score(p,3)
+
+    u_05 = calculate_under_prob(p,0)
+    u_15 = calculate_under_prob(p,1)
+    u_25 = calculate_under_prob(p,2)
+    u_35 = calculate_under_prob(p,3)
+
+
+    # assign 
+    home_win_probs[i] = hda.hw 
+    draw_probs[i] = hda.dr 
+    away_win_probs[i] = hda.aw 
+
+    correct_score[i, :] = cs.correct_scores 
+    other_home_win_score[i] = cs.other_home_win 
+    other_away_win_score[i] = cs.other_away_win 
+    other_draw_score[i] = cs.other_draw 
+
+    under_05[i] = u_05
+    under_15[i] = u_15
+    under_25[i] = u_25
+    under_35[i] = u_35
+
+  end
+
+    return MatchHalfChainPredicts( 
+  home_win_probs,
+  draw_probs,
+  away_win_probs,
+  correct_score,
+  other_home_win_score,
+  other_away_win_score,
+  other_draw_score,
+  under_05,
+  under_15,
+  under_25,
+  under_35,
+ )
+end
+
+function predict_match_ft_ht_chain(
+    home_team::AbstractString,
+    away_team::AbstractString,
+    round_chains::TrainedChains,
+    mapping::MappedData) 
+
+  ht_predict = predict_match_chain(home_team,away_team, round_chains.ht, mapping)
+  ft_predict = predict_match_chain(home_team,away_team, round_chains.ft, mapping)
+  return MatchPredict(ht_predict, ft_predict)
 end

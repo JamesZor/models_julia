@@ -1,14 +1,16 @@
 # All struct definitions in one place for clarity
 # Data types
-struct DataFiles 
-    base_dir::String 
-    match::String 
-    odds::String 
+struct DataFiles
+    base_dir::String
+    match::String
+    odds::String
+    incidents::String
 end
 
 struct DataStore
-    matches::DataFrame 
+    matches::DataFrame
     odds::DataFrame
+    incidents::DataFrame
 end
 
 # Mapping types
@@ -82,3 +84,28 @@ struct ExperimentResult
     config_hash::UInt64
     total_time::Float64
 end
+
+# Basic predictions types maher 
+
+struct MatchHalfChainPredicts 
+  home::AbstractVector{Float64}
+  draw::AbstractVector{Float64}
+  away::AbstractVector{Float64}
+
+  correct_score::AbstractArray{Float64}
+  other_home_win_score::AbstractVector{Float64} 
+  other_away_win_score::AbstractVector{Float64} 
+  other_draw_score::AbstractVector{Float64} 
+
+  under_05::AbstractVector{Float64} 
+  under_15::AbstractVector{Float64} 
+  under_25::AbstractVector{Float64} 
+  under_35::AbstractVector{Float64} 
+end
+
+
+struct MatchPredict
+  ht::MatchHalfChainPredicts
+  ft::MatchHalfChainPredicts
+end
+

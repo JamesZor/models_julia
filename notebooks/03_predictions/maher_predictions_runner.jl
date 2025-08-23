@@ -6,7 +6,7 @@ using Distributions
 using KernelDensity
 using Plots
 using StatsPlots
-
+using Turing
 ### Load the saved data for the basic maher model 
 r1 = load_experiment("/home/james/bet_project/models_julia/experiments/maher_basic_test_20250820_231427.jld2")
 # extract the results and config 
@@ -21,94 +21,13 @@ data_files = DataFiles("/home/james/bet_project/football_data/scot_nostats_20_to
 data_store = DataStore(data_files)
 
 ########
-# Configure prediction settings
-pred_config = PredictionConfig(
-    quantile_levels = [0.025, 0.1, 0.25, 0.5, 0.75, 0.9, 0.975],
-    keep_samples = false,  # Set to true if you want to keep raw samples
-    n_simulations = 1000,
-    max_goals = 10
-)
-
-
 first_split = result.chains_sequence[1]
-model_params = extract_model_parameters(first_split, result.mapping, pred_config)
-
-# Example: Look at parameter distribution for a specific team
-# team_name = "celtic"
-team_name = "st-mirren"
-if haskey(model_params.teams, team_name)
-    team = model_params.teams[team_name]
-    println("\n$(team_name) Parameter Distribution:")
-    println("Attack (FT):")
-    println("  Mean: $(round(team.attack_ft.mean, digits=3))")
-    println("  Median: $(round(team.attack_ft.median, digits=3))")
-    println("  95% CI: [$(round(team.attack_ft.quantiles[1], digits=3)), " *
-            "$(round(team.attack_ft.quantiles[end], digits=3))]")
-    println("  IQR: [$(round(team.attack_ft.quantiles[3], digits=3)), " *
-            "$(round(team.attack_ft.quantiles[5], digits=3))]")
-end
-
-
-# Predict a specific match
-  home_team = "celtic"
-  away_team = "rangers"
-  
-  prediction = predict_match_probabilistic(home_team, away_team, model_params, pred_config)
-  
-  if !isnothing(prediction)
-      println("\n\nMatch Prediction: $home_team vs $away_team")
-      println("="^50)
-      
-      println("\nExpected Goals (Full Time):")
-      println("  $home_team xG: $(round(prediction.xG_home_ft.median, digits=2)) " *
-              "[$(round(prediction.xG_home_ft.quantiles[1], digits=2)), " *
-              "$(round(prediction.xG_home_ft.quantiles[end], digits=2))]")
-      println("  $away_team xG: $(round(prediction.xG_away_ft.median, digits=2)) " *
-              "[$(round(prediction.xG_away_ft.quantiles[1], digits=2)), " *
-              "$(round(prediction.xG_away_ft.quantiles[end], digits=2))]")
-      
-      println("\nOutcome Probabilities:")
-      println("  Home Win: $(round(prediction.prob_home_win * 100, digits=1))%")
-      println("  Draw: $(round(prediction.prob_draw * 100, digits=1))%")
-      println("  Away Win: $(round(prediction.prob_away_win * 100, digits=1))%")
-      
-      # Implied odds
-      println("\nImplied Fair Odds:")
-      println("  Home: $(round(1/prediction.prob_home_win, digits=2))")
-      println("  Draw: $(round(1/prediction.prob_draw, digits=2))")
-      println("  Away: $(round(1/prediction.prob_away_win, digits=2))")
-  end
-
+#model_params = extract_model_parameters(first_split, result.mapping, pred_config) # ? 
 
 # Predict all matches for a round with uncertainty
 cv_config = TimeSeriesSplitsConfig(["20/21", "21/22", "22/23", "23/24"], "24/25", :round)
 target_matches = filter(row -> row.season == cv_config.target_season, data_store.matches)
 round_1_matches = filter(row -> row.round == 1, target_matches)
-
-predictions_df = predict_round_with_uncertainty(
-    first_split,
-    round_1_matches,
-    result.mapping,
-    pred_config
-)
-
-# Analyze predictions
-summary = create_prediction_summary(predictions_df)
-
-println("\n\nRound 1 Predictions Summary:")
-println("="^50)
-println("Number of matches: $(summary.n_matches)")
-println("\nPrediction Interval Coverage (95% CI):")
-println("  Home goals: $(round(summary.interval_coverage.home * 100, digits=1))%")
-println("  Away goals: $(round(summary.interval_coverage.away * 100, digits=1))%")
-println("\nAverage Interval Width:")
-println("  Home: ±$(round(summary.interval_width.home/2, digits=2)) goals")
-println("  Away: ±$(round(summary.interval_width.away/2, digits=2)) goals")
-println("\nPrediction Accuracy:")
-println("  MAE Home: $(round(summary.mae.home_ft, digits=3))")
-println("  MAE Away: $(round(summary.mae.away_ft, digits=3))")
-println("  Brier Score: $(round(summary.brier_score, digits=4))")
-
 
 
 ###### Prob prediction 
@@ -156,11 +75,14 @@ round_20_matches = filter(row -> row.round == 20, target_matches)
 
 
 
-match_number = 2
-home_team = String(round_20_matches[match_number,:].home_team)
-away_team = String(round_20_matches[match_number,:].away_team)
+match_number = 4
+home_team = round_20_matches[match_number,:].home_team
+away_team = round_20_matches[match_number,:].away_team
 match_id = only(round_20_matches[match_number,:].match_id)
-
+#=
+julia> match_id = only(round_20_matches[match_number,:].match_id)
+12477013
+=#
 t1 = predict_match_chain(home_team, away_team, round_chain_split.ht, mapping )
 
 # test
@@ -174,7 +96,7 @@ round( 1/quantile(t1.away_win_probs, 0.60), digits=2)
 ##################################
 
 
-m1 = predict_match_ft_ht_chain(string(home_team), away_team, round_chain_split, mapping )
+m1 = predict_match_ft_ht_chain(home_team, away_team, round_chain_split, mapping )
 
 1/mean(m1.ht.home)
 
@@ -188,8 +110,10 @@ m1 = predict_match_ft_ht_chain(string(home_team), away_team, round_chain_split, 
 
 1/mean(m1.ft.away)
 
-odds_m1 = filter(row -> ( row.sofa_match_id==match_id && row.minutes ≥ 0 && row.minutes ≤ 5), data_store.odds)
-last(odds_m1[:, [:ht_home, :ht_draw, :ht_away, :home, :draw, :away]])
+odds_m1 = filter(row -> ( row.sofa_match_id==match_id && row.minutes ≥ 0 && row.minutes ≤ 10), data_store.odds);
+sort(odds_m1[:, [:minutes, :ht_home, :ht_draw, :ht_away, :home, :draw, :away]], :minutes)
+
+round_20_matches[match_number, [:home_score_ht, :away_score_ht, :home_score, :away_score]]
 #= match 2 in round 20 
 julia> 1/mean(m1.ht.home)
 6.63482014503234
@@ -206,14 +130,15 @@ julia> 1/mean(m1.ft.home)
 julia> 1/mean(m1.ft.draw)
 3.901925538388655
 
+julia> round_20_matches[2, [:home_score_ht, :away_score_ht, :home_score, :away_score]]
 julia> 1/mean(m1.ft.away)
 2.048671002300172
 
-DataFrameRow
- Row │ ht_home   ht_draw   ht_away   home      draw      away     
-     │ Float64?  Float64?  Float64?  Float64?  Float64?  Float64? 
-─────┼────────────────────────────────────────────────────────────
- 336 │      4.4      2.32       3.3       7.6       4.8       1.5
+ Row │ minutes  ht_home   ht_draw   ht_away   home      draw      away     
+     │ Int64    Float64?  Float64?  Float64?  Float64?  Float64?  Float64? 
+─────┼─────────────────────────────────────────────────────────────────────
+   1 │       0       4.4      2.32       3.3       3.3       3.5      2.42
+   2 │       1       4.4      2.32       3.3       3.3       3.5      2.42
 
 julia> round_20_matches[2, [:home_score_ht, :away_score_ht, :home_score, :away_score]]
 DataFrameRow
@@ -221,6 +146,17 @@ DataFrameRow
      │ Int64          Int64          Int64       Int64      
 ─────┼──────────────────────────────────────────────────────
    2 │             0              1           2           2
+
+julia> filter(row -> row.match_id==match_id && row.incident_type=="goal", incidents)[:, [:time, :player_name, :assist1_name, :home_score, :away_score]
+       ]
+4×5 DataFrame
+ Row │ time   player_name    assist1_name   home_score  away_score 
+     │ Int64  String31?      String31?      Float64?    Float64?   
+─────┼─────────────────────────────────────────────────────────────
+   1 │    90  Jordan White   missing               2.0         2.0
+   2 │    90  Joshua Nisbet  missing               1.0         2.0
+   3 │    48  James Wilson   James Penrice         0.0         2.0
+   4 │     2  James Wilson   Liam Boyce            0.0         1.0
 
 =# 
 
@@ -249,7 +185,7 @@ DataFrameRow
 
 1 / median(m1.ft.under_35)
 1 / median(1 .- m1.ft.under_35)
-odds_m1[100, [:minutes, :under_1_5, :over_1_5, :under_2_5, :over_2_5, :under_3_5, :over_3_5]]
+odds_m1[:, [:minutes, :under_1_5, :over_1_5, :under_2_5, :over_2_5, :under_3_5, :over_3_5]]
 #=
 julia> 1 / mean(m1.ft.under_05)
 12.66621401878406
@@ -299,10 +235,35 @@ julia> 1 / median(1 .- m1.ft.under_35)
  100 │       1        3.6      1.37       1.86      2.16       1.34       4.1
 =#
 
+1 / mean(m1.ht.under_05)
+1 / mean(1 .- m1.ht.under_05)
+
+1 / mean(m1.ht.under_15)
+1 / mean(1 .- m1.ht.under_15)
+
+1 / mean(m1.ht.under_25)
+1 / mean(1 .- m1.ht.under_25)
+
+1 / mean(m1.ht.under_35)
+1 / mean(1 .- m1.ht.under_35)
+
+1 / median(m1.ht.under_05)
+1 / median(1 .- m1.ht.under_05)
+
+1 / median(m1.ht.under_15)
+1 / median(1 .- m1.ht.under_15)
+
+1 / median(m1.ht.under_25)
+1 / median(1 .- m1.ht.under_25)
+
+1 / median(m1.ht.under_35)
+1 / median(1 .- m1.ht.under_35)
+sort(odds_m1[:, [:minutes, :ht_under_0_5, :ht_over_0_5, :ht_under_1_5, :ht_over_1_5, :ht_under_2_5, :ht_over_2_5]], :minutes)
 # correct scores ft match 2 
 
 1 ./ mean(m1.ft.correct_score, dims=1)
 
+reshape(1 ./ mean(m1.ft.correct_score, dims=1), (4,4)
 
 odds_m1[1,  ["0_0", "1_0", "2_0", "3_0", "0_1", "1_1", "2_1", "3_1", "0_2", "1_2", "2_2", "3_2", "0_3", "1_3", "2_3", "3_3"]]
 #=
@@ -382,6 +343,7 @@ odds_m1[1,  ["0_0", "0_1",  "0_2",  "0_3",  "1_0", "1_1", "1_2", "1_3", "2_0", "
 
 
 ### for a round 
+# TODO: finish this for the rounds
 predict_round_chains( round_chain_split, round_20_matches, mapping)
 
 

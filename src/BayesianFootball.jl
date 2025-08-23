@@ -1,5 +1,6 @@
 module BayesianFootball
 
+using CategoricalArrays # maybe 
 # Package dependencies
 using CSV, DataFrames
 using Statistics, Dates
@@ -30,6 +31,7 @@ include("training/pipeline.jl")
 
 # Prediction 
 include("prediction/basic_maher.jl")
+export extract_posterior_samples, extract_samples, predict_match_chain, predict_match_ft_ht_chain
 
 # Evaluation - TODO: Create these files
 # include("evaluation/diagnostics.jl")
@@ -53,7 +55,13 @@ export create_experiment_config
 # experiments/persistence 
 export load_experiment, save_experiment
 
-export DataFrames 
+
+# Nice packages to have
+
+export DataFrames, Statistics, Plots, Distributions, KernelDensity, Plots, StatsPlots, Turing
+
+
+
 
 # Export any additional functions you need
 export compose_training_morphism

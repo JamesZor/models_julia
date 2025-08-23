@@ -1,13 +1,33 @@
-# Data loading functionality
+using CSV, DataFrames, CategoricalArrays, Dates
+
+module FootballData
+
+using DataFrames, Dates
+
+struct DataFiles
+    base_dir::String
+    match::String
+    odds::String
+    incidents::String
+end
+
+struct DataStore
+    matches::DataFrame
+    odds::DataFrame
+    incidents::DataFrame
+end
+
+end # module
+
 function DataFiles(path::String)
     base_dir = path
     match = joinpath(path, "football_data_mixed_matches.csv")
     odds = joinpath(path, "odds.csv")
     incidents = joinpath(path, "football_data_mixed_incidents.csv")
-    return DataFiles(base_dir, match, odds, incidents)
+    return FootballData.DataFiles(base_dir, match, odds, incidents)
 end
 
-function DataStore(data_files::DataFiles)
+function DataStore(data_files::FootballData.DataFiles)
     # Define types for the incidents DataFrame
     # Using String31 as shown in your data output for string columns
     incidents_types = Dict(
@@ -96,17 +116,16 @@ function DataStore(data_files::DataFiles)
         :ht_under_2_5 => Union{Missing, Float64}
     )
 
-    # Read the CSV files with appropriate date formats for each file
-    matches = CSV.read(data_files.match, DataFrame; 
-        types=matches_types, 
-        dateformat=Dict(:match_date => dateformat"yyyy-mm-dd"))
+    # Read the CSV files with specified types and date formats
+    # Using a Dict to specify different date formats for different columns
+    date_formats = Dict(
+        :match_date => dateformat"yyyy-mm-dd",
+        :timestamp => dateformat"yyyy-mm-dd HH:MM:SS"
+    )
     
-    odds = CSV.read(data_files.odds, DataFrame; 
-        types=odds_types, 
-        dateformat=Dict(:timestamp => dateformat"yyyy-mm-dd HH:MM:SS"))
-    
+    matches = CSV.read(data_files.match, DataFrame; types=matches_types, dateformat=date_formats)
+    odds = CSV.read(data_files.odds, DataFrame; types=odds_types, dateformat=date_formats)
     incidents = CSV.read(data_files.incidents, DataFrame; types=incidents_types)
 
-    return DataStore(matches, odds, incidents)
+    return FootballData.DataStore(matches, odds, incidents)
 end
-
