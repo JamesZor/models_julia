@@ -11,20 +11,36 @@ function DataStore(data_files::DataFiles)
     # Define types for the incidents DataFrame
     # Using String31 as shown in your data output for string columns
     incidents_types = Dict(
-        :tournament_id => Int64,
-        :season_id => Int64,
-        :match_id => Int64,
-        :incident_type => String15,  # Based on your data showing String15
-        :time => Int64,
-        :is_home => Union{Missing, Bool},
-        :player_in => Union{Missing, String31},  # Based on your data
-        :player_out => Union{Missing, String31},
-        :is_injury => Union{Missing, Bool},
-        :player_name => Union{Missing, String31},
-        :card_type => Union{Missing, String15},
-        :assist1_name => Union{Missing, String31},
-        :home_score => Union{Missing, Float64},  # Your data shows Float64
-        :away_score => Union{Missing, Float64}
+      :tournament_id => Int64,
+      :season_id => Int64,
+      :match_id => Int64,
+      :incident_type => String15,
+      :time => Int64,
+      :is_home => Union{Missing, Bool},
+      :is_live => Union{Missing, Bool},
+      :period_text => Union{Missing, String3}, 
+      :player_in_name => Union{Missing, String31}, 
+      :player_out_name => Union{Missing, String31},
+      :is_injury => Union{Missing, Bool},
+      :player_name => Union{Missing, String31},
+      :card_type => Union{Missing, String15},
+      :assist1_name => Union{Missing, String31},
+      :assist2_name => Union{Missing, String31},
+      :home_score => Union{Missing, Float64},
+      :away_score => Union{Missing, Float64},
+      :added_time => Union{Missing, Float64},
+      :time_seconds => Union{Missing, Float64},
+      :reversed_period_time => Union{Missing, Float64},
+      :reversed_period_time_seconds => Union{Missing, Float64},
+      :period_time_seconds => Union{Missing, Float64},
+      :injury_time_length => Union{Missing, Float64},
+      :incident_class => Union{Missing, String31},  
+      :reason => Union{Missing, String31},         
+      :rescinded => Union{Missing, Bool},
+      :var_confirmed => Union{Missing, Bool},
+      :var_decision => Union{Missing, String31},  
+      :var_reason => Union{Missing, String31},   
+      :penalty_reason => Union{Missing, String31}
     )
 
     # Define types for the matches DataFrame
@@ -109,4 +125,3 @@ function DataStore(data_files::DataFiles)
 
     return DataStore(matches, odds, incidents)
 end
-

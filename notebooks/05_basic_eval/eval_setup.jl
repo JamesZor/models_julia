@@ -250,6 +250,7 @@ function get_winning_outcomes(score_timeline)
     
     return (ht_winner = ht_winner, ft_winner = ft_winner)
 end
+
 function check_hedging_opportunities(score_timeline, time_range)
     goals_in_range = filter(minute -> minute in time_range, collect(keys(score_timeline.score_timeline)))
     
