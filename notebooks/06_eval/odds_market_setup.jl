@@ -97,6 +97,7 @@ struct PeriodOdds
     draw::MaybeFloat
     away::MaybeFloat
 
+    # TODO: Change 0_5 to _05
     # Over/Under odds
     over_0_5::MaybeFloat
     under_0_5::MaybeFloat
@@ -677,4 +678,781 @@ function impute_and_rescale_odds(data_store, match_id::Int; target_sum::Float64=
     return Eval.RescaledMatchOdds(mo.sofa_match_id, ht_rescaled, ft_rescaled)
 end
 
+
+function get_match_results(df::DataFrame, match_id::Int)
+    # 1. Filter and sort the DataFrame for the given match
+    match_incidents = sort(
+        filter(row -> row.match_id == match_id, df),
+        :time
+    )
+
+    # 2. Extract scores for half-time and full-time
+    # Find the row corresponding to the end of the first half (time 45)
+    # The `period` incident type contains the end-of-period score.
+    ht_row = findfirst(
+        row -> !ismissing(row.time) && row.time == 45 && row.incident_type == "period",
+        eachrow(match_incidents)
+    )
+
+    # Find the row corresponding to the end of the second half (time 90)
+    ft_row = findfirst(
+        row -> !ismissing(row.time) && row.time == 90 && row.incident_type == "period",
+        eachrow(match_incidents)
+    )
+
+    # 3. Helper function to process scores for a given period
+    function process_period_data(score_row)
+        if isnothing(score_row)
+            # Return a struct with all `nothing` if the data isn't found
+            return Eval.MatchPeriodResults(
+                nothing, nothing, nothing,
+                Vector{Eval.MaybeBool}(nothing, 16),
+                nothing, nothing, nothing,
+                nothing, nothing, nothing, nothing
+            )
+        else
+            home_score = score_row.home_score
+            away_score = score_row.away_score
+
+            # Handle cases where scores might be missing from the period row
+            if ismissing(home_score) || ismissing(away_score)
+                return Eval.MatchPeriodResults(
+                    nothing, nothing, nothing,
+                    Vector{Eval.MaybeBool}(nothing, 16),
+                    nothing, nothing, nothing,
+                    nothing, nothing, nothing, nothing
+                )
+            end
+
+            # Determine win/draw/loss
+            home_win = home_score > away_score
+            away_win = away_score > home_score
+            draw = home_score == away_score
+
+            # Calculate over/under
+            total_goals = home_score + away_score
+            under_05 = total_goals < 0.5
+            under_15 = total_goals < 1.5
+            under_25 = total_goals < 2.5
+            under_35 = total_goals < 3.5
+
+            # Correct Score (4x4 matrix, flattened)
+            correct_score_vec = Vector{Eval.MaybeBool}(fill(false, 16))
+            other_home = false
+            other_away = false
+            other_draw = false
+
+            if home_score <= 3 && away_score <= 3
+                # Map scores to the flattened index (1-16)
+                idx = Int(home_score * 4 + away_score + 1)
+                correct_score_vec[idx] = true
+            else
+                # Score is outside the 4x4 grid
+                if home_score > away_score
+                    other_home = true
+                elseif away_score > home_score
+                    other_away = true
+                else
+                    other_draw = true
+                end
+            end
+
+            return Eval.MatchPeriodResults(
+                home_win, draw, away_win,
+                correct_score_vec,
+                other_home, other_away, other_draw,
+                under_05, under_15, under_25, under_35
+            )
+        end
+    end
+
+
+    # 4. Process the data for each period
+    ht_results = process_period_data(isnothing(ht_row) ? nothing : match_incidents[ht_row, :])
+    ft_results = process_period_data(isnothing(ft_row) ? nothing : match_incidents[ft_row, :])
+
+    # 5. Return the final composite struct
+    return Eval.MatchLinesResults(ht_results, ft_results)
+end
+
+
+
+
+
+#### Claudes junk 
+##################################################
+# Kelly Criterion Structures for All Markets
+##################################################
+
+module KellyEval
+    using Statistics
+    
+    const MaybeKellyFraction = Union{Main.ExtendedEval.KellyFraction, Nothing}
+    
+    # Structure to hold Kelly fractions for a period's 1x2 market
+    struct Kelly1x2
+        home::MaybeKellyFraction
+        draw::MaybeKellyFraction
+        away::MaybeKellyFraction
+    end
+    
+    # Structure to hold Kelly fractions for over/under markets
+    struct KellyOverUnder
+        under_05::MaybeKellyFraction
+        over_05::MaybeKellyFraction
+        under_15::MaybeKellyFraction
+        over_15::MaybeKellyFraction
+        under_25::MaybeKellyFraction
+        over_25::MaybeKellyFraction
+        under_35::MaybeKellyFraction
+        over_35::MaybeKellyFraction
+    end
+    
+    # Structure to hold Kelly fractions for correct score markets
+    struct KellyCorrectScore
+        scores::Dict{Tuple{Int, Int}, MaybeKellyFraction}
+        other_home::MaybeKellyFraction
+        other_draw::MaybeKellyFraction
+        other_away::MaybeKellyFraction
+    end
+    
+    # Structure for a single period (HT or FT)
+    struct PeriodKellyFractions
+        one_x_two::Kelly1x2
+        over_under::KellyOverUnder
+        correct_score::KellyCorrectScore
+    end
+    
+    # Main structure for match Kelly fractions
+    struct MatchKellyFractions
+        ht::PeriodKellyFractions
+        ft::PeriodKellyFractions
+    end
+end
+
+##################################################
+# Safe Kelly Calculation Helper
+##################################################
+
+"""
+Calculate Bayesian Kelly fraction for a single outcome
+"""
+function calculate_bayesian_kelly(
+    model_probs::Vector{Float64},  # Posterior samples
+    market_odds::Float64,
+    fractional_kelly::Float64 = 0.25  # Conservative fraction
+)
+    kelly_fractions = Float64[]
+    
+    for p in model_probs
+        # Standard Kelly formula: f = (p*o - 1) / (o - 1)
+        # where p is probability, o is decimal odds
+        edge = p * market_odds - 1.0
+        
+        if edge > 0
+            f = edge / (market_odds - 1.0)
+            push!(kelly_fractions, f)
+        else
+            push!(kelly_fractions, 0.0)
+        end
+    end
+    
+    if isempty(kelly_fractions) || all(f -> f == 0, kelly_fractions)
+        return ExtendedEval.KellyFraction(:none, 0.0, (0.0, 0.0))
+    end
+    
+    # Use percentiles for conservative betting
+    fraction = quantile(kelly_fractions, 0.5) * fractional_kelly  # Median * safety factor
+    ci = (quantile(kelly_fractions, 0.25), quantile(kelly_fractions, 0.75))
+    
+    return ExtendedEval.KellyFraction(:single, fraction, ci)
+end
+
+"""
+    safe_calculate_kelly(model_probs, market_odds, fractional_kelly)
+
+Safely calculates Kelly fraction, handling nothing values and invalid inputs.
+"""
+function safe_calculate_kelly(
+    model_probs::Union{Vector{Float64}, Nothing},
+    market_odds::Union{Float64, Nothing},
+    fractional_kelly::Float64 = 1.0
+)
+    # Check for nothing values
+    if isnothing(model_probs) || isnothing(market_odds)
+        return nothing
+    end
+    
+    # Check for invalid odds
+    if market_odds <= 1.0
+        return nothing
+    end
+    
+    # Check for empty or all-zero probabilities
+    if isempty(model_probs) || all(p -> p <= 0, model_probs)
+        return nothing
+    end
+    
+    return calculate_bayesian_kelly(model_probs, market_odds, fractional_kelly)
+end
+
+##################################################
+# Period Kelly Calculation
+##################################################
+
+"""
+    calculate_period_kelly_fractions(
+        model_predictions,
+        normalized_odds,
+        raw_odds,
+        period::Symbol;
+        fractional_kelly::Float64 = 1.0
+    )
+
+Calculate Kelly fractions for all markets in a period (HT or FT).
+"""
+function calculate_period_kelly_fractions(
+    model_predictions,
+    normalized_odds,
+    raw_odds,
+    period::Symbol;
+    fractional_kelly::Float64 = 1.0
+)
+    # Select the appropriate period data
+    model_period = getfield(model_predictions, period)
+    norm_odds_period = getfield(normalized_odds, period)
+    raw_odds_period = getfield(raw_odds, period)
+    
+    # Calculate 1x2 Kelly fractions
+    kelly_1x2 = KellyEval.Kelly1x2(
+        safe_calculate_kelly(model_period.home, norm_odds_period.home, fractional_kelly),
+        safe_calculate_kelly(model_period.draw, norm_odds_period.draw, fractional_kelly),
+        safe_calculate_kelly(model_period.away, norm_odds_period.away, fractional_kelly)
+    )
+    
+    # Calculate over/under Kelly fractions
+    kelly_ou = KellyEval.KellyOverUnder(
+        safe_calculate_kelly(model_period.under_05, norm_odds_period.under_0_5, fractional_kelly),
+        safe_calculate_kelly(1 .- model_period.under_05, norm_odds_period.over_0_5, fractional_kelly),
+        safe_calculate_kelly(model_period.under_15, norm_odds_period.under_1_5, fractional_kelly),
+        safe_calculate_kelly(1 .- model_period.under_15, norm_odds_period.over_1_5, fractional_kelly),
+        safe_calculate_kelly(model_period.under_25, norm_odds_period.under_2_5, fractional_kelly),
+        safe_calculate_kelly(1 .- model_period.under_25, norm_odds_period.over_2_5, fractional_kelly),
+        safe_calculate_kelly(model_period.under_35, norm_odds_period.under_3_5, fractional_kelly),
+        safe_calculate_kelly(1 .- model_period.under_35, norm_odds_period.over_3_5, fractional_kelly)
+    )
+    
+    # Calculate correct score Kelly fractions
+    kelly_cs_dict = Dict{Tuple{Int, Int}, KellyEval.MaybeKellyFraction}()
+    
+    # Standard 4x4 grid of scores  
+    score_grid = [
+        (0,0), (1,0), (2,0), (3,0),
+        (0,1), (1,1), (2,1), (3,1),
+        (0,2), (1,2), (2,2), (3,2),
+        (0,3), (1,3), (2,3), (3,3)
+    ]
+    
+    for (idx, (home_score, away_score)) in enumerate(score_grid)
+        # Get model probabilities for this score
+        model_probs = if !isnothing(model_period.correct_score) && 
+                        size(model_period.correct_score, 2) >= idx
+            model_period.correct_score[:, idx]
+        else
+            nothing
+        end
+        
+        # Get market odds for this score
+        market_odds = get(raw_odds_period.correct_score, (home_score, away_score), nothing)
+        
+        # Calculate Kelly fraction
+        kelly_cs_dict[(home_score, away_score)] = safe_calculate_kelly(
+            model_probs, 
+            market_odds, 
+            fractional_kelly
+        )
+    end
+    
+    # Handle "other" scores
+    kelly_other_home = safe_calculate_kelly(
+        model_period.other_home_win_score,
+        raw_odds_period.any_other_home,
+        fractional_kelly
+    )
+    
+    kelly_other_draw = safe_calculate_kelly(
+        model_period.other_draw_score,
+        raw_odds_period.any_other_draw,
+        fractional_kelly
+    )
+    
+    kelly_other_away = safe_calculate_kelly(
+        model_period.other_away_win_score,
+        raw_odds_period.any_other_away,
+        fractional_kelly
+    )
+    
+    kelly_cs = KellyEval.KellyCorrectScore(
+        kelly_cs_dict,
+        kelly_other_home,
+        kelly_other_draw,
+        kelly_other_away
+    )
+    
+    return KellyEval.PeriodKellyFractions(kelly_1x2, kelly_ou, kelly_cs)
+end
+
+##################################################
+# Main Function to Calculate All Kelly Fractions
+##################################################
+
+"""
+    calculate_match_kelly_fractions(
+        model_predictions,
+        data_store,
+        match_id::Int;
+        target_sum::Float64 = 1.005,
+        fractional_kelly::Float64 = 1.0
+    )
+
+Calculate Kelly fractions for all markets and periods for a match.
+"""
+function calculate_match_kelly_fractions(
+    model_predictions,
+    data_store,
+    match_id::Int;
+    target_sum::Float64 = 1.005,
+    fractional_kelly::Float64 = 1.0
+)
+    # Get normalized odds
+    normalized_odds = impute_and_rescale_odds(data_store, match_id, target_sum=target_sum)
+    if isnothing(normalized_odds)
+        @warn "Could not get normalized odds for match_id: $match_id"
+        return nothing
+    end
+    
+    # Get raw odds for correct scores
+    raw_odds = get_game_line_odds(data_store.odds, match_id)
+    if isnothing(raw_odds)
+        @warn "Could not get raw odds for match_id: $match_id"
+        return nothing
+    end
+    
+    # Calculate Kelly fractions for both periods
+    ht_kelly = calculate_period_kelly_fractions(
+        model_predictions,
+        normalized_odds,
+        raw_odds,
+        :ht,
+        fractional_kelly=fractional_kelly
+    )
+    
+    ft_kelly = calculate_period_kelly_fractions(
+        model_predictions,
+        normalized_odds,
+        raw_odds,
+        :ft,
+        fractional_kelly=fractional_kelly
+    )
+    
+    return KellyEval.MatchKellyFractions(ht_kelly, ft_kelly)
+end
+
+
+##################################################
+# Display Functions
+##################################################
+
+using Printf
+
+"""
+    display_kelly_fractions(kelly::KellyEval.MatchKellyFractions, match_id::Int, data_store, match_results::Eval.MatchLinesResults)
+
+Display Kelly fractions with win/loss indicators and profit calculations.
+"""
+function display_kelly_fractions_v2(kelly::KellyEval.MatchKellyFractions, match_id::Int, data_store, match_results::Eval.MatchLinesResults)
+    # Helper to format Kelly fraction
+    function fmt_kelly(kf::Union{ExtendedEval.KellyFraction, Nothing})
+        isnothing(kf) ? "     -     " : @sprintf("%11.4f", kf.fraction)
+    end
+    
+    # Helper to format confidence interval
+    function fmt_ci(kf::Union{ExtendedEval.KellyFraction, Nothing})
+        isnothing(kf) ? "        -        " : @sprintf("[%6.3f, %6.3f]", kf.confidence_interval[1], kf.confidence_interval[2])
+    end
+    
+    # Helper to calculate profit/loss for a Kelly bet
+    function calc_profit(kf::Union{ExtendedEval.KellyFraction, Nothing}, odds::Union{Float64, Nothing}, won::Union{Bool, Nothing})
+        if isnothing(kf) || isnothing(odds) || isnothing(won) || kf.fraction <= 0
+            return 0.0
+        end
+        stake = kf.fraction  # As fraction of bankroll
+        return won ? stake * (odds - 1) : -stake
+    end
+    
+    # Helper to format profit
+    function fmt_profit(profit::Float64)
+        profit == 0 ? "       -       " : @sprintf("%+14.4f", profit)
+    end
+    
+    # Extract match info from data_store
+    match_row = filter(row -> row.match_id == match_id, data_store.matches)
+    
+    println("\n╔" * "═"^80 * "╗")
+    println("║" * " "^25 * "KELLY CRITERION ANALYSIS" * " "^31 * "║")
+    println("╠" * "═"^80 * "╣")
+    
+    if !isempty(match_row)
+        match_row = match_row[1, :]
+        teams = "$(match_row.home_team) vs $(match_row.away_team)"
+        scores = "FT: $(match_row.home_score)-$(match_row.away_score), HT: $(match_row.home_score_ht)-$(match_row.away_score_ht)"
+        println("║ Match: $(rpad(teams, 72)) ║")
+        println("║ Score: $(rpad(scores, 72)) ║")
+    else
+        println("║ Match ID: $(rpad(string(match_id), 68)) ║")
+    end
+    println("╚" * "═"^80 * "╝")
+    
+    # Get odds for profit calculation
+    norm_odds = impute_and_rescale_odds(data_store, match_id, target_sum=1.005)
+    raw_odds = get_game_line_odds(data_store.odds, match_id)
+    
+    # Track profit by market group
+    profit_1x2_ft = 0.0
+    profit_1x2_ht = 0.0
+    profit_ou_ft = 0.0
+    profit_ou_ht = 0.0
+    profit_cs_ft = 0.0
+    profit_cs_ht = 0.0
+    total_profit = 0.0
+    
+    # 1X2 Markets with results
+    println("\n┌" * "─"^94 * "┐")
+    println("│" * " "^42 * "1X2 MARKETS" * " "^41 * "│")
+    println("├" * "─"^94 * "┤")
+    println("│ Period │  Market  │    Kelly    │       95% CI       │  Result  │   Profit/Loss   │")
+    println("├────────┼──────────┼─────────────┼────────────────────┼──────────┼─────────────────┤")
+    
+    # FT 1X2
+    ft_1x2 = [
+        (:home, "Home", kelly.ft.one_x_two.home, match_results.ft.home, norm_odds.ft.home),
+        (:draw, "Draw", kelly.ft.one_x_two.draw, match_results.ft.draw, norm_odds.ft.draw),
+        (:away, "Away", kelly.ft.one_x_two.away, match_results.ft.away, norm_odds.ft.away)
+    ]
+    
+    for (field, name, kf, won, odds) in ft_1x2
+        profit = calc_profit(kf, odds, won)
+        profit_1x2_ft += profit
+        result_str = isnothing(won) ? "    -    " : (won ? "   WIN   " : "   LOSS  ")
+        println("│   FT   │ $(rpad(name, 8)) │ $(fmt_kelly(kf)) │ $(fmt_ci(kf)) │ $(result_str) │ $(fmt_profit(profit)) │")
+    end
+    
+    println("├────────┼──────────┼─────────────┼────────────────────┼──────────┼─────────────────┤")
+    
+    # HT 1X2
+    ht_1x2 = [
+        (:home, "Home", kelly.ht.one_x_two.home, match_results.ht.home, norm_odds.ht.home),
+        (:draw, "Draw", kelly.ht.one_x_two.draw, match_results.ht.draw, norm_odds.ht.draw),
+        (:away, "Away", kelly.ht.one_x_two.away, match_results.ht.away, norm_odds.ht.away)
+    ]
+    
+    for (field, name, kf, won, odds) in ht_1x2
+        profit = calc_profit(kf, odds, won)
+        profit_1x2_ht += profit
+        result_str = isnothing(won) ? "    -    " : (won ? "   WIN   " : "   LOSS  ")
+        println("│   HT   │ $(rpad(name, 8)) │ $(fmt_kelly(kf)) │ $(fmt_ci(kf)) │ $(result_str) │ $(fmt_profit(profit)) │")
+    end
+    
+    println("└" * "─"^94 * "┘")
+    
+    # Over/Under Markets with results
+    println("\n┌" * "─"^94 * "┐")
+    println("│" * " "^38 * "OVER/UNDER MARKETS" * " "^38 * "│")
+    println("├" * "─"^94 * "┤")
+    println("│ Period │  Line  │   Type   │    Kelly    │       95% CI       │  Result  │   Profit   │")
+    println("├────────┼────────┼──────────┼─────────────┼────────────────────┼──────────┼────────────┤")
+    
+    # FT Over/Under
+    ft_ou_markets = [
+        ("0.5", "Under", kelly.ft.over_under.under_05, match_results.ft.under_05, norm_odds.ft.under_0_5),
+        ("0.5", "Over", kelly.ft.over_under.over_05, !match_results.ft.under_05, norm_odds.ft.over_0_5),
+        ("1.5", "Under", kelly.ft.over_under.under_15, match_results.ft.under_15, norm_odds.ft.under_1_5),
+        ("1.5", "Over", kelly.ft.over_under.over_15, !match_results.ft.under_15, norm_odds.ft.over_1_5),
+        ("2.5", "Under", kelly.ft.over_under.under_25, match_results.ft.under_25, norm_odds.ft.under_2_5),
+        ("2.5", "Over", kelly.ft.over_under.over_25, !match_results.ft.under_25, norm_odds.ft.over_2_5),
+        ("3.5", "Under", kelly.ft.over_under.under_35, match_results.ft.under_35, norm_odds.ft.under_3_5),
+        ("3.5", "Over", kelly.ft.over_under.over_35, !match_results.ft.under_35, norm_odds.ft.over_3_5)
+    ]
+    
+    for (line, type, kf, won, odds) in ft_ou_markets
+        profit = calc_profit(kf, odds, won)
+        profit_ou_ft += profit
+        result_str = isnothing(won) ? "    -    " : (won ? "   WIN   " : "   LOSS  ")
+        profit_str = profit == 0 ? "     -      " : @sprintf("%+11.4f", profit)
+        println("│   FT   │  $(line)  │ $(rpad(type, 8)) │ $(fmt_kelly(kf)) │ $(fmt_ci(kf)) │ $(result_str) │ $(profit_str) │")
+    end
+    
+    println("├────────┼────────┼──────────┼─────────────┼────────────────────┼──────────┼────────────┤")
+    
+    # HT Over/Under
+    ht_ou_markets = [
+        ("0.5", "Under", kelly.ht.over_under.under_05, match_results.ht.under_05, norm_odds.ht.under_0_5),
+        ("0.5", "Over", kelly.ht.over_under.over_05, !match_results.ht.under_05, norm_odds.ht.over_0_5),
+        ("1.5", "Under", kelly.ht.over_under.under_15, match_results.ht.under_15, norm_odds.ht.under_1_5),
+        ("1.5", "Over", kelly.ht.over_under.over_15, !match_results.ht.under_15, norm_odds.ht.over_1_5),
+        ("2.5", "Under", kelly.ht.over_under.under_25, match_results.ht.under_25, norm_odds.ht.under_2_5),
+        ("2.5", "Over", kelly.ht.over_under.over_25, !match_results.ht.under_25, norm_odds.ht.over_2_5)
+    ]
+    
+    for (line, type, kf, won, odds) in ht_ou_markets
+        profit = calc_profit(kf, odds, won)
+        profit_ou_ht += profit
+        result_str = isnothing(won) ? "    -    " : (won ? "   WIN   " : "   LOSS  ")
+        profit_str = profit == 0 ? "     -      " : @sprintf("%+11.4f", profit)
+        println("│   HT   │  $(line)  │ $(rpad(type, 8)) │ $(fmt_kelly(kf)) │ $(fmt_ci(kf)) │ $(result_str) │ $(profit_str) │")
+    end
+    
+    println("└" * "─"^94 * "┘")
+    
+    # Correct Score Markets
+    println("\n┌" * "─"^94 * "┐")
+    println("│" * " "^34 * "CORRECT SCORE MARKETS" * " "^38 * "│")
+    println("├" * "─"^94 * "┤")
+    println("│ Period │  Score  │    Kelly    │       95% CI       │  Result  │   Profit/Loss   │")
+    println("├────────┼─────────┼─────────────┼────────────────────┼──────────┼─────────────────┤")
+    
+    # FT Correct Scores - show ALL scores from the 4x4 grid
+    score_grid = [
+        (0,0), (1,0), (2,0), (3,0),
+        (0,1), (1,1), (2,1), (3,1),
+        (0,2), (1,2), (2,2), (3,2),
+        (0,3), (1,3), (2,3), (3,3)
+    ]
+    
+    for (idx, (h, a)) in enumerate(score_grid)
+        kf = get(kelly.ft.correct_score.scores, (h, a), nothing)
+        
+        # Check if this score actually happened
+        won = if !isnothing(match_results.ft.correct_score) && idx <= length(match_results.ft.correct_score)
+            match_results.ft.correct_score[idx]
+        else
+            false
+        end
+        
+        odds = get(raw_odds.ft.correct_score, (h, a), nothing)
+        profit = calc_profit(kf, odds, won)
+        profit_cs_ft += profit
+        
+        score_str = "$h-$a"
+        result_str = won ? "   WIN   " : "   LOSS  "
+        println("│   FT   │   $(rpad(score_str, 5)) │ $(fmt_kelly(kf)) │ $(fmt_ci(kf)) │ $(result_str) │ $(fmt_profit(profit)) │")
+    end
+    
+    # Other scores for FT
+    other_scores = [
+        ("Other H", kelly.ft.correct_score.other_home, match_results.ft.other_home_win_score, raw_odds.ft.any_other_home),
+        ("Other D", kelly.ft.correct_score.other_draw, match_results.ft.other_draw_score, raw_odds.ft.any_other_draw),
+        ("Other A", kelly.ft.correct_score.other_away, match_results.ft.other_away_win_score, raw_odds.ft.any_other_away)
+    ]
+    
+    for (name, kf, won, odds) in other_scores
+        profit = calc_profit(kf, odds, won)
+        profit_cs_ft += profit
+        result_str = isnothing(won) ? "    -    " : (won ? "   WIN   " : "   LOSS  ")
+        println("│   FT   │ $(rpad(name, 7)) │ $(fmt_kelly(kf)) │ $(fmt_ci(kf)) │ $(result_str) │ $(fmt_profit(profit)) │")
+    end
+    
+    println("├────────┼─────────┼─────────────┼────────────────────┼──────────┼─────────────────┤")
+    
+    # HT Correct Scores
+    for (idx, (h, a)) in enumerate(score_grid)
+        kf = get(kelly.ht.correct_score.scores, (h, a), nothing)
+        
+        won = if !isnothing(match_results.ht.correct_score) && idx <= length(match_results.ht.correct_score)
+            match_results.ht.correct_score[idx]
+        else
+            false
+        end
+        
+        odds = get(raw_odds.ht.correct_score, (h, a), nothing)
+        profit = calc_profit(kf, odds, won)
+        profit_cs_ht += profit
+        
+        score_str = "$h-$a"
+        result_str = won ? "   WIN   " : "   LOSS  "
+        println("│   HT   │   $(rpad(score_str, 5)) │ $(fmt_kelly(kf)) │ $(fmt_ci(kf)) │ $(result_str) │ $(fmt_profit(profit)) │")
+    end
+    
+    println("└" * "─"^94 * "┘")
+    
+    # Calculate total profit and ROI
+    total_profit = profit_1x2_ft + profit_1x2_ht + profit_ou_ft + profit_ou_ht + profit_cs_ft + profit_cs_ht
+    
+    # Count total stake
+    total_stake = 0.0
+    
+    # Function to add stake if bet was placed
+    function add_stake(kf)
+        if !isnothing(kf) && kf.fraction > 0.0001
+            return kf.fraction
+        end
+        return 0.0
+    end
+    
+    # Calculate total stake from all markets
+    # 1X2
+    for kf in [kelly.ft.one_x_two.home, kelly.ft.one_x_two.draw, kelly.ft.one_x_two.away,
+               kelly.ht.one_x_two.home, kelly.ht.one_x_two.draw, kelly.ht.one_x_two.away]
+        total_stake += add_stake(kf)
+    end
+    
+    # Over/Under
+    for kf in [kelly.ft.over_under.under_05, kelly.ft.over_under.over_05,
+               kelly.ft.over_under.under_15, kelly.ft.over_under.over_15,
+               kelly.ft.over_under.under_25, kelly.ft.over_under.over_25,
+               kelly.ft.over_under.under_35, kelly.ft.over_under.over_35,
+               kelly.ht.over_under.under_05, kelly.ht.over_under.over_05,
+               kelly.ht.over_under.under_15, kelly.ht.over_under.over_15,
+               kelly.ht.over_under.under_25, kelly.ht.over_under.over_25]
+        total_stake += add_stake(kf)
+    end
+    
+    # Correct Scores
+    for (_, kf) in kelly.ft.correct_score.scores
+        total_stake += add_stake(kf)
+    end
+    for (_, kf) in kelly.ht.correct_score.scores
+        total_stake += add_stake(kf)
+    end
+    
+    roi = total_stake > 0 ? (total_profit / total_stake * 100) : 0.0
+    
+    # Summary Statistics with P/L breakdown
+    println("\n┌" * "─"^60 * "┐")
+    println("│" * " "^21 * "PROFIT/LOSS BREAKDOWN" * " "^17 * "│")
+    println("├" * "─"^60 * "┤")
+    println("│ Market Group │ Period │       P/L      │      Stake      │")
+    println("├──────────────┼────────┼────────────────┼─────────────────┤")
+    
+    # Calculate stakes for each group
+    stake_1x2_ft = add_stake(kelly.ft.one_x_two.home) + add_stake(kelly.ft.one_x_two.draw) + add_stake(kelly.ft.one_x_two.away)
+    stake_1x2_ht = add_stake(kelly.ht.one_x_two.home) + add_stake(kelly.ht.one_x_two.draw) + add_stake(kelly.ht.one_x_two.away)
+    
+    stake_ou_ft = add_stake(kelly.ft.over_under.under_05) + add_stake(kelly.ft.over_under.over_05) +
+                  add_stake(kelly.ft.over_under.under_15) + add_stake(kelly.ft.over_under.over_15) +
+                  add_stake(kelly.ft.over_under.under_25) + add_stake(kelly.ft.over_under.over_25) +
+                  add_stake(kelly.ft.over_under.under_35) + add_stake(kelly.ft.over_under.over_35)
+    
+    stake_ou_ht = add_stake(kelly.ht.over_under.under_05) + add_stake(kelly.ht.over_under.over_05) +
+                  add_stake(kelly.ht.over_under.under_15) + add_stake(kelly.ht.over_under.over_15) +
+                  add_stake(kelly.ht.over_under.under_25) + add_stake(kelly.ht.over_under.over_25)
+    
+    stake_cs_ft = sum(add_stake(kf) for (_, kf) in kelly.ft.correct_score.scores)
+    stake_cs_ht = sum(add_stake(kf) for (_, kf) in kelly.ht.correct_score.scores)
+    
+    println("│     1X2      │   FT   │ $(@sprintf("%+14.4f", profit_1x2_ft)) │ $(@sprintf("%15.4f", stake_1x2_ft)) │")
+    println("│     1X2      │   HT   │ $(@sprintf("%+14.4f", profit_1x2_ht)) │ $(@sprintf("%15.4f", stake_1x2_ht)) │")
+    println("│  Over/Under  │   FT   │ $(@sprintf("%+14.4f", profit_ou_ft)) │ $(@sprintf("%15.4f", stake_ou_ft)) │")
+    println("│  Over/Under  │   HT   │ $(@sprintf("%+14.4f", profit_ou_ht)) │ $(@sprintf("%15.4f", stake_ou_ht)) │")
+    println("│ Correct Score│   FT   │ $(@sprintf("%+14.4f", profit_cs_ft)) │ $(@sprintf("%15.4f", stake_cs_ft)) │")
+    println("│ Correct Score│   HT   │ $(@sprintf("%+14.4f", profit_cs_ht)) │ $(@sprintf("%15.4f", stake_cs_ht)) │")
+    println("├──────────────┴────────┴────────────────┴─────────────────┤")
+    println("│ Total P/L (% of bankroll): $(@sprintf("%+8.4f%%", total_profit * 100)) " * " "^22 * "│")
+    println("│ Total Stake (% of bankroll): $(@sprintf("%7.4f%%", total_stake * 100)) " * " "^20 * "│")
+    println("│ ROI: $(@sprintf("%+8.2f%%", roi)) " * " "^42 * "│")
+    println("└" * "─"^60 * "┘")
+   # _won = 0
+    
+    # Check all markets
+    all_bets = [
+        (kelly.ft.one_x_two.home, match_results.ft.home),
+        (kelly.ft.one_x_two.draw, match_results.ft.draw),
+        (kelly.ft.one_x_two.away, match_results.ft.away),
+        (kelly.ht.one_x_two.home, match_results.ht.home),
+        (kelly.ht.one_x_two.draw, match_results.ht.draw),
+        (kelly.ht.one_x_two.away, match_results.ht.away),
+        (kelly.ft.over_under.under_05, match_results.ft.under_05),
+        (kelly.ft.over_under.over_05, !match_results.ft.under_05),
+        (kelly.ft.over_under.under_15, match_results.ft.under_15),
+        (kelly.ft.over_under.over_15, !match_results.ft.under_15),
+        (kelly.ft.over_under.under_25, match_results.ft.under_25),
+        (kelly.ft.over_under.over_25, !match_results.ft.under_25),
+        (kelly.ft.over_under.under_35, match_results.ft.under_35),
+        (kelly.ft.over_under.over_35, !match_results.ft.under_35),
+        (kelly.ht.over_under.under_05, match_results.ht.under_05),
+        (kelly.ht.over_under.over_05, !match_results.ht.under_05),
+        (kelly.ht.over_under.under_15, match_results.ht.under_15),
+        (kelly.ht.over_under.over_15, !match_results.ht.under_15),
+        (kelly.ht.over_under.under_25, match_results.ht.under_25),
+        (kelly.ht.over_under.over_25, !match_results.ht.under_25)
+    ]
+   
+    bets_placed = 0
+    bets_won =0
+    for (kf, won) in all_bets
+        if !isnothing(kf) && kf.fraction > 0.0001
+            bets_placed += 1
+            if !isnothing(won) && won
+                bets_won += 1
+            end
+        end
+    end
+    
+    win_rate = bets_placed > 0 ? (bets_won / bets_placed * 100) : 0.0
+    println("│ Bets Placed: $(lpad(string(bets_placed), 2))  |  Bets Won: $(lpad(string(bets_won), 2))  |  Win Rate: $(@sprintf("%5.1f%%", win_rate)) │")
+    println("└" * "─"^50 * "┘")
+end
+
+"""
+    get_positive_kelly_bets(kelly::KellyEval.MatchKellyFractions; min_kelly=0.01)
+
+Extract all positive Kelly fractions above threshold.
+"""
+function get_positive_kelly_bets(kelly::KellyEval.MatchKellyFractions; min_kelly::Float64=0.01)
+    bets = []
+    
+    # Check FT 1X2
+    for (market, field) in [("FT_Home", :home), ("FT_Draw", :draw), ("FT_Away", :away)]
+        kf = getfield(kelly.ft.one_x_two, field)
+        if !isnothing(kf) && kf.fraction >= min_kelly
+            push!(bets, (market=market, kelly=kf.fraction, ci=kf.confidence_interval))
+        end
+    end
+    
+    # Check HT 1X2
+    for (market, field) in [("HT_Home", :home), ("HT_Draw", :draw), ("HT_Away", :away)]
+        kf = getfield(kelly.ht.one_x_two, field)
+        if !isnothing(kf) && kf.fraction >= min_kelly
+            push!(bets, (market=market, kelly=kf.fraction, ci=kf.confidence_interval))
+        end
+    end
+    
+    # Check Over/Under markets
+    for period in [:ft, :ht]
+        period_str = uppercase(string(period))
+        ou = getfield(kelly, period).over_under
+        
+        for (line, under_field, over_field) in [
+            ("0.5", :under_05, :over_05),
+            ("1.5", :under_15, :over_15),
+            ("2.5", :under_25, :over_25),
+            ("3.5", :under_35, :over_35)
+        ]
+            kf_under = getfield(ou, under_field)
+            kf_over = getfield(ou, over_field)
+            
+            if !isnothing(kf_under) && kf_under.fraction >= min_kelly
+                push!(bets, (market="$(period_str)_Under_$(line)", kelly=kf_under.fraction, ci=kf_under.confidence_interval))
+            end
+            if !isnothing(kf_over) && kf_over.fraction >= min_kelly
+                push!(bets, (market="$(period_str)_Over_$(line)", kelly=kf_over.fraction, ci=kf_over.confidence_interval))
+            end
+        end
+    end
+    
+    # Sort by Kelly fraction (highest first)
+    sort!(bets, by=x->x.kelly, rev=true)
+    
+    return bets
+end
 
