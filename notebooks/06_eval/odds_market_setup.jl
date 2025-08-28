@@ -190,6 +190,15 @@ end
 
 
 
+module ExtendedEval
+  # Kelly criterion structures
+  struct KellyFraction
+      outcome::Symbol  # :home, :draw, :away, etc.
+      fraction::Float64
+      confidence_interval::Tuple{Float64, Float64}  # CI from Bayesian posterior
+  end
+
+end
 ##################################################
 # Extract the informations from the incidents 
 ##################################################

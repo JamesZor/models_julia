@@ -23,8 +23,6 @@ rescaled_odds_obj = impute_and_rescale_odds(data_store, match_id_to_process, tar
 
 
 # display 
-function display_odd_change(o_odds, re_odds)
-
 # You can now inspect the rescaled odds
 println("--- Original FT 1x2 Odds ---")
 println("Home: ", original_odds.ft.home)
@@ -54,6 +52,8 @@ m1::MatchPredict = matches_results[match_id]
 ##################################################
 # Kelly Criterion Implementation
 ##################################################
+#
+#
 module ExtendedEval
   # Kelly criterion structures
   struct KellyFraction
@@ -176,3 +176,88 @@ m1 = matches_results[match_id];
 kelly = calculate_match_kelly_fractions(m1, data_store, match_id, fractional_kelly=1.0);
 mr = get_match_results(data_store.incidents, match_id);
 display_kelly_fractions_v2(kelly, match_id, data_store, mr)
+kelly
+
+
+
+###### 
+
+function calc_profit(kf::Union{ExtendedEval.KellyFraction, Nothing}, odds::Union{Float64, Nothing}, won::Union{Bool, Nothing})
+    if isnothing(kf) || isnothing(odds) || isnothing(won) || kf.fraction <= 0
+        return 0.0
+    end
+    stake = kf.fraction  # As fraction of bankroll
+    return won ? stake * (odds - 1) : -stake
+end
+
+function test_kelly_1x2_ht(kelly, match_results, norm_odds)
+    profit_1x2_ht = 0.0
+    # HT 1X2
+    ht_1x2 = [
+        (:home, "Home", kelly.ht.one_x_two.home, match_results.ht.home, norm_odds.ht.home),
+        (:draw, "Draw", kelly.ht.one_x_two.draw, match_results.ht.draw, norm_odds.ht.draw),
+        (:away, "Away", kelly.ht.one_x_two.away, match_results.ht.away, norm_odds.ht.away)
+    ]
+    
+    for (field, name, kf, won, odds) in ht_1x2
+        profit = calc_profit(kf, odds, won)
+        profit_1x2_ht += profit
+    end
+    return profit_1x2_ht
+end
+
+
+match_id = rand(keys(matches_results))
+m1 = matches_results[match_id];
+mr = get_match_results(data_store.incidents, match_id);
+kelly = calculate_match_kelly_fractions(m1, data_store, match_id, fractional_kelly=1.0);
+norm_odds = impute_and_rescale_odds(data_store, match_id, target_sum=1.005)
+raw_odds = get_game_line_odds(data_store.odds, match_id)
+test_kelly_1x2_ht(kelly, mr, norm_odds)
+test_kelly_1x2_ht(kelly, mr, raw_odds)
+
+
+#####
+#
+function calculate_bayesian_kelly(
+    model_probs::Vector{Float64},  # Posterior samples
+    market_odds::Float64,
+    fractional_kelly::Float64 = 1.0  # Conservative fraction
+)
+    kelly_fractions = Float64[]
+    
+    for p in model_probs
+        # Standard Kelly formula: f = (p*o - 1) / (o - 1)
+        # where p is probability, o is decimal odds
+        edge = p * market_odds - 1.0
+        
+        if edge > 0
+            f = edge / (market_odds - 1.0)
+            push!(kelly_fractions, f)
+        else
+            push!(kelly_fractions, 0.0)
+        end
+    end
+    
+    if isempty(kelly_fractions) || all(f -> f == 0, kelly_fractions)
+        return ExtendedEval.KellyFraction(:none, 0.0, (0.0, 0.0))
+    end
+   
+    return kelly_fractions
+    
+end
+
+
+k_ = calculate_bayesian_kelly(m1.ft.correct_score[:,6], raw_odds.ft.correct_score[(1,1)], 1.0)
+
+
+
+quantile(k_, [0.1, 0.25, 0.5, 0.75, 0.9]) 
+mean(k_)
+median(k_)
+
+using Plots
+histogram(k_, bins=60)
+
+sum( k_ .> 0)/ length(k_)
+
