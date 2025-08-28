@@ -109,3 +109,44 @@ struct MatchPredict
   ft::MatchHalfChainPredicts
 end
 
+##################################################
+#  Types incidents match results
+##################################################
+
+const MaybeFloat = Union{Float64, Nothing}
+const MaybeBool = Union{Bool, Nothing}
+
+# Define correct score dictionary types
+const CorrectScore = Dict{Union{Tuple{Int,Int}, String}, MaybeBool}
+
+struct MatchFTResults 
+  home::MaybeBool
+  draw::MaybeBool
+  away::MaybeBool
+  correct_score::CorrectScore 
+  # under
+  under_05::MaybeBool 
+  under_15::MaybeBool 
+  under_25::MaybeBool 
+  under_35::MaybeBool 
+  # btts
+  btts::MaybeBool
+  injury_time::MaybeFloat  # Added
+end 
+
+struct MatchHTResults 
+  home::MaybeBool
+  draw::MaybeBool
+  away::MaybeBool
+  correct_score::CorrectScore
+  # under
+  under_05::MaybeBool 
+  under_15::MaybeBool 
+  under_25::MaybeBool 
+  injury_time::MaybeFloat  # Added
+end 
+
+struct MatchLinesResults
+  ht::MatchHTResults
+  ft::MatchFTResults
+end

@@ -16,6 +16,10 @@ include("data/loader.jl")
 include("data/mapping.jl") 
 include("data/splitting.jl")
 
+# Data Utils 
+include("./data/utils_incidents.jl")
+export get_match_results, process_matches_results
+
 # Features
 # include("features/base.jl")  # TODO: Create this file
 include("features/maher.jl")

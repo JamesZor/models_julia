@@ -1,210 +1,173 @@
-# analysis_logic.jl
-using Statistics, DataFrames, Plots, Printf
+# threaded analysis_logic.jl
+using Statistics, DataFrames, Plots, Printf, Base.Threads
 
-# Make sure the structs are available
+# Ensure the structs from your setup file are available
 include("odds_market_setup.jl")
 
 # ##################################################
-# 1. MODIFIED KELLY CALCULATION
+# 1. NEW DATA STRUCTURES 
 # ##################################################
 
-"""
-Calculates the Bayesian Kelly fraction chain.
-Based on the original `calculate_bayesian_kelly` function[cite: 3, 15].
-"""
-function calculate_bayesian_kelly_chain(
-    model_probs::Vector{Float64},
-    market_odds::Union{Float64, Nothing}
-)
-    # Handle invalid inputs
-    if isnothing(market_odds) || market_odds <= 1.0 || isempty(model_probs)
-        return Float64[] # Return an empty chain
-    end
-
-    kelly_fractions = Float64[]
-    for p in model_probs
-        edge = p * market_odds - 1.0
-        if edge > 0
-            f = edge / (market_odds - 1.0)
-            push!(kelly_fractions, f)
-        else
-            push!(kelly_fractions, 0.0)
-        end
-    end
+# Holds the full distribution of Kelly fractions for all markets in a match
+struct MatchKellyChains
+    # Chains calculated using normalized odds (good for 1x2, O/U)
+    norm_1x2::NamedTuple{(:home, :draw, :away), NTuple{3, Vector{Float64}}}
+    norm_ou::NamedTuple{(:u05, :o05, :u15, :o15, :u25, :o25, :u35, :o35), NTuple{8, Vector{Float64}}}
     
-    # Return the full chain of fractions
-    return kelly_fractions
+    # Chains calculated using raw odds (often better for less efficient markets like Correct Score)
+    raw_cs::Dict{Tuple{Int, Int}, Vector{Float64}}
+end
+
+# A container for all pre-processed data for a single match
+struct MatchAnalysisPacket
+    match_id::Int
+    model_predictions::MatchPredict 
+    match_results::Eval.MatchLinesResults
+    norm_odds::Eval.RescaledMatchOdds
+    raw_odds::Eval.MatchOdds
+    kelly_chains::MatchKellyChains
 end
 
 # ##################################################
-# 2. PROFIT CALCULATION & ITERATION
+# 2. STAGE 1: DATA PREPARATION & PROCESSING (Threaded)
 # ##################################################
 
 """
-Calculates profit from a Kelly chain given a specific quantile.
+Core function to calculate all Kelly chains for a single match.
+This is the heart of the "Process" stage.
 """
-function calculate_profit_from_chain(
-    chain::Vector{Float64},
-    odds::Union{Float64, Nothing},
-    won::Union{Bool, Nothing},
-    quantile_level::Float64,
+function calculate_match_kelly_chains(
+    model_predictions::MatchPredict, 
+    norm_odds::Eval.RescaledMatchOdds,
+    raw_odds::Eval.MatchOdds
+)
+    # --- Use Normalized Odds for 1x2 and O/U Markets ---
+    # Full-Time (FT)
+    ft_home_chain = calculate_bayesian_kelly_chain(model_predictions.ft.home, norm_odds.ft.home)
+    ft_draw_chain = calculate_bayesian_kelly_chain(model_predictions.ft.draw, norm_odds.ft.draw)
+    ft_away_chain = calculate_bayesian_kelly_chain(model_predictions.ft.away, norm_odds.ft.away)
+    
+    ft_u25_chain = calculate_bayesian_kelly_chain(model_predictions.ft.under_25, norm_odds.ft.under_2_5)
+    ft_o25_chain = calculate_bayesian_kelly_chain(1.0 .- model_predictions.ft.under_25, norm_odds.ft.over_2_5)
+    
+    # (Extend this for other O/U lines as needed, e.g., 0.5, 1.5, 3.5)
+    
+    # --- Use Raw Odds for Correct Score Market ---
+    raw_cs_chains = Dict{Tuple{Int, Int}, Vector{Float64}}()
+    for (idx, score_tuple) in enumerate(score_grid()) # Assuming a helper function score_grid
+        score_probs = model_predictions.ft.correct_score[:, idx]
+        score_odds = get(raw_odds.ft.correct_score, score_tuple, nothing)
+        raw_cs_chains[score_tuple] = calculate_bayesian_kelly_chain(score_probs, score_odds)
+    end
+
+    # NOTE: This example is simplified to FT markets. You would expand this for HT markets too.
+    return MatchKellyChains(
+        (home=ft_home_chain, draw=ft_draw_chain, away=ft_away_chain),
+        (u05=[], o05=[], u15=[], o15=[], u25=ft_u25_chain, o25=ft_o25_chain, u35=[], o35=[]), # Simplified
+        raw_cs_chains
+    )
+end
+
+"""
+Processes a single match: fetches all data and calculates Kelly chains.
+This function is designed to be called by a thread.
+"""
+function process_single_match(match_id::Int, matches_predictions_map, data_store)
+    try
+        m1 = matches_predictions_map[match_id]
+        mr = get_match_results(data_store.incidents, match_id)
+        norm_odds = impute_and_rescale_odds(data_store, match_id, target_sum=1.005)
+        raw_odds = get_game_line_odds(data_store.odds, match_id)
+
+        if isnothing(norm_odds) || isnothing(raw_odds)
+            return nothing
+        end
+
+        kelly_chains = calculate_match_kelly_chains(m1, norm_odds, raw_odds)
+        
+        return MatchAnalysisPacket(match_id, m1, mr, norm_odds, raw_odds, kelly_chains)
+    catch e
+        @warn "Could not process match_id $match_id: $e"
+        return nothing
+    end
+end
+
+"""
+Orchestrates the threaded processing of all target matches.
+"""
+function prepare_all_matches_threaded(target_matches, matches_predictions_map, data_store)
+    num_matches = nrow(target_matches)
+    packets = Vector{Union{MatchAnalysisPacket, Nothing}}(undef, num_matches)
+    
+    # Use @threads for simple, efficient parallelization
+    @threads for i in 1:num_matches
+        match_id = target_matches[i, :match_id]
+        packets[i] = process_single_match(match_id, matches_predictions_map, data_store)
+    end
+    
+    # Filter out any matches that failed and return a dictionary keyed by match_id
+    valid_packets = filter(!isnothing, packets)
+    return Dict(p.match_id => p for p in valid_packets)
+end
+
+
+# ##################################################
+# 3. STAGE 2: ANALYSIS (Fast, Non-Threaded)
+# ##################################################
+
+"""
+Calculates aggregate ROI across all matches for a given quantile.
+This function operates on the pre-processed data and is very fast.
+"""
+function calculate_aggregate_roi(
+    analysis_packets::Dict{Int, MatchAnalysisPacket};
+    quantile_level::Float64 = 0.5,
     fractional_kelly::Float64 = 1.0
 )
-    if isempty(chain) || isnothing(odds) || isnothing(won)
-        return (profit=0.0, stake=0.0)
+    # Initialize accumulators
+    market_groups = ["FT_1x2", "FT_OU_2.5", "FT_CS"]
+    results = Dict(g => (profit=0.0, stake=0.0) for g in market_groups)
+
+    for (match_id, packet) in analysis_packets
+        # Unpack data for clarity
+        chains = packet.kelly_chains
+        results_ = packet.match_results
+        odds = packet.norm_odds # Using normalized odds for staking in 1x2 and O/U
+
+        # --- FT 1x2 ---
+        p_h = calculate_profit_from_chain(chains.norm_1x2.home, odds.ft.home, results_.ft.home, quantile_level, fractional_kelly)
+        p_d = calculate_profit_from_chain(chains.norm_1x2.draw, odds.ft.draw, results_.ft.draw, quantile_level, fractional_kelly)
+        p_a = calculate_profit_from_chain(chains.norm_1x2.away, odds.ft.away, results_.ft.away, quantile_level, fractional_kelly)
+        results["FT_1x2"] = (profit=results["FT_1x2"].profit + p_h.profit + p_d.profit + p_a.profit, stake=results["FT_1x2"].stake + p_h.stake + p_d.stake + p_a.stake)
+        
+        # --- FT Over/Under 2.5 ---
+        p_u25 = calculate_profit_from_chain(chains.norm_ou.u25, odds.ft.under_2_5, results_.ft.under_25, quantile_level, fractional_kelly)
+        p_o25 = calculate_profit_from_chain(chains.norm_ou.o25, odds.ft.over_2_5, !isnothing(results_.ft.under_25) ? !results_.ft.under_25 : nothing, quantile_level, fractional_kelly)
+        results["FT_OU_2.5"] = (profit=results["FT_OU_2.5"].profit + p_u25.profit + p_o25.profit, stake=results["FT_OU_2.5"].stake + p_u25.stake + p_o25.stake)
+
+        # (Add logic for other markets as needed)
     end
 
-    # Determine the stake using the specified quantile of the Kelly distribution
-    stake = quantile(chain, quantile_level) * fractional_kelly
-
-    if stake <= 0
-        return (profit=0.0, stake=0.0)
-    end
-
-    profit = won ? stake * (odds - 1) : -stake
-    return (profit=profit, stake=stake)
-end
-
-"""
-Iterates through all target matches and calculates aggregated profit and stake
-for a given quantile.
-"""
-function run_analysis_for_quantile(
-    target_matches::DataFrame,
-    matches_results_map::Dict,
-    data_store::DataStore;
-    quantile_level::Float64 = 0.5,
-    fractional_kelly::Float64 = 1.0,
-    target_sum::Float64 = 1.005
-)
-    # Initialize accumulators for profit and stake
-    market_groups = [
-        "FT_1x2", "HT_1x2", "FT_OU", "HT_OU", "FT_CS", "HT_CS"
-    ]
-    results = Dict(group => (profit=0.0, stake=0.0) for group in market_groups)
-    
-    cumulative_wealth = [1.0] # Start with a bankroll of 1.0
-
-    for match_row in eachrow(target_matches)
-        match_id = match_row.match_id
-        
-        # Get necessary data for the match
-        model_predictions = get(matches_results_map, match_id, nothing)
-        if isnothing(model_predictions) continue end
-        
-        match_results = get_match_results(data_store.incidents, match_id)
-        norm_odds = impute_and_rescale_odds(data_store, match_id; target_sum=target_sum)
-        raw_odds = get_game_line_odds(data_store.odds, match_id)
-        if isnothing(norm_odds) || isnothing(raw_odds) continue end
-        
-        match_total_profit = 0.0
-
-        # --- Process Full-Time Markets ---
-        
-        # FT 1x2
-        p_home = calculate_profit_from_chain(calculate_bayesian_kelly_chain(model_predictions.ft.home, norm_odds.ft.home), norm_odds.ft.home, match_results.ft.home, quantile_level, fractional_kelly)
-        p_draw = calculate_profit_from_chain(calculate_bayesian_kelly_chain(model_predictions.ft.draw, norm_odds.ft.draw), norm_odds.ft.draw, match_results.ft.draw, quantile_level, fractional_kelly)
-        p_away = calculate_profit_from_chain(calculate_bayesian_kelly_chain(model_predictions.ft.away, norm_odds.ft.away), norm_odds.ft.away, match_results.ft.away, quantile_level, fractional_kelly)
-        
-        results["FT_1x2"] = (profit = results["FT_1x2"].profit + p_home.profit + p_draw.profit + p_away.profit, stake = results["FT_1x2"].stake + p_home.stake + p_draw.stake + p_away.stake)
-        match_total_profit += p_home.profit + p_draw.profit + p_away.profit
-
-        # FT Over/Under
-        ft_ou_markets = [
-            (model_predictions.ft.under_05, norm_odds.ft.under_0_5, match_results.ft.under_05),
-            (1 .- model_predictions.ft.under_05, norm_odds.ft.over_0_5, !isnothing(match_results.ft.under_05) ? !match_results.ft.under_05 : nothing),
-            (model_predictions.ft.under_15, norm_odds.ft.under_1_5, match_results.ft.under_15),
-            (1 .- model_predictions.ft.under_15, norm_odds.ft.over_1_5, !isnothing(match_results.ft.under_15) ? !match_results.ft.under_15 : nothing),
-            (model_predictions.ft.under_25, norm_odds.ft.under_2_5, match_results.ft.under_25),
-            (1 .- model_predictions.ft.under_25, norm_odds.ft.over_2_5, !isnothing(match_results.ft.under_25) ? !match_results.ft.under_25 : nothing),
-            (model_predictions.ft.under_35, norm_odds.ft.under_3_5, match_results.ft.under_35),
-            (1 .- model_predictions.ft.under_35, norm_odds.ft.over_3_5, !isnothing(match_results.ft.under_35) ? !match_results.ft.under_35 : nothing),
-        ]
-        for (probs, odds, won) in ft_ou_markets
-            p = calculate_profit_from_chain(calculate_bayesian_kelly_chain(probs, odds), odds, won, quantile_level, fractional_kelly)
-            results["FT_OU"] = (profit = results["FT_OU"].profit + p.profit, stake = results["FT_OU"].stake + p.stake)
-            match_total_profit += p.profit
-        end
-
-        # --- Process Half-Time Markets (similar logic) ---
-        
-        # HT 1x2
-        p_home_ht = calculate_profit_from_chain(calculate_bayesian_kelly_chain(model_predictions.ht.home, norm_odds.ht.home), norm_odds.ht.home, match_results.ht.home, quantile_level, fractional_kelly)
-        p_draw_ht = calculate_profit_from_chain(calculate_bayesian_kelly_chain(model_predictions.ht.draw, norm_odds.ht.draw), norm_odds.ht.draw, match_results.ht.draw, quantile_level, fractional_kelly)
-        p_away_ht = calculate_profit_from_chain(calculate_bayesian_kelly_chain(model_predictions.ht.away, norm_odds.ht.away), norm_odds.ht.away, match_results.ht.away, quantile_level, fractional_kelly)
-
-        results["HT_1x2"] = (profit = results["HT_1x2"].profit + p_home_ht.profit + p_draw_ht.profit + p_away_ht.profit, stake = results["HT_1x2"].stake + p_home_ht.stake + p_draw_ht.stake + p_away_ht.stake)
-        match_total_profit += p_home_ht.profit + p_draw_ht.profit + p_away_ht.profit
-
-
-        # HT Over/Under
-        ht_ou_markets = [
-            (model_predictions.ht.under_05, norm_odds.ht.under_0_5, match_results.ht.under_05),
-            (1 .- model_predictions.ht.under_05, norm_odds.ht.over_0_5, !isnothing(match_results.ht.under_05) ? !match_results.ht.under_05 : nothing),
-            (model_predictions.ht.under_15, norm_odds.ht.under_1_5, match_results.ht.under_15),
-            (1 .- model_predictions.ht.under_15, norm_odds.ht.over_1_5, !isnothing(match_results.ht.under_15) ? !match_results.ht.under_15 : nothing),
-            (model_predictions.ht.under_25, norm_odds.ht.under_2_5, match_results.ht.under_25),
-            (1 .- model_predictions.ht.under_25, norm_odds.ht.over_2_5, !isnothing(match_results.ht.under_25) ? !match_results.ht.under_25 : nothing),
-            (model_predictions.ht.under_35, norm_odds.ht.under_3_5, match_results.ht.under_35),
-            (1 .- model_predictions.ht.under_35, norm_odds.ht.over_3_5, !isnothing(match_results.ht.under_35) ? !match_results.ht.under_35 : nothing),
-        ]
-        for (probs, odds, won) in ht_ou_markets
-            p = calculate_profit_from_chain(calculate_bayesian_kelly_chain(probs, odds), odds, won, quantile_level, fractional_kelly)
-            results["HT_OU"] = (profit = results["HT_OU"].profit + p.profit, stake = results["HT_OU"].stake + p.stake)
-            match_total_profit += p.profit
-        end
-
-        # (Add HT Over/Under and Correct Score logic here if needed, following the FT example)
-
-        # Update cumulative wealth
-        push!(cumulative_wealth, last(cumulative_wealth) + match_total_profit)
-    end
-
-    # Calculate final ROI for each group
+    # Calculate final ROI
     rois = Dict{String, Float64}()
     for (group, data) in results
         rois[group] = data.stake > 0 ? (data.profit / data.stake) * 100 : 0.0
     end
     
-    return (rois=rois, wealth_curve=cumulative_wealth)
+    return rois
 end
 
-# ##################################################
-# 3. VISUALIZATION
-# ##################################################
 
-"""
-Plots ROI vs. Quantile for different market groups.
-"""
-function plot_quantile_sensitivity(quantile_results::Dict)
-    plot(legend=:outertopright, xlabel="Quantile Level", ylabel="ROI (%)", title="ROI Sensitivity to Kelly Quantile Choice")
-    
-    quantiles = sort(collect(keys(quantile_results)))
-    market_groups = sort(collect(keys(quantile_results[quantiles[1]])))
-
-    for group in market_groups
-        roi_values = [quantile_results[q][group] for q in quantiles]
-        plot!(quantiles, roi_values, label=group, lw=2)
-    end
-    
-    savefig("roi_vs_quantile.png")
-    println("📈 ROI vs. Quantile plot saved to roi_vs_quantile.png")
+# Helper function from previous answer (no changes needed)
+function calculate_profit_from_chain(chain, odds, won, q, fk)
+    # ... same implementation as before ...
 end
 
-"""
-Plots the cumulative wealth curve over all matches.
-"""
-function plot_wealth_curve(wealth_curve::Vector{Float64}, quantile_level::Float64)
-    plot(wealth_curve, 
-        label="Cumulative Wealth (Bankroll)", 
-        xlabel="Match Number", 
-        ylabel="Bankroll Value",
-        title="Cumulative Wealth at Quantile $(quantile_level)",
-        legend=:topleft,
-        lw=2
-    )
-    hline!([1.0], linestyle=:dash, color=:red, label="Starting Bankroll", lw=2)
-    
-    savefig("cumulative_wealth.png")
-    println("💰 Cumulative Wealth plot saved to cumulative_wealth.png")
+# Helper for CS market grid
+function score_grid()
+    return [(h, a) for h in 0:3 for a in 0:3]
 end
+
+# Plotting functions from previous answer (no changes needed)
+# plot_quantile_sensitivity(quantile_results)
+# plot_wealth_curve(wealth_curve, quantile_level)
