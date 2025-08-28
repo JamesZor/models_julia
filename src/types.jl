@@ -86,27 +86,37 @@ struct ExperimentResult
 end
 
 # Basic predictions types maher 
-
-struct MatchHalfChainPredicts 
-  home::AbstractVector{Float64}
-  draw::AbstractVector{Float64}
-  away::AbstractVector{Float64}
-
-  correct_score::AbstractArray{Float64}
-  other_home_win_score::AbstractVector{Float64} 
-  other_away_win_score::AbstractVector{Float64} 
-  other_draw_score::AbstractVector{Float64} 
-
-  under_05::AbstractVector{Float64} 
-  under_15::AbstractVector{Float64} 
-  under_25::AbstractVector{Float64} 
-  under_35::AbstractVector{Float64} 
-end
-
-
-struct MatchPredict
-  ht::MatchHalfChainPredicts
-  ft::MatchHalfChainPredicts
+#
+module Predictions
+  # Type aliases matching Results module
+  const CorrectScore = Dict{Union{Tuple{Int,Int}, String}, Vector{Float64}}
+  
+  struct MatchHTPredictions
+    home::Vector{Float64}
+    draw::Vector{Float64}
+    away::Vector{Float64}
+    correct_score::CorrectScore
+    under_05::Vector{Float64}
+    under_15::Vector{Float64}
+    under_25::Vector{Float64}
+  end
+  
+  struct MatchFTPredictions
+    home::Vector{Float64}
+    draw::Vector{Float64}
+    away::Vector{Float64}
+    correct_score::CorrectScore
+    under_05::Vector{Float64}
+    under_15::Vector{Float64}
+    under_25::Vector{Float64}
+    under_35::Vector{Float64}
+    btts::Vector{Float64}
+  end
+  
+  struct MatchLinePredictions
+    ht::MatchHTPredictions
+    ft::MatchFTPredictions
+  end
 end
 
 ##################################################

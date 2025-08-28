@@ -1,3 +1,41 @@
+using BayesianFootball
+using Turing
+using MCMCChains
+using DataFrames
+using Base.Threads
+
+module Predictions
+  # Type aliases matching Results module
+  const CorrectScoreHT = Dict{Union{Tuple{Int,Int}, String}, Vector{Float64}}
+  const CorrectScoreFT = Dict{Union{Tuple{Int,Int}, String}, Vector{Float64}}
+  
+  struct MatchHTPredictions
+    home::Vector{Float64}
+    draw::Vector{Float64}
+    away::Vector{Float64}
+    correct_score::CorrectScoreHT
+    under_05::Vector{Float64}
+    under_15::Vector{Float64}
+    under_25::Vector{Float64}
+  end
+  
+  struct MatchFTPredictions
+    home::Vector{Float64}
+    draw::Vector{Float64}
+    away::Vector{Float64}
+    correct_score::CorrectScoreFT
+    under_05::Vector{Float64}
+    under_15::Vector{Float64}
+    under_25::Vector{Float64}
+    under_35::Vector{Float64}
+    btts::Vector{Float64}
+  end
+  
+  struct MatchLinePredictions
+    ht::MatchHTPredictions
+    ft::MatchFTPredictions
+  end
+end
 
 # prediction/basic_maher.jl
 """
