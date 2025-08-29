@@ -19,6 +19,7 @@ include("data/splitting.jl")
 # Data Utils 
 include("./data/utils_incidents.jl")
 export get_match_results, process_matches_results
+export get_line_active_minutes, process_matches_active_minutes
 
 # Features
 # include("features/base.jl")  # TODO: Create this file
@@ -36,7 +37,7 @@ include("training/pipeline.jl")
 # Prediction 
 include("prediction/basic_maher.jl")
 export Predictions
-export extract_posterior_samples, extract_samples, predict_match_chain, predict_match_ft_ht_chain, predict_round_chains, predict_target_season
+export extract_posterior_samples, extract_samples, predict_match_chain_ft, predict_match_chain_ht, predict_match_ft_ht_chain, predict_round_chains, predict_target_season
 # export MatchPredict, MatchHalfChainPredicts
 
 # Evaluation - TODO: Create these files

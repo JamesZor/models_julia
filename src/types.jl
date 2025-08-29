@@ -160,3 +160,49 @@ struct MatchLinesResults
   ht::MatchHTResults
   ft::MatchFTResults
 end
+
+#################################################
+#  Active Minutes Tracking Types 
+##################################################
+
+module ActiveMinutes
+  const MaybeFloat = Union{Float64, Nothing}
+  const MaybeInt = Union{Int, Nothing}
+  const MinutesList = Vector{Int}
+  
+  # Define correct score dictionary types for active minutes
+  const CorrectScoreMinutes = Dict{Union{Tuple{Int,Int}, String}, MinutesList}
+
+  struct MatchFTActiveMinutes 
+    home::MinutesList
+    draw::MinutesList
+    away::MinutesList
+    correct_score::CorrectScoreMinutes
+    # over/under transition minutes (when line first goes over)
+    over_05::MaybeInt
+    over_15::MaybeInt
+    over_25::MaybeInt
+    over_35::MaybeInt
+    # btts minute (when both teams have scored)
+    btts::MaybeInt
+    injury_time::MaybeFloat
+  end 
+  
+  struct MatchHTActiveMinutes 
+    home::MinutesList
+    draw::MinutesList
+    away::MinutesList
+    correct_score::CorrectScoreMinutes
+    # over/under transition minutes
+    over_05::MaybeInt
+    over_15::MaybeInt
+    over_25::MaybeInt
+    injury_time::MaybeFloat
+  end 
+  
+  struct MatchLinesActiveMinutes
+    ht::MatchHTActiveMinutes
+    ft::MatchFTActiveMinutes
+  end
+end 
+
