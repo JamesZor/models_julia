@@ -155,6 +155,8 @@ function predict_match_chain_ht(
     away_idx = findfirst(==(away_team), posterior_samples.teams)
     
     # Initialize result vectors
+    λ_home = zeros(n_samples)
+    λ_away = zeros(n_samples)
     home_win_probs = zeros(n_samples)
     draw_probs = zeros(n_samples)
     away_win_probs = zeros(n_samples)
@@ -179,9 +181,9 @@ function predict_match_chain_ht(
         β_a = posterior_samples.β[i, away_idx]
         γ = posterior_samples.γ[i]
         
-        λ_home = α_h * β_a * γ
-        λ_away = α_a * β_h
-        p = compute_xScore(λ_home, λ_away, 10)
+        λ_home[i] = α_h * β_a * γ
+        λ_away[i] = α_a * β_h
+        p = compute_xScore(λ_home[i], λ_away[i], 10)
         
         hda = calculate_1x2(p)
         cs = calculate_correct_score_dict_ht(p)
@@ -201,6 +203,8 @@ function predict_match_chain_ht(
     end
     
     return Predictions.MatchHTPredictions(
+        λ_home,
+        λ_away,
         home_win_probs,
         draw_probs,
         away_win_probs,
@@ -223,6 +227,8 @@ function predict_match_chain_ft(
     away_idx = findfirst(==(away_team), posterior_samples.teams)
     
     # Initialize result vectors
+    λ_home = zeros(n_samples)
+    λ_away = zeros(n_samples)
     home_win_probs = zeros(n_samples)
     draw_probs = zeros(n_samples)
     away_win_probs = zeros(n_samples)
@@ -249,9 +255,9 @@ function predict_match_chain_ft(
         β_a = posterior_samples.β[i, away_idx]
         γ = posterior_samples.γ[i]
         
-        λ_home = α_h * β_a * γ
-        λ_away = α_a * β_h
-        p = compute_xScore(λ_home, λ_away, 10)
+        λ_home[i] = α_h * β_a * γ
+        λ_away[i] = α_a * β_h
+        p = compute_xScore(λ_home[i], λ_away[i], 10)
         
         hda = calculate_1x2(p)
         cs = calculate_correct_score_dict_ft(p)
@@ -273,6 +279,8 @@ function predict_match_chain_ft(
     end
     
     return Predictions.MatchFTPredictions(
+        λ_home,
+        λ_away,
         home_win_probs,
         draw_probs,
         away_win_probs,

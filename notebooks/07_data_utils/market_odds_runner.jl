@@ -83,4 +83,24 @@ matches_odds[m_id]
 
 
 ### added to bayesain football 
+using BayesianFootball
 
+
+data_files = DataFiles("/home/james/bet_project/football_data/scot_nostats_20_to_24")
+data_store = DataStore(data_files)
+
+match_id = rand(data_store.matches.match_id)
+
+
+processed_odds = get_processed_game_line_odds(data_store, match_id)
+raw_odds = BayesianFootball.get_game_line_odds_simple(data_store, match_id)
+
+
+
+r1 = load_experiment("/home/james/bet_project/models_julia/experiments/maher_basic_test_20250820_231427.jld2")
+result = r1[1]
+experiment_config = r1[2]
+mapping = result.mapping
+target_matches = filter(row -> row.season == experiment_config.cv_config.target_season, data_store.matches)
+
+matches_odds = process_matches_odds(data_store, target_matches)

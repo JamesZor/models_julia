@@ -168,6 +168,8 @@ module Predictions
   const CorrectScore = Dict{Union{Tuple{Int,Int}, String}, Vector{Float64}}
   
   struct MatchHTPredictions
+    λ_h::Vector{Float64}
+    λ_a::Vector{Float64}
     home::Vector{Float64}
     draw::Vector{Float64}
     away::Vector{Float64}
@@ -178,6 +180,8 @@ module Predictions
   end
   
   struct MatchFTPredictions
+    λ_h::Vector{Float64}
+    λ_a::Vector{Float64}
     home::Vector{Float64}
     draw::Vector{Float64}
     away::Vector{Float64}
@@ -217,7 +221,6 @@ struct MatchFTResults
   under_35::MaybeBool 
   # btts
   btts::MaybeBool
-  injury_time::MaybeFloat  # Added
 end 
 
 struct MatchHTResults 
@@ -229,7 +232,6 @@ struct MatchHTResults
   under_05::MaybeBool 
   under_15::MaybeBool 
   under_25::MaybeBool 
-  injury_time::MaybeFloat  # Added
 end 
 
 struct MatchLinesResults
