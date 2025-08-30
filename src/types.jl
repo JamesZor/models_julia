@@ -85,6 +85,82 @@ struct ExperimentResult
     total_time::Float64
 end
 
+
+##################################################
+#  Types market odds match results
+##################################################
+module Odds
+  const MaybeOdds = Union{Nothing, Float64}
+  # Type aliases matching Results module
+  const CorrectScore = Dict{Union{Tuple{Int,Int}, String}, Float64}
+  
+  struct MatchHTOdds
+    home::MaybeOdds
+    draw::MaybeOdds
+    away::MaybeOdds
+    correct_score::CorrectScore
+    under_05::MaybeOdds
+    over_05::MaybeOdds
+    under_15::MaybeOdds
+    over_15::MaybeOdds
+    under_25::MaybeOdds
+    over_25::MaybeOdds
+  end
+  
+  struct MatchFTOdds
+    home::MaybeOdds
+    draw::MaybeOdds
+    away::MaybeOdds
+    correct_score::CorrectScore
+    under_05::MaybeOdds
+    over_05::MaybeOdds
+    under_15::MaybeOdds
+    over_15::MaybeOdds
+    under_25::MaybeOdds
+    over_25::MaybeOdds
+    under_35::MaybeOdds
+    over_35::MaybeOdds
+    btts_yes::MaybeOdds
+    btts_no::MaybeOdds
+  end
+  
+  struct MatchLineOdds
+    ht::MatchHTOdds
+    ft::MatchFTOdds
+  end
+end
+
+module OddsProcessing
+  struct OddsConfig
+      # Window parameters
+      window_minutes_before::Int
+      window_minutes_after::Int
+      min_window_size::Int  # Minimum minutes needed for valid window
+      
+      # Aggregation method
+      aggregation::Symbol  # :mean, :median, :weighted_mean, :last_valid
+      outlier_threshold::Float64  # For filtering jumps (e.g., 2.0 = 100% change)
+      
+      # Market completion
+      complete_missing::Bool
+      completion_method::Symbol  # :probability_sum, :similar_markets, :regression
+      
+      # Normalization
+      normalize_groups::Bool
+      target_overround::Float64  # e.g., 1.05 for 5% overround
+      normalization_method::Symbol  # :proportional, :power, :margin_weights
+      
+      # Validation
+      min_liquidity_threshold::Float64  # Minimum implied probability sum to consider valid
+      max_staleness_minutes::Int  # Max minutes since last trade to consider valid
+      
+      # Market groups definition
+      market_groups::Dict{String, Vector{String}}
+  end
+end # module
+
+
+
 # Basic predictions types maher 
 #
 module Predictions

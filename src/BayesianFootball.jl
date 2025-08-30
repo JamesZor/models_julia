@@ -21,6 +21,12 @@ include("./data/utils_incidents.jl")
 export get_match_results, process_matches_results
 export get_line_active_minutes, process_matches_active_minutes
 
+# data market odds
+include("./data/utils_market_odds.jl")
+export get_processed_game_line_odds, process_matches_odds, default_marketodds_config 
+
+
+
 # Features
 # include("features/base.jl")  # TODO: Create this file
 include("features/maher.jl")

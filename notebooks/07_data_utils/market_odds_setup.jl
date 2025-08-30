@@ -1,44 +1,67 @@
-
 using BayesianFootball
 using DataFrames 
 
 module Odds
+  const MaybeOdds = Union{Nothing, Float64}
   # Type aliases matching Results module
   const CorrectScore = Dict{Union{Tuple{Int,Int}, String}, Float64}
   
-  struct MatchHTPredictions
-    home::Float64
-    draw::Float64
-    away::Float64
+  struct MatchHTOdds
+    home::MaybeOdds
+    draw::MaybeOdds
+    away::MaybeOdds
     correct_score::CorrectScore
-    under_05::Float64
-    under_15::Float64
-    under_25::Float64
+    under_05::MaybeOdds
+    over_05::MaybeOdds
+    under_15::MaybeOdds
+    over_15::MaybeOdds
+    under_25::MaybeOdds
+    over_25::MaybeOdds
   end
   
-  struct MatchFTPredictions
-    home::Float64
-    draw::Float64
-    away::Float64
+  struct MatchFTOdds
+    home::MaybeOdds
+    draw::MaybeOdds
+    away::MaybeOdds
     correct_score::CorrectScore
-    under_05::Float64
-    under_15::Float64
-    under_25::Float64
-    under_35::Float64
-    btts::Float64
+    under_05::MaybeOdds
+    over_05::MaybeOdds
+    under_15::MaybeOdds
+    over_15::MaybeOdds
+    under_25::MaybeOdds
+    over_25::MaybeOdds
+    under_35::MaybeOdds
+    over_35::MaybeOdds
+    btts_yes::MaybeOdds
+    btts_no::MaybeOdds
   end
   
-  struct MatchLinePredictions
-    ht::MatchHTPredictions
-    ft::MatchFTPredictions
+  struct MatchLineOdds
+    ht::MatchHTOdds
+    ft::MatchFTOdds
   end
 end
+
+MARKET_GROUPS = Dict(
+        "ft_1x2" => ["home", "draw", "away"],
+        "ht_1x2" => ["ht_home", "ht_draw", "ht_away"],
+        "ft_ou_05" => ["over_0_5", "under_0_5"],
+        "ft_ou_15" => ["over_1_5", "under_1_5"],
+        "ft_ou_25" => ["over_2_5", "under_2_5"],
+        "ft_ou_35" => ["over_3_5", "under_3_5"],
+        "ht_ou_05" => ["ht_over_0_5", "ht_under_0_5"],
+        "ht_ou_15" => ["ht_over_1_5", "ht_under_1_5"],
+        "ht_ou_25" => ["ht_over_2_5", "ht_under_2_5"],
+        "btts" => ["btts_yes", "btts_no"],
+        "ft_cs" => ["0_0", "0_1", "0_2", "0_3", "1_1", "1_2", "1_3","2_1", "2_2", "2_3","3_1", "3_2", "3_3","1_0", "2_0", "3_0", "any_other_home", "any_other_away", "any_other_draw"], 
+        "ht_cs" => ["ht_0_0", "ht_0_1", "ht_0_2", "ht_1_1", "ht_1_2","ht_2_1", "ht_2_2","ht_1_0", "ht_2_0", "ht_any_unquoted"], 
+       )
 
 """
     get_game_line_odds(data_store::DataStore, match_id::Int)
     
 Extracts the kickoff odds (at minutes=0) for a given match from the odds DataFrame.
-Returns Odds.MatchLinePredictions or nothing if not found.
+Returns Odds.MatchLineOdds or nothing if not found.
 """
 function get_game_line_odds(data_store::DataStore, match_id::Int)
     # Filter for kickoff odds (minutes = 0)
@@ -78,40 +101,48 @@ function get_game_line_odds(data_store::DataStore, match_id::Int)
     ft_correct_scores["other_draw"] = get_val("any_other_draw")
     
     # Build HT odds
-    ht_odds = Odds.MatchHTPredictions(
+    ht_odds = Odds.MatchHTOdds(
         get_val("ht_home"),
         get_val("ht_draw"),
         get_val("ht_away"),
         ht_correct_scores,
         get_val("ht_under_0_5"),  # Note: under_05 = 1/over_05 if not directly available
+        get_val("ht_over_0_5"),
         get_val("ht_under_1_5"),
-        get_val("ht_under_2_5")
+        get_val("ht_over_1_5"),
+        get_val("ht_under_2_5"),
+        get_val("ht_over_2_5"),
     )
     
     # Build FT odds
-    ft_odds = Odds.MatchFTPredictions(
+    ft_odds = Odds.MatchFTOdds(
         get_val("home"),
         get_val("draw"),
         get_val("away"),
         ft_correct_scores,
         get_val("under_0_5"),
+        get_val("over_0_5"),
         get_val("under_1_5"),
+        get_val("over_1_5"),
         get_val("under_2_5"),
+        get_val("over_2_5"),
         get_val("under_3_5"),
-        get_val("btts_yes")
+        get_val("over_3_5"),
+        get_val("btts_yes"),
+        get_val("btts_no")
     )
     
-    return Odds.MatchLinePredictions(ht_odds, ft_odds)
+    return Odds.MatchLineOdds(ht_odds, ft_odds)
 end
 
 """
     process_matches_odds(data_store::DataStore, target_matches::DataFrame)
     
 Process odds for multiple matches.
-Returns Dict{Int64, Odds.MatchLinePredictions}
+Returns Dict{Int64, Odds.MatchLineOdds}
 """
 function process_matches_odds(data_store::DataStore, target_matches::DataFrame)
-    results = Dict{Int64, Odds.MatchLinePredictions}()
+    results = Dict{Int64, Odds.MatchLineOdds}()
     
     for match_id in target_matches.match_id
         odds = get_game_line_odds(data_store, match_id)
@@ -184,14 +215,18 @@ function default_config()
         "ht_ou_1.5" => ["ht_over_1_5", "ht_under_1_5"],
         "ht_ou_2.5" => ["ht_over_2_5", "ht_under_2_5"],
         "btts" => ["btts_yes", "btts_no"],
-        # Correct scores handled separately due to complexity
+        "ft_cs" => ["0_0", "0_1", "0_2", "0_3", "1_0", "1_1", "1_2", "1_3",
+                    "2_0", "2_1", "2_2", "2_3", "3_0", "3_1", "3_2", "3_3",
+                    "any_other_home", "any_other_away", "any_other_draw"],
+        "ht_cs" => ["ht_0_0", "ht_0_1", "ht_0_2", "ht_1_0", "ht_1_1", "ht_1_2",
+                    "ht_2_0", "ht_2_1", "ht_2_2", "ht_any_unquoted"]
     )
     
     return OddsProcessing.OddsConfig(
-        5, 5, 3,  # Window: 5 mins before/after, min 3 mins
-        :weighted_mean, 2.0,  # Aggregation with 100% jump filter
+        10, 4, 3,  # Window: 5 mins before/after, min 3 mins
+        :weighted_mean, 1.4,  # Aggregation with 100% jump filter
         true, :probability_sum,  # Complete missing via probability
-        true, 1.05, :proportional,  # Normalize to 5% overround
+        true, 1.001, :proportional,  # Normalize to 1% overround
         0.8, 10,  # Min 80% liquidity, max 10 min staleness
         market_groups
     )
@@ -369,31 +404,36 @@ function normalize_market_group(odds_dict::Dict{String, Float64},
         @warn "Probability sum too low: $current_sum"
         return odds_dict
     end
-    
-    if config.normalization_method == :proportional
-        # Simple proportional scaling
-        scale_factor = config.target_overround / current_sum
-        for col in available
-            odds_dict[col] = odds_dict[col] / scale_factor
-        end
-    elseif config.normalization_method == :power
-        # Power scaling (preserves favorites/longshots relationship better)
-        power = log(config.target_overround) / log(current_sum)
-        for col in available
-            prob = 1.0 / odds_dict[col]
-            new_prob = prob^power
-            odds_dict[col] = 1.0 / new_prob
-        end
-    elseif config.normalization_method == :margin_weights
-        # Weighted by distance from fair (more margin on longshots)
-        fair_probs = probs ./ current_sum
-        margins = (config.target_overround - 1.0) .* (1 .- fair_probs)
-        new_probs = fair_probs .+ margins
-        
-        for (i, col) in enumerate(available)
-            odds_dict[col] = 1.0 / new_probs[i]
-        end
+
+
+    if current_sum < config.target_overround
+    # Apply normalization
+      if config.normalization_method == :proportional
+          # Simple proportional scaling
+          scale_factor = config.target_overround / current_sum
+          for col in available
+              odds_dict[col] = odds_dict[col] / scale_factor
+          end
+      elseif config.normalization_method == :power
+          # Power scaling (preserves favorites/longshots relationship better)
+          power = log(config.target_overround) / log(current_sum)
+          for col in available
+              prob = 1.0 / odds_dict[col]
+              new_prob = prob^power
+              odds_dict[col] = 1.0 / new_prob
+          end
+      elseif config.normalization_method == :margin_weights
+          # Weighted by distance from fair (more margin on longshots)
+          fair_probs = probs ./ current_sum
+          margins = (config.target_overround - 1.0) .* (1 .- fair_probs)
+          new_probs = fair_probs .+ margins
+          
+          for (i, col) in enumerate(available)
+              odds_dict[col] = 1.0 / new_probs[i]
+          end
+      end
     end
+
     
     return odds_dict
 end
@@ -527,7 +567,7 @@ function process_odds_pipeline(data_store::DataStore,
 end
 
 """
-Convert processed odds dictionary to Odds.MatchLinePredictions structure
+Convert processed odds dictionary to Odds.MatchLineOdds structure
 """
 function dict_to_predictions(odds_dict::Dict{String, Float64})
     # Helper to safely get values
@@ -550,29 +590,37 @@ function dict_to_predictions(odds_dict::Dict{String, Float64})
     ft_correct_scores["other_draw"] = get_val("any_other_draw")
     
     # Build predictions
-    ht_pred = Odds.MatchHTPredictions(
+    ht_pred = Odds.MatchHTOdds(
         get_val("ht_home"),
         get_val("ht_draw"),
         get_val("ht_away"),
         ht_correct_scores,
         get_val("ht_under_0_5"),
+        get_val("ht_over_0_5"),
         get_val("ht_under_1_5"),
-        get_val("ht_under_2_5")
+        get_val("ht_over_1_5"),
+        get_val("ht_under_2_5"),
+        get_val("ht_over_2_5"),
     )
     
-    ft_pred = Odds.MatchFTPredictions(
+    ft_pred = Odds.MatchFTOdds(
         get_val("home"),
         get_val("draw"),
         get_val("away"),
         ft_correct_scores,
         get_val("under_0_5"),
+        get_val("over_0_5"),
         get_val("under_1_5"),
+        get_val("over_1_5"),
         get_val("under_2_5"),
+        get_val("over_2_5"),
         get_val("under_3_5"),
-        get_val("btts_yes")
+        get_val("over_3_5"),
+        get_val("btts_yes"),
+        get_val("btts_no")
     )
     
-    return Odds.MatchLinePredictions(ht_pred, ft_pred)
+    return Odds.MatchLineOdds(ht_pred, ft_pred)
 end
 
 """
@@ -602,10 +650,10 @@ function process_matches_odds(data_store::DataStore,
     n_threads = Threads.nthreads()
     
     # Each thread gets its own dictionary
-    thread_results = Vector{Dict{Int64, Odds.MatchLinePredictions}}(undef, n_threads)
+    thread_results = Vector{Dict{Int64, Odds.MatchLineOdds}}(undef, n_threads)
     
     Threads.@threads for tid in 1:n_threads
-        local_dict = Dict{Int64, Odds.MatchLinePredictions}()
+        local_dict = Dict{Int64, Odds.MatchLineOdds}()
         
         for idx in tid:n_threads:n_matches
             match_id = match_ids[idx]
@@ -630,7 +678,6 @@ end
 ##################################################################
 ##################################################################
 ##################################################################
-##################################################################
 
 using DataFrames
 using Printf
@@ -649,8 +696,8 @@ prob_to_odds(prob::Float64) = isnan(prob) || prob == 0 ? NaN : 100.0 / prob
 """
 Display a market group comparison between raw and processed odds
 """
-function display_market_group(raw_odds::Union{Odds.MatchLinePredictions, Nothing}, 
-                            processed_odds::Union{Odds.MatchLinePredictions, Nothing},
+function display_market_group(raw_odds::Union{Odds.MatchLineOdds, Nothing}, 
+                            processed_odds::Union{Odds.MatchLineOdds, Nothing},
                             market_name::String;
                             show_probs::Bool = true)
     
@@ -663,22 +710,53 @@ function display_market_group(raw_odds::Union{Odds.MatchLinePredictions, Nothing
         values = Dict{String, Float64}()
         
         if market == "ft_1x2"
-            values["Home"] = odds_struct.ft.home
-            values["Draw"] = odds_struct.ft.draw
-            values["Away"] = odds_struct.ft.away
+            values["Home"] = isnothing(odds_struct.ft.home) ? NaN : odds_struct.ft.home
+            values["Draw"] = isnothing(odds_struct.ft.draw) ? NaN : odds_struct.ft.draw
+            values["Away"] = isnothing(odds_struct.ft.away) ? NaN : odds_struct.ft.away
         elseif market == "ht_1x2"
-            values["Home"] = odds_struct.ht.home
-            values["Draw"] = odds_struct.ht.draw
-            values["Away"] = odds_struct.ht.away
-        elseif market == "ft_ou_2.5"
-            values["Over 2.5"] = isnan(odds_struct.ft.under_25) ? NaN : prob_to_odds(100.0 - odds_to_prob(odds_struct.ft.under_25))
-            values["Under 2.5"] = odds_struct.ft.under_25
-        elseif market == "ft_ou_1.5"
-            values["Over 1.5"] = isnan(odds_struct.ft.under_15) ? NaN : prob_to_odds(100.0 - odds_to_prob(odds_struct.ft.under_15))
-            values["Under 1.5"] = odds_struct.ft.under_15
+            values["Home"] = isnothing(odds_struct.ht.home) ? NaN : odds_struct.ht.home
+            values["Draw"] = isnothing(odds_struct.ht.draw) ? NaN : odds_struct.ht.draw
+            values["Away"] = isnothing(odds_struct.ht.away) ? NaN : odds_struct.ht.away
+        elseif market == "ft_ou_05"
+            values["Over 0.5"] = isnothing(odds_struct.ft.over_05) ? NaN : odds_struct.ft.over_05
+            values["Under 0.5"] = isnothing(odds_struct.ft.under_05) ? NaN : odds_struct.ft.under_05
+        elseif market == "ft_ou_15"
+            values["Over 1.5"] = isnothing(odds_struct.ft.over_15) ? NaN : odds_struct.ft.over_15
+            values["Under 1.5"] = isnothing(odds_struct.ft.under_15) ? NaN : odds_struct.ft.under_15
+        elseif market == "ft_ou_25"
+            values["Over 2.5"] = isnothing(odds_struct.ft.over_25) ? NaN : odds_struct.ft.over_25
+            values["Under 2.5"] = isnothing(odds_struct.ft.under_25) ? NaN : odds_struct.ft.under_25
+        elseif market == "ft_ou_35"
+            values["Over 3.5"] = isnothing(odds_struct.ft.over_35) ? NaN : odds_struct.ft.over_35
+            values["Under 3.5"] = isnothing(odds_struct.ft.under_35) ? NaN : odds_struct.ft.under_35
+        elseif market == "ht_ou_05"
+            values["Over 0.5"] = isnothing(odds_struct.ht.over_05) ? NaN : odds_struct.ht.over_05
+            values["Under 0.5"] = isnothing(odds_struct.ht.under_05) ? NaN : odds_struct.ht.under_05
+        elseif market == "ht_ou_15"
+            values["Over 1.5"] = isnothing(odds_struct.ht.over_15) ? NaN : odds_struct.ht.over_15
+            values["Under 1.5"] = isnothing(odds_struct.ht.under_15) ? NaN : odds_struct.ht.under_15
+        elseif market == "ht_ou_25"
+            values["Over 2.5"] = isnothing(odds_struct.ht.over_25) ? NaN : odds_struct.ht.over_25
+            values["Under 2.5"] = isnothing(odds_struct.ht.under_25) ? NaN : odds_struct.ht.under_25
         elseif market == "btts"
-            values["BTTS Yes"] = odds_struct.ft.btts
-            values["BTTS No"] = isnan(odds_struct.ft.btts) ? NaN : NaN  # Would need btts_no field
+            values["BTTS Yes"] = isnothing(odds_struct.ft.btts_yes) ? NaN : odds_struct.ft.btts_yes
+            values["BTTS No"] = isnothing(odds_struct.ft.btts_no) ? NaN : odds_struct.ft.btts_no
+        elseif market == "ft_cs"
+            # Full-time correct scores
+            cs = odds_struct.ft.correct_score
+            for h in 0:3, a in 0:3
+                values["$h-$a"] = get(cs, (h,a), NaN)
+            end
+            values["Other Home"] = get(cs, "other_home_win", NaN)
+            values["Other Away"] = get(cs, "other_away_win", NaN)
+            values["Other Draw"] = get(cs, "other_draw", NaN)
+        elseif market == "ht_cs"
+            # Half-time correct scores
+            cs = odds_struct.ht.correct_score
+            for h in 0:2, a in 0:2
+                values["HT $h-$a"] = get(cs, (h,a), NaN)
+            end
+            values["HT Other"] = get(cs, "any_unquoted", NaN)
         end
         
         return values
@@ -731,7 +809,7 @@ function compare_configurations(data_store::DataStore,
     raw_odds = get_game_line_odds(data_store, match_id)
     
     # Process with each config
-    results = Dict{String, Odds.MatchLinePredictions}()
+    results = Dict{String, Odds.MatchLineOdds}()
     for (name, config) in configs
         processed = get_processed_game_line_odds(data_store, match_id, config)
         if !isnothing(processed)
@@ -991,3 +1069,7 @@ function odds_quality_check(data_store::DataStore, match_id::Int)
     
     return nothing
 end
+
+
+
+
