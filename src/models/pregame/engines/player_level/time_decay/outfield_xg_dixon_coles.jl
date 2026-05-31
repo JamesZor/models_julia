@@ -286,7 +286,7 @@ function extract_parameters(
     p_dyn_nt  = extract_dynamics(chain, model.player_dynamics_config, "p_dyn", n_teams)
     
     # Reconstruct ρ from ρ_raw since only ~ variables are saved in the chain
-    ρ_raw_vec = Array(chain[:ρ_raw])
+    ρ_raw_vec = vec(Array(chain[:ρ_raw]))
     ρ_vec = 0.3 .* tanh.(ρ_raw_vec)
 
     n_samples = size(chain, 1) * size(chain, 3) 
