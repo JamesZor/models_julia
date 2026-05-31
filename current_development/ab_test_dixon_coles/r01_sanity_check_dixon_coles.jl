@@ -75,6 +75,61 @@ chains_no_market = results_no_market.training_results[1][1]
 display(describe(chains_no_market))
 
 
+mp =Predictions.model_inference(ds, results_no_market)
+
+
+mp_summary = transform(mp.df, :distribution => ByRow(mean) => :model_prob)
+
+# 2. Join the model predictions with the historical odds data
+comparison_df = innerjoin(
+mp_summary[!, [:match_id, :selection, :model_prob]],
+ds.odds[!, [:match_id, :is_winner, :selection, :odds_close, :prob_implied_close, :prob_fair_close]],
+on = [:match_id, :selection]
+)
+
+# 3. Calculate how far off our model is from the market's true fair probability
+comparison_df.prob_diff = comparison_df.model_prob .- comparison_df.prob_fair_close
+
+# 4. Add the model's implied fair odds for easy reading
+comparison_df.model_odds = 1.0 ./ comparison_df.model_prob
+
+# Sort for readability
+sort!(comparison_df, [:match_id, :market_name, :selection])
+
+# Display the 1X2 market predictions as a quick sanity check
+println("=== 1X2 Market Comparison ===")
+display(subset(comparison_df, :selection => ByRow(==(:over_25))))
+
+# Display the Mean Absolute Error (MAE) across all predicted markets
+mae = mean(abs.(comparison_df.prob_diff))
+println("\nMean Absolute Error vs Market: ", round(mae, digits=4))
+
+describe(comparison_df.prob_diff)
+
+
+
+#=
+julia> describe(comparison_df.prob_diff)
+Summary Stats:
+Length:         408
+Missing Count:  0
+Mean:           0.044117
+Std. Deviation: 0.122762
+Minimum:        -0.140475
+1st Quartile:   -0.024681
+Median:         0.005160
+3rd Quartile:   0.050254
+Maximum:        0.470452
+Type:           Float64
+
+julia> mae = mean(abs.(comparison_df.prob_diff))
+0.0727865300671262
+=#
+
+
+
+
+
 # ==========================================
 # 5. MODEL 2: WITH MARKET
 # ==========================================
@@ -104,7 +159,7 @@ task_market = Experiments.create_experiment_task(
     warmup_period = 5,
     samples=1000,
     warmup=500,  
-    chains=8,     # Reduced for sanity check
+    chains=16,     # Reduced for sanity check
     use_queue=true,
 )
 
@@ -116,3 +171,29 @@ chains_market = results_market.training_results[1][1]
 display(describe(chains_market))
 
 println("\n[INFO] Both Sanity Checks Complete!")
+
+
+
+mp =Predictions.model_inference(ds, results_market)
+
+
+
+
+#=
+julia> mae = mean(abs.(comparison_df.prob_diff))
+0.06903531786106815
+
+julia> describe(comparison_df.prob_diff)
+Summary Stats:
+Length:         408
+Missing Count:  0
+Mean:           0.044117
+Std. Deviation: 0.121818
+Minimum:        -0.127527
+1st Quartile:   -0.018953
+Median:         0.004942
+3rd Quartile:   0.041948
+Maximum:        0.490574
+Type:           Float64
+=#
+
