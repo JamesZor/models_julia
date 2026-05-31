@@ -68,13 +68,13 @@ results = Experiments.run_experiment(task)
 println("[INFO] Experiment Completed. Summarizing Split 1, Chain 1...")
 describe(results.training_results[1][1])
 
-mp =Predictions.model_inference(ds, results)
 
 
 # analysis
 using Statistics
 using DataFrames
 
+mp =Predictions.model_inference(ds, results)
 # 1. Calculate the mean probability of the posterior predictive distribution
 mp_summary = transform(mp.df, :distribution => ByRow(mean) => :model_prob)
 
