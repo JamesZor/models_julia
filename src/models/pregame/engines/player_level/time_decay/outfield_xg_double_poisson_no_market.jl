@@ -9,8 +9,7 @@ Base.@kwdef struct DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel{
     D<:AbstractDispersionConfig, # Unused mathematically in Poisson, but kept for interface consistency
     H<:AbstractHomeAdvantageConfig,
     K<:AbstractKappaConfig,
-    R<:Features.AbstractFeatureConfig,
-    M<:Features.AbstractMarketFeatureConfig
+    R<:Features.AbstractFeatureConfig
   } <: AbstractTimeDecayPlayerModel
       interception_config::I
       player_dynamics_config::P 
@@ -176,11 +175,6 @@ function build_turing_model(config::DynamicDoublePoissonXGOutfieldPlayerTimeDeca
     away_xg = Vector{Float64}(coalesce.(data[:flat_away_xg], NaN))
     idx_xg    = findall(x -> !isnan(x), home_xg)
     idx_no_xg = findall(isnan, home_xg)
-
-    # Market
-        idx_market   = findall(x -> !isnan(x), market_log_h)
-
-
 
     return build_double_poisson_xg_no_market_player_engine(
         home_ids, away_ids, season_ids, month_indices,

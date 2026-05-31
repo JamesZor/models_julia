@@ -1,6 +1,5 @@
 # current_development/ab_test_outfield_player/r03_sanity_check_double_poisson.jl
 
-using Pkg; Pkg.activate(".")
 using Revise
 using BayesianFootball
 using DataFrames
@@ -69,30 +68,56 @@ results = Experiments.run_experiment(task)
 println("[INFO] Experiment Completed. Summarizing Split 1, Chain 1...")
 describe(results.training_results[1][1])
 
-chains_df_all = Experiments.Diagnostics.extract_chains(ds, results)
+mp =Predictions.model_inference(ds, results)
 
-println("\n--- Convergence Diagnostics (R-hat & ESS) ---")
-conv_diag_all = Experiments.Diagnostics.check_convergence(chains_df_all)
 
-println("\n--- Temporal Stability Diagnostics (ADF Stationarity) ---")
-stab_diag_all = Experiments.Diagnostics.check_stability(chains_df_all)
 
-# Grab the very first split to test manual extraction logic
-test_split = first(task.splits)
-println("\n[INFO] Manual Testing on Split: $(test_split.split_id)")
-println("       Train Matches: $(nrow(test_split.train_df))")
-println("       Test Matches:  $(nrow(test_split.test_df))")
+id = first(mp.df.match_id)
 
-println("\n[TEST 1] Building Turing Model...")
-t_model = PreGame.build_turing_model(model_dp, test_split.train_features)
-println("✅ build_turing_model successful!")
+ds.odds
 
-println("\n[TEST 2] Extracting Parameters for Test Set...")
-ext = PreGame.extract_parameters(model_dp, test_split.test_df, test_split.test_features, results.training_results[1][1])
-println("✅ extract_parameters successful!")
 
-first_match_id = first(test_split.test_df.match_id)
-println("\n[VERIFICATION] Parameters for Match $first_match_id:")
-display(ext[first_match_id])
+using Statistics
+using DataFrames
 
-println("\n🎉 All systems go! Double Poisson runner is working.")
+# 1. Calculate the mean probability of the posterior predictive distribution
+mp_summary = transform(mp.df, :distribution => ByRow(mean) => :model_prob)
+
+# 2. Join the model predictions with the historical odds data
+comparison_df = innerjoin(
+mp_summary[!, [:match_id, :selection, :model_prob]],
+ds.odds[!, [:match_id, :is_winner, :selection, :odds_close, :prob_implied_close, :prob_fair_close]],
+on = [:match_id, :selection]
+)
+
+# 3. Calculate how far off our model is from the market's true fair probability
+comparison_df.prob_diff = comparison_df.model_prob .- comparison_df.prob_fair_close
+
+# 4. Add the model's implied fair odds for easy reading
+comparison_df.model_odds = 1.0 ./ comparison_df.model_prob
+
+# Sort for readability
+sort!(comparison_df, [:match_id, :market_name, :selection])
+
+# Display the 1X2 market predictions as a quick sanity check
+println("=== 1X2 Market Comparison ===")
+display(subset(comparison_df, :selection => ByRow(==(:over_25))))
+
+# Display the Mean Absolute Error (MAE) across all predicted markets
+mae = mean(abs.(comparison_df.prob_diff))
+println("\nMean Absolute Error vs Market: ", round(mae, digits=4))
+
+describe(comparison_df.prob_diff)
+
+
+
+
+model_a_no_market = PreGame.DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel(
+  interception_config = inter_cfg,
+  player_dynamics_config = dyn_cfg,
+  dispersion_config = disp_cfg,
+  homeadvantage_config = ha_cfg,
+  kappa_config = kap_cfg,
+  player_ratings_feature = feature_cfg_bayes,
+)
+
