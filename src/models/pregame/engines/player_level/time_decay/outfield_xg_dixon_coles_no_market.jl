@@ -140,8 +140,8 @@ end
             λ_a = λ_goals_a[i]
             
             # Dynamically clamp ρ per-match to ensure τ > 0 strictly
-            mx_rho = min(1.0 / (λ_h * λ_a) - 1e-4, 1.0 - 1e-4)
-            mn_rho = max(-1.0 / λ_h + 1e-4, -1.0 / λ_a + 1e-4)
+            mx_rho = min(0.9999 / (λ_h * λ_a), 0.9999)
+            mn_rho = max(-0.9999 / λ_h, -0.9999 / λ_a)
             r = clamp(ρ, mn_rho, mx_rho)
             
             if h_g == 0 && a_g == 0
@@ -305,8 +305,8 @@ function extract_parameters(
         λ_goals_a = κ_a .* exp.(log_λ_a) .+ 1e-6
 
         # Dynamically clamp ρ for this specific match
-        max_rho = min.(1.0 ./ (λ_goals_h .* λ_goals_a) .- 1e-4, 1.0 - 1e-4)
-        min_rho = max.(-1.0 ./ λ_goals_h .+ 1e-4, -1.0 ./ λ_goals_a .+ 1e-4)
+        max_rho = min.(0.9999 ./ (λ_goals_h .* λ_goals_a), 0.9999)
+        min_rho = max.(-0.9999 ./ λ_goals_h, -0.9999 ./ λ_goals_a)
         ρ_match = clamp.(ρ_vec, min_rho, max_rho)
 
         results[mid] = (;
