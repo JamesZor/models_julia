@@ -285,8 +285,9 @@ function extract_parameters(
     kap_mat   = extract_kappa(chain, model.kappa_config, n_teams)
     p_dyn_nt  = extract_dynamics(chain, model.player_dynamics_config, "p_dyn", n_teams)
     
-    # Extract rho directly from the chain (it's a scalar per sample)
-    ρ_vec = Array(chain[:ρ])
+    # Reconstruct ρ from ρ_raw since only ~ variables are saved in the chain
+    ρ_raw_vec = Array(chain[:ρ_raw])
+    ρ_vec = 0.3 .* tanh.(ρ_raw_vec)
 
     n_samples = size(chain, 1) * size(chain, 3) 
     results = Dict{Int, NamedTuple}()
