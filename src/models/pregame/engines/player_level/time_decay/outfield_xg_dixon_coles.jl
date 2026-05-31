@@ -141,17 +141,33 @@ end
     log_lik_indep_h = logpdf.(Poisson.(λ_goals_h), home_goals)
     log_lik_indep_a = logpdf.(Poisson.(λ_goals_a), away_goals)
 
-    # Dynamically clamp ρ per-match to ensure τ > 0 strictly
-    max_rho = min.(1.0 ./ (λ_goals_h .* λ_goals_a) .- 1e-4, 1.0 - 1e-4)
-    min_rho = max.(-1.0 ./ λ_goals_h .+ 1e-4, -1.0 ./ λ_goals_a .+ 1e-4)
-    ρ_match = clamp.(ρ, min_rho, max_rho)
-
-    # Calculate Tau correction
-    τ_term = ones(eltype(λ_goals_h), length(home_goals))
-    if !isempty(idx_00) τ_term[idx_00] = 1.0 .- (λ_goals_h[idx_00] .* λ_goals_a[idx_00] .* ρ_match[idx_00]) end
-    if !isempty(idx_10) τ_term[idx_10] = 1.0 .+ (λ_goals_a[idx_10] .* ρ_match[idx_10]) end
-    if !isempty(idx_01) τ_term[idx_01] = 1.0 .+ (λ_goals_h[idx_01] .* ρ_match[idx_01]) end
-    if !isempty(idx_11) τ_term[idx_11] .= 1.0 .- ρ_match[idx_11] end
+    # Calculate Tau correction safely using a comprehension to avoid array mutation and AD errors
+    τ_term = [
+        begin
+            h_g = home_goals[i]
+            a_g = away_goals[i]
+            λ_h = λ_goals_h[i]
+            λ_a = λ_goals_a[i]
+            
+            # Dynamically clamp ρ per-match to ensure τ > 0 strictly
+            mx_rho = min(1.0 / (λ_h * λ_a) - 1e-4, 1.0 - 1e-4)
+            mn_rho = max(-1.0 / λ_h + 1e-4, -1.0 / λ_a + 1e-4)
+            r = clamp(ρ, mn_rho, mx_rho)
+            
+            if h_g == 0 && a_g == 0
+                1.0 - (λ_h * λ_a * r)
+            elseif h_g == 1 && a_g == 0
+                1.0 + (λ_a * r)
+            elseif h_g == 0 && a_g == 1
+                1.0 + (λ_h * r)
+            elseif h_g == 1 && a_g == 1
+                1.0 - r
+            else
+                1.0 # fallback for independent outcomes
+            end
+        end
+        for i in 1:length(home_goals)
+    ]
 
     # (AD-Safe hard rejection is no longer needed since ρ is bounded safely)
 
