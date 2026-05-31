@@ -29,9 +29,12 @@ end
 # MATH & HELPERS
 # ==============================================================================
 function compute_crps(y::Real, λ::Real, r_disp::Real; max_goals=30)
-    # Convert mean (λ) and dispersion (r) to NegBinomial (r, p)
-    p = r_disp / (r_disp + λ)
-    dist = NegativeBinomial(r_disp, p)
+    if isinf(r_disp) || isnan(r_disp)
+        dist = Poisson(λ)
+    else
+        p = r_disp / (r_disp + λ)
+        dist = NegativeBinomial(r_disp, p)
+    end
     
     crps_value = 0.0
     # Sum over possible goal counts
@@ -43,6 +46,18 @@ function compute_crps(y::Real, λ::Real, r_disp::Real; max_goals=30)
     end
     
     return crps_value
+end
+
+function get_r(df)
+    if hasproperty(df, :r)
+        return mean.(df.r), mean.(df.r)
+    elseif hasproperty(df, :r_h)
+        return mean.(df.r_h), mean.(df.r_a) 
+    else
+        # Return Inf to indicate Poisson (no overdispersion)
+        n = nrow(df)
+        return fill(Inf, n), fill(Inf, n)
+    end 
 end
 
 # ==============================================================================

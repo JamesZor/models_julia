@@ -71,12 +71,7 @@ describe(results.training_results[1][1])
 mp =Predictions.model_inference(ds, results)
 
 
-
-id = first(mp.df.match_id)
-
-ds.odds
-
-
+# analysis
 using Statistics
 using DataFrames
 
@@ -111,6 +106,9 @@ describe(comparison_df.prob_diff)
 
 
 
+# ==========================================
+# M2. Double poisosn MODEL INITIALIZATION
+# ==========================================
 
 model_a_no_market = PreGame.DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel(
   interception_config = inter_cfg,
@@ -120,4 +118,25 @@ model_a_no_market = PreGame.DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarke
   kappa_config = kap_cfg,
   player_ratings_feature = feature_cfg_bayes,
 )
+
+# ==========================================
+# 4. CREATE EXPERIMENT TASK (For Splitting)
+# ==========================================
+println("[INFO] Creating Experiment Task (Target Season: 2026)...")
+task = Experiments.create_experiment_task(
+    ds, 
+    model_a_no_market, 
+    "sanity_check_double_poisson", 
+    "./tmp_mcmc_checkpoints/"; 
+    target_seasons=["2026"], 
+    dynamics_col=:match_month,
+    warmup_period = 5,
+    samples=1000,
+    warmup=500,  
+    chains=16,
+    use_queue=true,
+)
+
+println("[INFO] Running Experiment...")
+results = Experiments.run_experiment(task)
 

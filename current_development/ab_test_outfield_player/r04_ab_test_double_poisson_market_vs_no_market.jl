@@ -1,6 +1,5 @@
 # current_development/ab_test_outfield_player/r04_ab_test_double_poisson_market_vs_no_market.jl
 
-using Pkg; Pkg.activate(".")
 using Revise
 using BayesianFootball
 using DataFrames
@@ -11,104 +10,124 @@ using ProgressMeter
 # Pin threads for maximum performance
 pinthreads(:cores)
 
-function main()
-    println("=========================================================")
-    println(" A/B TEST: Double Poisson (Market vs No Market)")
-    println("=========================================================")
-    
-    # 1. Setup DataStore for Ireland (2025-2026 for rich history)
-    println("[1] Loading DataStore...")
-    ds = Data.load_datastore_cached(Data.Ireland())
-    
-    # 2. Define Shared Architecture Components
-    inter_config = Models.PreGame.HierarchicalInterception()
-    ha_config = Models.PreGame.HierarchicalTeamHomeAdvantage()
-    kappa_config = Models.PreGame.HierarchicalTeamKappa()
-    p_dyn_config = Models.PreGame.OutfieldPlayerDynamicsConfig(
-        days_half_life = 180.0
-    )
-    
-    # Use the established BayesianTracker for player ratings
-    tracker = Features.BayesianTracker(6.5, 1.0, 0.5, 0.01)
-    ratings_feature = Features.PlayerRatingsFeature(tracker)
-    
-    # 3. Model A: Double Poisson WITHOUT Market Data
-    println("[2] Initializing Model A (No Market)...")
-    model_a_no_market = Models.PreGame.DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel(
-        interception_config = inter_config,
-        player_dynamics_config = p_dyn_config,
-        dispersion_config = Models.PreGame.HomeAwayDispersion(), # Unused but required by interface
-        homeadvantage_config = ha_config,
-        kappa_config = kappa_config,
-        player_ratings_feature = ratings_feature,
-        ν_xg = truncated(Normal(3.0, 0.5), lower=0.5)
-    )
 
-    # 4. Model B: Double Poisson WITH Market Data
-    println("[3] Initializing Model B (With Market)...")
-    model_b_market = Models.PreGame.DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel(
-        interception_config = inter_config,
-        player_dynamics_config = p_dyn_config,
-        dispersion_config = Models.PreGame.HomeAwayDispersion(), # Unused but required by interface
-        homeadvantage_config = ha_config,
-        kappa_config = kappa_config,
-        player_ratings_feature = ratings_feature,
-        market_feature_config = Features.DoublePoissonMarketFeature(),
-        ν_xg = truncated(Normal(3.0, 0.5), lower=0.5),
-        market_σ = truncated(Normal(0.1, 0.2), lower=0.01),
-        market_weight = 0.4
-    )
+const PreGame = BayesianFootball.Models.PreGame
+const Features = BayesianFootball.Features
+const Experiments = BayesianFootball.Experiments
 
-    # 5. Define Shared Splitter & Training Config
-    splitter = Data.GroupedCVSplitter(
-        ds; 
-        target_seasons=[2025, 2026],
-        group_by=:match_month,
-        history_depth=2,
-        min_warmup_matches=5
-    )
 
-    training_config = Training.TrainingConfig(
-        strategy = Training.IndependentStrategy(
-            max_concurrent_tasks = 8, 
-            sampler = Samplers.QueuedNUTSConfig(
-                samples=1000, 
-                warmup=500, 
-                chains=16, 
-                max_cpu_threads=128
-            )
-        )
-    )
+ds = Data.load_datastore_cached(Data.Ireland())
 
-    # 6. Create Tasks
-    task_a = Experiments.create_experiment_task(
-        ds, model_a_no_market, splitter,
-        experiment_name = "ab_dp_no_market",
-        training_config = training_config,
-        save_dir = "./tmp_mcmc_checkpoints"
-    )
+save_dir::String = "./data/dp_poisson_ab/"
+# ==========================================
+# 2. SHARED COMPONENT CONFIGURATION
+# ==========================================
+inter_cfg = PreGame.GlobalInterception()
+disp_cfg  = PreGame.HomeAwayDispersion()
+ha_cfg    = PreGame.HierarchicalTeamHomeAdvantage()
+kap_cfg   = PreGame.HierarchicalTeamKappa()
+dyn_cfg   = PreGame.OutfieldPlayerDynamicsConfig(days_half_life=60.0)
 
-    task_b = Experiments.create_experiment_task(
-        ds, model_b_market, splitter,
-        experiment_name = "ab_dp_market",
-        training_config = training_config,
-        save_dir = "./tmp_mcmc_checkpoints"
-    )
+tracker_bayes = Features.BayesianTracker(6.5, 1.0, 0.5, 0.01)
+feature_cfg_bayes = Features.PlayerRatingsFeature(tracker_bayes)
 
-    # 7. Execute Tasks Concurrently (Queue-based)
-    println("\n[4] Starting Concurrent A/B Execution...")
-    
-    # We run them sequentially so we don't blow up RAM, but the sampler itself uses queues
-    println("--- Running Model A (No Market) ---")
-    results_a = Experiments.run_experiment(task_a)
-    Experiments.save_experiment(results_a)
-    
-    println("--- Running Model B (Market) ---")
-    results_b = Experiments.run_experiment(task_b)
-    Experiments.save_experiment(results_b)
+samples=800
+warmup=300
+chains = 4
 
-    println("\n[5] A/B Test Complete!")
-    println("Results saved to ./tmp_mcmc_checkpoints/")
-end
 
-main()
+
+
+# ==========================================
+# 3. MODEL INITIALIZATION
+# ==========================================
+#
+model_a_no_market = PreGame.DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel(
+  interception_config = inter_cfg,
+  player_dynamics_config = dyn_cfg,
+  dispersion_config = disp_cfg,
+  homeadvantage_config = ha_cfg,
+  kappa_config = kap_cfg,
+  player_ratings_feature = feature_cfg_bayes,
+)
+
+
+model_dp = PreGame.DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel(
+    interception_config    = inter_cfg,
+    player_dynamics_config = dyn_cfg,
+    dispersion_config      = disp_cfg,
+    homeadvantage_config   = ha_cfg,
+    kappa_config           = kap_cfg,
+    player_ratings_feature = feature_cfg_bayes,
+    market_weight          = 0.4
+)
+
+
+
+task_nm = Experiments.create_experiment_task(
+    ds, 
+    model_a_no_market, 
+    "no_market_model", 
+    save_dir; 
+    target_seasons=["2025","2026"], 
+    dynamics_col=:match_biweek,
+    warmup_period = 0,
+    samples=samples,
+    warmup=warmup,  
+    chains=chains,
+    use_queue=true,
+)
+
+
+task_dp = Experiments.create_experiment_task(
+    ds, 
+    model_dp, 
+    "market_model", 
+    save_dir; 
+    target_seasons=["2025","2026"], 
+    dynamics_col=:match_biweek,
+    warmup_period = 0,
+    samples=samples,
+    warmup=warmup,  
+    chains=chains,
+    use_queue=true,
+)
+
+
+results_a = Experiments.run_experiment(task_nm)
+Experiments.save_experiment(results_a)
+
+println("--- Running Model B (Market) ---")
+results_b = Experiments.run_experiment(task_dp)
+Experiments.save_experiment(results_b)
+
+
+saved_files = Experiments.list_experiments(save_dir, data_dir="")
+results_all = Experiments.load_experiment(saved_files, 1)
+results_outfield = Experiments.load_experiment(saved_fiels, 2)
+
+ledger = BackTesting.run_backtest(
+    ds, 
+    [results_a, results_b], 
+    [BayesianFootball.Signals.BayesianKelly()]; 
+    market_config = BayesianFootball.Data.Markets.DEFAULT_MARKET_CONFIG
+)
+
+tearsheet = BackTesting.generate_tearsheet(ledger)
+
+println("\n>>> Backtest Comparison Summary:")
+cols_to_show = [:model_name, :selection, :opportunities, :activity_pct, :bets_placed, :turnover, :profit, :roi_pct, :win_rate_pct]
+show(tearsheet[:, cols_to_show], allrows=true)
+
+metrics = [
+    Evaluation.RQR(),
+    Evaluation.LogLoss(), 
+    Evaluation.CRPS(), 
+    Evaluation.GLMEdge()
+]
+master_eval_df = Evaluation.evaluate_experiments(metrics, [results_a, results_b], ds)
+
+Evaluation.display_summary_metric(master_eval_df, :logloss)
+Evaluation.display_summary_metric(master_eval_df, :glmedge)
+Evaluation.display_summary_metric(master_eval_df, :rqr)
+

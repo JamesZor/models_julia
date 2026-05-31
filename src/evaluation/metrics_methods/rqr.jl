@@ -37,8 +37,12 @@ end
 
 # 1. Core RQR Calculation
 function compute_rqr(y::Integer, λ::Float64, r_disp::Float64)
-    p = r_disp / (r_disp + λ)
-    dist = NegativeBinomial(r_disp, p)
+    if isinf(r_disp) || isnan(r_disp)
+        dist = Poisson(λ)
+    else
+        p = r_disp / (r_disp + λ)
+        dist = NegativeBinomial(r_disp, p)
+    end
     
     cdf_lower = y > 0 ? cdf(dist, y - 1) : 0.0
     cdf_upper = cdf(dist, y)
@@ -50,14 +54,16 @@ function compute_rqr(y::Integer, λ::Float64, r_disp::Float64)
     return quantile(Normal(0, 1), u)
 end
 
-# 2. Extract Dispersion (Handles hierarchical vs global r)
+# 2. Extract Dispersion (Handles hierarchical vs global r, or none for Poisson)
 function get_r(df)
     if hasproperty(df, :r)
         return mean.(df.r), mean.(df.r)
     elseif hasproperty(df, :r_h)
         return mean.(df.r_h), mean.(df.r_a) 
     else
-        throw(ArgumentError("Row does not contain expected shape parameters (:r or :r_h)"))
+        # Return Inf to indicate Poisson (no overdispersion)
+        n = nrow(df)
+        return fill(Inf, n), fill(Inf, n)
     end 
 end
 
