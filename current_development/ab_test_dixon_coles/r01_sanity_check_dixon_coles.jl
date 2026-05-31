@@ -1,6 +1,5 @@
 # current_development/ab_test_dixon_coles/r01_sanity_check_dixon_coles.jl
 
-using Pkg; Pkg.activate(".")
 using Revise
 using BayesianFootball
 using DataFrames
@@ -63,7 +62,7 @@ task_no_market = Experiments.create_experiment_task(
     warmup_period = 5,
     samples=1000,
     warmup=500,  
-    chains=8,     # Reduced for sanity check
+    chains=16,     # Reduced for sanity check
     use_queue=true,
 )
 

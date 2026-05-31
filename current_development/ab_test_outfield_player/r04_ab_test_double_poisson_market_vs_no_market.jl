@@ -230,3 +230,24 @@ julia> Evaluation.display_summary_metric(master_eval_df, :logloss)
    2 │ no_market_model                  0.559696                    0.58959               -0.0298938
 =#
 
+ledger = BackTesting.run_backtest(
+    ds1, 
+    [results_a, results_b], 
+    [BayesianFootball.Signals.BayesianKelly()]; 
+    market_config = BayesianFootball.Data.Markets.DEFAULT_MARKET_CONFIG
+)
+
+tearsheet = BackTesting.generate_tearsheet(ledger)
+
+println("\n>>> Backtest Comparison Summary:")
+cols_to_show = [:model_name, :selection, :opportunities, :activity_pct, :bets_placed, :turnover, :profit, :roi_pct, :win_rate_pct]
+show(tearsheet[:, cols_to_show], allrows=true)
+
+model_names = unique(tearsheet.selection)
+
+for m_name in model_names
+    println("\nStats for: $m_name")
+    sub = subset(tearsheet, :selection => ByRow(isequal(m_name)))
+    show(sub[!, cols_to_show])
+end
+

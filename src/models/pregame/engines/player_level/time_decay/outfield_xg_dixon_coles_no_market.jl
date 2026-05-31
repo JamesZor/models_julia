@@ -131,18 +131,19 @@ end
     log_lik_indep_h = logpdf.(Poisson.(λ_goals_h), home_goals)
     log_lik_indep_a = logpdf.(Poisson.(λ_goals_a), away_goals)
 
+    # Dynamically clamp ρ per-match to ensure τ > 0 strictly
+    max_rho = min.(1.0 ./ (λ_goals_h .* λ_goals_a) .- 1e-4, 1.0 - 1e-4)
+    min_rho = max.(-1.0 ./ λ_goals_h .+ 1e-4, -1.0 ./ λ_goals_a .+ 1e-4)
+    ρ_match = clamp.(ρ, min_rho, max_rho)
+
     # Calculate Tau correction
     τ_term = ones(eltype(λ_goals_h), length(home_goals))
-    if !isempty(idx_00) τ_term[idx_00] = 1.0 .- (λ_goals_h[idx_00] .* λ_goals_a[idx_00] .* ρ) end
-    if !isempty(idx_10) τ_term[idx_10] = 1.0 .+ (λ_goals_a[idx_10] .* ρ) end
-    if !isempty(idx_01) τ_term[idx_01] = 1.0 .+ (λ_goals_h[idx_01] .* ρ) end
-    if !isempty(idx_11) τ_term[idx_11] .= 1.0 - ρ end
+    if !isempty(idx_00) τ_term[idx_00] = 1.0 .- (λ_goals_h[idx_00] .* λ_goals_a[idx_00] .* ρ_match[idx_00]) end
+    if !isempty(idx_10) τ_term[idx_10] = 1.0 .+ (λ_goals_a[idx_10] .* ρ_match[idx_10]) end
+    if !isempty(idx_01) τ_term[idx_01] = 1.0 .+ (λ_goals_h[idx_01] .* ρ_match[idx_01]) end
+    if !isempty(idx_11) τ_term[idx_11] .= 1.0 .- ρ_match[idx_11] end
 
-    # AD-Safe hard rejection for invalid Tau boundaries (prevents HMC flattening)
-    if any(τ_term .<= 0.0)
-        Turing.@addlogprob! -Inf
-        return
-    end
+    # (AD-Safe hard rejection is no longer needed since ρ is bounded safely)
 
     # Combine into final likelihood vector for all matches
     log_lik_goals = log_lik_indep_h .+ log_lik_indep_a .+ log.(τ_term)   # Apply Match Weights globally to the combined goals likelihood
@@ -287,13 +288,18 @@ function extract_parameters(
         λ_goals_h = κ_h .* exp.(log_λ_h) .+ 1e-6
         λ_goals_a = κ_a .* exp.(log_λ_a) .+ 1e-6
 
+        # Dynamically clamp ρ for this specific match
+        max_rho = min.(1.0 ./ (λ_goals_h .* λ_goals_a) .- 1e-4, 1.0 - 1e-4)
+        min_rho = max.(-1.0 ./ λ_goals_h .+ 1e-4, -1.0 ./ λ_goals_a .+ 1e-4)
+        ρ_match = clamp.(ρ_vec, min_rho, max_rho)
+
         results[mid] = (;
             λ_h = λ_goals_h,
             λ_a = λ_goals_a,
             θ_1 = log.(λ_goals_h),
             θ_2 = log.(λ_goals_a),
-            θ_3 = ρ_vec,
-            ρ = ρ_vec, 
+            θ_3 = ρ_match,
+            ρ = ρ_match, 
             true_xg_h = exp.(log_λ_h), 
             true_xg_a = exp.(log_λ_a),
         )
