@@ -175,17 +175,25 @@ end
 
     # --- Pillar C: The Market (Normal) ---
     if !isempty(idx_market)
-        h_id_m = home_team_indices[idx_market]
-        a_id_m = away_team_indices[idx_market]
+        market_lik_terms = [
+            begin
+                idx = idx_market[i]
+                h_id_m = home_team_indices[idx]
+                a_id_m = away_team_indices[idx]
+                
+                ρ_raw_m = dc.ρ_base + dc.δ_ρ[h_id_m] + dc.δ_ρ[a_id_m]
+                ρ_m = 0.3 * tanh(ρ_raw_m)
+                
+                ll_h = logpdf(Normal(log_λₕ[idx], σ_market), market_log_λ_h[idx])
+                ll_a = logpdf(Normal(log_λₐ[idx], σ_market), market_log_λ_a[idx])
+                ll_ρ = logpdf(Normal(ρ_m, σ_market), market_ρ[idx])
+                
+                (ll_h + ll_a + ll_ρ) * match_weights[idx]
+            end
+            for i in 1:length(idx_market)
+        ]
         
-        ρ_market_raw = dc.ρ_base .+ dc.δ_ρ[h_id_m] .+ dc.δ_ρ[a_id_m]
-        ρ_m = 0.3 .* tanh.(ρ_market_raw)
-        
-        log_lik_market_h = logpdf.(Normal.(log_λₕ[idx_market], σ_market), market_log_λ_h[idx_market])
-        log_lik_market_a = logpdf.(Normal.(log_λₐ[idx_market], σ_market), market_log_λ_a[idx_market])
-        log_lik_market_ρ = logpdf.(Normal.(ρ_m, σ_market), market_ρ[idx_market])
-        
-        Turing.@addlogprob! config.market_weight * (sum(log_lik_market_h .* match_weights[idx_market]) + sum(log_lik_market_a .* match_weights[idx_market]) + sum(log_lik_market_ρ .* match_weights[idx_market]))
+        Turing.@addlogprob! config.market_weight * sum(market_lik_terms)
     end
 end
 

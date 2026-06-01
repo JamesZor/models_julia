@@ -91,6 +91,19 @@ model_dc_m = PreGame.DynamicDixonColesXGOutfieldPlayerTimeDecayModel(
     market_weight          = 0.4
 )
 
+# Model 5: Dixon Coles Market (Hierarchical Rho)
+model_dc_hm = PreGame.DynamicDixonColesXGOutfieldPlayerTimeDecayModel(
+    interception_config    = inter_cfg,
+    player_dynamics_config = dyn_cfg,
+    dispersion_config      = disp_cfg,
+    homeadvantage_config   = ha_cfg,
+    kappa_config           = kap_cfg,
+    dixon_coles_config     = PreGame.HierarchicalTeamDixonColesConfig(),
+    player_ratings_feature = feature_cfg_bayes,
+    market_feature_config  = Features.DixonColesMarketFeature(),
+    market_weight          = 0.4
+)
+
 # ==========================================
 # 4. TASK CREATION
 # ==========================================
@@ -119,6 +132,12 @@ task_dc_m = Experiments.create_experiment_task(
     warmup_period=0, samples=samples, warmup=warmup, chains=chains, use_queue=true,
 )
 
+task_dc_hm = Experiments.create_experiment_task(
+    ds, model_dc_hm, "DixonColes_Market_Hierarchical", save_dir; 
+    target_seasons=target_seasons, dynamics_col=:match_biweek,
+    warmup_period=0, samples=samples, warmup=warmup, chains=chains, use_queue=true,
+)
+
 # ==========================================
 # 5. RUN EXPERIMENTS
 # ==========================================
@@ -139,7 +158,14 @@ println("--- Running Dixon Coles Market ---")
 res_dc_m = Experiments.run_experiment(task_dc_m)
 Experiments.save_experiment(res_dc_m)
 
-all_results = [res_dp_nm, res_dp_m, res_dc_nm, res_dc_m]
+# NOTE: If you have already ran the above models and have them loaded in your REPL,
+# you can comment out the run_experiment() calls above to save time.
+
+println("--- Running Dixon Coles Market (Hierarchical) ---")
+res_dc_hm = Experiments.run_experiment(task_dc_hm)
+Experiments.save_experiment(res_dc_hm)
+
+all_results = [res_dp_nm, res_dp_m, res_dc_nm, res_dc_m, res_dc_hm]
 
 # ==========================================
 # 6. EVALUATION & BACKTESTING
