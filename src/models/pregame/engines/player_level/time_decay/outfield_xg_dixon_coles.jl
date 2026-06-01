@@ -9,6 +9,7 @@ Base.@kwdef struct DynamicDixonColesXGOutfieldPlayerTimeDecayModel{
     D<:AbstractDispersionConfig, # Unused mathematically in Poisson, but kept for interface consistency
     H<:AbstractHomeAdvantageConfig,
     K<:AbstractKappaConfig,
+    C<:AbstractDixonColesConfig,
     R<:Features.AbstractFeatureConfig,
     M<:Features.AbstractMarketFeatureConfig
   } <: AbstractTimeDecayPlayerModel
@@ -17,6 +18,7 @@ Base.@kwdef struct DynamicDixonColesXGOutfieldPlayerTimeDecayModel{
       dispersion_config::D
       homeadvantage_config::H
       kappa_config::K
+      dixon_coles_config::C = GlobalDixonColesConfig()
       player_ratings_feature::R
       market_feature_config::M = Features.DixonColesMarketFeature()
       ν_xg::Distribution = truncated(Normal(3.0, 0.5), lower=0.5) 
@@ -64,6 +66,7 @@ end
     n_teams::Int,
     n_seasons::Int,
     n_months::Int,
+    # --- Config ---
     config::DynamicDixonColesXGOutfieldPlayerTimeDecayModel
 )
     # ==========================================
@@ -72,14 +75,11 @@ end
     ν_xg     ~ config.ν_xg
     σ_market ~ config.market_σ
     
-    # Dixon-Coles Correlation Parameter
-    ρ_raw ~ Normal(0, 1.0)
-    ρ = 0.3 * tanh(ρ_raw) # Bounded tightly
-
-    inter ~ to_submodel(build_interception(config.interception_config, n_seasons))
-    ha    ~ to_submodel(build_home_advantage(config.homeadvantage_config, n_teams))
-    kap   ~ to_submodel(build_kappa(config.kappa_config, n_teams))
-    p_dyn ~ to_submodel(build_dynamics(config.player_dynamics_config, n_teams))
+    inter = @submodel build_interception(config.interception_config, n_seasons)
+    ha    = @submodel build_home_advantage(config.homeadvantage_config, n_teams)
+    kap   = @submodel build_kappa(config.kappa_config, n_teams)
+    p_dyn = @submodel build_dynamics(config.player_dynamics_config, "p_dyn", n_teams)
+    dc    = @submodel build_dixon_coles(config.dixon_coles_config, n_teams)
 
     # ==========================================
     # 2. VECTORIZED INDEXING & MATH
@@ -141,15 +141,16 @@ end
     log_lik_indep_h = logpdf.(Poisson.(λ_goals_h), home_goals)
     log_lik_indep_a = logpdf.(Poisson.(λ_goals_a), away_goals)
 
-    # Calculate Tau correction safely using a comprehension to avoid array mutation and AD errors
+    # Calculate Tau correction safely
     τ_term = [
         begin
-            h_g = home_goals[i]
-            a_g = away_goals[i]
-            λ_h = λ_goals_h[i]
-            λ_a = λ_goals_a[i]
+            h_g, a_g = home_goals[i], away_goals[i]
+            λ_h, λ_a = λ_goals_h[i], λ_goals_a[i]
             
-            # Dynamically clamp ρ per-match to ensure τ > 0 strictly
+            h_id, a_id = home_team_indices[i], away_team_indices[i]
+            ρ_match_raw = dc.ρ_base + dc.δ_ρ[h_id] + dc.δ_ρ[a_id]
+            ρ = 0.3 * tanh(ρ_match_raw)
+            
             mx_rho = min(0.9999 / (λ_h * λ_a), 0.9999)
             mn_rho = max(-0.9999 / λ_h, -0.9999 / λ_a)
             r = clamp(ρ, mn_rho, mx_rho)
@@ -163,28 +164,28 @@ end
             elseif h_g == 1 && a_g == 1
                 1.0 - r
             else
-                1.0 # fallback for independent outcomes
+                1.0
             end
         end
         for i in 1:length(home_goals)
     ]
 
-    # (AD-Safe hard rejection is no longer needed since ρ is bounded safely)
-
-    # Combine into final likelihood vector for all matches
-    log_lik_goals = log_lik_indep_h .+ log_lik_indep_a .+ log.(τ_term)   # Apply Match Weights globally to the combined goals likelihood
+    log_lik_goals = log_lik_indep_h .+ log_lik_indep_a .+ log.(τ_term)
     Turing.@addlogprob! sum(log_lik_goals .* match_weights)
 
     # --- Pillar C: The Market (Normal) ---
     if !isempty(idx_market)
-        market_rate_h = log_λₕ[idx_market] .+ log.(κ_h_flat[idx_market])
-        market_rate_a = log_λₐ[idx_market] .+ log.(κ_a_flat[idx_market])
-
-        log_lik_market_h = logpdf.(Normal.(market_rate_h, σ_market), market_log_λ_h[idx_market])
-        log_lik_market_a = logpdf.(Normal.(market_rate_a, σ_market), market_log_λ_a[idx_market])
-        log_lik_market_ρ = logpdf(Normal(ρ, σ_market), mean(market_ρ[idx_market]))
-
-        Turing.@addlogprob! config.market_weight * (sum(log_lik_market_h .* match_weights[idx_market]) + sum(log_lik_market_a .* match_weights[idx_market]) + log_lik_market_ρ)
+        h_id_m = home_team_indices[idx_market]
+        a_id_m = away_team_indices[idx_market]
+        
+        ρ_market_raw = dc.ρ_base .+ dc.δ_ρ[h_id_m] .+ dc.δ_ρ[a_id_m]
+        ρ_m = 0.3 .* tanh.(ρ_market_raw)
+        
+        log_lik_market_h = logpdf.(Normal.(log_λₕ[idx_market], σ_market), market_log_λ_h[idx_market])
+        log_lik_market_a = logpdf.(Normal.(log_λₐ[idx_market], σ_market), market_log_λ_a[idx_market])
+        log_lik_market_ρ = logpdf.(Normal.(ρ_m, σ_market), market_ρ[idx_market])
+        
+        Turing.@addlogprob! config.market_weight * (sum(log_lik_market_h .* match_weights[idx_market]) + sum(log_lik_market_a .* match_weights[idx_market]) + sum(log_lik_market_ρ .* match_weights[idx_market]))
     end
 end
 
@@ -284,11 +285,8 @@ function extract_parameters(
     ha_mat    = extract_home_advantage(chain, model.homeadvantage_config, n_teams)
     kap_mat   = extract_kappa(chain, model.kappa_config, n_teams)
     p_dyn_nt  = extract_dynamics(chain, model.player_dynamics_config, "p_dyn", n_teams)
+    dc_mat    = extract_dixon_coles(chain, model.dixon_coles_config, "dc", n_teams)
     
-    # Reconstruct ρ from ρ_raw since only ~ variables are saved in the chain
-    ρ_raw_vec = vec(Array(chain[:ρ_raw]))
-    ρ_vec = 0.3 .* tanh.(ρ_raw_vec)
-
     n_samples = size(chain, 1) * size(chain, 3) 
     results = Dict{Int, NamedTuple}()
     ratings_map = data[:player_ratings_map]
@@ -334,6 +332,10 @@ function extract_parameters(
 
         λ_goals_h = κ_h .* exp.(log_λ_h) .+ 1e-6
         λ_goals_a = κ_a .* exp.(log_λ_a) .+ 1e-6
+
+        # Calculate ρ_match vector for this specific match
+        ρ_match_raw = dc_mat.ρ_base .+ dc_mat.δ_ρ[:, h_id] .+ dc_mat.δ_ρ[:, a_id]
+        ρ_vec = 0.3 .* tanh.(ρ_match_raw)
 
         # Dynamically clamp ρ for this specific match
         max_rho = min.(0.9999 ./ (λ_goals_h .* λ_goals_a), 0.9999)

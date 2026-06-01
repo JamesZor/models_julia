@@ -19,9 +19,10 @@ include("./types.jl")
 include("./components/dispersion.jl")
 include("./components/interception.jl")
 include("./components/home_advantage.jl")
+include("./components/copula.jl")
+include("./components/dixon_coles.jl")
 include("./components/dynamics.jl")
 include("./components/kappa.jl")
-include("./components/copula.jl")
 include("./display.jl")
 
 # Team Level - Standard
