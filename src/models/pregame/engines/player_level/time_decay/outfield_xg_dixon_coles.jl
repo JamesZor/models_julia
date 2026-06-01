@@ -75,11 +75,11 @@ end
     ν_xg     ~ config.ν_xg
     σ_market ~ config.market_σ
     
-    inter = @submodel build_interception(config.interception_config, n_seasons)
-    ha    = @submodel build_home_advantage(config.homeadvantage_config, n_teams)
-    kap   = @submodel build_kappa(config.kappa_config, n_teams)
-    p_dyn = @submodel build_dynamics(config.player_dynamics_config, "p_dyn", n_teams)
-    dc    = @submodel build_dixon_coles(config.dixon_coles_config, n_teams)
+    inter ~ to_submodel(build_interception(config.interception_config, n_seasons))
+    ha    ~ to_submodel(build_home_advantage(config.homeadvantage_config, n_teams))
+    kap   ~ to_submodel(build_kappa(config.kappa_config, n_teams))
+    p_dyn ~ to_submodel(build_dynamics(config.player_dynamics_config, n_teams))
+    dc    ~ to_submodel(build_dixon_coles(config.dixon_coles_config, n_teams))
 
     # ==========================================
     # 2. VECTORIZED INDEXING & MATH
