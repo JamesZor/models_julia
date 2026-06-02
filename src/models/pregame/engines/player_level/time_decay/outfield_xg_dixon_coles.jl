@@ -93,71 +93,69 @@ end
     # ==========================================
     # 3. UNIFIED LIKELIHOOD PIPELINE (AD-Safe)
     # ==========================================
-    total_lik_terms = [
-        begin
-            h_id = home_team_indices[i]
-            a_id = away_team_indices[i]
-            s_id = season_indices[i]
-            m_id = month_indices[i]
-            
-            int_m = inter.μ_base[s_id] + inter.δ_month[m_id]
-            l_h = clamp(int_m + ha[h_id] + att_h[i] + def_a[i], -20.0, 20.0)
-            l_a = clamp(int_m            + att_a[i] + def_h[i], -20.0, 20.0)
-            
-            λ_h = kap[h_id] * exp(l_h) + 1e-6
-            λ_a = kap[a_id] * exp(l_a) + 1e-6
-            
-            # --- Pillar B: Actual Goals (Dixon-Coles Poisson) ---
-            h_g, a_g = home_goals[i], away_goals[i]
-            
-            ρ_match_raw = dc.ρ_base + dc.δ_ρ[h_id] + dc.δ_ρ[a_id]
-            ρ = 0.3 * tanh(ρ_match_raw)
-            
-            mx_rho = min(0.9999 / (λ_h * λ_a), 0.9999)
-            mn_rho = max(-0.9999 / λ_h, -0.9999 / λ_a)
-            r = clamp(ρ, mn_rho, mx_rho)
-            
-            τ = if h_g == 0 && a_g == 0
-                1.0 - (λ_h * λ_a * r)
-            elseif h_g == 1 && a_g == 0
-                1.0 + (λ_a * r)
-            elseif h_g == 0 && a_g == 1
-                1.0 + (λ_h * r)
-            elseif h_g == 1 && a_g == 1
-                1.0 - r
-            else
-                1.0
-            end
-            
-            ll_goals = logpdf(Poisson(λ_h), h_g) + logpdf(Poisson(λ_a), a_g) + log(τ)
-            
-            # --- Pillar A: xG (Gamma) ---
-            ll_xg = if !isnan(home_xg[i])
-                logpdf(Gamma(ν_xg, (exp(l_h) + 1e-6) / ν_xg), home_xg[i]) + logpdf(Gamma(ν_xg, (exp(l_a) + 1e-6) / ν_xg), away_xg[i])
-            else
-                0.0
-            end
-            
-            # --- Pillar C: The Market (Normal) ---
-            ll_market = if !isnan(market_log_λ_h[i])
-                market_rate_h = l_h + log(kap[h_id])
-                market_rate_a = l_a + log(kap[a_id])
-                
-                config.market_weight * (
-                    logpdf(Normal(market_rate_h, σ_market), market_log_λ_h[i]) +
-                    logpdf(Normal(market_rate_a, σ_market), market_log_λ_a[i]) +
-                    logpdf(Normal(ρ, σ_market), market_ρ[i])
-                )
-            else
-                0.0
-            end
-            
-            (ll_goals + ll_xg + ll_market) * match_weights[i]
+    ll_total = zero(ν_xg)
+    for i in 1:length(home_goals)
+        h_id = home_team_indices[i]
+        a_id = away_team_indices[i]
+        s_id = season_indices[i]
+        m_id = month_indices[i]
+        
+        int_m = inter.μ_base[s_id] + inter.δ_month[m_id]
+        l_h = clamp(int_m + ha[h_id] + att_h[i] + def_a[i], -20.0, 20.0)
+        l_a = clamp(int_m            + att_a[i] + def_h[i], -20.0, 20.0)
+        
+        λ_h = kap[h_id] * exp(l_h) + 1e-6
+        λ_a = kap[a_id] * exp(l_a) + 1e-6
+        
+        # --- Pillar B: Actual Goals (Dixon-Coles Poisson) ---
+        h_g, a_g = home_goals[i], away_goals[i]
+        
+        ρ_match_raw = dc.ρ_base + dc.δ_ρ[h_id] + dc.δ_ρ[a_id]
+        ρ = 0.3 * tanh(ρ_match_raw)
+        
+        mx_rho = min(0.9999 / (λ_h * λ_a), 0.9999)
+        mn_rho = max(-0.9999 / λ_h, -0.9999 / λ_a)
+        r = clamp(ρ, mn_rho, mx_rho)
+        
+        τ = if h_g == 0 && a_g == 0
+            1.0 - (λ_h * λ_a * r)
+        elseif h_g == 1 && a_g == 0
+            1.0 + (λ_a * r)
+        elseif h_g == 0 && a_g == 1
+            1.0 + (λ_h * r)
+        elseif h_g == 1 && a_g == 1
+            1.0 - r
+        else
+            1.0
         end
-        for i in 1:length(home_goals)
-    ]
+        
+        ll_goals = logpdf(Poisson(λ_h), h_g) + logpdf(Poisson(λ_a), a_g) + log(τ)
+        
+        # --- Pillar A: xG (Gamma) ---
+        ll_xg = if !isnan(home_xg[i])
+            logpdf(Gamma(ν_xg, (exp(l_h) + 1e-6) / ν_xg), home_xg[i]) + logpdf(Gamma(ν_xg, (exp(l_a) + 1e-6) / ν_xg), away_xg[i])
+        else
+            zero(λ_h)
+        end
+        
+        # --- Pillar C: The Market (Normal) ---
+        ll_market = if !isnan(market_log_λ_h[i])
+            market_rate_h = l_h + log(kap[h_id])
+            market_rate_a = l_a + log(kap[a_id])
+            
+            config.market_weight * (
+                logpdf(Normal(market_rate_h, σ_market), market_log_λ_h[i]) +
+                logpdf(Normal(market_rate_a, σ_market), market_log_λ_a[i]) +
+                logpdf(Normal(ρ, σ_market), market_ρ[i])
+            )
+        else
+            zero(λ_h)
+        end
+        
+        ll_total += (ll_goals + ll_xg + ll_market) * match_weights[i]
+    end
     
-    Turing.@addlogprob! sum(total_lik_terms)
+    Turing.@addlogprob! ll_total
 end
 
 # ==========================================
