@@ -166,6 +166,15 @@ res_dc_hm = Experiments.run_experiment(task_dc_hm)
 Experiments.save_experiment(res_dc_hm)
 
 all_results = [res_dp_nm, res_dp_m, res_dc_nm, res_dc_m, res_dc_hm]
+all_results = [res_dc_nm, res_dc_m, res_dc_hm]
+
+all_results = [res_dp_nm, res_dp_m]
+
+saved_files = Experiments.list_experiments(save_dir, data_dir="")
+res_dc_hm = Experiments.load_experiment(saved_files, 7)
+res_dc_m = Experiments.load_experiment(saved_files, 3)
+res_dc_nm = Experiments.load_experiment(saved_files, 4)
+
 
 # ==========================================
 # 6. EVALUATION & BACKTESTING
@@ -187,11 +196,44 @@ println("===========================================")
 eval_glmedge = Evaluation.evaluate_experiments(Evaluation.GLMEdge(), all_results, ds1)
 Evaluation.display_summary_metric(eval_glmedge, :glmedge)
 
+#=
+--- GLM Edge Summary ---
+5×4 DataFrame
+ Row │ model                           glmedge_intercept_coef  glmedge_spread_fair_coef  glmedge_spread_fair_p_value 
+     │ String                          Float64                 Float64                   Float64                     
+─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ DixonColes_Market                             -2.48254                   2.10108                   8.90688e-5
+   2 │ DixonColes_Market_Hierarchical                -2.48321                   2.11194                   7.84762e-5
+   3 │ DixonColes_NoMarket                           -2.45214                   1.51498                   0.00314894
+   4 │ DoublePoisson_Market                          -2.45759                   2.10985                   0.00100934
+   5 │ DoublePoisson_NoMarket                        -2.45037                   1.42114                   0.00494915
+=#
+
+
+
 println("\n===========================================")
 println("📉 LogLoss Evaluation (Betfair Odds)")
 println("===========================================")
 eval_logloss = Evaluation.evaluate_experiments(Evaluation.LogLoss(), all_results, ds1)
 Evaluation.display_summary_metric(eval_logloss, :logloss)
+
+
+
+
+#=
+julia> Evaluation.display_summary_metric(eval_logloss, :logloss)
+
+--- LogLoss Summary (Lower Diff is Better) ---
+5×4 DataFrame
+ Row │ model                           logloss_overall_model_ll  logloss_overall_market_ll  logloss_overall_diff_ll 
+     │ String                          Float64                   Float64                    Float64                 
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ DixonColes_Market                               0.555594                    0.58959               -0.0339963
+   2 │ DixonColes_Market_Hierarchical                  0.555536                    0.58959               -0.0340538
+   3 │ DixonColes_NoMarket                             0.560145                    0.58959               -0.0294454
+   4 │ DoublePoisson_Market                            0.55372                     0.58959               -0.0358704
+   5 │ DoublePoisson_NoMarket                          0.560504                    0.58959               -0.0290864
+=#
 
 
 println("\n===========================================")

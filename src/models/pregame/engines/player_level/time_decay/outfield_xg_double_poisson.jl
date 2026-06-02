@@ -1,4 +1,4 @@
-# src/models/pregame/engines/player_level/time_decay/outfield_xg_dixon_coles.jl
+# src/models/pregame/engines/player_level/time_decay/outfield_xg_double_poisson.jl
 
 # ==========================================
 # 1. THE MODEL CONFIGURATION
@@ -6,7 +6,7 @@
 Base.@kwdef struct DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel{
     I<:AbstractInterceptionConfig,
     P<:OutfieldPlayerDynamicsConfig, 
-    D<:AbstractDispersionConfig, # Unused mathematically in Poisson, but kept for interface consistency
+    D<:AbstractDispersionConfig, 
     H<:AbstractHomeAdvantageConfig,
     K<:AbstractKappaConfig,
     R<:Features.AbstractFeatureConfig,
@@ -66,8 +66,7 @@ end
     ν_xg     ~ config.ν_xg
     σ_market ~ config.market_σ
     
-    
-    inter ~ to_submodel(build_interception(config.interception_config, n_seasons))
+    inter ~ to_submodel(build_interception(config.interception_config, n_seasons, n_months))
     ha    ~ to_submodel(build_home_advantage(config.homeadvantage_config, n_teams))
     kap   ~ to_submodel(build_kappa(config.kappa_config, n_teams))
     p_dyn ~ to_submodel(build_dynamics(config.player_dynamics_config, n_teams))
@@ -75,7 +74,6 @@ end
     # ==========================================
     # 2. VECTORIZED INDEXING & MATH
     # ==========================================
-    # Mean-center the ratings to perfectly resolve the non-identifiability ridge with inter.μ
     base_rating = config.player_ratings_feature.tracker.prior_mean
     
     h_G_c = home_G_ratings .- base_rating
@@ -89,63 +87,49 @@ end
     att_a = (p_dyn.w_G_att .* a_G_c) .+ (p_dyn.w_Outfield_att .* a_O_c)
     def_a = (p_dyn.w_G_def .* a_G_c) .+ (p_dyn.w_Outfield_def .* a_O_c)
 
-    home_adv    = view(ha, home_team_indices)
-    inter_match = view(inter, season_indices)
-    κ_h_flat    = view(kap, home_team_indices)
-    κ_a_flat    = view(kap, away_team_indices)
-
     # ==========================================
-    # 3. STABLE RATE GENERATION (True xG)
+    # 3. UNIFIED LIKELIHOOD PIPELINE (AD-Safe)
     # ==========================================
-    log_λₕ = clamp.(inter_match .+ home_adv .+ att_h .+ def_a, -20.0, 20.0) 
-    log_λₐ = clamp.(inter_match .+             att_a .+ def_h, -20.0, 20.0)
-
-    λₕ = exp.(log_λₕ) .+ 1e-6
-    λₐ = exp.(log_λₐ) .+ 1e-6
-
-    if any(isnan, λₕ) || any(isnan, λₐ) || any(isinf, λₕ) || any(isinf, λₐ)
-        Turing.@addlogprob! -Inf
-        return
-    end
-
-    # ==========================================
-    # 4. TIME-DECAYED LIKELIHOOD PIPELINE
-    # ==========================================
+    total_lik_terms = [
+        begin
+            h_id = home_team_indices[i]
+            a_id = away_team_indices[i]
+            s_id = season_indices[i]
+            m_id = month_indices[i]
+            
+            int_m = inter.μ_base[s_id] + inter.δ_month[m_id]
+            l_h = clamp(int_m + ha[h_id] + att_h[i] + def_a[i], -20.0, 20.0)
+            l_a = clamp(int_m            + att_a[i] + def_h[i], -20.0, 20.0)
+            
+            λ_h = kap[h_id] * exp(l_h) + 1e-6
+            λ_a = kap[a_id] * exp(l_a) + 1e-6
+            
+            ll_match = 0.0
+            
+            # --- Pillar B: Actual Goals (Poisson) ---
+            ll_match += logpdf(Poisson(λ_h), home_goals[i])
+            ll_match += logpdf(Poisson(λ_a), away_goals[i])
+            
+            # --- Pillar A: xG (Gamma) ---
+            if !isnan(home_xg[i])
+                ll_match += logpdf(Gamma(ν_xg, (exp(l_h) + 1e-6) / ν_xg), home_xg[i])
+                ll_match += logpdf(Gamma(ν_xg, (exp(l_a) + 1e-6) / ν_xg), away_xg[i])
+            end
+            
+            # --- Pillar C: The Market (Normal) ---
+            if !isnan(market_log_λ_h[i])
+                market_rate_h = l_h + log(kap[h_id])
+                market_rate_a = l_a + log(kap[a_id])
+                ll_match += config.market_weight * logpdf(Normal(market_rate_h, σ_market), market_log_λ_h[i])
+                ll_match += config.market_weight * logpdf(Normal(market_rate_a, σ_market), market_log_λ_a[i])
+            end
+            
+            ll_match * match_weights[i]
+        end
+        for i in 1:length(home_goals)
+    ]
     
-    # --- Pillar A: xG (Gamma) ---
-    if !isempty(idx_xg)
-        λₕ_xg = λₕ[idx_xg]
-        λₐ_xg = λₐ[idx_xg]
-        
-        log_lik_xg_h = logpdf.(Gamma.(ν_xg, λₕ_xg ./ ν_xg), home_xg[idx_xg])
-        log_lik_xg_a = logpdf.(Gamma.(ν_xg, λₐ_xg ./ ν_xg), away_xg[idx_xg])
-
-        Turing.@addlogprob! sum(log_lik_xg_h .* match_weights[idx_xg])
-        Turing.@addlogprob! sum(log_lik_xg_a .* match_weights[idx_xg])
-    end
-
-    # --- Pillar B: Actual Goals (Dixon-Coles Poisson) ---
-    λ_goals_h = κ_h_flat .* λₕ
-    λ_goals_a = κ_a_flat .* λₐ
-
-    # Independent Poisson component
-    log_lik_indep_h = logpdf.(Poisson.(λ_goals_h), home_goals)
-    log_lik_indep_a = logpdf.(Poisson.(λ_goals_a), away_goals)
-
-    # Combine into final likelihood vector for all matches
-    log_lik_goals = log_lik_indep_h .+ log_lik_indep_a
-    Turing.@addlogprob! sum(log_lik_goals .* match_weights)
-
-    # --- Pillar C: The Market (Normal) ---
-    if !isempty(idx_market)
-        market_rate_h = log_λₕ[idx_market] .+ log.(κ_h_flat[idx_market])
-        market_rate_a = log_λₐ[idx_market] .+ log.(κ_a_flat[idx_market])
-
-        log_lik_market_h = logpdf.(Normal.(market_rate_h, σ_market), market_log_λ_h[idx_market])
-        log_lik_market_a = logpdf.(Normal.(market_rate_a, σ_market), market_log_λ_a[idx_market])
-
-        Turing.@addlogprob! config.market_weight * (sum(log_lik_market_h .* match_weights[idx_market]) + sum(log_lik_market_a .* match_weights[idx_market]))
-    end
+    Turing.@addlogprob! sum(total_lik_terms)
 end
 
 # ==========================================
@@ -181,7 +165,6 @@ function build_turing_model(config::DynamicDoublePoissonXGOutfieldPlayerTimeDeca
     home_goals = Vector{Int}(data[:flat_home_goals])
     away_goals = Vector{Int}(data[:flat_away_goals])
 
-    # Player Ratings
     h_G = Vector{Float64}(data[:flat_home_G_rating])
     h_D = Vector{Float64}(data[:flat_home_D_rating])
     h_M = Vector{Float64}(data[:flat_home_M_rating])
@@ -191,18 +174,14 @@ function build_turing_model(config::DynamicDoublePoissonXGOutfieldPlayerTimeDeca
     a_M = Vector{Float64}(data[:flat_away_M_rating])
     a_F = Vector{Float64}(data[:flat_away_F_rating])
 
-    # xG
     home_xg = Vector{Float64}(coalesce.(data[:flat_home_xg], NaN))
     away_xg = Vector{Float64}(coalesce.(data[:flat_away_xg], NaN))
     idx_xg    = findall(x -> !isnan(x), home_xg)
     idx_no_xg = findall(isnan, home_xg)
 
-    # Market
     market_log_h = Vector{Float64}(coalesce.(log.(data[:flat_market_λ_home]), NaN))
     market_log_a = Vector{Float64}(coalesce.(log.(data[:flat_market_λ_away]), NaN))
-        idx_market   = findall(x -> !isnan(x), market_log_h)
-
-
+    idx_market   = findall(x -> !isnan(x), market_log_h)
 
     return build_double_poisson_xg_market_player_engine(
         home_ids, away_ids, season_ids, month_indices,
@@ -229,14 +208,12 @@ function extract_parameters(
     n_seasons = Int(data[:n_seasons])
     team_map  = data[:team_map]
 
-    inter_mat = extract_interception(chain, model.interception_config, n_seasons)
+    inter_nt  = extract_interception(chain, model.interception_config, n_seasons)
     ha_mat    = extract_home_advantage(chain, model.homeadvantage_config, n_teams)
     kap_mat   = extract_kappa(chain, model.kappa_config, n_teams)
     p_dyn_nt  = extract_dynamics(chain, model.player_dynamics_config, "p_dyn", n_teams)
     
     n_samples = size(chain, 1) * size(chain, 3) 
-    
-    # Extract rho directly from the chain (it's a scalar per sample)
     ρ_vec = zeros(n_samples)
 
     results = Dict{Int, NamedTuple}()
@@ -274,7 +251,9 @@ function extract_parameters(
         κ_a = a_id > 0 ? kap_mat[:, a_id] : ones(n_samples)
 
         s_idx = hasproperty(row, :season_idx) ? Int(row.season_idx) : n_seasons
-        μ_v = inter_mat[:, s_idx] 
+        m_idx = hasproperty(row, :month_idx) ? Int(row.month_idx) : 1
+        
+        μ_v = inter_nt.μ_base[:, s_idx] .+ inter_nt.δ_month[:, m_idx]
 
         log_λ_h = clamp.(μ_v .+ γ_h .+ att_h .+ def_a, -20.0, 20.0)
         log_λ_a = clamp.(μ_v .+        att_a .+ def_h, -20.0, 20.0)
