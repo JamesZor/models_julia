@@ -28,7 +28,6 @@ end
 # 2. THE TURING ENGINE
 # ==========================================
 @model function build_double_poisson_xg_market_player_engine(
-    # --- Base Data ---
     home_team_indices::Vector{Int},
     away_team_indices::Vector{Int},
     season_indices::Vector{Int},
@@ -36,7 +35,6 @@ end
     home_goals::Vector{Int},
     away_goals::Vector{Int},
     match_weights::Vector{Float64},
-    # --- Player Positional Ratings ---
     home_G_ratings::Vector{Float64},
     home_D_ratings::Vector{Float64},
     home_M_ratings::Vector{Float64},
@@ -45,16 +43,12 @@ end
     away_D_ratings::Vector{Float64},
     away_M_ratings::Vector{Float64},
     away_F_ratings::Vector{Float64},
-    # --- Expected Goals Data ---
     home_xg::Vector{Float64},
     away_xg::Vector{Float64},
-    idx_xg::Vector{Int},
-    idx_no_xg::Vector{Int},
-    # --- Market Data ---
+    xg_mask::Vector{Float64},
     market_log_λ_h::Vector{Float64},
     market_log_λ_a::Vector{Float64},
-    idx_market::Vector{Int},
-    # --- Dimensions ---
+    market_mask::Vector{Float64},
     n_teams::Int,
     n_seasons::Int,
     n_months::Int,
@@ -90,46 +84,45 @@ end
     # ==========================================
     # 3. UNIFIED LIKELIHOOD PIPELINE (AD-Safe)
     # ==========================================
-    ll_total = zero(ν_xg)
-    for i in 1:length(home_goals)
-        h_id = home_team_indices[i]
-        a_id = away_team_indices[i]
-        s_id = season_indices[i]
-        m_id = month_indices[i]
-        
-        int_m = inter.μ_base[s_id] + inter.δ_month[m_id]
-        l_h = clamp(int_m + ha[h_id] + att_h[i] + def_a[i], -20.0, 20.0)
-        l_a = clamp(int_m            + att_a[i] + def_h[i], -20.0, 20.0)
-        
-        λ_h = kap[h_id] * exp(l_h) + 1e-6
-        λ_a = kap[a_id] * exp(l_a) + 1e-6
-        
-        # --- Pillar B: Actual Goals (Poisson) ---
-        ll_goals = logpdf(Poisson(λ_h), home_goals[i]) + logpdf(Poisson(λ_a), away_goals[i])
-        
-        # --- Pillar A: xG (Gamma) ---
-        ll_xg = if !isnan(home_xg[i])
-            logpdf(Gamma(ν_xg, (exp(l_h) + 1e-6) / ν_xg), home_xg[i]) + logpdf(Gamma(ν_xg, (exp(l_a) + 1e-6) / ν_xg), away_xg[i])
-        else
-            zero(λ_h)
-        end
-        
-        # --- Pillar C: The Market (Normal) ---
-        ll_market = if !isnan(market_log_λ_h[i])
-            market_rate_h = l_h + log(kap[h_id])
-            market_rate_a = l_a + log(kap[a_id])
-            config.market_weight * (
-                logpdf(Normal(market_rate_h, σ_market), market_log_λ_h[i]) +
-                logpdf(Normal(market_rate_a, σ_market), market_log_λ_a[i])
-            )
-        else
-            zero(λ_h)
-        end
-        
-        ll_total += (ll_goals + ll_xg + ll_market) * match_weights[i]
-    end
+    int_m = view(inter.μ_base, season_indices) .+ view(inter.δ_month, month_indices)
     
-    Turing.@addlogprob! ll_total
+    log_λ_h = clamp.(int_m .+ view(ha, home_team_indices) .+ att_h .+ def_a, -20.0, 20.0)
+    log_λ_a = clamp.(int_m                                .+ att_a .+ def_h, -20.0, 20.0)
+
+    kap_h = view(kap, home_team_indices)
+    kap_a = view(kap, away_team_indices)
+
+    λ_h = kap_h .* exp.(log_λ_h) .+ 1e-6
+    λ_a = kap_a .* exp.(log_λ_a) .+ 1e-6
+
+    # AD-Safe Rejection
+    if any(isnan, λ_h) || any(isnan, λ_a) || any(isinf, λ_h) || any(isinf, λ_a)
+        Turing.@addlogprob! -Inf
+        return
+    end
+
+    # --- Pillar B: Actual Goals (Poisson) ---
+    ll_goals_h = logpdf.(Poisson.(λ_h), home_goals)
+    ll_goals_a = logpdf.(Poisson.(λ_a), away_goals)
+    
+    Turing.@addlogprob! sum((ll_goals_h .+ ll_goals_a) .* match_weights)
+
+    # --- Pillar A: xG (Gamma) ---
+    xg_rate_h = exp.(log_λ_h) .+ 1e-6
+    xg_rate_a = exp.(log_λ_a) .+ 1e-6
+    
+    ll_xg_h = logpdf.(Gamma.(ν_xg, xg_rate_h ./ ν_xg), home_xg)
+    ll_xg_a = logpdf.(Gamma.(ν_xg, xg_rate_a ./ ν_xg), away_xg)
+    Turing.@addlogprob! sum((ll_xg_h .+ ll_xg_a) .* match_weights .* xg_mask)
+
+    # --- Pillar C: The Market (Normal) ---
+    market_rate_h = log_λ_h .+ log.(kap_h)
+    market_rate_a = log_λ_a .+ log.(kap_a)
+
+    ll_market_h = logpdf.(Normal.(market_rate_h, σ_market), market_log_λ_h)
+    ll_market_a = logpdf.(Normal.(market_rate_a, σ_market), market_log_λ_a)
+
+    Turing.@addlogprob! sum((ll_market_h .+ ll_market_a) .* match_weights .* market_mask) * config.market_weight
 end
 
 # ==========================================
@@ -174,21 +167,26 @@ function build_turing_model(config::DynamicDoublePoissonXGOutfieldPlayerTimeDeca
     a_M = Vector{Float64}(data[:flat_away_M_rating])
     a_F = Vector{Float64}(data[:flat_away_F_rating])
 
-    home_xg = Vector{Float64}(coalesce.(data[:flat_home_xg], NaN))
-    away_xg = Vector{Float64}(coalesce.(data[:flat_away_xg], NaN))
-    idx_xg    = findall(x -> !isnan(x), home_xg)
-    idx_no_xg = findall(isnan, home_xg)
+    home_xg_raw = coalesce.(data[:flat_home_xg], NaN)
+    away_xg_raw = coalesce.(data[:flat_away_xg], NaN)
+    
+    xg_mask = Float64.(.!isnan.(home_xg_raw))
+    home_xg = [isnan(x) ? 1.0 : Float64(x) for x in home_xg_raw]
+    away_xg = [isnan(x) ? 1.0 : Float64(x) for x in away_xg_raw]
 
-    market_log_h = Vector{Float64}(coalesce.(log.(data[:flat_market_λ_home]), NaN))
-    market_log_a = Vector{Float64}(coalesce.(log.(data[:flat_market_λ_away]), NaN))
-    idx_market   = findall(x -> !isnan(x), market_log_h)
+    market_log_h_raw = coalesce.(log.(data[:flat_market_λ_home]), NaN)
+    market_log_a_raw = coalesce.(log.(data[:flat_market_λ_away]), NaN)
+    
+    market_mask = Float64.(.!isnan.(market_log_h_raw))
+    market_log_h = [isnan(x) ? 0.0 : Float64(x) for x in market_log_h_raw]
+    market_log_a = [isnan(x) ? 0.0 : Float64(x) for x in market_log_a_raw]
 
     return build_double_poisson_xg_market_player_engine(
         home_ids, away_ids, season_ids, month_indices,
         home_goals, away_goals, match_weights,
         h_G, h_D, h_M, h_F, a_G, a_D, a_M, a_F,
-        home_xg, away_xg, idx_xg, idx_no_xg,
-        market_log_h, market_log_a, idx_market,
+        home_xg, away_xg, xg_mask,
+        market_log_h, market_log_a, market_mask,
         n_teams, n_seasons, n_months,
         config
     )

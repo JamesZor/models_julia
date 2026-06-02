@@ -46,12 +46,11 @@ end
     # --- Expected Goals Data ---
     home_xg::Vector{Float64},
     away_xg::Vector{Float64},
-    idx_xg::Vector{Int},
-    idx_no_xg::Vector{Int},
+    xg_mask::Vector{Float64},
     # --- Market Data ---
     market_log_λ_h::Vector{Float64},
     market_log_λ_a::Vector{Float64},
-    idx_market::Vector{Int},
+    market_mask::Vector{Float64},
     # --- Dimensions ---
     n_teams::Int,
     n_seasons::Int,
@@ -141,20 +140,14 @@ end
     # ==========================================
     
     # --- Pillar A: xG (Gamma) ---
-    if !isempty(idx_xg)
-        λₕ_xg = λₕ[idx_xg]
-        λₐ_xg = λₐ[idx_xg]
-        
-        ν_safe = ν_xg + 1e-6
-        θ_h_safe = (λₕ_xg ./ ν_safe) .+ 1e-6
-        θ_a_safe = (λₐ_xg ./ ν_safe) .+ 1e-6
-        
-        log_lik_xg_h = logpdf.(Gamma.(ν_safe, θ_h_safe), home_xg[idx_xg])
-        log_lik_xg_a = logpdf.(Gamma.(ν_safe, θ_a_safe), away_xg[idx_xg])
+    ν_safe = ν_xg + 1e-6
+    θ_h_safe = (λₕ ./ ν_safe) .+ 1e-6
+    θ_a_safe = (λₐ ./ ν_safe) .+ 1e-6
+    
+    log_lik_xg_h = logpdf.(Gamma.(ν_safe, θ_h_safe), home_xg)
+    log_lik_xg_a = logpdf.(Gamma.(ν_safe, θ_a_safe), away_xg)
 
-        Turing.@addlogprob! sum(log_lik_xg_h .* match_weights[idx_xg])
-        Turing.@addlogprob! sum(log_lik_xg_a .* match_weights[idx_xg])
-    end
+    Turing.@addlogprob! sum((log_lik_xg_h .+ log_lik_xg_a) .* match_weights .* xg_mask)
 
     # --- Pillar B: Actual Goals (NegBin) ---
     λ_goals_h = κ_h_flat .* λₕ
@@ -163,20 +156,16 @@ end
     log_lik_goals_h = logpdf.(RobustNegativeBinomial.(r_h_flat, λ_goals_h), home_goals)
     log_lik_goals_a = logpdf.(RobustNegativeBinomial.(r_a_flat, λ_goals_a), away_goals)
 
-    Turing.@addlogprob! sum(log_lik_goals_h .* match_weights)
-    Turing.@addlogprob! sum(log_lik_goals_a .* match_weights)
+    Turing.@addlogprob! sum((log_lik_goals_h .+ log_lik_goals_a) .* match_weights)
 
     # --- Pillar C: The Market (Normal) ---
-    if !isempty(idx_market)
-        market_rate_h = log_λₕ[idx_market] .+ log.(κ_h_flat[idx_market])
-        market_rate_a = log_λₐ[idx_market] .+ log.(κ_a_flat[idx_market])
+    market_rate_h = log_λₕ .+ log.(κ_h_flat)
+    market_rate_a = log_λₐ .+ log.(κ_a_flat)
 
-        log_lik_market_h = logpdf.(Normal.(market_rate_h, σ_market), market_log_λ_h[idx_market])
-        log_lik_market_a = logpdf.(Normal.(market_rate_a, σ_market), market_log_λ_a[idx_market])
+    log_lik_market_h = logpdf.(Normal.(market_rate_h, σ_market), market_log_λ_h)
+    log_lik_market_a = logpdf.(Normal.(market_rate_a, σ_market), market_log_λ_a)
 
-        Turing.@addlogprob! sum(log_lik_market_h .* match_weights[idx_market]) * config.market_weight
-        Turing.@addlogprob! sum(log_lik_market_a .* match_weights[idx_market]) * config.market_weight
-    end
+    Turing.@addlogprob! sum((log_lik_market_h .+ log_lik_market_a) .* match_weights .* market_mask) * config.market_weight
 end
 
 # ==========================================
@@ -224,22 +213,27 @@ function build_turing_model(config::DynamicMarketXGPlayerTimeDecayModel, feature
     a_F = Vector{Float64}(data[:flat_away_F_rating])
 
     # xG
-    home_xg = Vector{Float64}(coalesce.(data[:flat_home_xg], NaN))
-    away_xg = Vector{Float64}(coalesce.(data[:flat_away_xg], NaN))
-    idx_xg    = findall(x -> !isnan(x), home_xg)
-    idx_no_xg = findall(isnan, home_xg)
+    home_xg_raw = coalesce.(data[:flat_home_xg], NaN)
+    away_xg_raw = coalesce.(data[:flat_away_xg], NaN)
+
+    xg_mask = Float64.(.!isnan.(home_xg_raw))
+    home_xg = [isnan(x) ? 1.0 : Float64(x) for x in home_xg_raw]
+    away_xg = [isnan(x) ? 1.0 : Float64(x) for x in away_xg_raw]
 
     # Market
-    market_log_h = Vector{Float64}(coalesce.(log.(data[:flat_market_λ_home]), NaN))
-    market_log_a = Vector{Float64}(coalesce.(log.(data[:flat_market_λ_away]), NaN))
-    idx_market = findall(x -> !isnan(x), market_log_h)
+    market_log_h_raw = coalesce.(log.(data[:flat_market_λ_home]), NaN)
+    market_log_a_raw = coalesce.(log.(data[:flat_market_λ_away]), NaN)
+    
+    market_mask = Float64.(.!isnan.(market_log_h_raw))
+    market_log_h = [isnan(x) ? 0.0 : Float64(x) for x in market_log_h_raw]
+    market_log_a = [isnan(x) ? 0.0 : Float64(x) for x in market_log_a_raw]
 
     return build_weighted_xg_market_player_engine(
         home_ids, away_ids, season_ids, month_indices,
         home_goals, away_goals, match_weights,
         h_G, h_D, h_M, h_F, a_G, a_D, a_M, a_F,
-        home_xg, away_xg, idx_xg, idx_no_xg,
-        market_log_h, market_log_a, idx_market,
+        home_xg, away_xg, xg_mask,
+        market_log_h, market_log_a, market_mask,
         n_teams, n_seasons, n_months,
         config
     )

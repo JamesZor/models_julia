@@ -55,7 +55,7 @@ function compute_rqr(y::Integer, λ::Float64, r_disp::Float64)
 end
 
 # 2. Extract Dispersion (Handles hierarchical vs global r, or none for Poisson)
-function get_r(df)
+function _rqr_get_r(df)
     if hasproperty(df, :r)
         return mean.(df.r), mean.(df.r)
     elseif hasproperty(df, :r_h)
@@ -102,7 +102,7 @@ function compute_metric(metric::RQR, exp::ExperimentResults, ds::DataStore, late
     # 2. Extract Expected values (Means of posterior samples)
     exp_home = mean.(joined.λ_h)
     exp_away = mean.(joined.λ_a)
-    exp_r_h, exp_r_a = get_r(joined)
+    exp_r_h, exp_r_a = _rqr_get_r(joined)
 
     # 3. Compute RQR vectors
     rqr_home = compute_rqr.(joined.home_score, exp_home, exp_r_h)

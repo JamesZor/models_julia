@@ -44,8 +44,7 @@ end
     # --- Expected Goals Data ---
     home_xg::Vector{Float64},
     away_xg::Vector{Float64},
-    idx_xg::Vector{Int},
-    idx_no_xg::Vector{Int},
+    xg_mask::Vector{Float64},
     # --- Dimensions ---
     n_teams::Int,
     n_seasons::Int,
@@ -126,16 +125,9 @@ end
     # ==========================================
     
     # --- Pillar A: xG (Gamma) ---
-    if !isempty(idx_xg)
-        λₕ_xg = λₕ[idx_xg]
-        λₐ_xg = λₐ[idx_xg]
-        
-        log_lik_xg_h = logpdf.(Gamma.(ν_xg, λₕ_xg ./ ν_xg), home_xg[idx_xg])
-        log_lik_xg_a = logpdf.(Gamma.(ν_xg, λₐ_xg ./ ν_xg), away_xg[idx_xg])
-
-        Turing.@addlogprob! sum(log_lik_xg_h .* match_weights[idx_xg])
-        Turing.@addlogprob! sum(log_lik_xg_a .* match_weights[idx_xg])
-    end
+    ll_xg_h = logpdf.(Gamma.(ν_xg, λₕ ./ ν_xg), home_xg)
+    ll_xg_a = logpdf.(Gamma.(ν_xg, λₐ ./ ν_xg), away_xg)
+    Turing.@addlogprob! sum((ll_xg_h .+ ll_xg_a) .* match_weights .* xg_mask)
 
     # --- Pillar B: Actual Goals (NegBin) ---
     λ_goals_h = κ_h_flat .* λₕ
@@ -144,8 +136,7 @@ end
     log_lik_goals_h = logpdf.(RobustNegativeBinomial.(r_h_flat, λ_goals_h), home_goals)
     log_lik_goals_a = logpdf.(RobustNegativeBinomial.(r_a_flat, λ_goals_a), away_goals)
 
-    Turing.@addlogprob! sum(log_lik_goals_h .* match_weights)
-    Turing.@addlogprob! sum(log_lik_goals_a .* match_weights)
+    Turing.@addlogprob! sum((log_lik_goals_h .+ log_lik_goals_a) .* match_weights)
 end
 
 # ==========================================
@@ -192,16 +183,18 @@ function build_turing_model(config::DynamicXGOutfieldPlayerTimeDecayModel, featu
     a_F = Vector{Float64}(data[:flat_away_F_rating])
 
     # xG
-    home_xg = Vector{Float64}(coalesce.(data[:flat_home_xg], NaN))
-    away_xg = Vector{Float64}(coalesce.(data[:flat_away_xg], NaN))
-    idx_xg    = findall(x -> !isnan(x), home_xg)
-    idx_no_xg = findall(isnan, home_xg)
+    home_xg_raw = coalesce.(data[:flat_home_xg], NaN)
+    away_xg_raw = coalesce.(data[:flat_away_xg], NaN)
+
+    xg_mask = Float64.(.!isnan.(home_xg_raw))
+    home_xg = [isnan(x) ? 1.0 : Float64(x) for x in home_xg_raw]
+    away_xg = [isnan(x) ? 1.0 : Float64(x) for x in away_xg_raw]
 
     return build_outfield_xg_player_engine(
         home_ids, away_ids, season_ids, month_indices,
         home_goals, away_goals, match_weights,
         h_G, h_D, h_M, h_F, a_G, a_D, a_M, a_F,
-        home_xg, away_xg, idx_xg, idx_no_xg,
+        home_xg, away_xg, xg_mask,
         n_teams, n_seasons, n_months,
         config
     )

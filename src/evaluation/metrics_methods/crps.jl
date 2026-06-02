@@ -48,7 +48,7 @@ function compute_crps(y::Real, λ::Real, r_disp::Real; max_goals=30)
     return crps_value
 end
 
-function get_r(df)
+function _crps_get_r(df)
     if hasproperty(df, :r)
         return mean.(df.r), mean.(df.r)
     elseif hasproperty(df, :r_h)
@@ -82,7 +82,7 @@ function compute_metric(metric::CRPS, exp::ExperimentResults, ds::DataStore, lat
     # 2. Extract Expected values (Means of posterior samples)
     exp_home = mean.(joined.λ_h)
     exp_away = mean.(joined.λ_a)
-    exp_r_h, exp_r_a = get_r(joined)
+    exp_r_h, exp_r_a = _crps_get_r(joined)
 
     # 3. Compute CRPS vectors
     crps_home = compute_crps.(joined.home_score, exp_home, exp_r_h)

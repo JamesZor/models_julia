@@ -43,12 +43,14 @@ end
     away_F_ratings::Vector{Float64},
     home_xg::Vector{Float64},
     away_xg::Vector{Float64},
-    idx_xg::Vector{Int},
-    idx_no_xg::Vector{Int},
-    idx_00::Vector{Int},
-    idx_10::Vector{Int},
-    idx_01::Vector{Int},
-    idx_11::Vector{Int},
+    home_xg::Vector{Float64},
+    away_xg::Vector{Float64},
+    xg_mask::Vector{Float64},
+    mask_00::Vector{Float64},
+    mask_10::Vector{Float64},
+    mask_01::Vector{Float64},
+    mask_11::Vector{Float64},
+    mask_other::Vector{Float64},
     n_teams::Int,
     n_seasons::Int,
     n_months::Int,
@@ -84,55 +86,48 @@ end
     # ==========================================
     # 3. UNIFIED LIKELIHOOD PIPELINE (AD-Safe)
     # ==========================================
-    ll_total = zero(ν_xg)
-    for i in 1:length(home_goals)
-        h_id = home_team_indices[i]
-        a_id = away_team_indices[i]
-        s_id = season_indices[i]
-        m_id = month_indices[i]
-        
-        int_m = inter.μ_base[s_id] + inter.δ_month[m_id]
-        l_h = clamp(int_m + ha[h_id] + att_h[i] + def_a[i], -20.0, 20.0)
-        l_a = clamp(int_m            + att_a[i] + def_h[i], -20.0, 20.0)
-        
-        λ_h = kap[h_id] * exp(l_h) + 1e-6
-        λ_a = kap[a_id] * exp(l_a) + 1e-6
-        
-        # --- Pillar B: Actual Goals (Dixon-Coles Poisson) ---
-        h_g, a_g = home_goals[i], away_goals[i]
-        
-        ρ_match_raw = dc.ρ_base + dc.δ_ρ[h_id] + dc.δ_ρ[a_id]
-        ρ = 0.3 * tanh(ρ_match_raw)
-        
-        mx_rho = min(0.9999 / (λ_h * λ_a), 0.9999)
-        mn_rho = max(-0.9999 / λ_h, -0.9999 / λ_a)
-        r = clamp(ρ, mn_rho, mx_rho)
-        
-        τ = if h_g == 0 && a_g == 0
-            1.0 - (λ_h * λ_a * r)
-        elseif h_g == 1 && a_g == 0
-            1.0 + (λ_a * r)
-        elseif h_g == 0 && a_g == 1
-            1.0 + (λ_h * r)
-        elseif h_g == 1 && a_g == 1
-            1.0 - r
-        else
-            1.0
-        end
-        
-        ll_goals = logpdf(Poisson(λ_h), h_g) + logpdf(Poisson(λ_a), a_g) + log(τ)
-        
-        # --- Pillar A: xG (Gamma) ---
-        ll_xg = if !isnan(home_xg[i])
-            logpdf(Gamma(ν_xg, (exp(l_h) + 1e-6) / ν_xg), home_xg[i]) + logpdf(Gamma(ν_xg, (exp(l_a) + 1e-6) / ν_xg), away_xg[i])
-        else
-            zero(λ_h)
-        end
-        
-        ll_total += (ll_goals + ll_xg) * match_weights[i]
+    home_adv    = view(ha, home_team_indices)
+    inter_match = inter.μ_base[season_indices] .+ inter.δ_month[month_indices]
+
+    log_λ_h = clamp.(inter_match .+ home_adv .+ att_h .+ def_a, -20.0, 20.0)
+    log_λ_a = clamp.(inter_match .+             att_a .+ def_h, -20.0, 20.0)
+
+    κ_h_flat = view(kap, home_team_indices)
+    κ_a_flat = view(kap, away_team_indices)
+
+    λ_h = κ_h_flat .* exp.(log_λ_h) .+ 1e-6
+    λ_a = κ_a_flat .* exp.(log_λ_a) .+ 1e-6
+
+    if any(isnan, λ_h) || any(isnan, λ_a) || any(isinf, λ_h) || any(isinf, λ_a)
+        Turing.@addlogprob! -Inf
+        return
     end
-    
-    Turing.@addlogprob! ll_total
+
+    # --- Pillar B: Actual Goals (Dixon-Coles Poisson) ---
+    ρ_match_raw = dc.ρ_base .+ view(dc.δ_ρ, home_team_indices) .+ view(dc.δ_ρ, away_team_indices)
+    ρ = 0.3 .* tanh.(ρ_match_raw)
+
+    mx_rho = min.(0.9999 ./ (λ_h .* λ_a), 0.9999)
+    mn_rho = max.(-0.9999 ./ λ_h, -0.9999 ./ λ_a)
+    r = clamp.(ρ, mn_rho, mx_rho)
+
+    τ_00 = 1.0 .- (λ_h .* λ_a .* r)
+    τ_10 = 1.0 .+ (λ_a .* r)
+    τ_01 = 1.0 .+ (λ_h .* r)
+    τ_11 = 1.0 .- r
+
+    τ = (mask_00 .* τ_00) .+ (mask_10 .* τ_10) .+ (mask_01 .* τ_01) .+ (mask_11 .* τ_11) .+ mask_other
+
+    ll_goals_h = logpdf.(Poisson.(λ_h), home_goals)
+    ll_goals_a = logpdf.(Poisson.(λ_a), away_goals)
+    ll_goals_τ = log.(τ)
+
+    Turing.@addlogprob! sum((ll_goals_h .+ ll_goals_a .+ ll_goals_τ) .* match_weights)
+
+    # --- Pillar A: xG (Gamma) ---
+    ll_xg_h = logpdf.(Gamma.(ν_xg, λ_h ./ ν_xg), home_xg)
+    ll_xg_a = logpdf.(Gamma.(ν_xg, λ_a ./ ν_xg), away_xg)
+    Turing.@addlogprob! sum((ll_xg_h .+ ll_xg_a) .* match_weights .* xg_mask)
 end
 
 # ==========================================
@@ -176,22 +171,25 @@ function build_turing_model(config::DynamicDixonColesXGOutfieldPlayerTimeDecayNo
     a_M = Vector{Float64}(data[:flat_away_M_rating])
     a_F = Vector{Float64}(data[:flat_away_F_rating])
 
-    home_xg = Vector{Float64}(coalesce.(data[:flat_home_xg], NaN))
-    away_xg = Vector{Float64}(coalesce.(data[:flat_away_xg], NaN))
-    idx_xg    = findall(x -> !isnan(x), home_xg)
-    idx_no_xg = findall(isnan, home_xg)
+    home_xg_raw = coalesce.(data[:flat_home_xg], NaN)
+    away_xg_raw = coalesce.(data[:flat_away_xg], NaN)
 
-    idx_00 = findall(x -> x == 0, home_goals .+ away_goals)
-    idx_10 = findall(x -> x == 1 && home_goals[x] == 1, 1:length(home_goals))
-    idx_01 = findall(x -> x == 1 && away_goals[x] == 1, 1:length(home_goals))
-    idx_11 = findall(x -> home_goals[x] == 1 && away_goals[x] == 1, 1:length(home_goals))
+    xg_mask = Float64.(.!isnan.(home_xg_raw))
+    home_xg = [isnan(x) ? 1.0 : Float64(x) for x in home_xg_raw]
+    away_xg = [isnan(x) ? 1.0 : Float64(x) for x in away_xg_raw]
+
+    mask_00 = Float64.((home_goals .== 0) .& (away_goals .== 0))
+    mask_10 = Float64.((home_goals .== 1) .& (away_goals .== 0))
+    mask_01 = Float64.((home_goals .== 0) .& (away_goals .== 1))
+    mask_11 = Float64.((home_goals .== 1) .& (away_goals .== 1))
+    mask_other = 1.0 .- mask_00 .- mask_10 .- mask_01 .- mask_11
 
     return build_dixon_coles_xg_no_market_player_engine(
         home_ids, away_ids, season_ids, month_indices,
         home_goals, away_goals, match_weights,
         h_G, h_D, h_M, h_F, a_G, a_D, a_M, a_F,
-        home_xg, away_xg, idx_xg, idx_no_xg,
-        idx_00, idx_10, idx_01, idx_11,
+        home_xg, away_xg, xg_mask,
+        mask_00, mask_10, mask_01, mask_11, mask_other,
         n_teams, n_seasons, n_months,
         config
     )
