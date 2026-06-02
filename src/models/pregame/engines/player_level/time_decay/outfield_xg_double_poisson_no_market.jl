@@ -91,19 +91,17 @@ end
             λ_h = kap[h_id] * exp(l_h) + 1e-6
             λ_a = kap[a_id] * exp(l_a) + 1e-6
             
-            ll_match = 0.0
-            
             # --- Pillar B: Actual Goals (Poisson) ---
-            ll_match += logpdf(Poisson(λ_h), home_goals[i])
-            ll_match += logpdf(Poisson(λ_a), away_goals[i])
+            ll_goals = logpdf(Poisson(λ_h), home_goals[i]) + logpdf(Poisson(λ_a), away_goals[i])
             
             # --- Pillar A: xG (Gamma) ---
-            if !isnan(home_xg[i])
-                ll_match += logpdf(Gamma(ν_xg, (exp(l_h) + 1e-6) / ν_xg), home_xg[i])
-                ll_match += logpdf(Gamma(ν_xg, (exp(l_a) + 1e-6) / ν_xg), away_xg[i])
+            ll_xg = if !isnan(home_xg[i])
+                logpdf(Gamma(ν_xg, (exp(l_h) + 1e-6) / ν_xg), home_xg[i]) + logpdf(Gamma(ν_xg, (exp(l_a) + 1e-6) / ν_xg), away_xg[i])
+            else
+                0.0
             end
             
-            ll_match * match_weights[i]
+            (ll_goals + ll_xg) * match_weights[i]
         end
         for i in 1:length(home_goals)
     ]

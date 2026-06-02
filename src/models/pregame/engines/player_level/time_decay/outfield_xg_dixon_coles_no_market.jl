@@ -98,8 +98,6 @@ end
             λ_h = kap[h_id] * exp(l_h) + 1e-6
             λ_a = kap[a_id] * exp(l_a) + 1e-6
             
-            ll_match = 0.0
-            
             # --- Pillar B: Actual Goals (Dixon-Coles Poisson) ---
             h_g, a_g = home_goals[i], away_goals[i]
             
@@ -122,17 +120,16 @@ end
                 1.0
             end
             
-            ll_match += logpdf(Poisson(λ_h), h_g)
-            ll_match += logpdf(Poisson(λ_a), a_g)
-            ll_match += log(τ)
+            ll_goals = logpdf(Poisson(λ_h), h_g) + logpdf(Poisson(λ_a), a_g) + log(τ)
             
             # --- Pillar A: xG (Gamma) ---
-            if !isnan(home_xg[i])
-                ll_match += logpdf(Gamma(ν_xg, (exp(l_h) + 1e-6) / ν_xg), home_xg[i])
-                ll_match += logpdf(Gamma(ν_xg, (exp(l_a) + 1e-6) / ν_xg), away_xg[i])
+            ll_xg = if !isnan(home_xg[i])
+                logpdf(Gamma(ν_xg, (exp(l_h) + 1e-6) / ν_xg), home_xg[i]) + logpdf(Gamma(ν_xg, (exp(l_a) + 1e-6) / ν_xg), away_xg[i])
+            else
+                0.0
             end
             
-            ll_match * match_weights[i]
+            (ll_goals + ll_xg) * match_weights[i]
         end
         for i in 1:length(home_goals)
     ]

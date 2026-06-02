@@ -104,27 +104,29 @@ end
             λ_h = kap[h_id] * exp(l_h) + 1e-6
             λ_a = kap[a_id] * exp(l_a) + 1e-6
             
-            ll_match = 0.0
-            
             # --- Pillar B: Actual Goals (Poisson) ---
-            ll_match += logpdf(Poisson(λ_h), home_goals[i])
-            ll_match += logpdf(Poisson(λ_a), away_goals[i])
+            ll_goals = logpdf(Poisson(λ_h), home_goals[i]) + logpdf(Poisson(λ_a), away_goals[i])
             
             # --- Pillar A: xG (Gamma) ---
-            if !isnan(home_xg[i])
-                ll_match += logpdf(Gamma(ν_xg, (exp(l_h) + 1e-6) / ν_xg), home_xg[i])
-                ll_match += logpdf(Gamma(ν_xg, (exp(l_a) + 1e-6) / ν_xg), away_xg[i])
+            ll_xg = if !isnan(home_xg[i])
+                logpdf(Gamma(ν_xg, (exp(l_h) + 1e-6) / ν_xg), home_xg[i]) + logpdf(Gamma(ν_xg, (exp(l_a) + 1e-6) / ν_xg), away_xg[i])
+            else
+                0.0
             end
             
             # --- Pillar C: The Market (Normal) ---
-            if !isnan(market_log_λ_h[i])
+            ll_market = if !isnan(market_log_λ_h[i])
                 market_rate_h = l_h + log(kap[h_id])
                 market_rate_a = l_a + log(kap[a_id])
-                ll_match += config.market_weight * logpdf(Normal(market_rate_h, σ_market), market_log_λ_h[i])
-                ll_match += config.market_weight * logpdf(Normal(market_rate_a, σ_market), market_log_λ_a[i])
+                config.market_weight * (
+                    logpdf(Normal(market_rate_h, σ_market), market_log_λ_h[i]) +
+                    logpdf(Normal(market_rate_a, σ_market), market_log_λ_a[i])
+                )
+            else
+                0.0
             end
             
-            ll_match * match_weights[i]
+            (ll_goals + ll_xg + ll_market) * match_weights[i]
         end
         for i in 1:length(home_goals)
     ]
