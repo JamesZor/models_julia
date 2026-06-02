@@ -47,12 +47,14 @@ model = PreGame.build_turing_model(model_cfg, feature_collection[1])
 
 # 5. Generate Random Parameters for testing
 using DynamicPPL
+using LogDensityProblems
 
 vi = DynamicPPL.VarInfo(model)
 model(vi) # init
 
-θ = vi[DynamicPPL.SampleFromPrior()]
-f = x -> DynamicPPL.getlogp(model(vi, DynamicPPL.SampleFromPrior(), x))
+θ = vi[:]
+lf = DynamicPPL.LogDensityFunction(model)
+f = x -> LogDensityProblems.logdensity(lf, x)
 
 # 6. Test ReverseDiff Tape Compilation and Execution
 println("[INFO] Compiling ReverseDiff Tape (compile=true)...")
