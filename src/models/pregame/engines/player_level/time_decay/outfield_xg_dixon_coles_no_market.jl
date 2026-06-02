@@ -43,8 +43,6 @@ end
     away_F_ratings::Vector{Float64},
     home_xg::Vector{Float64},
     away_xg::Vector{Float64},
-    home_xg::Vector{Float64},
-    away_xg::Vector{Float64},
     xg_mask::Vector{Float64},
     mask_00::Vector{Float64},
     mask_10::Vector{Float64},
