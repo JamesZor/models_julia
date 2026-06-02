@@ -13,33 +13,46 @@ const Data = BayesianFootball.Data
 # 1. Load tiny dataset (just first few rows to build structure)
 println("[INFO] Loading Ireland DataStore...")
 ds = Data.load_datastore_cached(Data.Ireland())
-    split_data = filter(row -> row.season == 2026, ds.matches)
 
 # 2. Config
-model_cfg = PreGame.DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel(
+model_cfg = PreGame.DynamicDixonColesXGOutfieldPlayerTimeDecayModel(
     interception_config    = PreGame.GlobalInterception(),
     player_dynamics_config = PreGame.OutfieldPlayerDynamicsConfig(days_half_life=60.0),
     dispersion_config      = PreGame.HomeAwayDispersion(),
     homeadvantage_config   = PreGame.HierarchicalTeamHomeAdvantage(),
     kappa_config           = PreGame.HierarchicalTeamKappa(),
+    dixon_coles_config     = PreGame.HierarchicalTeamDixonColesConfig(),
     player_ratings_feature = Features.PlayerRatingsFeature(Features.BayesianTracker(6.5, 1.0, 0.5, 0.01)),
-    market_feature_config  = Features.DoublePoissonMarketFeature(),
+    market_feature_config  = Features.DixonColesMarketFeature(),
     market_weight          = 0.4
 )
 
-# 3. Build Model
-println("[INFO] Building features and Turing model...")
-feature_set = Features.build_feature_set(model_cfg, split_data)
-model = PreGame.build_turing_model(model_cfg, feature_set)
+# 3. Create temporal boundaries
+cv_config = Data.GroupedCVConfig(
+    tournament_groups = [[79]], # Ireland
+    target_seasons = ["2026"],
+    history_seasons = 1,
+    dynamics_col = :match_month
+)
 
-# 4. Generate Random Parameters for testing
+boundaries = Data.create_id_boundaries(ds, cv_config)
+
+# 4. Build Model
+println("[INFO] Building features and Turing model...")
+feature_collection = Features.create_features(boundaries, ds, model_cfg)
+feature_set = feature_collection[1][2] # tuple is (SubDataFrame, FeatureSet) typically, or just FeatureSet? Let's check. 
+# In README: feature_collection = Features.create_features(boundaries, ds, test_model). We'll assume feature_collection is Vector{FeatureSet} or similar, actually README doesn't specify. Wait, README says: feature_collection = Features.create_features(boundaries, ds, test_model).
+# Let's see what is inside it. Usually it's Vector{FeatureSet}. Let's just do feature_set = feature_collection[1]
+model = PreGame.build_turing_model(model_cfg, feature_collection[1])
+
+# 5. Generate Random Parameters for testing
 vi = Turing.VarInfo(model)
 model(vi) # init
 
 θ = vi[Turing.SampleFromPrior()]
 f = x -> Turing.getlogp(model(vi, Turing.SampleFromPrior(), x))
 
-# 5. Test ReverseDiff Tape Compilation and Execution
+# 6. Test ReverseDiff Tape Compilation and Execution
 println("[INFO] Compiling ReverseDiff Tape (compile=true)...")
 const tape = ReverseDiff.compile(ReverseDiff.GradientTape(f, θ))
 
