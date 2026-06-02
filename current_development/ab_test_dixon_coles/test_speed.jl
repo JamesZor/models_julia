@@ -46,11 +46,13 @@ feature_set = feature_collection[1][2] # tuple is (SubDataFrame, FeatureSet) typ
 model = PreGame.build_turing_model(model_cfg, feature_collection[1])
 
 # 5. Generate Random Parameters for testing
-vi = Turing.VarInfo(model)
+using DynamicPPL
+
+vi = DynamicPPL.VarInfo(model)
 model(vi) # init
 
-θ = vi[Turing.SampleFromPrior()]
-f = x -> Turing.getlogp(model(vi, Turing.SampleFromPrior(), x))
+θ = vi[DynamicPPL.SampleFromPrior()]
+f = x -> DynamicPPL.getlogp(model(vi, DynamicPPL.SampleFromPrior(), x))
 
 # 6. Test ReverseDiff Tape Compilation and Execution
 println("[INFO] Compiling ReverseDiff Tape (compile=true)...")
