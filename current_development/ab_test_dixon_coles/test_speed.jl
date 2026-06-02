@@ -13,7 +13,7 @@ const Data = BayesianFootball.Data
 # 1. Load tiny dataset (just first few rows to build structure)
 println("[INFO] Loading Ireland DataStore...")
 ds = Data.load_datastore_cached(Data.Ireland())
-split_data = Data.build_split(ds, 2026, 0, 2, :match_month, 5)
+    split_data = filter(row -> row.season == 2026, ds.matches)
 
 # 2. Config
 model_cfg = PreGame.DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel(
