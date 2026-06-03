@@ -124,10 +124,10 @@ end
     λₐ = exp.(log_λₐ) .+ 1e-6
 
     # AD-Safe Rejection
-    if any(isnan, λₕ) || any(isnan, λₐ) || any(isinf, λₕ) || any(isinf, λₐ)
-        Turing.@addlogprob! -Inf
-        return
-    end
+    is_bad = any(isnan, λₕ) || any(isnan, λₐ) || any(isinf, λₕ) || any(isinf, λₐ)
+    λₕ = ifelse.(isnan.(λₕ) .| isinf.(λₕ), 1.0, λₕ)
+    λₐ = ifelse.(isnan.(λₐ) .| isinf.(λₐ), 1.0, λₐ)
+    Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
 
     # ==========================================
     # 4. TIME-DECAYED LIKELIHOOD PIPELINE

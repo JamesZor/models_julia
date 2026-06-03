@@ -96,10 +96,10 @@ end
     λ_h = κ_h_flat .* exp.(log_λ_h) .+ 1e-6
     λ_a = κ_a_flat .* exp.(log_λ_a) .+ 1e-6
 
-    if any(isnan, λ_h) || any(isnan, λ_a) || any(isinf, λ_h) || any(isinf, λ_a)
-        Turing.@addlogprob! -Inf
-        return
-    end
+    is_bad = any(isnan, λ_h) || any(isnan, λ_a) || any(isinf, λ_h) || any(isinf, λ_a)
+    λ_h = ifelse.(isnan.(λ_h) .| isinf.(λ_h), 1.0, λ_h)
+    λ_a = ifelse.(isnan.(λ_a) .| isinf.(λ_a), 1.0, λ_a)
+    Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
 
     # --- Pillar B: Actual Goals (Dixon-Coles Poisson) ---
     ρ_match_raw = dc.ρ_base .+ view(dc.δ_ρ, home_team_indices) .+ view(dc.δ_ρ, away_team_indices)
