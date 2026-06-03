@@ -169,6 +169,16 @@ println("--- Running Dixon Coles Market (Hierarchical) ---")
 res_dc_hm = Experiments.run_experiment(task_dc_hm)
 Experiments.save_experiment(res_dc_hm)
 
+
+
+saved_files = Experiments.list_experiments(save_dir, data_dir="")
+res_dp_nm = Experiments.load_experiment(saved_files, 5)
+res_dp_m = Experiments.load_experiment(saved_files, 4)
+res_dc_nm = Experiments.load_experiment(saved_files, 3)
+res_dc_m = Experiments.load_experiment(saved_files, 2)
+res_dc_hm = Experiments.load_experiment(saved_files, 1)
+
+
 all_results = [res_dp_nm, res_dp_m, res_dc_nm, res_dc_m, res_dc_hm]
 
 # ==========================================
@@ -191,11 +201,47 @@ println("===========================================")
 eval_glmedge = Evaluation.evaluate_experiments(Evaluation.GLMEdge(), all_results, ds1)
 Evaluation.display_summary_metric(eval_glmedge, :glmedge)
 
+
+
+#=
+julia> Evaluation.display_summary_metric(eval_glmedge, :glmedge)
+
+--- GLM Edge Summary ---
+5×4 DataFrame
+ Row │ model                           glmedge_intercept_coef  glmedge_spread_fair_coef  glmedge_spread_fair_p_value 
+     │ String                          Float64                 Float64                   Float64                     
+─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ DixonColes_Market                             -2.43451                   1.2658                   0.0198314
+   2 │ DixonColes_Market_Hierarchical                -2.4759                    2.49408                  0.000102481
+   3 │ DixonColes_NoMarket                           -2.46135                   1.52107                  0.000896477
+   4 │ DoublePoisson_Market                          -2.45938                   2.09581                  0.00101046
+   5 │ DoublePoisson_NoMarket                        -2.47303                   1.58695                  0.000638487
+=#
+
+
 println("\n===========================================")
 println("📉 LogLoss Evaluation (Betfair Odds)")
 println("===========================================")
 eval_logloss = Evaluation.evaluate_experiments(Evaluation.LogLoss(), all_results, ds1)
 Evaluation.display_summary_metric(eval_logloss, :logloss)
+
+
+
+#=
+julia> Evaluation.display_summary_metric(eval_logloss, :logloss)
+
+--- LogLoss Summary (Lower Diff is Better) ---
+5×4 DataFrame
+ Row │ model                           logloss_overall_model_ll  logloss_overall_market_ll  logloss_overall_diff_ll 
+     │ String                          Float64                   Float64                    Float64                 
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ DixonColes_Market                               0.559031                    0.58959               -0.0305586
+   2 │ DixonColes_Market_Hierarchical                  0.552316                    0.58959               -0.0372741
+   3 │ DixonColes_NoMarket                             0.561917                    0.58959               -0.0276727
+   4 │ DoublePoisson_Market                            0.553858                    0.58959               -0.0357318
+   5 │ DoublePoisson_NoMarket                          0.560942                    0.58959               -0.028648
+=#
+
 
 println("\n===========================================")
 println("💰 Backtesting Strategy (Kelly)")
