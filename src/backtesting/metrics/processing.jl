@@ -48,8 +48,8 @@ function generate_tearsheet(ledger::BacktestLedger;
         # C. Distributional Metrics (per-bet data → NamedTuple)
         dist = _compute_distributional_metrics(sub_df, dist_metrics)
         
-        # Merge all three into one row
-        merge(stats, wealth, dist)
+        # Merge all three into one row (chained — merge only takes 2 args for NamedTuple)
+        merge(merge(stats, wealth), dist)
     end
     
     return results
