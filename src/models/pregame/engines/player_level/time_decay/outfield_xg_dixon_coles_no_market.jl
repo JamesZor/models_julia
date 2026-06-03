@@ -211,7 +211,7 @@ function extract_parameters(
     ha_mat    = extract_home_advantage(chain, model.homeadvantage_config, n_teams)
     kap_mat   = extract_kappa(chain, model.kappa_config, n_teams)
     p_dyn_nt  = extract_dynamics(chain, model.player_dynamics_config, "p_dyn", n_teams)
-    dc_nt     = extract_dixon_coles(chain, model.dixon_coles_config, n_teams)
+    dc_nt     = extract_dixon_coles(chain, model.dixon_coles_config, "dc", n_teams)
     
     n_samples = size(chain, 1) * size(chain, 3) 
     

@@ -363,12 +363,8 @@ if any(isnan, λ_h) || any(isnan, λ_a) || any(isinf, λ_h) || any(isinf, λ_a)
 end
 ```
 
-> [!NOTE]
-> This `if` statement is **safe** for `compile=true` because it depends on
-> the sampled parameters, not data. If the sampler wanders into NaN territory,
-> we reject the proposal. This branch should almost never be taken in practice —
-> the `clamp` and `1e-6` guards prevent it. But if it does fire, it cleanly
-> rejects rather than corrupting the chain.
+> [!WARNING]
+> While this `if` statement with an early `return` currently works as a fallback guard, it is **incompatible with Zygote.jl**, which will throw a pullback error on early returns. If the codebase transitions to Zygote, you must remove this structural branching and rely strictly on continuous mathematical constraints like `clamp`. It is technically "safe" for ReverseDiff only because it acts as dead code when `compile=true` traces the standard non-NaN path.
 
 ### Bounded transformations
 
@@ -446,20 +442,17 @@ section.
 
 ## 10. AD Backend Comparison
 
-| Feature | ReverseDiff.jl | Mooncake.jl | ForwardDiff.jl |
-|:--------|:--------------|:------------|:---------------|
-| **Type** | Tape-based tracing | Source-to-source IR transform | Dual numbers |
-| **Scaling** | O(1) in #params (reverse mode) | O(1) in #params | O(N) in #params |
-| **Compiled tape** | ✅ `compile=true` | N/A (always compiles) | N/A |
-| **Dynamic control flow** | ❌ Silent errors with `compile=true` | ✅ Fully supported | ✅ Fully supported |
-| **Array mutation** | ❌ Errors or silent failures | ✅ First-class support | ⚠️ Limited |
-| **Sweet spot** | Static, vectorised models (our use case) | Complex Julia code with mutations | Few parameters (< 100) |
+| Feature | ReverseDiff.jl | Zygote.jl | Mooncake.jl | ForwardDiff.jl |
+|:--------|:--------------|:----------|:------------|:---------------|
+| **Type** | Tape-based tracing | Source-to-source IR transform | Source-to-source IR transform | Dual numbers |
+| **Scaling** | O(1) in #params (reverse mode)| O(1) in #params | O(1) in #params | O(N) in #params |
+| **Compiled tape** | ✅ `compile=true` | N/A | N/A (prepares caches) | N/A |
+| **Dynamic control flow** | ❌ Silent errors with `compile=true` | ❌ Fails on early `return` | ✅ Fully supported | ✅ Fully supported |
+| **Array mutation** | ❌ Errors or silent failures | ❌ Strongly unsupported | ✅ First-class support | ⚠️ Limited |
+| **Sweet spot** | Static, vectorised models | Purely functional, highly vectorised models | Complex Julia code with mutations and branching | Few parameters (< 100) |
 
 > [!TIP]
-> We use `AutoReverseDiff(compile=true)` because our models are 100% static
-> (no parameter-dependent branching in the likelihood). If you ever need dynamic
-> control flow, consider `AutoMooncake()` as an alternative — but you'll lose
-> the compiled tape speedup.
+> Currently, the system hardcodes `AutoReverseDiff(compile=true)` because our models are largely static. If transitioning to `AutoZygote()`, all early `return` statements in the AD-safe rejection blocks must be removed, as Zygote will fail when attempting to pull back through early returns. `AutoMooncake()` provides a more robust modern alternative to Zygote, fully supporting control flow and mutations, though `ReverseDiff` is still the fastest for completely static arrays.
 
 ---
 
@@ -468,7 +461,7 @@ section.
 Before submitting a new model engine, verify:
 
 - [ ] **No `for` loops** inside `@model`
-- [ ] **No `if`/`else`** inside `@model` (except the NaN/Inf rejection guard)
+- [ ] **No `if`/`else`** inside `@model`. (Even the NaN/Inf rejection guards must avoid early `return` if using Zygote!)
 - [ ] **No `isnan()`** inside `@model`
 - [ ] **No `A[indices]`** on intermediate tracked arrays — use `view(A, indices)` or masks
 - [ ] All optional data uses **binary masks** (`xg_mask`, `market_mask`)
@@ -477,4 +470,4 @@ Before submitting a new model engine, verify:
 - [ ] **`1e-6`** epsilon floor on all rate parameters
 - [ ] All likelihood terms multiplied by **`match_weights`** before `sum()`
 - [ ] `@belapsed` gradient eval is **< 1ms** for typical dataset sizes
-- [ ] Model compiles with `ReverseDiff.GradientTape` without errors
+- [ ] Model compiles with the selected AD backend without errors

@@ -63,3 +63,30 @@ const tape = ReverseDiff.compile(ReverseDiff.GradientTape(f, θ))
 println("[INFO] Timing compiled tape execution...")
 time_eval = @belapsed ReverseDiff.gradient!($(similar(θ)), $tape, $θ)
 println("Gradient Evaluation Time: ", round(time_eval * 1000, digits=2), " ms")
+
+
+  model_cfg_old = PreGame.DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel(
+        interception_config    = PreGame.GlobalInterception(),
+        player_dynamics_config = PreGame.OutfieldPlayerDynamicsConfig(days_half_life=60.0),
+        dispersion_config      = PreGame.HomeAwayDispersion(),
+        homeadvantage_config   = PreGame.HierarchicalTeamHomeAdvantage(),
+        kappa_config           = PreGame.HierarchicalTeamKappa(),
+        player_ratings_feature = Features.PlayerRatingsFeature(Features.BayesianTracker(6.5, 1.0, 0.5, 0.01)),
+        market_feature_config  = Features.DoublePoissonMarketFeature(), # Use DoublePoisson
+        market_weight          = 0.4
+    )
+
+    # 2. Re-run the feature creation and model building
+    feature_collection_old = Features.create_features(boundaries, ds, model_cfg_old)
+    model_old = PreGame.build_turing_model(model_cfg_old, feature_collection_old[1][1])
+
+    # 3. Setup Tape
+    vi_old = DynamicPPL.VarInfo(model_old)
+    model_old(vi_old)
+    θ_old = vi_old[:]
+    lf_old = DynamicPPL.LogDensityFunction(model_old)
+    f_old = x -> LogDensityProblems.logdensity(lf_old, x)
+    tape_old = ReverseDiff.compile(ReverseDiff.GradientTape(f_old, θ_old))
+
+    # 4. Compare
+    time_old = @belapsed ReverseDiff.gradient!($(similar(θ_old)), $tape_old, $θ_old)

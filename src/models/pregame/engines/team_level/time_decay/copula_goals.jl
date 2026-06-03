@@ -23,7 +23,7 @@ end
     config::DynamicCopulaGoalsTimeDecayModel 
 )
     # 1. LOAD COMPONENTS
-    inter ~ to_submodel(build_interception(config.interception_config, n_seasons))
+    inter ~ to_submodel(build_interception(config.interception_config, n_seasons, n_months))
     disp  ~ to_submodel(build_dispersion(config.dispersion_config, n_teams, n_months))
     ha    ~ to_submodel(build_home_advantage(config.homeadvantage_config, n_teams))
     dyn   ~ to_submodel(build_dynamics(config.dynamics_config, n_teams))
@@ -36,7 +36,7 @@ end
     def_h = view(dyn.β, home_team_indices)
     att_a = view(dyn.α, away_team_indices)
     def_a = view(dyn.β, away_team_indices)
-    inter_match = view(inter, season_indices)
+    inter_match = inter.μ_base[season_indices] .+ inter.δ_month[month_indices]
     home_adv = view(ha, home_team_indices)
     
     # Copula deltas
@@ -136,7 +136,7 @@ function extract_parameters(
     team_map  = data[:team_map]
 
     # 2. DELEGATE TO COMPONENTS
-    inter_mat = extract_interception(chain, model.interception_config, n_seasons)
+    inter_nt  = extract_interception(chain, model.interception_config, n_seasons)
     disp_nt   = extract_dispersion(chain, model.dispersion_config, n_teams, n_months)
     ha_mat    = extract_home_advantage(chain, model.homeadvantage_config, n_teams)
     dyn_nt    = extract_dynamics(chain, model.dynamics_config, "dyn", n_teams)
@@ -164,10 +164,10 @@ function extract_parameters(
         κ_frank = cop_nt.κ_base .+ δ_κ_h .+ δ_κ_a
 
         s_idx = hasproperty(row, :season_idx) ? Int(row.season_idx) : n_seasons
-        inter_match = inter_mat[:, s_idx] 
 
-        # --- Reconstruct Dispersion ---
+        # --- Reconstruct Dispersion and Interception ---
         m_idx = month(row.match_date)
+        inter_match = inter_nt.μ_base[:, s_idx] .+ inter_nt.δ_month[:, m_idx]
         match_disp = reconstruct_dispersion(disp_nt, h_idx, a_idx, m_idx)
 
         λ_goals_h = exp.(inter_match .+ γ_h .+ α_h .+ β_a)
