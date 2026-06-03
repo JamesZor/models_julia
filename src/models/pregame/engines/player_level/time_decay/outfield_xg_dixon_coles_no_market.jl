@@ -97,8 +97,8 @@ end
     λ_a = κ_a_flat .* exp.(log_λ_a) .+ 1e-6
 
     is_bad = any(isnan, λ_h) || any(isnan, λ_a) || any(isinf, λ_h) || any(isinf, λ_a)
-    λ_h = ifelse.(isnan.(λ_h) .| isinf.(λ_h), 1.0, λ_h)
-    λ_a = ifelse.(isnan.(λ_a) .| isinf.(λ_a), 1.0, λ_a)
+    λ_h = ifelse.(isnan.(λ_h) .| isinf.(λ_h), one.(λ_h), λ_h)
+    λ_a = ifelse.(isnan.(λ_a) .| isinf.(λ_a), one.(λ_a), λ_a)
     Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
 
     # --- Pillar B: Actual Goals (Dixon-Coles Poisson) ---
