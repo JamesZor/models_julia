@@ -1,4 +1,3 @@
-# current_development/ab_test_dixon_coles/r05_ab_test_ireland_monthly_interception.jl
 
 using Revise
 using BayesianFootball
@@ -21,9 +20,9 @@ const Data = BayesianFootball.Data
 # 1. SETUP & DATA
 # ==========================================
 println("[INFO] Loading Ireland DataStore...")
-ds = Data.load_datastore_cached(Data.Ireland())
+ds = Data.load_datastore_cached(Data.Norway())
 
-save_dir::String = "./data/dixon_coles_monthly_inter_ab/"
+save_dir::String = "./data/dixon_coles_monthly_inter_ab_norway/"
 mkpath(save_dir)
 
 # ==========================================
