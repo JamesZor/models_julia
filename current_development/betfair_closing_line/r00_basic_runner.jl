@@ -152,8 +152,8 @@ julia> ds.betfair_odds
        8 │  9378193  OverUnder            3.5  over_35    2021-11-19T20:09:04.161            24.0694           2.36
        9 │  9378193  OverUnder            3.5  over_35    2021-11-19T20:10:04.152            25.0692           2.4
       10 │  9378193  OverUnder            3.5  over_35    2021-11-19T20:11:04.117            26.0686           2.44
-
-Note the timestamp and time till kick off 
+A small extraction so you understand the columns and data, tho this only show the under_35, but is for more markets.
+Note the timestamp and time till kick off, 
 =#
 
 unique(ds.betfair_odds.selection)

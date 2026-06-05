@@ -340,7 +340,7 @@ function roll_spread(bf_long::DataFrame; targets::Vector{Symbol} = TARGET_SELECT
             length(s.traded_price) < 3 && continue
             dp = diff(s.traded_price)
             length(dp) < 2 && continue
-            push!(covs, cov(dp[1:end-1], dp[2:end]))
+            push!(covs, Statistics.cov(dp[1:end-1], dp[2:end]))
         end
         c = isempty(covs) ? NaN : mean(covs)
         push!(rows, (

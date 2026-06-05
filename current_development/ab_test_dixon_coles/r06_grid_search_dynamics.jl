@@ -177,9 +177,6 @@ end
 
 
 
-
-
-
 #=
 Stats for: under_15                                                                                                                                                                                                                                                                                          12:06 [75/1907]
 4×18 DataFrame                                                                                                                                                                                                                                                                                                              
