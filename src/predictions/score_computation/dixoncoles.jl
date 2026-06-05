@@ -1,13 +1,15 @@
 # src/predictions/score_computation/dixon_coles.jl
 
 using Distributions
-using ..Models.PreGame: DynamicDixonColesXGOutfieldPlayerTimeDecayModel, DynamicDixonColesXGOutfieldPlayerTimeDecayNoMarketModel
+using ..Models.PreGame: DynamicDixonColesXGOutfieldPlayerTimeDecayModel, DynamicDixonColesXGOutfieldPlayerTimeDecayNoMarketModel,
+    DynamicDixonColesXGFullPositionPlayerTimeDecayModel
 # using LogExpFunctions: logpdf
 
 const AbstractDixonColesPlayerModels = Union{
     AbstractDixonColesModel,
     DynamicDixonColesXGOutfieldPlayerTimeDecayModel,
-    DynamicDixonColesXGOutfieldPlayerTimeDecayNoMarketModel
+    DynamicDixonColesXGOutfieldPlayerTimeDecayNoMarketModel,
+    DynamicDixonColesXGFullPositionPlayerTimeDecayModel
 }
 
 # 1. Adapter: Maps the flat model output to named parameters
