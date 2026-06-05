@@ -13,7 +13,7 @@ using ..Data
 using ..TypesInterfaces
 
 export FeatureSet, create_features, required_features, add_feature!
-export AbstractFeatureConfig, TeamIDsFeature, GoalsFeature, XGFeature, ShotsFeature, MarketLambdaFeature, TimeIndicesFeature, DatesFeature, MonthFeature, MidweekFeature, PlasticPitchFeature, AbstractRatingTracker, PlayerRatingsFeature
+export AbstractFeatureConfig, TeamIDsFeature, GoalsFeature, XGFeature, ShotsFeature, BigChanceFeature, ShotsInsideBoxFeature, FinalThirdEntriesFeature, TouchesInOppBoxFeature, MarketLambdaFeature, TimeIndicesFeature, DatesFeature, MonthFeature, MidweekFeature, PlasticPitchFeature, AbstractRatingTracker, PlayerRatingsFeature
 export LastValueTracker, WindowAverageTracker, EWMATracker, BayesianTracker
 
 # Core Architecture

@@ -331,3 +331,182 @@ This says: the regime can shift, but it's pulled back toward a long-run equilibr
 | Gate function | Kelly fraction (already modulates stakes) | Natural extension point |
 
 The L3 meta-model is architecturally a **mirror** of your L1 model, just operating on a different data stream (bet outcomes instead of match outcomes) and at a different time scale (monthly instead of per-match).
+
+---
+
+## 9. Design Update — lessons from the L2 / staking experiments (2026-06)
+
+The staking diagnostics (`current_development/bayesian_layer_2/MIN_EDGE_STAKING_REPORT.md`,
+`docs/l2_bayesian_calibration_research.md` §8) empirically validate the **regime-gate** concept
+above and sharpen it in three ways. They also settle which of the two "L3" flavours to build.
+
+### 9.1 Two distinct L3 flavours — build the staking gate, not the prediction blend
+- **Prediction-blend** (`meta_model_design.md`): `Q = θ_t·p_L1 + (1−θ_t)·m` — adjusts the
+  *probability*. We showed that shifting/blending the probability (Bayesian L2) **does not
+  improve realised growth**, because Baker–McHale Kelly already integrates the posterior.
+- **Staking gate** (this doc): adjusts the *stake/decision*. Market-selection + `min_edge`
+  **roughly doubled** out-of-sample `G_emp`. **→ The staking gate is the high-value L3.** Prefer
+  it; the θ-mixture is at best secondary.
+
+### 9.2 Drive the gate off **CLV**, not realised P&L / `G_t` (the key refinement)
+§2–5 of this doc gate on the rolling hurdle growth `Ĝ_t` (a *bet-outcome* statistic). The
+experiments show that is the **wrong signal to react to**: per-market rolling tuning on realised
+growth **overfit and lost to a fixed default** (walk-forward: per-market-tuned `G_emp` 0.0099 <
+fixed 0.0143). Realised P&L/`G_t` is **high-variance and lagging** (~15 settled bets/market/fold).
+
+> **Use realised Closing Line Value as the primary monitoring signal.** CLV is the
+> lowest-latency, lowest-variance edge health-check: every bet yields a CLV reading at kickoff
+> (no wait for settlement, no aggregation noise), and beating the close is the *leading*
+> indicator of edge (Betfair study). Gate/throttle on rolling **CLV**; use `G_t`/log-score only
+> as slow confirmation. This is the single most important change to the §2–5 design.
+
+### 9.3 The control output is richer than binary — three nested knobs
+The gate need not be bet/no-bet. The experiments expose a continuous ladder:
+1. **Market inclusion** (binary, biggest lever): bet a market only when its rolling-CLV lower
+   credible bound > 0. Empirically the edge lives in **unders / BTTS / low-overs**; the model
+   *loses* on **1X2 and high-overs** — so the gate's job is largely to keep selecting that set
+   as it drifts.
+2. **`min_edge_{m,t}`** (continuous): a **fixed global 0.03 is the robust floor** (≈2× OOS
+   growth); let L3 *raise* it above 0.03 for a market whose rolling CLV is deteriorating.
+3. **Stake scaler `λ_{m,t}∈[0,1]`** (circuit-breaker): a CUSUM / run-length detector on the CLV
+   stream cuts `λ→0` fast on a regime break (bleed-stop), recovering as CLV evidence rebuilds.
+
+### 9.4 Robustness lessons (thin-league data)
+- **Per-market hard tuning overfits.** Use **hierarchical pooling across market-type groups**
+  (unders / overs / BTTS / 1X2) — §6 already flags this for Phase 3; promote it to Phase 1.
+- **Conservative Bayesian gate**: "no bet until positive CLV is demonstrated" (credible-bound
+  gate), not a point estimate; keep the fixed `min_edge=0.03` as the always-on floor so L3 can
+  only ever *tighten* from a safe baseline.
+- **Forgetting, not windows**: exponential discount tied to the 60-day half-life (already the
+  §3.1 / §8 device), consistent with L1.
+
+### 9.5 Revised build order
+1. **Rolling CLV market gate** — per fold, include a market iff its discounted rolling CLV
+   (lower credible bound) > 0; confirm the unders/BTTS edge holds OOS. *First component.*
+2. Add the **fixed `min_edge=0.03` floor** + CLV-driven tightening above it.
+3. Add the **CUSUM/BOCPD `λ` circuit-breaker** on the CLV stream (the bleed-stop).
+4. Hierarchical pooling across market-type groups; graduate to `src/` as the L3 controller.
+
+---
+
+## 10. Empirical verdict (2026-06) — dynamic gating FAILS here; static curation wins
+
+The first L3 component (walk-forward market gate) was built and tested across all 17 markets.
+**Both candidate health signals failed, and the dynamic gate is counterproductive on this data.**
+
+### 10.1 CLV is not a usable signal here
+Correlation between per-market mean realised CLV (open→close fair-line movement) and realised
+Kelly `G_emp` is **−0.02 (zero)**. Worst case: `btts_yes` is a profit-maker (G_emp +0.0084) yet
+has the *most negative* CLV (line moves against its backs 62% of the time). Two reasons:
+(a) free-tier last-traded "open" prices are too stale/sparse on a thin market; (b) **the
+strategy enters at the close**, so CLV-of-open measures a different (early-entry) strategy and is
+structurally uninformative for a close-entry system. The §9.2 recommendation to gate on CLV is
+**retracted for this data/strategy**.
+
+### 10.2 The realised-performance gate destroys value (performance-chasing)
+
+Walk-forward OOS, all 17 markets, full Kelly:
+
+| strategy | bets | ROI% | `G_emp` | profit |
+|---|---|---|---|---|
+| dynamic gate, loose (z=0) | 539 | 9.3 | 0.00146 | 2.91 |
+| dynamic gate, mild (z=0.5) | 297 | 3.0 | −0.0019 | 0.60 |
+| dynamic gate, conservative (z=1) | 145 | −8.1 | −0.0093 | **−0.95** |
+| **STATIC all-17 (no gate)** | 986 | 7.1 | −0.0013 | 4.55 |
+| **STATIC good-10 (curated once)** | 626 | 19.3 | **0.0073** | **7.06** |
+
+- **The more aggressively you gate, the worse it gets** (z=0→0.5→1 : profit 2.91→0.60→−0.95).
+  The gate reacts to ~10-bet-per-fold *noise*: it skips winners during normal variance dips
+  (missed: draw +2.52, under_25 +1.39, under_15 +1.18, over_25 +0.84) while correctly blocking
+  the structural losers (saved: away −1.61, home −0.76). The false-negatives on winners dominate.
+- **Even the best dynamic gate loses to static curation on every metric** (2.91 vs 7.06 profit;
+  0.0015 vs 0.0073 G_emp). A longer warm-up (min_bets 25) does not help.
+
+### 10.3 Conclusion — don't build the reactive gate; curate statically
+On this data volume (~13 months, ~10 bets/market/fold, one league) **market regimes are not
+reliably detectable, and reacting to realised performance is net-negative.** The winning lever is
+unchanged and *static*:
+
+> **Curate the structurally-good market set (unders / BTTS / low-overs), drop 1X2 + high-overs,
+> bet full Baker–McHale Kelly with a fixed `min_edge≈0.03`.** Re-derive the bettable set on a
+> *long* rolling window (season-scale, not monthly), not a reactive month-to-month gate.
+
+The structural good/bad split (unders/BTTS win; 1X2/high-overs lose) is **stable across the whole
+sample** and *is* learnable; the **fold-to-fold variation** must not be momentum-traded. A
+reactive momentum L3 regime-switch is **counterproductive** here.
+
+### 10.4 The signal is mean-reverting — momentum is backwards, contrarian is the edge
+
+Following the observation that the momentum gate skipped winners *during dips* (i.e. dips were
+followed by bounces), we tested the direction directly:
+
+- **Demeaned lag-1 autocorrelation of per-market fold growth = −0.16.** After removing each
+  market's structural mean, performance is **mean-reverting**, not persistent. Momentum gating
+  fights this; that is *why* it loses.
+- **Switching to a contrarian gate (bet a good market when it has recently underperformed):**
+
+  | strategy | bets | ROI% | `G_emp` | profit |
+  |---|---|---|---|---|
+  | momentum good-10 | 498 | 15.8 | 0.00507 | 4.44 |
+  | **contrarian good-10** | 117 | **38.9** | **0.01615** | 2.46 |
+  | static good-10 | 626 | 19.3 | 0.00729 | 7.06 |
+  | contrarian all-17 | 428 | 5.1 | −0.005 | 1.55 |
+
+**Readings.**
+1. **Contrarian timing within curated good markets ~doubles per-bet growth** (G_emp 0.0073→0.0162,
+   ROI 19%→39%) — dips really are followed by above-average bounces. The user's "switch the
+   signal" hypothesis is **confirmed**.
+2. **Contrarian only works *inside* the good set** (all-17 contrarian is negative −0.005): a
+   structural loser that dips reverts to its *negative* mean, not to profit. **Curate first, then
+   tilt contrarian.**
+3. **But the contrarian gate sacrifices volume** (117 vs 626 bets) → *lower total profit* (2.46 vs
+   7.06) despite higher per-bet growth. A binary contrarian gate throws away 80% of good bets.
+
+**Design implication — a contrarian *stake tilt*, not a gate.** Keep betting all curated-good
+markets (preserve volume), but **size up after a market's recent dip and down after a hot streak**
+(a continuous mean-reversion multiplier on the Kelly stake). That captures the −0.16 reversion
+*without* discarding bets — strictly dominating the binary gate. This is the one genuinely
+promising dynamic L3 element to prototype next.
+
+**Caveats.** Autocorr −0.16 is weak; the 38.9% contrarian ROI on 117 bets is high-variance and
+surely inflated by small samples; good-10 is in-sample. Treat the *direction* (mean-reverting →
+contrarian tilt) as the robust takeaway, the magnitudes as noisy. Keep the tilt mild and
+walk-forward-validated to avoid overfitting on thin data.
+
+For now, "L3" = disciplined static curation + `min_edge` + full Kelly, **plus an optional mild
+contrarian stake tilt** within the curated set — not a binary regime gate, and not a θ-mixture.
+
+### 10.5 The contrarian stake tilt — prototyped and it WORKS (the payoff)
+
+Prototype: keep *all* curated-good-market bets, multiply each Kelly stake by
+`tilt = clamp(1 − β·wm/scale, 0.3, 2.0)`, where `wm` = recency-discounted (45-day) realised
+log-growth of that market over *past* folds (the gate's own signal: absolute recent dip).
+Cold market (`wm<0`) → tilt up; hot (`wm>0`) → tilt down. Walk-forward, good-10, `scale=0.01`.
+
+**Decomposition (why it works — robust OOS):** splitting static good-10 bets by decision-time
+state, **recently-cold bets vastly outperform hot**: ROI 43.6% vs 14.2%, G_emp **0.0171 vs
+0.0042** (cold 142 bets / hot 473). Dips are genuinely followed by above-average bounces.
+
+**Tilt result (volume preserved, 626 bets):**
+
+| β | ROI% | `G_emp` | profit | mean tilt |
+|---|---|---|---|---|
+| 0 (static) | 19.3 | 0.00729 | 7.06 | 1.00 |
+| **1** | 31.0 | **0.00915** | **7.70** | 0.70 |
+| 2 | 31.1 | 0.00875 | 7.72 | 0.71 |
+| 4 | 29.9 | 0.00802 | 7.33 | 0.71 |
+
+At β=1: **G_emp +26%, profit +9%, ROI +60% (19→31%)** — and it keeps every bet (vs the gate
+which kept only 19%). Robust across β∈[1,2].
+
+**Not just de-risking.** Mean tilt 0.70 means turnover *fell* ~30%, yet profit *rose*. A uniform
+0.70× shrink would (by the §3 linearity of fractional Kelly) cut profit to ~4.9 and G_emp to
+~0.005 — far worse. So the gain comes from **reallocating stake from low-edge hot bets to
+high-edge cold bets**, not from betting less. This is the one dynamic element worth keeping.
+
+**Recommended staking stack (this data):**
+`static good-market curation → min_edge≈0.03 → full Baker–McHale Kelly → ×mild contrarian tilt (β≈1)`.
+
+**Caveats:** 142 cold bets / single league / good-10 in-sample; 43.6% cold ROI is small-sample-
+inflated. `β` and `scale` are partly redundant (`β/scale` is the real knob); tune that one ratio
+out-of-sample and keep the clamp tight. Direction is robust; magnitude is noisy.

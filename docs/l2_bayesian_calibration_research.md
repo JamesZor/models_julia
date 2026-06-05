@@ -273,6 +273,173 @@ not regress; add team effects only if they further improve OOS log-score beyond 
 
 ---
 
+## 8b. Prototype findings (under_25, DCMH_HalfLife_60, 271 matches)
+
+Run via `current_development/bayesian_layer_2/` (loader `src/l01_bayes_calib.jl`, runner
+`r01_bayes_calib.jl`), on the live server REPL. All numbers OOS-honest where stated.
+
+**Stage 2 — the convolution is verified numerically.** For a test match the three
+constructions of the calibrated posterior agree on the logit-scale mean/variance:
+analytic `(3.165, 30.10)`, paired-N `(3.16, 29.98)`, N×M grid `(3.162, 29.94)`, with
+KS(grid, paired) = 0.017. **Confirms §1: it is one 1-D convolution, not a 2-D object.**
+The widening equals σ² exactly (`Var[z_cal] − Var[z_L1] = 0.0147 = σ_shift²`), and the
+σ→0 limit gives widening = 0.0 — i.e. exactly reproduces the deterministic `BasicLogitShift`.
+Global shift α̂ = −0.037 (sd 0.12): **L1 is essentially unbiased on under_25.**
+
+**Stage 3 — time decay is expensive here.** 60-day half-life weighting drops the
+effective sample size to **ESS = 95.5 of 271 (35%)**; the global shift sd widens 0.12 → 0.25
+accordingly. Decay is only worth that information cost if there is genuine regime drift to
+track — on a thin league, spend it deliberately.
+
+**Stage 4 — empirical Bayes says *don't* add team effects (as predicted).** EB drove the
+team-effect scale to the floor (τ = 0.05) and **zero teams** show residual bias |z| > 1.5.
+The evidence pools the team deltas to ≈0 — direct confirmation of §3.1: **L1 already captures
+team strength, so there is no residual per-team bias to learn.** Adding team effects here is
+not justified.
+
+**Gate — location calibration does *not* help on under_25.** Strict walk-forward OOS
+log-score (174 rows): raw L1 = −0.68038; +global shift = −0.68314 (Δ = −0.0028); +team shift
+= −0.68327 (Δ = −0.0029). Both shifts *slightly hurt* — consistent with α̂≈0 (fitting a shift
+just injects estimation noise when L1 is already unbiased in the mean).
+
+**Interpretation.** The location knob is a no-op on under_25 (L1's mean is already right).
+That makes the **dispersion knob the only reason to run a Bayesian L2 here** — and the
+log-score gate does *not* measure dispersion. The headline hypothesis (widening fixes the PIT
+over-confidence and improves Kelly growth) is therefore **still untested by the gate** and is
+the next thing to run. Concretely: re-use the Betfair `panel` (which already carries the
+vig-removed closing prob) to compute PIT/interval-coverage of the **widened** posterior vs raw
+L1, and feed both through `run_backtest` + `BernoulliGammaHurdle` to compare `hurdle_G`.
+Caveat: under_25 may be the wrong market to prove the point — btts_yes / under_15 carried the
+significant edge in the Betfair study; repeat there.
+
+## 8c. Backtest findings — does widening improve McHale/Kelly staking? (btts_yes, under_15)
+
+End-to-end test: walk-forward-calibrate the target markets, then run **both** raw and
+calibrated PPDs through the real `process_signals` → `BayesianKelly` (Baker–McHale) →
+`generate_tearsheet`, restricted to the **identical** calibrated match set (only the
+posterior differs). Betfair `odds_close`, Ireland, ~70–113 bets/market — small samples,
+read directionally.
+
+**(i) Decayed global shift (location + variance) — HURTS.** It places +39% more bets
+(138→192) but they are marginal: ROI falls (btts 14.9→7.1%, under_15 55.9→43.5%) and realised
+growth drops (G_emp btts 0.0044→0.0009, under_15 0.0138→0.0088). The decay-induced **location**
+move pushes weak selections past the Kelly edge filter — the same harmful location effect seen
+on under_25, now dominating. **Do not use a decayed mean-shift for staking on these markets.**
+
+**(ii) Pure dispersion widening (σ≈0.16, mean ≈fixed) — market-specific, growth-neutral.**
+
+| market | arm | bets | ROI% | Sharpe | hurdle_G | **G_emp** | profit |
+|---|---|---|---|---|---|---|---|
+| btts_yes | raw | 72 | 14.9 | 0.188 | 0.0078 | **0.00435** | 0.49 |
+| btts_yes | widen | 113 | 12.9 | 0.207 | 0.0125 | **0.00424** | 1.06 |
+| under_15 | raw | 66 | 55.9 | 0.132 | 0.0065 | **0.01377** | 1.23 |
+| under_15 | widen | 71 | 55.3 | 0.088 | 0.0034 | **0.01208** | 1.15 |
+
+The parametric `hurdle_G` and total profit look better for btts (G +60%, profit doubled) —
+but that is driven by **+57% more bets at similar ROI (more turnover)**, not better per-bet
+quality: the **trustworthy realised growth `G_emp` is essentially unchanged** on both markets
+(btts 0.00435→0.00424; under_15 0.01377→0.01208, slightly down). Parametric G (Gamma-fit on
+positive ROIs) is the optimistic metric and disagrees with the realised one — trust `G_emp`.
+
+**Conclusion: on this data the Bayesian L2 widening does NOT improve the realised geometric
+growth of the McHale Kelly staking.** The likely reason is deep and important:
+
+> **`BayesianKelly` already integrates over the full L1 posterior and shrinks the stake for its
+> variance (Baker–McHale).** Injecting *more* posterior variance is therefore partly
+> double-counting the uncertainty the staking engine already respects. The PIT over-confidence
+> is a statement about the L1 width being too narrow *relative to outcomes*, but the staking is
+> already conservative, so widening mostly relocates the operating point (more/fewer marginal
+> bets) without adding realised edge.
+
+**Implications for the project:**
+1. The headline motivation ("widen the posterior to stop Kelly over-betting") is **weaker than
+   it looked** — the over-betting it would prevent is partly already prevented by McHale
+   shrinkage. Confirm by checking whether raw-L1 Kelly actually over-bets (compare full-Kelly
+   vs fractional on the same posterior).
+2. Where a Bayesian L2 *could* still earn its place: a **location** correction on a market where
+   L1 is genuinely biased (none of under_25 / btts / under_15 were), or as the **regime
+   circuit-breaker** (the L3 idea) that *cuts* staking when realised CLV/Brier drifts — that
+   acts on the decision, not the posterior width, so it isn't redundant with McHale.
+3. The widening still legitimately fixes **calibration** (PIT) even if it doesn't move `G_emp`;
+   if the goal is honest probabilities for reporting/monitoring it has value, just not for
+   staking growth here.
+
+**Next decisive test (not yet run):** PIT / interval-coverage of the widened vs raw posterior
+on btts_yes/under_15 — does widening actually pull coverage to nominal? That confirms the
+*statistical* claim independently of the (null) staking result, and tells us whether to keep
+this layer for monitoring even though it doesn't boost growth.
+
+## 8d. Fractional shift λ∈[0,1] — the calibration shrinkage dial
+
+`z_cal = z_L1 + λ·μ`, widening `σ→λ·σ` (λ=0 ≡ raw, λ=1 ≡ full decayed shift). Grid over both
+markets, scored by **OOS log-score** (forecast accuracy) and **realised `G_emp`** (staking
+growth). Headline: **the two objectives disagree, and the staking optimum is λ\*≈0.**
+
+| market | metric | λ=0 | interior | λ=1 | optimum |
+|---|---|---|---|---|---|
+| btts_yes | OOS log-score | −0.69056 | **−0.68978 @λ≈0.5** | −0.69010 | shallow interior λ≈0.5 |
+| btts_yes | `G_emp` | **0.00435** | ↓ monotone | 0.00088 | **λ=0** |
+| under_15 | OOS log-score | **−0.60265** | ↓ monotone | −0.60417 | **λ=0** |
+| under_15 | `G_emp` | 0.01377 | 0.01397 @λ≈0.2 | 0.00877 | flat ≈0 (noise) |
+
+**Readings.**
+1. The user's intuition is correct *mechanically*: full strength (λ=1) is too strong; a partial
+   nudge is gentler. For btts forecast-accuracy there is a genuine **interior optimum λ≈0.5**
+   (log-score improves ~0.0008 nats) — the classic fractional-shrinkage sweet spot.
+2. **But for staking growth `G_emp`, λ\*≈0 on both markets** — any shift dilutes by pushing
+   marginal selections through the Kelly edge filter (more bets, lower ROI). Forecast accuracy
+   and staking growth point to **different λ**.
+3. All effects are tiny (log-score in the 4th decimal; ~70–100 bets) — within sampling noise.
+
+**Decision.** Keep the **fractional λ as the standard tuning knob for any future L2** (never
+assume λ=1; always grid-search it). On the *current* best markets it confirms **λ\*≈0 for
+making money** ⇒ L1 is already well enough calibrated that McHale Kelly extracts the edge
+without an L2 nudge. The fractional machinery will only pay off on a market with genuine L1
+bias (where λ\*≫0) — and is the natural lever for the L3 circuit-breaker (let λ, or the stake,
+fall when regime-drift is detected, rather than applying a fixed full-strength correction).
+
+## 8e. Code verification + the `min_edge` sweep — the real lever is the filter, not L2
+
+**Verification (the code is correct).** (i) My global shift α̂ = −0.0367 matches the production
+`BasicLogitShift` c_shift = −0.0372 to 3 dp. (ii) Bias-injection recovery: inject known logit
+shifts ±0.4/±0.8, the calibrator recovers them to ~1%. The calibrator is sound.
+
+**Correction to an earlier claim.** btts_yes is *not* unbiased — calibration-in-the-mean:
+under_25 0.537 vs 0.528 (−0.9pp); **btts_yes 0.499 vs 0.554 (+5.5pp under-prediction)**;
+under_15 0.280 vs 0.295 (+1.5pp). L2 *correctly* corrects the btts bias (hence the λ≈0.5
+log-score optimum in §8d). So "L2 looks bad" ≠ "L2 is broken" — on btts it improves the
+probabilities; it just doesn't improve *staking*, for the reason below.
+
+**`min_edge` sweep on btts_yes (raw vs calibrated, same match set):**
+
+| min_edge | raw: bets / ROI / G_emp / profit | calibrated: bets / ROI / G_emp / profit |
+|---|---|---|
+| 0.00 | 72 / 14.9 / 0.00435 / 0.49 | 113 / 12.8 / 0.00424 / 1.06 |
+| 0.02 | 53 / 15.3 / 0.00589 / 0.49 | 95 / 12.5 / 0.00461 / 1.02 |
+| **0.03** | **42 / 17.4 / 0.00826 / 0.52** | 85 / 11.8 / 0.00430 / 0.94 |
+| 0.05 | 19 / −0.0 / −0.0079 / 0.0 | 65 / 11.6 / 0.00419 / 0.84 |
+| **0.07** | 10 / −10.4 / −0.025 / −0.14 | **40 / 15.8 / 0.00916 / 0.86** |
+
+**Readings.**
+1. **`min_edge` is a bigger lever than L2.** On the *raw* posterior, raising min_edge 0→0.03
+   nearly **doubles realised growth** (G_emp 0.00435→0.00826) by dropping marginal bets
+   72→42. `BayesianKelly(min_edge=0)` over-bets — that, not the calibrator, was the main drag.
+2. **The two arms' min_edge axes are not directly comparable.** Calibrating btts *up* by +5.5pp
+   also inflates measured edge `p_cal − p_implied` by ~that amount, so the calibrated arm's
+   optimum sits at a higher min_edge (~0.07 vs raw's ~0.03, a gap ≈ the bias correction).
+   Calibration largely **relabels the edge axis**.
+3. **At their respective optima**, calibrated edges out raw (G_emp 0.00916 vs 0.00826; profit
+   0.86 vs 0.52, similar ~40 bets) — a modest, not dramatic, gain, on tiny samples (noisy).
+
+**Net.** The biggest, most robust improvement available here is **tuning `min_edge` > 0**, which
+helps with or without L2. Calibration adds a small further benefit once min_edge is tuned, but
+much of its apparent effect is shifting where the optimal threshold sits. Recommend: (a) make
+`min_edge` a first-class, walk-forward-tuned hyperparameter of the staking strategy; (b) treat
+L2 as a probability-accuracy / monitoring layer, not a growth lever. Caveat: 40–70 bets/market,
+single league — tune min_edge out-of-sample, do not over-fit to the 0.03 figure.
+
+---
+
 ## 9. References
 
 - West & Harrison, *Bayesian Forecasting and Dynamic Models* (1997) — Ch. 6 (discount factors), Ch. 11.

@@ -14,6 +14,10 @@ struct GoalsFeature <: AbstractFeatureConfig end
 # --- Stats Features ---
 struct XGFeature <: AbstractFeatureConfig end
 struct ShotsFeature <: AbstractFeatureConfig end
+struct BigChanceFeature <: AbstractFeatureConfig end          # bigChanceCreated
+struct ShotsInsideBoxFeature <: AbstractFeatureConfig end     # totalShotsInsideBox
+struct FinalThirdEntriesFeature <: AbstractFeatureConfig end  # finalThirdEntries
+struct TouchesInOppBoxFeature <: AbstractFeatureConfig end    # touchesInOppBox
 
 # --- Market Features ---
 abstract type AbstractMarketFeatureConfig <: AbstractFeatureConfig end
