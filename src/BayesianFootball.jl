@@ -3,10 +3,12 @@
 module BayesianFootball
 
 # --- Environment Setup ---
+# Loads .env (e.g. BF_DB_URL) into ENV at module init. DotEnv v1's `config` does
+# NOT mutate ENV; `load!(ENV, path)` is the call that actually populates it.
 using DotEnv
 const env_path = joinpath(pkgdir(@__MODULE__), ".env")
 if isfile(env_path)
-    DotEnv.config(env_path)
+    DotEnv.load!(ENV, env_path)
 end
 # -------------------------
 
