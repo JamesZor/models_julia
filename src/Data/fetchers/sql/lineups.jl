@@ -9,8 +9,8 @@ function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::LineUpsData)
             l.player_id, l.player_name, l.position, l.shirt_number,
             l.substitute AS is_substitute, l.captain AS is_captain,
             l.minutes_played, l.rating, l.goals, l.expected_goals, l.expected_assists
-        FROM match_player_lineups l
-        JOIN matches m ON l.match_id = m.match_id
+        FROM sofascore.match_player_lineups l
+        JOIN sofascore.matches m ON l.match_id = m.match_id
         WHERE m.tournament_id = ANY(\$1)
     """
     local base_df
@@ -27,8 +27,8 @@ function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::LineUpsData)
         SELECT 
             l.match_id, l.player_id, stats.key AS stat_key,
             (stats.value)::text AS stat_value
-        FROM match_player_lineups l
-        JOIN matches m ON l.match_id = m.match_id,
+        FROM sofascore.match_player_lineups l
+        JOIN sofascore.matches m ON l.match_id = m.match_id,
         jsonb_each(l.statistics) AS stats
         WHERE m.tournament_id = ANY(\$1) AND stats.key != 'ratingVersions'
     """

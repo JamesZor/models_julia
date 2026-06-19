@@ -15,8 +15,8 @@ function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::IncidentsData)
             (i.data ->> 'rescinded')::boolean AS rescinded,
             i.data ->> 'text' AS period_text,
             (i.data ->> 'timeSeconds')::numeric AS time_seconds
-        FROM match_incidents i
-        JOIN matches m ON i.match_id = m.match_id
+        FROM sofascore.match_incidents i
+        JOIN sofascore.matches m ON i.match_id = m.match_id
         WHERE m.tournament_id = ANY(\$1)
     """
     try

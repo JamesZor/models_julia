@@ -101,12 +101,12 @@ function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::BetfairData)
             m.start_timestamp,
             mk.market_type,
             o.odds_data
-        FROM matches m
+        FROM sofascore.matches m
         INNER JOIN betfair.match_meta mm ON m.match_id = mm.match_id
         INNER JOIN betfair.odds_history o ON m.match_id = o.match_id
         INNER JOIN betfair.markets mk ON o.market_id = mk.market_id
         WHERE m.tournament_id = ANY(\$1)
-        AND mm.status IN ('SUCCESS', 'PARTIAL_SUCCESS')
+        AND mm.status = 'SUCCESS'
         ORDER BY m.match_id ASC
     """
     

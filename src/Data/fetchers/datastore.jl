@@ -35,9 +35,16 @@ end
     load_datastore_sql(segment) -> DataStore
 Main entry point for external use. Manages the DB connection lifecycle and returns the data.
 """
-function load_datastore_sql(segment::DataTournemantSegment)::DataStore 
-    # Use environment variable for the connection string, with a fallback
-    db_url = get(ENV, "BF_DB_URL", "postgresql://admin:supersecretpassword@100.124.38.117:5432/sofascrape_db")
+function load_datastore_sql(segment::DataTournemantSegment)::DataStore
+    # The connection string MUST come from the environment — no credentials are
+    # committed here. Point BF_DB_URL at the new schema-split instance
+    # (`:5433/betdb`); the old `:5432/sofascrape_db` is the untouched rollback.
+    # The password was rotated in the Phase 2 credential rotation and lives only
+    # in the environment.
+    db_url = get(ENV, "BF_DB_URL") do
+        error("BF_DB_URL is not set. Export it before loading data, e.g.\n" *
+              "  export BF_DB_URL=\"postgresql://admin:<password>@100.124.38.117:5433/betdb\"")
+    end
     db_config = DBConfig(db_url)
     
     db_conn = connect_to_db(db_config)
