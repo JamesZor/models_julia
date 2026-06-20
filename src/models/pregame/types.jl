@@ -11,6 +11,7 @@ abstract type AbstractKappaConfig <: AbstractModelComponent end
 abstract type AbstractDynamicsConfig <: AbstractModelComponent end
 abstract type AbstractInterceptionConfig <: AbstractModelComponent end
 abstract type AbstractCopulaConfig <: AbstractModelComponent end
+abstract type AbstractDixonColesConfig <: AbstractModelComponent end
 
 # ==========================================
 # 2. MASTER ARCHITECTURE TYPES

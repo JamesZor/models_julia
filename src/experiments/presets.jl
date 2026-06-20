@@ -74,7 +74,7 @@ function create_experiment_task(
             n_warmup = warmup, 
             accept_rate = accept_rate, 
             max_depth = max_depth,  
-            initialisation = Samplers.UniformInit(-2, 2),
+            initialisation = Samplers.UniformInit(-2.0, 2.0),
             show_progress = show_progress 
         )
         

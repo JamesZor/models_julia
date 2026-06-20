@@ -19,8 +19,8 @@ function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::MatchesData)
             m.round,
             (m.raw_data ->> 'hasXg')::boolean AS has_xg,
             (m.raw_data ->> 'hasEventPlayerStatistics')::boolean AS has_stats
-        FROM matches m
-        JOIN seasons s ON m.season_id = s.season_id
+        FROM sofascore.matches m
+        JOIN sofascore.seasons s ON m.season_id = s.season_id
         WHERE m.status_type = 'finished'
         AND m.tournament_id = ANY(\$1) 
     """

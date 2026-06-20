@@ -10,8 +10,8 @@ function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::StatisticsData
         s.stat_key,
         s.home_value,
         s.away_value
-    FROM match_statistics s
-    JOIN matches m ON s.match_id = m.match_id
+    FROM sofascore.match_statistics s
+    JOIN sofascore.matches m ON s.match_id = m.match_id
     WHERE m.tournament_id = ANY(\$1)
     """
     try

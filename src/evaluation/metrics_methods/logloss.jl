@@ -3,7 +3,13 @@
 export LogLoss, LogLossResult, LogLossComponent
 
 # --- The Trigger ---
-struct LogLoss <: AbstractScoringRule end
+struct LogLoss <: AbstractScoringRule 
+    selections::Vector{Symbol}
+end
+
+# Convenience constructors
+LogLoss(selection::Symbol) = LogLoss([selection])
+LogLoss() = LogLoss(Symbol[])
 
 # --- The Components ---
 struct LogLossComponent <: AbstractMetricComponent
@@ -22,8 +28,12 @@ function get_metric_method_name(::LogLossResult)::String
     return "logloss"
 end
 
-function get_metric_method_name(::LogLoss)::String
-    return "logloss"
+function get_metric_method_name(metric::LogLoss)::String
+    if isempty(metric.selections)
+        return "logloss_all"
+    else
+        return "logloss_" * join(String.(metric.selections), "_")
+    end
 end
 
 # ==============================================================================
@@ -63,6 +73,11 @@ function compute_metric(metric::LogLoss, exp::ExperimentResults, ds::DataStore, 
     
     # 5. Clean up missing odds/outcomes
     dropmissing!(analysis_df, [:prob_fair_close, :is_winner])
+    
+    # FILTER BY SELECTIONS
+    if !isempty(metric.selections)
+        filter!(:selection => s -> s in metric.selections, analysis_df)
+    end
     
     # Convert outcomes to Float64 (1.0 for win, 0.0 for loss)
     analysis_df.Y = Float64.(analysis_df.is_winner)

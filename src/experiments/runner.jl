@@ -243,6 +243,27 @@ end
 # 4. INTERNAL HELPERS
 # ==============================================================================
 
+    # Tell Julia how to upgrade the old JLD2.ReconstructedStatic into a modern AbstractExecutionStrategy
+function Base.convert(::Type{Training.AbstractExecutionStrategy}, rs::JLD2.ReconstructedStatic)
+	# Check if the reconstructed object was originally an "Independent" struct
+	if typeof(rs).parameters[1] == Symbol("BayesianFootball.Training.Independent")
+
+            # Safely extract the old fields (using defaults just in case)
+            parallel = hasproperty(rs, :parallel) ? rs.parallel : false
+            max_splits = hasproperty(rs, :max_concurrent_splits) ? rs.max_concurrent_splits : 1
+
+            # Return the new, modern version of the struct (supplying a default for the new field)
+            return BayesianFootball.Training.Independent(
+		parallel = parallel,
+		max_concurrent_splits = max_splits,
+		max_concurrent_tasks = Threads.nthreads()
+            )
+	end
+
+	# If it's something else, throw the normal error
+	throw(MethodError(Base.convert, (BayesianFootball.Training.AbstractExecutionStrategy, rs)))
+    end
+
 function _read_meta(path)
     meta_path = joinpath(path, "meta.json")
     default = (name=basename(path), model="?", splitter="?", sampler="?", time_taken="N/A")

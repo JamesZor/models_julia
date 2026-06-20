@@ -46,12 +46,11 @@ end
     # --- Expected Goals Data ---
     home_xg::Vector{Float64},
     away_xg::Vector{Float64},
-    idx_xg::Vector{Int},
-    idx_no_xg::Vector{Int},
+    xg_mask::Vector{Float64},
     # --- Market Data ---
     market_log_λ_h::Vector{Float64},
     market_log_λ_a::Vector{Float64},
-    idx_market::Vector{Int},
+    market_mask::Vector{Float64},
     # --- Dimensions ---
     n_teams::Int,
     n_seasons::Int,
@@ -76,16 +75,19 @@ end
     # 2. VECTORIZED INDEXING & MATH
     # ==========================================
     
-    # --- 1. Aggregate Outfield Ratings ---
-    home_Outfield = home_D_ratings .+ home_M_ratings .+ home_F_ratings
-    away_Outfield = away_D_ratings .+ away_M_ratings .+ away_F_ratings
-
-    # --- 2. Match-Level Strength Calculation ---
-    att_h = (p_dyn.w_G_att .* home_G_ratings) .+ (p_dyn.w_Outfield_att .* home_Outfield)
-    def_h = (p_dyn.w_G_def .* home_G_ratings) .+ (p_dyn.w_Outfield_def .* home_Outfield)
+    # Mean-center the ratings to perfectly resolve the non-identifiability ridge with inter.μ
+    base_rating = config.player_ratings_feature.tracker.prior_mean
     
-    att_a = (p_dyn.w_G_att .* away_G_ratings) .+ (p_dyn.w_Outfield_att .* away_Outfield)
-    def_a = (p_dyn.w_G_def .* away_G_ratings) .+ (p_dyn.w_Outfield_def .* away_Outfield)
+    h_G_c = home_G_ratings .- base_rating
+    h_O_c = (home_D_ratings .+ home_M_ratings .+ home_F_ratings) .- (10.0 * base_rating)
+    
+    a_G_c = away_G_ratings .- base_rating
+    a_O_c = (away_D_ratings .+ away_M_ratings .+ away_F_ratings) .- (10.0 * base_rating)
+
+    att_h = (p_dyn.w_G_att .* h_G_c) .+ (p_dyn.w_Outfield_att .* h_O_c)
+    def_h = (p_dyn.w_G_def .* h_G_c) .+ (p_dyn.w_Outfield_def .* h_O_c)
+    att_a = (p_dyn.w_G_att .* a_G_c) .+ (p_dyn.w_Outfield_att .* a_O_c)
+    def_a = (p_dyn.w_G_def .* a_G_c) .+ (p_dyn.w_Outfield_def .* a_O_c)
 
     # --- Standard Intercepts & Advantages ---
     home_adv    = view(ha, home_team_indices)
@@ -120,26 +122,19 @@ end
     λₐ = exp.(log_λₐ) .+ 1e-6
 
     # AD-Safe Rejection
-    if any(isnan, λₕ) || any(isnan, λₐ) || any(isinf, λₕ) || any(isinf, λₐ)
-        Turing.@addlogprob! -Inf
-        return
-    end
+    is_bad = any(isnan, λₕ) || any(isnan, λₐ) || any(isinf, λₕ) || any(isinf, λₐ)
+    λₕ = ifelse.(isnan.(λₕ) .| isinf.(λₕ), one.(λₕ), λₕ)
+    λₐ = ifelse.(isnan.(λₐ) .| isinf.(λₐ), one.(λₐ), λₐ)
+    Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
 
     # ==========================================
     # 4. TIME-DECAYED LIKELIHOOD PIPELINE
     # ==========================================
     
     # --- Pillar A: xG (Gamma) ---
-    if !isempty(idx_xg)
-        λₕ_xg = λₕ[idx_xg]
-        λₐ_xg = λₐ[idx_xg]
-        
-        log_lik_xg_h = logpdf.(Gamma.(ν_xg, λₕ_xg ./ ν_xg), home_xg[idx_xg])
-        log_lik_xg_a = logpdf.(Gamma.(ν_xg, λₐ_xg ./ ν_xg), away_xg[idx_xg])
-
-        Turing.@addlogprob! sum(log_lik_xg_h .* match_weights[idx_xg])
-        Turing.@addlogprob! sum(log_lik_xg_a .* match_weights[idx_xg])
-    end
+    ll_xg_h = logpdf.(Gamma.(ν_xg, λₕ ./ ν_xg), home_xg)
+    ll_xg_a = logpdf.(Gamma.(ν_xg, λₐ ./ ν_xg), away_xg)
+    Turing.@addlogprob! sum((ll_xg_h .+ ll_xg_a) .* match_weights .* xg_mask)
 
     # --- Pillar B: Actual Goals (NegBin) ---
     λ_goals_h = κ_h_flat .* λₕ
@@ -148,20 +143,16 @@ end
     log_lik_goals_h = logpdf.(RobustNegativeBinomial.(r_h_flat, λ_goals_h), home_goals)
     log_lik_goals_a = logpdf.(RobustNegativeBinomial.(r_a_flat, λ_goals_a), away_goals)
 
-    Turing.@addlogprob! sum(log_lik_goals_h .* match_weights)
-    Turing.@addlogprob! sum(log_lik_goals_a .* match_weights)
+    Turing.@addlogprob! sum((log_lik_goals_h .+ log_lik_goals_a) .* match_weights)
 
     # --- Pillar C: The Market (Normal) ---
-    if !isempty(idx_market)
-        market_rate_h = log_λₕ[idx_market] .+ log.(κ_h_flat[idx_market])
-        market_rate_a = log_λₐ[idx_market] .+ log.(κ_a_flat[idx_market])
+    market_rate_h = log_λₕ .+ log.(κ_h_flat)
+    market_rate_a = log_λₐ .+ log.(κ_a_flat)
 
-        log_lik_market_h = logpdf.(Normal.(market_rate_h, σ_market), market_log_λ_h[idx_market])
-        log_lik_market_a = logpdf.(Normal.(market_rate_a, σ_market), market_log_λ_a[idx_market])
+    log_lik_market_h = logpdf.(Normal.(market_rate_h, σ_market), market_log_λ_h)
+    log_lik_market_a = logpdf.(Normal.(market_rate_a, σ_market), market_log_λ_a)
 
-        Turing.@addlogprob! sum(log_lik_market_h .* match_weights[idx_market]) * config.market_weight
-        Turing.@addlogprob! sum(log_lik_market_a .* match_weights[idx_market]) * config.market_weight
-    end
+    Turing.@addlogprob! sum((log_lik_market_h .+ log_lik_market_a) .* match_weights .* market_mask) * config.market_weight
 end
 
 # ==========================================
@@ -209,22 +200,27 @@ function build_turing_model(config::DynamicMarketXGOutfieldPlayerTimeDecayModel,
     a_F = Vector{Float64}(data[:flat_away_F_rating])
 
     # xG
-    home_xg = Vector{Float64}(coalesce.(data[:flat_home_xg], NaN))
-    away_xg = Vector{Float64}(coalesce.(data[:flat_away_xg], NaN))
-    idx_xg    = findall(x -> !isnan(x), home_xg)
-    idx_no_xg = findall(isnan, home_xg)
+    home_xg_raw = coalesce.(data[:flat_home_xg], NaN)
+    away_xg_raw = coalesce.(data[:flat_away_xg], NaN)
+
+    xg_mask = Float64.(.!isnan.(home_xg_raw))
+    home_xg = [isnan(x) ? 1.0 : Float64(x) for x in home_xg_raw]
+    away_xg = [isnan(x) ? 1.0 : Float64(x) for x in away_xg_raw]
 
     # Market
-    market_log_h = Vector{Float64}(coalesce.(log.(data[:flat_market_λ_home]), NaN))
-    market_log_a = Vector{Float64}(coalesce.(log.(data[:flat_market_λ_away]), NaN))
-    idx_market = findall(x -> !isnan(x), market_log_h)
+    market_log_h_raw = coalesce.(log.(data[:flat_market_λ_home]), NaN)
+    market_log_a_raw = coalesce.(log.(data[:flat_market_λ_away]), NaN)
+    
+    market_mask = Float64.(.!isnan.(market_log_h_raw))
+    market_log_h = [isnan(x) ? 0.0 : Float64(x) for x in market_log_h_raw]
+    market_log_a = [isnan(x) ? 0.0 : Float64(x) for x in market_log_a_raw]
 
     return build_outfield_xg_market_player_engine(
         home_ids, away_ids, season_ids, month_indices,
         home_goals, away_goals, match_weights,
         h_G, h_D, h_M, h_F, a_G, a_D, a_M, a_F,
-        home_xg, away_xg, idx_xg, idx_no_xg,
-        market_log_h, market_log_a, idx_market,
+        home_xg, away_xg, xg_mask,
+        market_log_h, market_log_a, market_mask,
         n_teams, n_seasons, n_months,
         config
     )
@@ -281,16 +277,21 @@ function extract_parameters(
         a_M = get(m_ratings, ("away", "M"), 0.0)
         a_F = get(m_ratings, ("away", "F"), 0.0)
 
-        # --- 1. Aggregate Outfield Ratings ---
-        h_Outfield = h_D + h_M + h_F
-        a_Outfield = a_D + a_M + a_F
 
-        # --- 2. Calculate Player-Driven Strength (Vectorized across samples) ---
-        att_h = (p_dyn_nt.w_G_att .* h_G) .+ (p_dyn_nt.w_Outfield_att .* h_Outfield)
-        def_h = (p_dyn_nt.w_G_def .* h_G) .+ (p_dyn_nt.w_Outfield_def .* h_Outfield)
 
-        att_a = (p_dyn_nt.w_G_att .* a_G) .+ (p_dyn_nt.w_Outfield_att .* a_Outfield)
-        def_a = (p_dyn_nt.w_G_def .* a_G) .+ (p_dyn_nt.w_Outfield_def .* a_Outfield)
+        # --- Player specific ratings
+        base_r = model.player_ratings_feature.tracker.prior_mean
+        h_G_c = h_G - base_r
+        h_O_c = (h_D + h_M + h_F) - (10.0 * base_r)
+        
+        a_G_c = a_G - base_r
+        a_O_c = (a_D + a_M + a_F) - (10.0 * base_r)
+
+        att_h = (p_dyn_nt.w_G_att * h_G_c) + (p_dyn_nt.w_Outfield_att * h_O_c)
+        def_h = (p_dyn_nt.w_G_def * h_G_c) + (p_dyn_nt.w_Outfield_def * h_O_c)
+
+        att_a = (p_dyn_nt.w_G_att * a_G_c) + (p_dyn_nt.w_Outfield_att * a_O_c)
+        def_a = (p_dyn_nt.w_G_def * a_G_c) + (p_dyn_nt.w_Outfield_def * a_O_c)
 
         # --- Standard Components ---
         γ_h = h_id > 0 ? ha_mat[:, h_id] : zeros(n_samples)

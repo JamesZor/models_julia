@@ -516,3 +516,4 @@ src/samplers/
     └── advi.jl                # Variational Inference engine
 ```
 
+> **Note on AD Backends**: See the [Turing AD Performance Guide](docs/turing_ad_performance_guide.md) for detailed rules on writing optimal models for `ReverseDiff.jl`, `Zygote.jl`, and `Mooncake.jl`.

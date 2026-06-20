@@ -27,8 +27,8 @@ function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::OddsData)
             o.match_id, o.market_id, o.market_name, o.choice_name, o.choice_group,
             o.initial_fraction_num, o.initial_fraction_den,
             o.fraction_num, o.fraction_den, o.winning
-        FROM match_odds o
-        JOIN matches m ON o.match_id = m.match_id
+        FROM sofascore.match_odds o
+        JOIN sofascore.matches m ON o.match_id = m.match_id
         WHERE m.tournament_id = ANY(\$1)
     """
     try

@@ -15,6 +15,9 @@ METRICS_VECTOR::Vector{AbstractWealthMetric} = [
           BurkeRatio(),
           SterlingRatio()
 ]
+DISTRIBUTIONAL_VECTOR::Vector{AbstractDistributionalMetric} = [
+          BernoulliGammaHurdle()
+]
 
 """
     generate_tearsheet(ledger::BacktestLedger, groupby_cols::Vector{Symbol}; 
@@ -24,7 +27,8 @@ Generates a summary table. Uses optimized DataFrame aggregation.
 """
 function generate_tearsheet(ledger::BacktestLedger;
                             groupby_cols::Vector{Symbol} = GROUPBY_SYMBOLS,
-                            metrics::Vector{<:AbstractWealthMetric}= METRICS_VECTOR
+                            metrics::Vector{<:AbstractWealthMetric} = METRICS_VECTOR,
+                            dist_metrics::Vector{<:AbstractDistributionalMetric} = DISTRIBUTIONAL_VECTOR
                             )
     
     df = ledger.df
@@ -38,12 +42,14 @@ function generate_tearsheet(ledger::BacktestLedger;
         # A. Basic Accounting (Vectorized)
         stats = _compute_basic_stats(sub_df)
         
-        # B. Wealth Metrics (Abstracted)
-        # We only build the equity curve once per group
+        # B. Wealth Metrics (equity curve → scalar)
         wealth = _compute_wealth_metrics(sub_df.pnl, metrics)
         
-        # Merge the two NamedTuples/Dicts into one row
-        merge(stats, wealth)
+        # C. Distributional Metrics (per-bet data → NamedTuple)
+        dist = _compute_distributional_metrics(sub_df, dist_metrics)
+        
+        # Merge all three into one row (chained — merge only takes 2 args for NamedTuple)
+        merge(merge(stats, wealth), dist)
     end
     
     return results
@@ -103,6 +109,25 @@ function _compute_wealth_metrics(pnl_vector::AbstractVector, config::Vector{<:Ab
     
     for metric in config
     results[metric_symbol(metric)] = round(compute_metric(metric, equity_curve), digits=3)
+    end
+    
+    return results
+end
+
+"""
+    _compute_distributional_metrics(sub_df, config)
+
+Runs each AbstractDistributionalMetric over the raw per-bet data.
+Each metric returns a NamedTuple; all are merged into a single Dict.
+"""
+function _compute_distributional_metrics(sub_df::AbstractDataFrame, config::Vector{<:AbstractDistributionalMetric})
+    results = Dict{Symbol, Any}()
+    
+    for metric in config
+        nt = compute_distributional_metric(metric, sub_df)
+        for (k, v) in pairs(nt)
+            results[k] = v
+        end
     end
     
     return results

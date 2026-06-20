@@ -29,9 +29,12 @@ end
 # MATH & HELPERS
 # ==============================================================================
 function compute_crps(y::Real, λ::Real, r_disp::Real; max_goals=30)
-    # Convert mean (λ) and dispersion (r) to NegBinomial (r, p)
-    p = r_disp / (r_disp + λ)
-    dist = NegativeBinomial(r_disp, p)
+    if isinf(r_disp) || isnan(r_disp)
+        dist = Poisson(λ)
+    else
+        p = r_disp / (r_disp + λ)
+        dist = NegativeBinomial(r_disp, p)
+    end
     
     crps_value = 0.0
     # Sum over possible goal counts
@@ -43,6 +46,18 @@ function compute_crps(y::Real, λ::Real, r_disp::Real; max_goals=30)
     end
     
     return crps_value
+end
+
+function _crps_get_r(df)
+    if hasproperty(df, :r)
+        return mean.(df.r), mean.(df.r)
+    elseif hasproperty(df, :r_h)
+        return mean.(df.r_h), mean.(df.r_a) 
+    else
+        # Return Inf to indicate Poisson (no overdispersion)
+        n = nrow(df)
+        return fill(Inf, n), fill(Inf, n)
+    end 
 end
 
 # ==============================================================================
@@ -67,7 +82,7 @@ function compute_metric(metric::CRPS, exp::ExperimentResults, ds::DataStore, lat
     # 2. Extract Expected values (Means of posterior samples)
     exp_home = mean.(joined.λ_h)
     exp_away = mean.(joined.λ_a)
-    exp_r_h, exp_r_a = get_r(joined)
+    exp_r_h, exp_r_a = _crps_get_r(joined)
 
     # 3. Compute CRPS vectors
     crps_home = compute_crps.(joined.home_score, exp_home, exp_r_h)

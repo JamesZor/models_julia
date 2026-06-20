@@ -74,7 +74,7 @@ function _process_single_experiment(
         end
     end
     
-    m_name = model_name(exp_res.config.model)
+    m_name = exp_res.config.name
     m_params = model_parameters(exp_res.config.model)
 
     df.model_name = fill(m_name, nrow(df))
