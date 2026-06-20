@@ -301,7 +301,7 @@ function compare_count_models(data::AbstractVector{<:Integer}, label::String)
     @printf("%-14s | %-3s | %-12s | %-12s | %-12s | %-5s\n",
             "Model", "k", "LogLik", "AIC", "BIC", "conv")
     println("-"^72)
-    for f in sort(fits, by = x -> x.aic)
+    for f in Base.sort(fits, by = x -> x.aic)
         @printf("%-14s | %-3d | %-12.2f | %-12.2f | %-12.2f | %-5s\n",
                 f.name, f.k, f.loglik, f.aic, f.bic, f.converged)
     end
@@ -311,7 +311,7 @@ function compare_count_models(data::AbstractVector{<:Integer}, label::String)
     println("-"^72)
     println("Winner by AIC: $(best_aic.name)  (params = $(best_aic.params))")
     println("Winner by BIC: $(best_bic.name)  (params = $(best_bic.params))")
-    return sort(fits, by = x -> x.aic)
+    return Base.sort(fits, by = x -> x.aic)
 end
 
 # ============================================================================
