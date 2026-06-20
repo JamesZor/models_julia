@@ -1,7 +1,14 @@
 # `bigChanceCreated` — Deep EDA (League of Ireland)
 
-**Status:** maths & methodology written; **results sections marked `⟨RESULTS PENDING⟩`** are
-filled after running `r02_bigchance_runner.jl` in the kaimon REPL on `mcmc-beast`.
+**Status:** complete. Results from `r02_bigchance_runner.jl` run in the kaimon REPL on `mcmc-beast`
+(Ireland, `Data.load_datastore_sql(Data.Ireland())`, n=1001 played matches).
+
+**TL;DR:** bigChanceCreated is a **mildly over-dispersed count** (V/M ≈ 1.11–1.14), **not**
+zero-inflated. **Negative Binomial** is the best marginal family (wins AIC *and* BIC on pooled data;
+χ² GoF p=0.51) and is already AD-safe in `src/MyDistributions`. It is a **near-proportional view of
+the attack rate**: `bigChance ≈ 1.12·xG` (corr 0.64 with xG, 0.47 with goals), so the next-session
+pillar should be `bigChance_side ~ RobustNegativeBinomial(r_bc, c·λ_side)` with a learned scale
+`c ≈ 1.1`, sharing the existing λ and home-advantage, NaN-masked for ~59% coverage.
 
 **Files:** `l01_bigchance_logic.jl` (functions), `r02_bigchance_runner.jl` (execution + captured
 output), this report.
@@ -49,7 +56,10 @@ session's pillar implementation.
 - **Coverage caveat:** not every played match has an `ALL`-period stats row; we report the fraction
   to flag selection effects (the future pillar must be masked like xG/market are, via a `NaN`-mask).
 
-`⟨RESULTS PENDING — coverage %, n_home / n_away / n_all⟩`
+**Coverage (Ireland):** 1001 played matches; 696 carry an `ALL`-period stats row (69.5%); of those,
+**587** have a non-missing `bigChanceCreated` per side ⇒ **n = 587 home, 587 away, 1174 pooled**
+(≈ 58.6% of played matches). Non-trivial missingness ⇒ the pillar must be NaN-masked exactly like
+the xG (Pillar A) and market (Pillar C) pillars.
 
 ## 3. Marginal moments
 
@@ -65,7 +75,17 @@ so its dispersion regime is an open question we measure directly. We also compar
 zero fraction** to the Poisson-implied `e^{-μ̂}`: a large positive excess is the signature of
 zero-inflation.
 
-`⟨RESULTS PENDING — mean / var / V/M / zero-mass / skew for home, away, all⟩`
+| Split | n | Mean | Var | V/M | zeros emp | zeros Poisson | excess | max | skew |
+|-------|---|------|-----|-----|-----------|---------------|--------|-----|------|
+| Home | 587 | 1.767 | 1.954 | **1.106** | 0.181 | 0.171 | +0.010 | 7 | 0.82 |
+| Away | 587 | 1.339 | 1.501 | **1.121** | 0.278 | 0.262 | +0.016 | 8 | 1.09 |
+| All  | 1174 | 1.553 | 1.772 | **1.141** | 0.229 | 0.212 | +0.017 | 8 | 0.96 |
+
+**Reading it:** mildly **over-dispersed** everywhere (V/M ≈ 1.11–1.14). Mean (1.55) sits above goals
+(≈1.24 combined) and below shots — a sensible "denser attacking signal." The zero-excess is
+**negligible** (+0.01 to +0.02): empirical zeros barely exceed the Poisson prediction, so there are
+**no structural zeros** → zero-inflated models are unlikely to be needed. Clear home tilt
+(1.77 vs 1.34), examined formally in §6.
 
 ## 4. Candidate distributions — the maths
 
@@ -126,17 +146,45 @@ Beyond AIC/BIC we check the **shape** of the fit on the winning family:
 
 ## 5. Model comparison results
 
-`⟨RESULTS PENDING — LL/k/AIC/BIC table for home, away, all; AIC- and BIC-winners⟩`
+**Validation guard (home goals, n=1001):** Poisson AIC 3030.45 ≈ NegBin 3030.72 ≈ COM 3031.56 —
+goals are near-equidispersed, reproducing `r01`'s qualitative verdict (absolute AICs differ from
+`r01`'s 2962 only because the dataset has grown to n=1001). The new ZIP/ZINB/COM fitters are
+therefore trustworthy.
 
-**Validation guard:** the runner first re-fits Poisson/NB on the *goals* vector; these must
-reproduce `r01`'s AICs (home goals ≈ 2962) before the ZIP/ZINB/COM fitters are trusted on
-bigChance.
+**bigChanceCreated — AIC/BIC (lower = better), sorted by AIC:**
 
-`⟨RESULTS PENDING — rootogram + χ² for the winning family⟩`
+| Model | k | **Pooled** LL | AIC | BIC | Home AIC | Away AIC |
+|-------|---|------|-----|-----|----------|----------|
+| **NegBin** | 2 | −1873.54 | **3751.08** | **3761.21** | **1958.04** | **1766.00** |
+| COM-Poisson | 2 | −1874.02 | 3752.04 | 3762.17 | 1958.31 | 1766.55 |
+| Weibull-count | 2 | −1874.24 | 3752.48 | 3762.62 | 1958.47 | 1766.72 |
+| ZINB | 3 | −1873.54 | 3753.08 | 3768.28 | 1960.04 | 1768.00 |
+| ZIP | 2 | −1876.82 | 3757.63 | 3767.77 | 1960.41 | 1768.20 |
+| Poisson | 1 | −1878.64 | 3759.29 | 3764.36 | 1959.02 | 1767.60 |
 
-**Provisional reasoning (to confirm with numbers):** if `V/M > 1` with no large zero-excess →
-expect **NB**; if there is a real zero-excess → **ZINB**; if `V/M < 1` → **COM-Poisson (ν>1)** or
-**Weibull-count (c>1)**.
+Fitted NB (home): `r = 16.69, μ = 1.767`.
+
+**Verdict — Negative Binomial.**
+- On **pooled** data NB wins **both** AIC and BIC (ΔAIC ≈ 8 over Poisson) — the over-dispersion is
+  real and worth a parameter.
+- **Per-side**, NB still wins AIC but the stricter BIC narrowly prefers Poisson → the over-dispersion
+  is **mild** (consistent with V/M ≈ 1.11 and the team-level analysis in §6).
+- **ZINB ties NB's log-likelihood with π → 0** ⇒ no structural zeros; zero-inflation is firmly
+  rejected (matches the negligible zero-excess in §3).
+- COM-Poisson and Weibull-count are competitive but never beat NB, and NB is already implemented
+  AD-safely (`RobustNegativeBinomial`) — the pragmatic and statistical choice.
+
+**Goodness of fit (NB, pooled, n=1174):** χ² = 5.25, df = 6, **p = 0.51** — no evidence against NB.
+Hanging rootogram residuals `√O − √E` are all small (|hang| < 0.8; mild under-fit only at count 3):
+
+```
+count  obs   exp     hang        count  obs  exp    hang
+  0    269  274.36  -0.162         5    27   23.83  +0.314
+  1    386  373.93  +0.310         6     6    7.84  -0.351
+  2    279  277.68  +0.040         7     2    2.35  -0.118
+  3    130  148.79  -0.796         8     1    0.65  +0.193
+  4     74   64.34  +0.581
+```
 
 ## 6. Link to the shared attack rate
 
@@ -153,21 +201,55 @@ To justify hanging bigChance off λ we test that it is a monotone, scaled view o
 - **Home/away asymmetry**: Mann-Whitney U on home vs away bigChance — if a home edge exists (as it
   does for goals), the pillar should inherit the model's `home_adv` term rather than a separate one.
 
-`⟨RESULTS PENDING — correlations, GLM/OLS coefficients, α & implied r, home/away test⟩`
+**Correlations (per-team-per-match, n=1174; xG subset n=514):**
+
+| Pair | Pearson | Spearman |
+|------|---------|----------|
+| bigChance ↔ goals | 0.474 | 0.469 |
+| bigChance ↔ **xG** | **0.644** | **0.656** |
+
+bigChance correlates more strongly with **xG** than with goals — expected, since both are
+chance-*quality* proxies whereas goals add finishing noise.
+
+**Predictive validity — Poisson GLM `goals ~ big_chance`:** slope **0.2665** (SE 0.0163, z = 16.4,
+p ≈ 3e-60). Each additional big chance multiplies expected goals by `exp(0.2665) = 1.31` (**+31%**) —
+big chances genuinely forecast goals.
+
+**Scaling vs xG — OLS `big_chance ~ xg`:** intercept 0.125 (p = 0.17, ≈ 0), slope **1.116**
+(SE 0.059, t = 19.0, p ≈ 2e-61). So `E[bigChance] ≈ 1.12 · xG` with essentially **zero intercept** —
+bigChance is a **near 1:1, near-proportional view of the attacking rate**. This is the key result
+licensing a shared-λ pillar with a single learned scale `c ≈ 1.1`.
+
+**Mean-variance scaling (per team, n ≥ 20; 12 teams):** mean team V/M = 1.082. Fitting
+`Var − Mean = α·Mean²` through the origin gives **α = 0.0595** ⇒ implied NB **r ≈ 16.8** — almost
+exactly the direct fit (r = 16.7). However α is **not individually significant** (t = 1.48,
+p = 0.17, CI [−0.029, 0.148]). Interpretation: much of the *pooled* over-dispersion is **cross-team
+heterogeneity** (teams differ in attacking rate) rather than within-team excess — and the model's
+team dynamics already absorb that. The residual within-team dispersion that the NB pillar must carry
+is therefore mild (large r).
+
+**Home advantage:** home mean 1.767 vs away 1.339; Mann-Whitney U **p = 7.5e-8** — a strong,
+significant home edge on chance creation, mirroring goals. The pillar should **inherit the model's
+existing `home_adv`** rather than introduce a separate term.
 
 ## 7. Recommendation for the next session
 
-`⟨RESULTS PENDING — fill after the run. Template:⟩`
-
-- **Marginal family:** `⟨winner⟩` (AIC `⟨..⟩` / BIC `⟨..⟩`), dispersion regime `V/M = ⟨..⟩`.
-- **Pillar link:** model `E[bigChance_side] = c · λ_side` with a learned scalar multiplier `c`
-  (analogous to the xG Gamma pillar's `mean = λ`), since bigChance correlates `⟨..⟩` with goals/xG.
-- **Likelihood:** `⟨e.g. RobustNegativeBinomial(r_bc, c·λ) — already AD-safe in src/MyDistributions⟩`.
+- **Marginal family:** **Negative Binomial** (pooled AIC 3751.1 / BIC 3761.2, both winners; χ² GoF
+  p = 0.51). Dispersion regime mild over-dispersion, V/M ≈ 1.11–1.14, fitted `r ≈ 16.7`. No
+  zero-inflation (ZINB → π=0); COM-Poisson/Weibull-count offer no improvement.
+- **Pillar link:** model `E[bigChance_side] = c · λ_side` with a single learned scalar `c ≈ 1.1`
+  (from `bigChance ≈ 1.12·xG`, ~zero intercept), analogous to the xG Gamma pillar's `mean = λ`.
+  bigChance correlates 0.64 with xG and 0.47 with goals, and its GLM slope on goals is highly
+  significant — a clean shared-λ signal, denser than goals (≈1.55 vs 1.24 events/match).
+- **Likelihood (proposed):** `bigChance_side ~ RobustNegativeBinomial(r_bc, c·λ_side)` — already
+  AD-safe in `src/MyDistributions`. Suggested priors: `c ~ truncated(Normal(1.1, 0.3), lower=0)`,
+  `r_bc ~ truncated(Normal(15, 8), lower=1)` (mild dispersion). Inherit the existing `home_adv`
+  (strong HA, p=7.5e-8) — do **not** add a separate home term.
 - **Caveats:**
-  - If **ZINB/ZIP/COM** wins, we need a *new* AD-safe `MyDistributions` type with a vectorised
-    `logpdf` honouring `docs/turing_ad_performance_guide.md` (no branches in `@model`; the zero/
-    non-zero split must be a precomputed Float64 mask, like the existing xG/market masks).
-  - bigChance coverage `< 100%` ⇒ the pillar needs a `NaN`-mask + `@addlogprob!` exactly like
+  - NB won, so **no new distribution is required** — reuse `RobustNegativeBinomial` (AD-safe, with
+    `mean = μ`, `var = μ + μ²/r`). Apply it via vectorised `logpdf.` + `@addlogprob!`, no branches
+    in the `@model`, per `docs/turing_ad_performance_guide.md`.
+  - bigChance coverage ≈ 58.6% ⇒ the pillar needs a `NaN`-mask + `@addlogprob!` exactly like
     Pillar A (xG) and Pillar C (market) so absent matches contribute nothing.
   - Add a `BigChanceCreatedFeature`-style entry to `required_features` (the extractor already exists:
     `src/features/extractors/stats_extractors.jl:30`, keys `:flat_home_big_chances` /
