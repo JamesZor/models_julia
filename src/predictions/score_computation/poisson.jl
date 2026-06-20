@@ -1,12 +1,13 @@
 # src/predictions/score_computation/poisson.jl
 
 using Distributions
-using ..Models.PreGame: DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel
+using ..Models.PreGame: DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDoublePoissonBigChanceOutfieldPlayerTimeDecayModel
 
 const AbstractDoublePoissonPlayerModels = Union{
-    AbstractPoissonModel, 
-    DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel, 
-    DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel
+    AbstractPoissonModel,
+    DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel,
+    DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel,
+    DynamicDoublePoissonBigChanceOutfieldPlayerTimeDecayModel
 }
 
 # 1. Adapter: DataFrame Row -> NamedTuple
