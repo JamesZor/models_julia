@@ -231,6 +231,62 @@ function fit_negbin_entry(data)
             params = (r = d.r, μ = d.μ), pmf = j -> exp(logpdf(d, j)), converged = true)
 end
 
+# ---- NB1 vs NB2 (Cameron & Trivedi, §3.3) -------------------------------
+#
+# The project's RobustNegativeBinomial(r, μ) is the NB2 parameterisation:
+#     Var = μ + μ²/r       (= μ + α·μ² with α = 1/r) → V/M = 1 + μ/r grows with μ.
+# NB1 instead has
+#     Var = μ + α·μ = (1+α)·μ = φ·μ → V/M = φ constant in μ (the GLM/quasi-Poisson law).
+# NB1 needs NO new distribution: it is NB2 with the dispersion made mean-proportional,
+#     r = μ/α   ⇒   RobustNegativeBinomial(μ/α, μ).
+
+"NB2 (standard): Var = μ + μ²/r. (Same as fit_negbin_entry, relabelled for the NB1/NB2 table.)"
+function fit_nb2_entry(data)
+    e = fit_negbin_entry(data)
+    α = 1 / e.params.r
+    return (name = "NB2", k = 2, loglik = e.loglik, aic = e.aic, bic = e.bic,
+            params = (μ = e.params.μ, r = e.params.r, α = α), pmf = e.pmf, converged = true)
+end
+
+"NB1 (linear dispersion): Var = (1+α)·μ. Fit as RobustNegativeBinomial(μ/α, μ)."
+function fit_nb1_entry(data)
+    n = length(data); m = mean(data); v = var(data)
+    α0 = max(v / m - 1, 0.05)                       # φ = 1 + α = V/M
+    function nll(p)
+        μ = exp(p[1]); α = exp(p[2])
+        d = MyDistributions.RobustNegativeBinomial(μ / α, μ)
+        return -sum(logpdf(d, x) for x in data)
+    end
+    res = optimize(nll, [log(max(m, 1e-4)), log(α0)], NelderMead(), Optim.Options(iterations = 3000))
+    μ = exp(res.minimizer[1]); α = exp(res.minimizer[2])
+    ll = -res.minimum
+    d = MyDistributions.RobustNegativeBinomial(μ / α, μ)
+    return (name = "NB1", k = 2, loglik = ll, aic = _aic(2, ll), bic = _bic(2, ll, n),
+            params = (μ = μ, α = α, φ = 1 + α), pmf = j -> exp(logpdf(d, j)),
+            converged = Optim.converged(res))
+end
+
+"""
+    compare_nb1_nb2(data, label)
+
+Fit NB1 and NB2 side by side (LL/AIC/BIC). They share a parameter count, so a
+direct AIC/BIC gap is the cleanest verdict on which *variance function* the data
+prefer: NB2 (V/M grows with μ) vs NB1 (constant V/M = φ). Returns both entries.
+"""
+function compare_nb1_nb2(data::AbstractVector{<:Integer}, label::String)
+    nb1 = fit_nb1_entry(data); nb2 = fit_nb2_entry(data)
+    println("\n" * "═"^60)
+    println(" NB1 vs NB2: $(uppercase(label))  (n=$(length(data)))")
+    println("═"^60)
+    @printf("NB2  Var=μ+μ²/r : r=%.3f (α=%.4f) μ=%.4f | LL %.2f AIC %.2f BIC %.2f\n",
+            nb2.params.r, nb2.params.α, nb2.params.μ, nb2.loglik, nb2.aic, nb2.bic)
+    @printf("NB1  Var=(1+α)μ : α=%.4f (φ=%.4f) μ=%.4f | LL %.2f AIC %.2f BIC %.2f\n",
+            nb1.params.α, nb1.params.φ, nb1.params.μ, nb1.loglik, nb1.aic, nb1.bic)
+    winner = nb1.aic < nb2.aic ? "NB1" : "NB2"
+    @printf("→ ΔAIC(NB1−NB2) = %+.3f  ⇒ preferred variance function: %s\n", nb1.aic - nb2.aic, winner)
+    return (nb1 = nb1, nb2 = nb2)
+end
+
 function fit_weibull_entry(data)
     n = length(data)
     d = fit_mle(MyDistributions.WeibullCount, data)
@@ -475,6 +531,45 @@ function mean_variance_scaling(long_df::DataFrame; min_matches::Int = 20)
         @printf("→ α = %.4f  ⇒ implied NB dispersion r ≈ 1/α = %.3f (over-dispersion present)\n", α, 1 / α)
     else
         @printf("→ α = %.4f ≤ 0  ⇒ no NB-style over-dispersion at team level\n", α)
+    end
+    return g
+end
+
+"""
+    dispersion_vs_mean(long_df; min_matches=20)
+
+The decisive NB1-vs-NB2 diagnostic. Per team, regress the index of dispersion
+V/M on the team mean:
+
+    NB2:  V/M = 1 + μ/r   → positive slope (≈ 1/r)
+    NB1:  V/M = φ         → zero slope (flat)
+
+A flat / non-significant slope favours the NB1 (constant-dispersion) variance
+function; a clear positive slope favours NB2.
+"""
+function dispersion_vs_mean(long_df::DataFrame; min_matches::Int = 20)
+    g = combine(groupby(long_df, :team),
+                :big_chance => mean => :mean_bc,
+                :big_chance => var  => :var_bc,
+                nrow => :n)
+    filter!(r -> r.n >= min_matches, g)
+    g.vm = g.var_bc ./ g.mean_bc
+
+    println("\n" * "═"^60)
+    println(" NB1 vs NB2 DIAGNOSTIC: V/M vs team mean  (n≥$min_matches)")
+    println("═"^60)
+    fit = lm(@formula(vm ~ mean_bc), g)
+    println(coeftable(fit))
+    slope = coef(fit)[2]
+    pslope = coeftable(fit).cols[4][2]
+    @printf("\nSlope of V/M on mean: %+.4f (p=%.4f) | intercept (≈φ if NB1): %.4f\n",
+            slope, pslope, coef(fit)[1])
+    if pslope > 0.05
+        println("→ Slope not significant ⇒ constant dispersion ⇒ NB1 variance law favoured.")
+    elseif slope > 0
+        println("→ Positive significant slope ⇒ dispersion grows with mean ⇒ NB2 favoured.")
+    else
+        println("→ Negative significant slope ⇒ neither NB1 nor NB2 cleanly (check under-dispersion).")
     end
     return g
 end

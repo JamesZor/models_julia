@@ -170,4 +170,18 @@ HOME vs AWAY: home mean 1.7666 vs away 1.3390 | MWU p=7.47e-8
       existing home_adv term (no separate HA needed).
 =#
 
+# ============================================================================
+# 8. NB1 vs NB2 (Cameron & Trivedi §3.3) — which variance function?
+#    NB2 (our RobustNegativeBinomial): Var = μ + μ²/r, V/M grows with μ.
+#    NB1: Var = (1+α)μ, V/M = φ constant. NB1 = NB2 with r = μ/α.
+# ============================================================================
+compare_nb1_nb2(home_bc, "Home bigChanceCreated")
+compare_nb1_nb2(away_bc, "Away bigChanceCreated")
+compare_nb1_nb2(all_bc,  "All bigChanceCreated")
+dispersion_vs_mean(long_df; min_matches = 20)
+
+#=
+PASTE NB1 vs NB2 OUTPUT HERE
+=#
+
 println("\n[INFO] bigChanceCreated EDA complete.")
