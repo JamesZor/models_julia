@@ -142,6 +142,8 @@ end
 
     ll_market_h = logpdf.(Normal.(market_rate_h, σ_market), market_log_λ_h)
     ll_market_a = logpdf.(Normal.(market_rate_a, σ_market), market_log_λ_a)
+    # FIXME: market_rate = log_λ + log(kap) = log(λ_goals), consistent with λ_h = kap·exp(log_λ_h). Correct. But ll_market_ρ reuses σ_market (the rate scale) for ρ (a ±0.3 quantity, line 145) 
+     # — dimensionally mismatched; a separate σ_market_ρ would be cleaner. Not a bug, a smell. 
     ll_market_ρ = logpdf.(Normal.(ρ, σ_market), market_ρ)
 
     Turing.@addlogprob! sum((ll_market_h .+ ll_market_a .+ ll_market_ρ) .* match_weights .* market_mask) * config.market_weight

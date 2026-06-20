@@ -43,7 +43,7 @@ tracker_bayes = Features.BayesianTracker(6.5, 1.0, 0.5, 0.01)
 feature_cfg_bayes = Features.PlayerRatingsFeature(tracker_bayes)
 
 # Fast experiment parameters matching the Double Poisson / Outfield tests
-samples = 800
+samples = 1000
 warmup  = 300
 chains  = 4
 target_seasons = ["2025", "2026"]
@@ -53,7 +53,7 @@ dynamics_col = :match_biweek
 # ==========================================
 # 3. GRID SEARCH SETUP
 # ==========================================
-half_lives = [14.0, 30.0, 45.0, 60.0]
+half_lives = [14.0, 30.0, 45.0, 60.0, 120.0]
 tasks = []
 all_results = []
 
@@ -151,3 +151,15 @@ for m_name in model_names
     sub = subset(tearsheet, :selection => ByRow(isequal(m_name)))
     show(sub[!, cols_to_show]; truncate=0)
 end
+
+
+
+
+chains_df_all = Experiments.Diagnostics.extract_chains(ds, all_results[1])
+
+println("\n--- Convergence Diagnostics (R-hat & ESS) ---")
+conv_diag_all = Experiments.Diagnostics.check_convergence(chains_df_all)
+
+println("\n--- Temporal Stability Diagnostics (ADF Stationarity) ---")
+stab_diag_all = Experiments.Diagnostics.check_stability(chains_df_all)
+

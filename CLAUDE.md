@@ -42,7 +42,7 @@ Each model must implement `Features.required_features(model)` returning a `Vecto
 GLM-based bias correction. Pipeline: `build_l2_training_df` → `train_calibrators` → `apply_calibrators`. Crucially shifts the **entire MCMC posterior distribution**, not just scalar probabilities, preserving uncertainty for Kelly staking.
 
 ### Layer 3: Meta Model (`current_development/MetaModels/`)
-In active development. Blends L1 predictions with market implied probabilities via a dynamic Gaussian Random Walk mixture: `Q_i = θ_t * p_L1_i + (1-θ_t) * m_i`. Two engine types: `ConvexMixtureMetaModel` and `AffineCalibrationMetaModel`. See `meta_model_design.md`.
+In active development. Blends L1 predictions with market implied probabilities via a dynamic Gaussian Random Walk mixture: `Q_i = θ_t * p_L1_i + (1-θ_t) * m_i`. Two engine types: `ConvexMixtureMetaModel` and `AffineCalibrationMetaModel`. See `docs/meta_model_design.md`.
 
 ### Other modules
 - **`Features`** (`src/features/`): Transforms `DataStore` into `FeatureSet`s. Uses `SplitBoundary` (Match ID pointers, not data copies) for memory-efficient temporal folds. Extractors live in `src/features/extractors/`.
@@ -63,6 +63,16 @@ New features are prototyped here **before** being moved to `src/`. Always create
 - **`XX`**: Two-digit iteration counter; increment when starting a fresh approach.
 
 Only graduate code to `src/` once the prototype is validated in the runner.
+
+Active research streams currently living under `current_development/` (kept after
+the validated work graduated to `src/`):
+- `MetaModels/` — Layer 3 meta-model (see Layer 3 above).
+- `match_day_inference/` — operational match-day fixture inference + runners.
+- `match_inplay_explore/` — in-play intensity / NHPP / market-inverse research.
+- `basic_hedging/` — portfolio-Kelly + partial-hedge staking research.
+- `ab_test_dixon_coles/`, `ab_test_fullposition/` — L1 engine A/B harnesses.
+- `betfair_closing_line/`, `order_book/`, `bayesian_layer_2/` — CLV, order-book,
+  and Bayesian-calibration/staking explorations.
 
 ## Key Patterns and Conventions
 

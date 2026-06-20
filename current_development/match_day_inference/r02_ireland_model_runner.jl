@@ -19,48 +19,52 @@ ds = BayesianFootball.Data.load_datastore_cached(BayesianFootball.Data.Ireland()
 
 save_dir = "./data/match_daya/"
 
-inter_cfg = PreGame.GlobalInterception()
+
+inter_cfg = PreGame.HierarchicalMonthlyInterception()
 disp_cfg  = PreGame.HomeAwayDispersion()
 ha_cfg    = PreGame.HierarchicalTeamHomeAdvantage()
 kap_cfg   = PreGame.HierarchicalTeamKappa()
 
-# Bayesian Tracker for player ratings
+dyn_cfg = PreGame.OutfieldPlayerDynamicsConfig(days_half_life=45.0)
+
 tracker_bayes = Features.BayesianTracker(6.5, 1.0, 0.5, 0.01)
 feature_cfg_bayes = Features.PlayerRatingsFeature(tracker_bayes)
 
-# 3. Model Instances
-
-# Outfield Time-Decay xG Model (No Market)
-model_outfield_xg = PreGame.DynamicXGOutfieldPlayerTimeDecayModel(
-    interception_config  = inter_cfg,
-    player_dynamics_config = PreGame.OutfieldPlayerDynamicsConfig(days_half_life=30.0),
-    dispersion_config    = disp_cfg,
-    homeadvantage_config = ha_cfg,
-    kappa_config         = kap_cfg,
-    player_ratings_feature = feature_cfg_bayes
+model = PreGame.DynamicDixonColesXGOutfieldPlayerTimeDecayModel(
+    interception_config    = inter_cfg,
+    player_dynamics_config = dyn_cfg,
+    dispersion_config      = disp_cfg,
+    homeadvantage_config   = ha_cfg,
+    kappa_config           = kap_cfg,
+    dixon_coles_config     = PreGame.HierarchicalTeamDixonColesConfig(),
+    player_ratings_feature = feature_cfg_bayes,
+    market_feature_config  = Features.DixonColesMarketFeature(),
+    market_weight          = 0.4
 )
 
 
 task = Experiments.create_experiment_task(
     ds, 
-    model_outfield_xg, 
-    "xg_goals_model", 
+    model, 
+    "dixon_coles_12_06_26", 
     save_dir; 
-    target_seasons = ["2026"],
-    dynamics_col = :match_week,
-    samples=1000,    # Reduced for quick testing
-    warmup=300,     # Reduced for quick testing
-    chains=4,       # Standard 4 chains
-    use_queue=true,  # <--- This triggers the new blazing fast MCMC queue (it defaults to true anyway!)
-    max_concurrent_tasks = 16
+    target_seasons=["2026"],
+    history_seasons = 2,
+    warmup_period =  20,
+    dynamics_col=:match_week,
+    samples=2000,      # Small samples for fast runner testing
+    warmup=1000,        # Small warmup for fast runner testing
+    chains=8,         # 2 chains for fast runner testing
+    use_queue=true
 )
+
 #
 results = Experiments.run_experiment(task)
-Experiments.save_experiment(results)
+# Experiments.save_experiment(results)
+# #
+# #
+# Experiments.save_experiment(results)
 #
-#
-Experiments.save_experiment(results)
-
 
 # ==========================================
 # DIAGNOSTICS
@@ -114,6 +118,8 @@ json_lineups_dir = "./current_development/match_day_inference/data/lineups"
 # ==========================================
 println("\n=== 4. Running Match Day Inference ===")
 ppd = compute_todays_matches_pdds(ds, expr, todays_matches, json_lineups_dir)
+
+ppd = Predictions.model_inference(ds, expr)
 
 println("\nRaw Model 1X2 Probabilities:")
 show(subset(ppd.df, :market_name => ByRow(==("1X2"))))

@@ -3,6 +3,7 @@
 /dev_exp
 
 /.agents
+.claude/*.lock
 
 Manifest.toml
 Project.toml
