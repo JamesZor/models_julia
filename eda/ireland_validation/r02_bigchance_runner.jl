@@ -181,7 +181,25 @@ compare_nb1_nb2(all_bc,  "All bigChanceCreated")
 dispersion_vs_mean(long_df; min_matches = 20)
 
 #=
-PASTE NB1 vs NB2 OUTPUT HERE
+ NB1 vs NB2: HOME (n=587)
+  NB2  r=16.693 (α=0.0599) μ=1.7666 | LL -977.02 AIC 1958.04 BIC 1966.79
+  NB1  α=0.1058 (φ=1.1058) μ=1.7666 | LL -977.02 AIC 1958.04 BIC 1966.79   ΔAIC=+0.000
+ NB1 vs NB2: AWAY (n=587)
+  NB2  r=11.712 (α=0.0854) μ=1.3390 | LL -881.00 AIC 1766.00 BIC 1774.75
+  NB1  α=0.1143 (φ=1.1143) μ=1.3390 | LL -881.00 AIC 1766.00 BIC 1774.75   ΔAIC=-0.000
+ NB1 vs NB2: ALL (n=1174)
+  NB2  r=11.146 (α=0.0897) μ=1.5528 | LL -1873.54 AIC 3751.08 BIC 3761.21
+  NB1  α=0.1393 (φ=1.1393) μ=1.5528 | LL -1873.54 AIC 3751.08 BIC 3761.21   ΔAIC=+0.000
+
+KEY: NB1 ≡ NB2 marginally (identical fit). On a SINGLE mean the two are the same
+2-param family — they only diverge once μ varies across observations (i.e. inside
+the Turing model where λ_i differs per match). Marginal EDA cannot separate them.
+
+ V/M vs team mean diagnostic (12 teams, n≥20):
+  V/M = 0.778(p=0.041) + 0.205·mean(p=0.368),  CI_slope [-0.28, 0.69]
+  → slope positive but NOT significant. NB2 predicts slope≈1/r≈0.06–0.09; NB1 predicts 0.
+    Underpowered (narrow μ range 1.3–1.8, 12 teams) — cannot distinguish NB1 vs NB2.
+    Decide INSIDE the joint model (fixed r=NB2 vs r=μ/α=NB1) via WAIC/predictive.
 =#
 
 println("\n[INFO] bigChanceCreated EDA complete.")

@@ -7,8 +7,10 @@
 zero-inflated. **Negative Binomial** is the best marginal family (wins AIC *and* BIC on pooled data;
 χ² GoF p=0.51) and is already AD-safe in `src/MyDistributions`. It is a **near-proportional view of
 the attack rate**: `bigChance ≈ 1.12·xG` (corr 0.64 with xG, 0.47 with goals), so the next-session
-pillar should be `bigChance_side ~ RobustNegativeBinomial(r_bc, c·λ_side)` with a learned scale
-`c ≈ 1.1`, sharing the existing λ and home-advantage, NaN-masked for ~59% coverage.
+pillar should be `bigChance_side ~ RobustNegativeBinomial(r_eff, c·λ_side)` with a learned scale
+`c ≈ 1.1`, sharing the existing λ and home-advantage, NaN-masked for ~59% coverage. The **NB1-vs-NB2
+variance function** (fixed `r` vs `r = μ/α`) is statistically indistinguishable marginally (§5b) and
+should be A/B'd inside the joint model.
 
 **Files:** `l01_bigchance_logic.jl` (functions), `r02_bigchance_runner.jl` (execution + captured
 output), this report.
@@ -186,6 +188,43 @@ count  obs   exp     hang        count  obs  exp    hang
   4     74   64.34  +0.581
 ```
 
+## 5b. NB1 vs NB2 — which variance function? (Cameron & Trivedi §3.3)
+
+There are two standard negative-binomial parameterisations, differing in how the
+variance scales with the mean:
+
+| | Variance | Index of dispersion `V/M` | In our code |
+|---|---|---|---|
+| **NB2** (standard) | `μ + μ²/r = μ + α·μ²` | `1 + μ/r` — **grows with μ** | `RobustNegativeBinomial(r, μ)` (fixed `r`) |
+| **NB1** (GLM/quasi-Poisson) | `μ + α·μ = (1+α)·μ = φ·μ` | `φ` — **constant in μ** | `RobustNegativeBinomial(μ/α, μ)` |
+
+NB1 needs **no new distribution** — it is NB2 with the dispersion made
+mean-proportional (`r = μ/α`). The distinction matters for the pillar because the
+model's predicted `λ` spans ~0.6 (weak away) to ~3 (strong home): NB2 makes high-λ
+matches much noisier, NB1 keeps `V/M` flat.
+
+**Result — they are indistinguishable in this marginal EDA:**
+
+| Split | NB2 (r, α) | NB1 (α, φ) | LL | ΔAIC(NB1−NB2) |
+|-------|-----------|-----------|----|---------------|
+| Home | r=16.69, α=0.060 | α=0.106, φ=1.106 | −977.02 | 0.000 |
+| Away | r=11.71, α=0.085 | α=0.114, φ=1.114 | −881.00 | 0.000 |
+| All  | r=11.15, α=0.090 | α=0.139, φ=1.139 | −1873.54 | 0.000 |
+
+The fits are **identical**. This is structural, not luck: on a sample with a single
+mean, NB1 and NB2 are *the same two-parameter family* (just a relabelling of the
+dispersion). The two variance functions only diverge once **μ varies across
+observations** — i.e. in the regression / model setting, never in a marginal fit.
+
+The discriminating test is the cross-team `V/M ~ mean` slope (NB2 ⇒ slope ≈ 1/r ≈
+0.06–0.09; NB1 ⇒ slope 0). It is **underpowered**: slope **+0.205, p = 0.37**
+(CI [−0.28, 0.69]; 12 teams, narrow μ range 1.3–1.8) — cannot separate them.
+
+**Implication:** the NB1/NB2 choice is a **modelling decision deferred to the joint
+model**, where `λ_i` varies widely enough to matter, and should be settled there by
+in-model WAIC / predictive comparison — not by the marginal EDA. Both are one-line
+variants of the same `RobustNegativeBinomial`.
+
 ## 6. Link to the shared attack rate
 
 To justify hanging bigChance off λ we test that it is a monotone, scaled view of attacking output:
@@ -241,10 +280,15 @@ existing `home_adv`** rather than introduce a separate term.
   (from `bigChance ≈ 1.12·xG`, ~zero intercept), analogous to the xG Gamma pillar's `mean = λ`.
   bigChance correlates 0.64 with xG and 0.47 with goals, and its GLM slope on goals is highly
   significant — a clean shared-λ signal, denser than goals (≈1.55 vs 1.24 events/match).
-- **Likelihood (proposed):** `bigChance_side ~ RobustNegativeBinomial(r_bc, c·λ_side)` — already
-  AD-safe in `src/MyDistributions`. Suggested priors: `c ~ truncated(Normal(1.1, 0.3), lower=0)`,
-  `r_bc ~ truncated(Normal(15, 8), lower=1)` (mild dispersion). Inherit the existing `home_adv`
-  (strong HA, p=7.5e-8) — do **not** add a separate home term.
+- **Likelihood (proposed):** `bigChance_side ~ RobustNegativeBinomial(r_eff, c·λ_side)` — already
+  AD-safe in `src/MyDistributions`. Inherit the existing `home_adv` (strong HA, p=7.5e-8) — do
+  **not** add a separate home term.
+- **NB1 vs NB2 (variance function) — test in-model:** the marginal EDA cannot separate them (§5b);
+  decide inside the joint model by WAIC/predictive. Both are one-liners on the same distribution:
+  - **NB2** (fixed dispersion): `r_eff = r_bc`, prior `r_bc ~ truncated(Normal(12, 8), lower=1)`.
+  - **NB1** (constant V/M): `r_eff = (c·λ_side)/α_bc`, prior `α_bc ~ truncated(Normal(0.12, 0.1), lower=0)`.
+  Suggested scale prior `c ~ truncated(Normal(1.1, 0.3), lower=0)`. Start with NB2 (natural fixed-r
+  Turing form); A/B against NB1, which is arguably more physical (no variance blow-up for strong teams).
 - **Caveats:**
   - NB won, so **no new distribution is required** — reuse `RobustNegativeBinomial` (AD-safe, with
     `mean = μ`, `var = μ + μ²/r`). Apply it via vectorised `logpdf.` + `@addlogprob!`, no branches
