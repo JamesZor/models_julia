@@ -225,6 +225,21 @@ model**, where `λ_i` varies widely enough to matter, and should be settled ther
 in-model WAIC / predictive comparison — not by the marginal EDA. Both are one-line
 variants of the same `RobustNegativeBinomial`.
 
+**AD-safety note (for the in-model NB1).** `RobustNegativeBinomial.logpdf`
+(`src/MyDistributions/negative_binomial.jl:44`) is **clamp-free** — pure
+`loggamma`/`log` arithmetic, fully ReverseDiff-differentiable. The constructor's
+`max(r,1e-6)`/`max(μ,1e-6)` and the `clamp` in `cdf`/`rand` are **off the gradient
+path** (cdf/rand unused in the likelihood; the EDA MLE was gradient-free). They did
+**not** affect the NB1/NB2 fits — both converged to the *same* `(r≈11.15, μ≈1.55)`,
+hence the identical LL. The genuine in-model subtlety is that NB1 makes `r_i = c·λ_i/α`
+**vary per match**, so (i) `loggamma(k_i+r_i)`/`loggamma(r_i)` are evaluated &
+`digamma`-differentiated for every match — new `loggamma` on this engine's tape
+(goals pillar is Poisson), so re-benchmark vs the 0.64 ms/grad target in
+`docs/turing_ad_performance_guide.md`; (ii) `λ_i` must stay positive *before* forming
+`r` — the existing `clamp.(log_λ,-20,20)` → `exp + 1e-6` already guarantees this, so
+don't reorder it; (iii) keep `r_bc`/`α_bc` priors `truncated(…, lower>0)` so the
+`max(r,1e-6)` branch never locks the wrong side of its kink into a compiled tape.
+
 ## 6. Link to the shared attack rate
 
 To justify hanging bigChance off λ we test that it is a monotone, scaled view of attacking output:
