@@ -184,4 +184,25 @@ HOME by market favouritism (actual Kelly stakes/pnl):
     competitive games, NOT goal-total markets.
 =#
 
+#= RESULT — RQR (randomized quantile residuals; target N(0,1): mean0 std1 skew0 kurt0 shapiro_p>0.05)
+  model                mean    std    skew    kurtosis  shapiro_p
+  NegBin_HomeAway     -0.036  0.950  -0.151   0.211     0.477   ✓ PASSES normality
+  NegBin_Hierarchical -0.031  0.956  -0.177   0.302     0.212   ✓ PASSES
+  DoublePoisson       -0.029  1.028  -0.284   0.896     0.003   ✗ fails
+  DixonColes          -0.040  1.043  -0.533   1.413     2.5e-6  ✗ fails (heavy left tail)
+
+→ The NB goals distribution is actually WELL-CALIBRATED (Shapiro p>0.05). The POISSON-based
+  engines FAIL: std>1 (over-confident / intervals too narrow) and positive kurtosis + negative
+  skew (heavy tails they can't fit) — exactly the over-dispersion the 718 EDA flagged (V/M 1.14).
+  NB fixes it: kurtosis 1.41→0.21, std 1.04→0.95 (a touch over-wide now). So on CALIBRATION the
+  models (esp NB) are NOT bad at goals.
+
+  The models are "bad at goals" only as a BETTING signal on totals: per-match goal totals are
+  dominated by irreducible Poisson/NB noise, and the market already prices the predictable part
+  (team strength → λ ≈ market λ). So there's ~no residual edge on O/U → betting it is adverse
+  selection (see over2.5 diagnostic above + memory totals-compression-is-denoising). Calibrated
+  ≠ informative: the model gets the goal *distribution* right but has no extra *per-match* signal
+  on totals beyond the market.
+=#
+
 println("\nDone! Double-NB A/B vs DoublePoisson/DixonColes complete.")
