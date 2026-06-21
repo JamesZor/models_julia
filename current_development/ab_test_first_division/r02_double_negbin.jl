@@ -162,4 +162,26 @@ First Division on ROI, matching DC on LogLoss/edge. Use HomeAwayDispersion (hier
 worth it). NB also samples FASTER/healthier than DC (55m vs 1h48m; ε up to 0.025 vs DC's tiny steps).
 =#
 
+#= DIAGNOSTIC — why Over 2.5 loses, and where the HOME edge lives (NB-HomeAway)
+
+OVER 2.5 (adverse selection, not edge):
+  all 147 o2.5 matches : model_p 0.507 | market_p 0.501 | realized 0.483  (market better calibrated)
+  84 matches model BACKS (model_p>market): model_p 0.512 | market_p 0.469 | realized 0.44 | odds 2.14
+  → On the subset where the model disagrees and bets the over, realized (0.44) is BELOW even the
+    market's price (0.469) and far below the model (0.512). The model over-predicts goals exactly
+    where it takes a position → break-even ≈0.467 at odds 2.14, realized 0.44 → loses. The positive
+    GLM coef (4.26) was p=0.46 = noise. Consistent with totals-compression-is-denoising: the model
+    has ~no real edge on goal totals; betting against the market on O/U is adverse selection.
+
+HOME by market favouritism (actual Kelly stakes/pnl):
+  bucket   bets  avg_odds  mkt_p   ROI%   growth_factor  win%
+  fav     6     1.81      0.557   79.2   1.20×          100   (tiny n)
+  even    36    2.47      0.408   67.6   4.61×          50    ← the bulk of the home edge
+  dog     54    4.42      0.250   31.4   1.15×          35    (positive but high-variance)
+  → The home profit is concentrated in EVEN / pick'em matchups (odds ~2.5): 50% win vs ~40.5%
+    break-even = a real margin, growth 4.6×. Home underdogs are net-positive but volatile; heavy
+    favourites are too few/short-priced to matter. The model's value is team-strength + home-adv in
+    competitive games, NOT goal-total markets.
+=#
+
 println("\nDone! Double-NB A/B vs DoublePoisson/DixonColes complete.")
