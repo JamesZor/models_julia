@@ -61,8 +61,11 @@ inference-time conditioning *on top of* that. `k < 0` ⇒ fade the line further;
   line. `process_signals` inner-joins on `[match_id, market_name, selection]`, so feeding
   Betfair odds automatically restricts bets to home/draw/away (+ DC). (cf. memory
   *betfair-vs-bet365-market-anchor*: anchor to the bookmaker line, execute/evaluate on Betfair.)
-- **SECONDARY / flagged = SofaScore O/U + BTTS** — same source we conditioned on ⇒
-  partly circular. Reported but **not** the verdict.
+- **TOTALS evaluation = Betfair O/U + BTTS** via `ds1` (§3.4). After the betdb gained these
+  Betfair markets for Ireland mid-study, O/U+BTTS are now priced on the exchange — a
+  *different* source from the SofaScore line we condition on, so this is **also held-out**,
+  not circular. (Before the DB update, O/U+BTTS were SofaScore-only ⇒ would have been
+  circular; that constraint no longer applies — [[betdb-data-coverage]].)
 
 ---
 
@@ -115,25 +118,79 @@ as k→1, so 1X2 LogLoss decreases monotonically toward the market line. As flag
 *not* success — it is the model agreeing with a better-calibrated line, which is exactly
 why the Kelly edge and bet count vanish.
 
+### 3.4 TOTALS + BTTS on a held-out Betfair line — the real edge
+
+The betdb was updated mid-study to price **Betfair O/U + BTTS + CorrectScore** for Ireland
+(previously 1X2+DC only). This removes the circularity worry: we condition on the
+**SofaScore** line and evaluate O/U+BTTS on **Betfair** odds — a genuinely different,
+held-out line (anchor-SofaScore / execute-Betfair, per [[betfair-vs-bet365-market-anchor]]).
+Re-ran the full sweep against the updated `ds1`. Basket = over/under {1.5,2.5,3.5} + BTTS
+yes/no. Full sweep in `r10_market_conjugate_totals_results.csv`. (`Gemp` = realized
+empirical growth — the trustworthy number; `G` = parametric hurdle fit, optimistic about
+fade-bet tails.)
+
+| model | metric | k=−0.25 | k=−0.1 | k=0 | k=0.2 | k=0.4 | k=0.7 | k=1.0 |
+|---|---|---|---|---|---|---|---|---|
+| **DixonColes_Market** | Gemp | 0.055 | **0.058** | 0.047 | 0.046 | 0.051 | −0.016 | −0.057 |
+|  | G | 0.131 | 0.108 | 0.084 | 0.074 | 0.064 | −0.021 | −0.139 |
+|  | profit/bets | 10.8/645 | 8.3/616 | 7.0/596 | 5.5/537 | 4.6/461 | 3.5/207 | 4.3/53 |
+| DCMH_HalfLife_14 | Gemp | 0.003 | 0.016 | 0.025 | 0.033 | 0.030 | 0.049 | −0.081 |
+| DCMH_HalfLife_30 | Gemp | 0.025 | 0.033 | 0.036 | **0.042** | 0.036 | 0.038 | 0.007 |
+| DCMH_HalfLife_60 | Gemp | 0.017 | 0.033 | 0.035 | **0.051** | 0.048 | −0.035 | −0.108 |
+| DCMH_HalfLife_120 | Gemp | −0.101 | −0.017 | −0.002 | −0.008 | −0.073 | −0.221 | −0.282 |
+
+**Unlike 1X2 (G negative everywhere), the totals/BTTS basket is solidly positive growth
+(~+0.04 to +0.06 realized) on 500–700 bets** — the model's edge lives here. Direction is
+model-dependent:
+- **DixonColes_Market** (standard r02 model) is **flat-to-contrarian**: realized growth is a
+  broad plateau over k≈−0.25…+0.4 (Gemp ~0.05), peaking *mildly contrarian* at **k≈−0.1**
+  (Gemp 0.058). Parametric G is strongly contrarian (0.17 @ −0.5) but that's optimistic —
+  realized growth collapses at k=−0.5 (Gemp −0.034). Honest read: **fading the line mildly
+  helps and never hurts up to ~k=0.4.**
+- **DCMH time-decay models** peak *slightly toward* the market (**k≈+0.2**), not contrarian.
+  HL120 is fragile (≈breakeven, blows up if faded: Gemp −0.40 @ k=−0.5).
+
+**Where the edge is** (DixonColes_Market, per selection @ k=0): the edge concentrates in
+**btts_yes** (122 bets, ROI 29%), **btts_no** (ROI 52%), and **under_15** (ROI 64%); it is
+~0 on `over_25` and **negative on `over_15`/`over_35`**. Fading (k<0) amplifies the winning
+BTTS/under bets *and* the losing overs — so a curated book (BTTS + unders, skip high overs)
+would beat the basket aggregate. The model systematically reads games as lower/less-dispersed
+than the line — the "fade market over-dispersion" thesis of [[totals-compression-is-denoising]].
+
 ---
 
 ## 4. Verdict
 
-- **Worth it on a held-out line? Marginally, and not as an edge.** Inference-time market
-  conditioning improves *risk-adjusted* growth G only by pushing **toward** the line
-  (k≈0.5–0.7 for short/mid half-lives), which mechanically means **betting less and pruning
-  the model's noisy 1X2 disagreements**. It does not create new profit; gross profit falls.
-- **Is optimal k contrarian? No.** k<0 maximises turnover and gross ROI but *minimises* G.
-  The growth-optimal k is positive (defer to the market) — the opposite of the hoped-for
-  contrarian result. This corroborates [[totals-compression-is-denoising]] and
-  [[staking-research-conclusions]]: the L1 engine has little exploitable 1X2 edge beyond
-  the SofaScore line in this minor league.
-- **Conjugate k\*** is directionally right but doesn't reach the G-optimum (under-shrinks
-  for short/mid half-lives, over-shrinks for HL120).
-- **Recommendation: do not ship a market k-update as an edge mechanism.** The only honest
-  use of k>0 is *selective abstention* (bet fewer, more market-aligned 1X2 positions),
-  which a higher `min_edge` achieves more transparently. Note this whole test is on 1X2
-  where the base already carries `market_weight=0.4`; the conclusion may differ for markets
-  where the model has genuine structural edge (e.g. totals dispersion / O/U fade per
-  [[totals-compression-is-denoising]]) — but that must be judged on a non-circular line,
-  not the SofaScore O/U we conditioned on.
+The answer splits by market:
+
+- **1X2 — no edge.** Inference-time conditioning only improves risk-adjusted growth by
+  pushing **toward** the line (k>0 ≈ selective abstention: bet less, defer to a
+  better-calibrated line). Contrarian k<0 maximises turnover/gross profit but *minimises* G.
+  Don't ship a k-update here; a higher `min_edge` expresses the same abstention transparently.
+
+- **Totals + BTTS — real edge, evaluated on a held-out Betfair line.** The basket runs
+  **~+0.04 to +0.06 realized growth on 500–700 bets**, concentrated in **BTTS and the
+  unders** (the model fades the market's over-/dispersion bias). This is the model's actual
+  money market, not 1X2.
+
+- **Is optimal k contrarian?** *Market-dependent.* For the standard **DixonColes_Market**,
+  growth on totals/BTTS is a **flat-to-contrarian plateau** (realized peak k≈−0.1; fading
+  helps mildly, never hurts up to ~k=0.4) — opposite to 1X2 and consistent with
+  [[totals-compression-is-denoising]]. For the **DCMH time-decay** models the totals optimum
+  is *slightly toward* the market (k≈+0.2); HL120 is fragile. So the contrarian tilt is
+  **second-order**; the first-order win is that the totals/BTTS edge exists and the market
+  conditioning must **not wash it out** (keep k small, |k|≲0.3).
+
+- **Conjugate k\*** sits in the safe small-|k| region (Gemp ≈ 0.04–0.05 on totals) but is
+  not the growth-optimum for any single market.
+
+- **Recommendation.** Don't ship the k-update as an *edge* mechanism. Best operational use:
+  on **totals/BTTS**, keep conditioning light (k≈0, optionally a mild contrarian k≈−0.1 for
+  DixonColes_Market) and curate selections (BTTS + unders, skip high overs); on **1X2**, lean
+  on `min_edge` rather than k. Next step: a curated BTTS+unders strategy benchmarked vs
+  Betfair close, and check whether the contrarian-totals tilt is specific to the stiffer
+  Global model vs the hierarchical time-decay variants.
+
+> **Data note:** the betdb gained Betfair O/U+BTTS+CorrectScore for Ireland mid-study, which
+> is what made the §3.4 totals evaluation a genuinely held-out (non-circular) test. Earlier
+> Ireland Betfair was 1X2+DC only ([[betdb-data-coverage]]).
