@@ -39,7 +39,7 @@ include("./display.jl")
 export 
     # Types
     DBConfig, DataStore, DataTournemantSegment,
-    ScottishLower, Ireland, SouthKorea,
+    ScottishLower, Ireland, IrelandFirstDivision, SouthKorea,
     
     # Functions
     load_datastore_sql, load_datastore_cached,
