@@ -34,6 +34,18 @@ using BayesianFootball
 include("../ireland_validation/l00_validation_logic.jl")
 include("../ireland_validation/l01_bigchance_logic.jl")
 
+# Disambiguation: l00_validation_logic AND l01_bigchance_logic both define
+# `fit_mle(::Type{WeibullCount}, data)`, but l00's is `Integer`-constrained and
+# returns a `(dist, ll)` TUPLE — which (being more specific) shadows the bigchance
+# scalar-returning method for integer goal vectors and breaks the goal/count
+# fitters. Re-declare the Integer method to return just the dist.
+function fit_mle(::Type{MyDistributions.WeibullCount}, data::AbstractVector{<:Integer})
+    c_guess = 1.0; λ_guess = max(mean(data), 1e-4)
+    obj(p) = -sum(logpdf(MyDistributions.WeibullCount(exp(p[1]), exp(p[2])), x) for x in data)
+    res = optimize(obj, [log(c_guess), log(λ_guess)], NelderMead(), Optim.Options(iterations = 2000))
+    return MyDistributions.WeibullCount(exp(res.minimizer[1]), exp(res.minimizer[2]))
+end
+
 # ============================================================================
 # A. GOAL-FAMILY χ² TABLE (re-declared from eda/basic_goals/l00 — that file has
 #    top-level execution and cannot be `include`d). Poisson / RobustNB / Weibull
@@ -101,6 +113,12 @@ end
 #    Each fit returns (ll, k[, ρ]); we tabulate AIC and the DC dependence ρ.
 # ============================================================================
 
+# Clamp the NB dispersion r to a sane range. Without this, the DC-NB optimiser
+# can drive r → ~1e14 on near-equidispersed data (e.g. 79 away goals, V/M<1),
+# where RobustNegativeBinomial's logpdf is numerically unreliable rather than
+# collapsing to its Poisson limit — producing a spurious ~600-point LL gain.
+_cr(x) = clamp(x, 1e-3, 1e6)
+
 "Dixon-Coles low-score τ correction (shared by every DC variant)."
 function _dc_tau(h, a, λ, μ, ρ)
     if h == 0 && a == 0; return 1.0 - λ * μ * ρ
@@ -121,11 +139,11 @@ function _dc_pois_ll(λ, μ, ρ, hg, ag)
 end
 
 function _dc_nb_ll(λ, μ, r_h, r_a, ρ, hg, ag)
-    ll = 0.0
+    rh = _cr(r_h); ra = _cr(r_a); ll = 0.0
     for (h, a) in zip(hg, ag)
         τ = _dc_tau(h, a, λ, μ, ρ)
-        ll += logpdf(MyDistributions.RobustNegativeBinomial(r_h, λ), h) +
-              logpdf(MyDistributions.RobustNegativeBinomial(r_a, μ), a) +
+        ll += logpdf(MyDistributions.RobustNegativeBinomial(rh, λ), h) +
+              logpdf(MyDistributions.RobustNegativeBinomial(ra, μ), a) +
               (τ > 0 ? log(τ) : -Inf)
     end
     return ll
@@ -162,12 +180,12 @@ function fit_dc_ladder(home_data, away_data)
                     [log(λ0), log(μ0), 0.0])
 
     # Indep NB
-    r_inb = optimize(p -> -(sum(logpdf.(MyDistributions.RobustNegativeBinomial(exp(p[3]), exp(p[1])), home_data)) +
-                            sum(logpdf.(MyDistributions.RobustNegativeBinomial(exp(p[4]), exp(p[2])), away_data))),
+    r_inb = optimize(p -> -(sum(logpdf.(MyDistributions.RobustNegativeBinomial(_cr(exp(p[3])), exp(p[1])), home_data)) +
+                            sum(logpdf.(MyDistributions.RobustNegativeBinomial(_cr(exp(p[4])), exp(p[2])), away_data))),
                      [log(λ0), log(μ0), log(r_h0), log(r_a0)])
 
     # DC NB (warm-start from indep NB)
-    r_dnb = optimize(p -> -_dc_nb_ll(exp(p[1]), exp(p[2]), exp(p[3]), exp(p[4]), tanh(p[5]), home_data, away_data),
+    r_dnb = optimize(p -> -_dc_nb_ll(exp(p[1]), exp(p[2]), _cr(exp(p[3])), _cr(exp(p[4])), tanh(p[5]), home_data, away_data),
                      [r_inb.minimizer[1], r_inb.minimizer[2], r_inb.minimizer[3], r_inb.minimizer[4], 0.0])
 
     # Indep Weibull
@@ -246,6 +264,15 @@ function feature_coverage_by_season(ds::Data.DataStore)
 
     stats_all = nrow(ds.statistics) == 0 ? ds.statistics :
                 filter(r -> r.period == "ALL", ds.statistics)
+    # Column-existence guards: 718 (First Division) carries NO bigChance columns
+    # and uses a different shots column name than 79 — probing a non-existent
+    # column on a DataFrameRow would throw, so resolve available columns once.
+    scols = Set(propertynames(stats_all))
+    has_xg_col = (:expectedGoals_home in scols) && (:expectedGoals_away in scols)
+    has_bc_col = (:bigChanceCreated_home in scols) && (:bigChanceCreated_away in scols)
+    shot_probe = [:shotsOnGoal_home, :totalShotsOnGoal_home, :totalShots_home, :shots_home]
+    shot_idx = findfirst(c -> c in scols, shot_probe)
+    shot_sym = isnothing(shot_idx) ? nothing : shot_probe[shot_idx]
     smap = Dict(r.match_id => r for r in eachrow(stats_all))
 
     # row→season lookups for the auxiliary frames
@@ -276,14 +303,9 @@ function feature_coverage_by_season(ds::Data.DataStore)
             haskey(smap, r.match_id) || continue
             has_stats += 1
             st = smap[r.match_id]
-            (!ismissing(st.expectedGoals_home) && !ismissing(st.expectedGoals_away)) && (has_xg += 1)
-            (!ismissing(st.bigChanceCreated_home) && !ismissing(st.bigChanceCreated_away)) && (has_bc += 1)
-            # shots column name varies; probe common ones
-            shot_ok = false
-            for c in (:totalShots_home, :shotsTotal_home, :shots_home)
-                if c in propertynames(st) && !ismissing(getproperty(st, c)); shot_ok = true; break; end
-            end
-            shot_ok && (has_shots += 1)
+            has_xg_col && !ismissing(st.expectedGoals_home) && !ismissing(st.expectedGoals_away) && (has_xg += 1)
+            has_bc_col && !ismissing(st.bigChanceCreated_home) && !ismissing(st.bigChanceCreated_away) && (has_bc += 1)
+            !isnothing(shot_sym) && !ismissing(getproperty(st, shot_sym)) && (has_shots += 1)
         end
         frac(x) = nplayed == 0 ? 0.0 : round(x / nplayed; digits = 3)
         push!(rows, (
