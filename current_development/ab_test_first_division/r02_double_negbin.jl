@@ -101,8 +101,22 @@ println("\n=== GLM Edge (Betfair) ===")
 ge = Evaluation.evaluate_experiments(Evaluation.GLMEdge(), all_results, ds1)
 show(ge, allrows=true, allcols=true)
 
-#= RESULT — LogLoss + GLM (4-way)
+#= RESULT — LogLoss + GLM (4-way)   [718, 2025/26, Betfair pillar; train times in brackets]
+LogLoss (diff = model_ll - market_ll; more negative beats the market more):
+  DixonColes        -0.03245   [1h48m]
+  NegBin_HomeAway   -0.03226   [55m]    ← NB ≈ DC, clearly > DP
+  NegBin_Hierarchical -0.03218 [2h02m]
+  DoublePoisson     -0.02948   [60m]
 
+GLM edge (spread_fair coef, p):
+  DixonColes        1.477  p=0.088   ← best (marginal)
+  NegBin_HomeAway   1.338  p=0.143
+  NegBin_Hierarchical 1.326 p=0.146
+  DoublePoisson     0.859  p=0.306
+
+→ Both NB variants BEAT DoublePoisson and ~tie DixonColes on calibration/edge.
+  HIERARCHICAL dispersion ≈ HomeAway on every metric (no gain) but costs ~2x train
+  time (2h02m vs 55m) — NOT worth it; use HomeAwayDispersion.
 =#
 
 # ==========================================
@@ -127,8 +141,25 @@ bt_market.roi_pct = 100 .* bt_market.profit ./ bt_market.turnover
 sort!(bt_market, [:model_name, :roi_pct], rev=[false,true])
 println("\n=== Backtest per-market ==="); show(bt_market, allrows=true, allcols=true)
 
-#= RESULT — Backtest (4-way)
+#= RESULT — Backtest (4-way)   BayesianKelly, Betfair odds
+Aggregate (growth_factor = ∏(1+pnl): naive all-market full-Kelly compounding):
+  model                bets  ROI%    growth_factor
+  NegBin_HomeAway      762   12.49   0.626   ← BEST ROI
+  NegBin_Hierarchical  762   12.46   0.592
+  DoublePoisson        769   10.24   0.452
+  DixonColes           779    9.67   0.616
+→ Both NB variants have the HIGHEST ROI (12.5% vs DP 10.2%, DC 9.7%). NB's edge comes
+  mostly from better HOME pricing: per-market HOME growth_factor NB-HA 6.40x vs DC 5.21x,
+  DP 4.04x (home ROI ~42%). away is a near-wipeout for all (gf ~0.16x); over_45/55 noise.
+  NB-HomeAway ≈ NB-Hierarchical per-market (hierarchical adds nothing).
+NOTE: aggregate growth_factor<1 for ALL models — naive "bet every market at full Kelly"
+  overbets (counts simultaneous bets as sequential) → value-destroying compounding despite
+  positive ROI. Consistent with portfolio-kelly-partial-hedge: cap simultaneous stakes.
+  Per-market isolated growth (e.g. HOME 6.4x) is the cleaner read.
 
+VERDICT: the double-NB engine (motivated by the 718 NB EDA) is the best outfield engine for
+First Division on ROI, matching DC on LogLoss/edge. Use HomeAwayDispersion (hierarchical not
+worth it). NB also samples FASTER/healthier than DC (55m vs 1h48m; ε up to 0.025 vs DC's tiny steps).
 =#
 
 println("\nDone! Double-NB A/B vs DoublePoisson/DixonColes complete.")
