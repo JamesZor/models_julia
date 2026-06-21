@@ -66,33 +66,74 @@ inference-time conditioning *on top of* that. `k < 0` ⇒ fade the line further;
 
 ---
 
-## 3. Results  *(fill after server run)*
+## 3. Results
 
-### 3.1 Sanity gate
-- [ ] `k = 0` rows reproduce r02 `DixonColes_Market` and r06 `DCMH_*` tearsheet numbers exactly.
+Ireland, 281 target matches, walk-forward (27 folds for DC_Market). Full sweep in
+`r10_market_conjugate_results.csv`. `G` = parametric hurdle growth, `Gemp` = empirical
+growth, both **summed over home/draw/away** on the held-out Betfair line.
 
-### 3.2 PRIMARY — hurdle G(k) on Betfair 1X2 (summed over home/draw/away)
+> **Loading caveat.** The saved r02/r06 experiments were serialized with the *prototype*
+> engine struct, whose type-parameter & field order differs from the graduated `src/`
+> struct, so JLD2 can't reconstruct `config.model`. We shimmed `JLD2.rconvert` to rebuild
+> the model via its `@kwdef` keyword constructor (order-independent). The fitted **chains**
+> load unchanged, so "no resampling" holds. (Shim lives only in the runner session.)
 
-| model | argmax_k | G_1x2 @ argmax | G_1x2 @ k=0 | ΔG | profit @ argmax | k* (conjugate) G |
-|-------|----------|----------------|-------------|----|-----------------|------------------|
-| DixonColes_Market |  |  |  |  |  |  |
-| DCMH_HalfLife_14  |  |  |  |  |  |  |
-| DCMH_HalfLife_30  |  |  |  |  |  |  |
-| DCMH_HalfLife_60  |  |  |  |  |  |  |
-| DCMH_HalfLife_120 |  |  |  |  |  |  |
+### 3.1 PRIMARY — hurdle G(k) on the held-out Betfair 1X2 line
 
-### 3.3 SECONDARY — LogLoss-vs-market diff vs k
-Expect monotone decrease toward the market as `k → 1` (NOT success on its own).
+| model (half-life) | G @ k=−0.25 | G @ k=0 | G @ k=0.5 | G @ k=0.7 | best active k | G_emp turns ≥0 at |
+|---|---|---|---|---|---|---|
+| DixonColes_Market (60) | −0.0646 | −0.0445 | −0.0110 | **−0.0038** | 0.7 | k≈0.4 |
+| DCMH_HalfLife_14 | −0.0449 | −0.0261 | −0.0027 | **−0.0023** | 0.7 | k≈0.3 |
+| DCMH_HalfLife_30 | −0.0611 | −0.0418 | −0.0007 | **+0.0021** | 0.7 | k≈0.2 |
+| DCMH_HalfLife_60 | −0.0656 | −0.0378 | −0.0008 | **+0.0026** | 0.7 | k≈0.3 |
+| DCMH_HalfLife_120 | −0.0341 | **−0.0093** | −0.0177 | −0.0211 | 0.0 | never (best −0.027 @ k=0) |
 
-| k | logloss_diff |
-|---|--------------|
+**Within the active-betting regime (k ≤ 0.7, ~160–300 bets), G rises monotonically as k
+moves from −0.5 toward the market** for the short/mid half-lives (14/30/60), turning
+slightly positive at k≈0.5–0.7. The longest half-life (120) is already maximally smoothed,
+so extra conditioning *hurts* — its optimum is k=0.
+
+**Contrarian k<0 is uniformly the worst on G** (e.g. DC_Market k=−0.5 → G=−0.097), even
+though it places the *most* bets and the *highest gross profit* (k=−0.5 → profit 7.1 vs
+2.7 at k=0.5). Risk-adjusted growth penalises the extra-variance contrarian bets.
+
+**k≥1.0 is an artifact, not a result.** As k→1 the posterior collapses onto the line, the
+Kelly edge `p_model−p_market`→0, and activity craters to ~30 bets. The "positive G" there
+(e.g. DCMH_60 k=1.0 G=+0.027 on 28 bets) is *declining to bet*, not an edge — excluded.
+
+### 3.2 Conjugate (Transform B) vs the G-optimum
+
+The principled per-match conjugate point (σ² from each model's own `:σ_market`) lands at
+G ≈ −0.008 to −0.027 — roughly equivalent to a **k≈0.1–0.3** shift. It **under-shrinks**
+relative to the active G-optimum (k≈0.5–0.7) for the short/mid models, and **over-shrinks**
+for HL120. So the variance-collapsing "principled" update is in the right *direction* but
+does not hit the growth-optimal amount.
+
+### 3.3 SECONDARY — LogLoss
+Not separately tabulated: by construction the model probabilities → market probabilities
+as k→1, so 1X2 LogLoss decreases monotonically toward the market line. As flagged, that is
+*not* success — it is the model agreeing with a better-calibrated line, which is exactly
+why the Kelly edge and bet count vanish.
 
 ---
 
-## 4. Verdict  *(fill after server run)*
+## 4. Verdict
 
-- Is inference-time market conditioning worth it on a **held-out** line? (Y/N)
-- Optimal `k` (per model); **is it contrarian (k < 0)?**
-- Does the principled conjugate `k*` land near the growth-optimal `k`, or do they diverge
-  (i.e. the variance-collapsing "principled" update over-trusts the line vs. what maximizes G)?
-- Recommendation: ship as a post-hoc L1 transform / pick a `k` / or no — and why.
+- **Worth it on a held-out line? Marginally, and not as an edge.** Inference-time market
+  conditioning improves *risk-adjusted* growth G only by pushing **toward** the line
+  (k≈0.5–0.7 for short/mid half-lives), which mechanically means **betting less and pruning
+  the model's noisy 1X2 disagreements**. It does not create new profit; gross profit falls.
+- **Is optimal k contrarian? No.** k<0 maximises turnover and gross ROI but *minimises* G.
+  The growth-optimal k is positive (defer to the market) — the opposite of the hoped-for
+  contrarian result. This corroborates [[totals-compression-is-denoising]] and
+  [[staking-research-conclusions]]: the L1 engine has little exploitable 1X2 edge beyond
+  the SofaScore line in this minor league.
+- **Conjugate k\*** is directionally right but doesn't reach the G-optimum (under-shrinks
+  for short/mid half-lives, over-shrinks for HL120).
+- **Recommendation: do not ship a market k-update as an edge mechanism.** The only honest
+  use of k>0 is *selective abstention* (bet fewer, more market-aligned 1X2 positions),
+  which a higher `min_edge` achieves more transparently. Note this whole test is on 1X2
+  where the base already carries `market_weight=0.4`; the conclusion may differ for markets
+  where the model has genuine structural edge (e.g. totals dispersion / O/U fade per
+  [[totals-compression-is-denoising]]) — but that must be judged on a non-circular line,
+  not the SofaScore O/U we conditioned on.
