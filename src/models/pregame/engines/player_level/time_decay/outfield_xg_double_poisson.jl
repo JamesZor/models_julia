@@ -170,16 +170,22 @@ function build_turing_model(config::DynamicDoublePoissonXGOutfieldPlayerTimeDeca
     home_xg_raw = coalesce.(data[:flat_home_xg], NaN)
     away_xg_raw = coalesce.(data[:flat_away_xg], NaN)
     
-    xg_mask = Float64.(.!isnan.(home_xg_raw))
-    home_xg = [isnan(x) ? 1.0 : Float64(x) for x in home_xg_raw]
-    away_xg = [isnan(x) ? 1.0 : Float64(x) for x in away_xg_raw]
+    # Mask requires BOTH sides present. xG is a Gamma observation (support x>0),
+    # so a *present* xG of exactly 0.0 (it occurs in the data) would make
+    # logpdf(Gamma, 0) = -Inf and force the whole likelihood to -Inf; floor
+    # present values to a small positive ε.
+    xg_mask = Float64.(.!isnan.(home_xg_raw) .& .!isnan.(away_xg_raw))
+    home_xg = [isnan(x) ? 1.0 : max(Float64(x), 1e-3) for x in home_xg_raw]
+    away_xg = [isnan(x) ? 1.0 : max(Float64(x), 1e-3) for x in away_xg_raw]
 
-    market_log_h_raw = coalesce.(log.(data[:flat_market_λ_home]), NaN)
-    market_log_a_raw = coalesce.(log.(data[:flat_market_λ_away]), NaN)
-    
-    market_mask = Float64.(.!isnan.(market_log_h_raw))
-    market_log_h = [isnan(x) ? 0.0 : Float64(x) for x in market_log_h_raw]
-    market_log_a = [isnan(x) ? 0.0 : Float64(x) for x in market_log_a_raw]
+    # Market pillar: only trust matches where BOTH implied rates are present and
+    # in a plausible football range. The market-inversion can occasionally return
+    # a degenerate λ (e.g. ~357) on thin/odd betfair closing odds, which would be
+    # a high-leverage corruption of the market pillar; mask those out.
+    _mok(x) = !ismissing(x) && (xf = Float64(x); !isnan(xf) && 0.02 < xf < 20.0)
+    market_mask  = Float64.(_mok.(data[:flat_market_λ_home]) .& _mok.(data[:flat_market_λ_away]))
+    market_log_h = [_mok(x) ? log(Float64(x)) : 0.0 for x in data[:flat_market_λ_home]]
+    market_log_a = [_mok(x) ? log(Float64(x)) : 0.0 for x in data[:flat_market_λ_away]]
 
     return build_double_poisson_xg_market_player_engine(
         home_ids, away_ids, season_ids, month_indices,
