@@ -64,7 +64,10 @@ if nrow(odds_bf) > 0
 end
 
 #= RESULT — data/coverage
-
+Betfair summary: 6797 rows; 682/914 matches carry ≥1 market row (median 9 markets/match).
+selections present: home/draw/away, btts_yes/btts_no, over_/under_ 05..55, plus cs_*/dnb_*/dc_*.
+→ all selections the market-inversion needs (1x2 + BTTS + O/U) are present.
+Target window: 275 played matches in 2025+2026 (xG ~99% covered from 2023).
 =#
 
 # ==========================================
@@ -150,8 +153,13 @@ println("===========================================")
 eval_glmedge = Evaluation.evaluate_experiments(Evaluation.GLMEdge(), all_results, ds1)
 Evaluation.display_summary_metric(eval_glmedge, :glmedge)
 
-#= RESULT — GLM Edge
-
+#= RESULT — GLM Edge  (n_obs=1635; spread_fair_coef>0 & significant ⇒ genuine edge)
+ model                    intercept(p)        prob_fair_coef(p)    spread_fair_coef   p_value
+ FD_DixonColes_Market     -2.496 (1.8e-67)    5.095 (1.2e-69)      1.477              0.088   ← marginal edge
+ FD_DoublePoisson_Market  -2.476 (1.2e-66)    5.042 (5.7e-69)      0.859              0.306   ← not significant
+→ Calibration coefs strong for both. The edge term (spread_fair) is only marginally significant
+  for DC and insignificant for DP — far weaker than 79 Premier (r02: spread_fair p≈1e-4). The
+  First Division market is thinner/noisier, so the model's pricing edge over Betfair is small.
 =#
 
 println("\n===========================================")
@@ -160,8 +168,12 @@ println("===========================================")
 eval_logloss = Evaluation.evaluate_experiments(Evaluation.LogLoss(), all_results, ds1)
 Evaluation.display_summary_metric(eval_logloss, :logloss)
 
-#= RESULT — LogLoss
-
+#= RESULT — LogLoss  (n_obs=1635; diff = model_ll − market_ll, NEGATIVE beats the market)
+ model                    model_ll   market_ll   diff_ll
+ FD_DixonColes_Market     0.55253    0.58498     -0.03245   ← best
+ FD_DoublePoisson_Market  0.55550    0.58498     -0.02948
+→ BOTH beat the Betfair 1x2 market on LogLoss; Dixon-Coles slightly better. Edge (~-0.03) is a
+  touch below 79 Premier (r02: DC -0.034, DP -0.036) but clearly positive.
 =#
 
 println("\n===========================================")
@@ -180,8 +192,23 @@ cols_to_show = [:model_name, :selection, :opportunities, :activity_pct, :bets_pl
                 :turnover, :profit, :roi_pct, :win_rate_pct]
 show(tearsheet[:, cols_to_show], allrows = true)
 
-#= RESULT — Backtest
+#= RESULT — Backtest  (BayesianKelly, Betfair odds, aggregated over all markets)
+ model                    bets   turnover   profit   ROI%
+ FD_DoublePoisson_Market  767    51.10      5.23     10.23
+ FD_DixonColes_Market     777    49.44      4.80      9.71
+→ Both profitable in-sample-temporal; DP marginally higher aggregate ROI, DC marginally better
+  calibration/LogLoss. Per-market (DC): the HOME market is the big winner (ROI ~41%, profit 4.13,
+  91 bets) and away is the worst (-26%). over_45/over_55 show extreme ROI on TINY samples
+  (≤14 bets) → noise, not signal. Treat aggregate ROI as encouraging but thin-market and
+  optimistic (small n=275 target matches, no execution costs).
 
+CAVEATS / OPS NOTES:
+- Dixon-Coles sampling is SLOW on 718: DP 60min, DC 1h48m (NUTS hit tiny step sizes ε~3e-6 on
+  some splits — a posterior-geometry pathology worth reparameterising before scaling up).
+- The kaimon gate "failed" the run on a 10-min no-output timeout, but the Julia process kept
+  training and saved BOTH experiments to ./data/first_division_ab/ — load via list_experiments.
+- Market pillar = Betfair de-vigged closing line. For thin minor leagues the pillar may be better
+  anchored to Bet365 (see memory betfair-vs-bet365-market-anchor) — revisit.
 =#
 
 println("\nDone! First Division outfield A/B (DP + DC) complete.")
