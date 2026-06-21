@@ -211,4 +211,89 @@ CAVEATS / OPS NOTES:
   anchored to Bet365 (see memory betfair-vs-bet365-market-anchor) — revisit.
 =#
 
-println("\nDone! First Division outfield A/B (DP + DC) complete.")
+# ==========================================
+# 7. PER-MARKET BREAKDOWN  (GLM edge + backtest ROI & growth factor)
+# ==========================================
+using GLM
+const Predictions = BayesianFootball.Predictions
+
+# --- 7a. Per-market backtest: ROI + growth factor ---
+# Growth factor = ∏(1 + pnl_i) over placed bets (pnl is already in bankroll-fraction
+# units, so each bet multiplies wealth by 1+pnl); geometric growth/bet = gf^(1/n)-1.
+bets_df = filter(r -> r.stake > 0, ledger.df)
+bt_market = combine(groupby(bets_df, [:model_name, :selection]),
+    nrow => :bets,
+    :stake => sum => :turnover,
+    :pnl   => sum => :profit,
+    :pnl   => (p -> exp(sum(log.(max.(1e-8, 1.0 .+ p))))) => :growth_factor,
+    :is_winner => (w -> 100 * mean(skipmissing(w))) => :win_pct)
+bt_market.roi_pct = 100 .* bt_market.profit ./ bt_market.turnover
+bt_market.growth_per_bet_pct = 100 .* (bt_market.growth_factor .^ (1 ./ bt_market.bets) .- 1)
+sort!(bt_market, [:model_name, :roi_pct], rev = [false, true])
+println("\n--- Per-market backtest (ROI & growth factor) ---")
+show(bt_market, allrows = true, allcols = true)
+
+# --- 7b. Per-market GLM edge ---
+# NOTE: evaluate_experiments([GLMEdge([s]) for s in sels], …) does NOT work for a
+# per-market table — GLMEdgeResult flattens under the constant name "glmedge", so
+# every selection's columns collide and merge keeps only the last. Compute the
+# per-selection logistic edge directly from one inference per model instead.
+function permarket_glm(exp)
+    latents = Experiments.extract_oos_predictions(ds1, exp)
+    ppd = Predictions.model_inference(latents)
+    mf  = transform(ppd.df, :distribution => ByRow(mean) => :prob_model)
+    mf  = select(mf, :match_id, :market_name, :market_line, :selection, :prob_model)
+    adf = innerjoin(ds1.odds, mf, on = [:match_id, :market_name, :market_line, :selection])
+    dropmissing!(adf, [:prob_fair_close, :is_winner])
+    adf.spread_fair = adf.prob_model .- adf.prob_fair_close
+    adf.Y = Float64.(adf.is_winner)
+    rows = NamedTuple[]
+    for sub in groupby(adf, :selection)
+        n = nrow(sub); (n >= 12 && length(unique(sub.Y)) == 2) || continue
+        m = glm(@formula(Y ~ prob_fair_close + spread_fair), sub, Binomial(), LogitLink())
+        ct = coeftable(m); idx = findfirst(==("spread_fair"), ct.rownms)
+        push!(rows, (model = exp.config.name, selection = sub.selection[1], n_obs = n,
+                     spread_coef = ct.cols[1][idx], spread_p = ct.cols[4][idx]))
+    end
+    return DataFrame(rows)
+end
+glm_market = vcat(permarket_glm(res_dp), permarket_glm(res_dc))
+sort!(glm_market, [:model, :spread_p])
+println("\n--- Per-market GLM edge (spread_fair coef & p; p<0.10 ⇒ edge) ---")
+show(glm_market, allrows = true, allcols = true)
+
+#= RESULT — PER-MARKET BREAKDOWN
+
+GLM EDGE per market (spread_fair coef, p; p<0.10 = model prices an edge vs Betfair):
+  Dixon-Coles                              Double-Poisson
+   over_45  coef 53.2  p 0.016 *            over_45  coef 39.1  p 0.026 *
+   over_15  coef 15.6  p 0.031 *            under_45 coef 35.3  p 0.033 *
+   btts_no  coef 36.4  p 0.051 *            btts_yes coef 15.5  p 0.099 *
+   over_25  coef  8.8  p 0.076 *            btts_no  coef 15.5  p 0.099 *
+   under_15 coef 16.9  p 0.092 *            (over_15/under_15 p 0.19; home p 0.38)
+   home     coef  2.1  p 0.349              away     coef  0.7  p 0.76
+   away     coef -0.7  p 0.78
+→ The genuine pricing edge concentrates on OVER lines (over_45/15/25) and BTTS — i.e. the model
+  fades the market UNDER-pricing goals, consistent with 718 being a high-scoring/over-dispersed
+  league (see first-division-718-signature). DC has more significant over-market edges than DP.
+  1x2 (home/draw/away) shows NO significant GLM edge for either model. Large coefs on O/U lines
+  are a scale artifact (small within-line spread variance) — read the p-value, not the magnitude.
+
+BACKTEST per market (BayesianKelly; growth_factor = terminal wealth multiple betting that market):
+  Dixon-Coles            bets  ROI%    growth_factor   Double-Poisson         bets  ROI%    gf
+   home                   91    41.2    5.21 ×           home                   94    38.5    4.04 ×
+   under_15               36    26.8    1.11 ×           under_15               43    31.8    1.22 ×
+   over_15                56     9.7    1.33 ×           btts_no                35    12.7    1.09 ×
+   btts_no                29     7.8    1.01 ×           over_15                51     6.6    1.16 ×
+   over_25                84   -11.0    0.46 ×           over_25                82   -17.4    0.33 ×
+   away                   83   -25.6    0.10 × (≈wipe)   away                   83    -6.5    0.20 ×
+   over_45                15   358     2.16 × (TINY n)   over_45                13   363     2.26 × (TINY n)
+→ HOME is the dominant profitable market (DC 5.2×, DP 4.0× wealth) — the bulk of both models' edge.
+  AWAY is a near-wipeout (gf 0.10–0.20×). over_25/over_35 lose despite the GLM "edge" sign (the edge
+  is in the EXTREME over lines, not 2.5). over_45/55 & under_05 ROIs are noise (≤15 bets).
+  Reconcile GLM vs backtest: GLM edge sign ≠ profit — Kelly profit needs the edge AND favourable
+  odds/variance; the real, robust money is HOME (1x2), where GLM is insignificant but Kelly + the
+  model's team-strength calibration still extract value.
+=#
+
+println("\nDone! First Division outfield A/B (DP + DC) + per-market breakdown complete.")
