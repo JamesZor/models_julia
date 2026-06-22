@@ -73,6 +73,26 @@ end
 # ==========================================
 
 """
+    clean_pos(pos::String)
+
+Normalises raw position labels (SofaScore / DB variants) to one of "G","D","M","F".
+Unknown labels default to "M".
+"""
+function clean_pos(pos::String)
+    if pos == "G" || pos == "Goalkeeper" || pos == "GK"
+        return "G"
+    elseif pos == "D" || pos == "Defender" || pos == "DF"
+        return "D"
+    elseif pos == "M" || pos == "Midfielder" || pos == "MF"
+        return "M"
+    elseif pos == "F" || pos == "Forward" || pos == "FW" || pos == "A"
+        return "F"
+    else
+        return "M" # Default to Midfielder
+    end
+end
+
+"""
     get_latest_player_ratings(ds::Data.DataStore, tracker::AbstractRatingTracker)
 
 Computes the latest ratings for all players based on the historical datastore and the rating tracker.
@@ -118,20 +138,6 @@ function build_matchday_ratings_map(ds::Data.DataStore, tracker::AbstractRatingT
     println("    └─ Total tracked players: ", length(player_ratings))
 
     ratings_map = Dict{Int, Dict{Tuple{String, String}, Float64}}()
-
-    function clean_pos(pos::String)
-        if pos == "G" || pos == "Goalkeeper" || pos == "GK"
-            return "G"
-        elseif pos == "D" || pos == "Defender" || pos == "DF"
-            return "D"
-        elseif pos == "M" || pos == "Midfielder" || pos == "MF"
-            return "M"
-        elseif pos == "F" || pos == "Forward" || pos == "FW" || pos == "A"
-            return "F"
-        else
-            return "M" # Default to Midfielder
-        end
-    end
 
     for row in eachrow(todays_matches)
         mid = Int(row.match_id)
@@ -187,4 +193,128 @@ function build_matchday_ratings_map(ds::Data.DataStore, tracker::AbstractRatingT
     end
 
     return ratings_map
+end
+
+# ==========================================
+# 3. LINEUP COMPARISON DIAGNOSTIC
+# ==========================================
+
+"""
+    _starters_rating_table(players, player_ratings, global_avg)
+
+Builds a DataFrame of starters (substitute == false) with their tracked rating and a
+debut flag (player unseen in history → falls back to `global_avg`).
+"""
+function _starters_rating_table(players, player_ratings::Dict, global_avg::Float64)
+    starters = filter(p -> !p.substitute, players)
+    rows = map(starters) do p
+        (
+            player_id   = p.player_id,
+            player_name = p.player_name,
+            position    = clean_pos(p.position),
+            rating      = round(get(player_ratings, p.player_id, global_avg), digits=3),
+            debut       = !haskey(player_ratings, p.player_id),
+        )
+    end
+    return isempty(rows) ? DataFrame(player_id=Int[], player_name=String[], position=String[], rating=Float64[], debut=Bool[]) :
+                           DataFrame(rows)
+end
+
+_pos_sums(tbl::AbstractDataFrame) = Dict(pos => sum(tbl.rating[tbl.position .== pos]; init=0.0) for pos in ["G","D","M","F"])
+
+"""
+    compare_matchday_lineups(ds, tracker, match_id, home_team, away_team, json_dir; verbose=true)
+
+For a single fixture, fetch BOTH the provisional XI (`sofascore.lineup_provisional`) and the
+fallback "most recent historical XI", attach each player's tracked rating, and compare them.
+
+Returns a NamedTuple:
+  - `home_provisional`, `home_fallback`, `away_provisional`, `away_fallback` :: player-level DataFrames
+  - `summary` :: positional-sum DataFrame (side, position, provisional, fallback, delta)
+
+The positional sums are exactly what feed the model (per side, sum of starter ratings by
+position), so `delta` shows how much the model's inputs shift between the two lineup sources.
+"""
+function compare_matchday_lineups(ds::Data.DataStore, tracker::AbstractRatingTracker,
+                                  match_id::Int, home_team::String, away_team::String,
+                                  json_dir::String; verbose::Bool=true)
+    player_ratings, global_avg = get_latest_player_ratings(ds, tracker)
+
+    prov = fetch_provisional_lineup(match_id)
+    prov_lu = isnothing(prov) ? (home = [], away = []) : (home = prov.home, away = prov.away)
+    fb_lu   = (home = get_most_recent_lineup(ds, home_team),
+               away = get_most_recent_lineup(ds, away_team))
+
+    tables = Dict{Tuple{String,Symbol}, DataFrame}()
+    for (side, hometeam) in [("home", home_team), ("away", away_team)]
+        prov_players = getfield(prov_lu, Symbol(side))
+        fb_players   = getfield(fb_lu,   Symbol(side))
+        tables[(side, :provisional)] = _starters_rating_table(prov_players, player_ratings, global_avg)
+        tables[(side, :fallback)]    = _starters_rating_table(fb_players,   player_ratings, global_avg)
+    end
+
+    # Positional-sum summary (model inputs)
+    summary_rows = NamedTuple[]
+    for side in ["home", "away"]
+        ps = _pos_sums(tables[(side, :provisional)])
+        fs = _pos_sums(tables[(side, :fallback)])
+        for pos in ["G","D","M","F"]
+            push!(summary_rows, (side = side, position = pos,
+                                 provisional = round(ps[pos], digits=2),
+                                 fallback = round(fs[pos], digits=2),
+                                 delta = round(ps[pos] - fs[pos], digits=2)))
+        end
+        push!(summary_rows, (side = side, position = "TOTAL",
+                             provisional = round(sum(values(ps)), digits=2),
+                             fallback = round(sum(values(fs)), digits=2),
+                             delta = round(sum(values(ps)) - sum(values(fs)), digits=2)))
+    end
+    summary = DataFrame(summary_rows)
+
+    if verbose
+        println("\n", "="^90)
+        println(" LINEUP COMPARISON | match $match_id | $home_team vs $away_team")
+        println(" Global avg rating fallback: $(round(global_avg, digits=3))")
+        if isnothing(prov)
+            println(" ⚠ No provisional lineup in DB — provisional side is empty (would use fallback live).")
+        elseif !prov.confirmed
+            println(" ℹ Provisional lineup is NOT yet confirmed (predicted XI).")
+        else
+            println(" ✓ Provisional lineup is confirmed.")
+        end
+        println("="^90)
+        for side in ["home", "away"]
+            team = side == "home" ? home_team : away_team
+            println("\n── $side: $team ──")
+            println("  [provisional XI]")
+            show(tables[(side, :provisional)]; allrows=true, allcols=true); println()
+            println("  [fallback / most-recent XI]")
+            show(tables[(side, :fallback)]; allrows=true, allcols=true); println()
+        end
+        println("\n── positional-sum summary (model inputs) ──")
+        show(summary; allrows=true, allcols=true); println()
+        println("="^90)
+    end
+
+    return (
+        home_provisional = tables[("home", :provisional)],
+        home_fallback    = tables[("home", :fallback)],
+        away_provisional = tables[("away", :provisional)],
+        away_fallback    = tables[("away", :fallback)],
+        summary          = summary,
+    )
+end
+
+"""
+    compare_matchday_lineups(ds, tracker, match_row, json_dir; kwargs...)
+
+Convenience method taking a `DataFrameRow` from `todays_matches`.
+"""
+function compare_matchday_lineups(ds::Data.DataStore, tracker::AbstractRatingTracker,
+                                  match_row::DataFrameRow, json_dir::String; kwargs...)
+    return compare_matchday_lineups(ds, tracker,
+                                    Int(match_row.match_id),
+                                    String(match_row.home_team),
+                                    String(match_row.away_team),
+                                    json_dir; kwargs...)
 end
