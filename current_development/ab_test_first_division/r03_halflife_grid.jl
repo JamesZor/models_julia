@@ -87,8 +87,28 @@ bt_market = combine(groupby(bets_df, [:model_name,:selection]), nrow=>:bets, :st
 bt_market.roi_pct = 100 .* bt_market.profit ./ bt_market.turn
 println("\n=== Backtest per-market ==="); show(bt_market, allrows=true, allcols=true)
 
-#= RESULT — HALF-LIFE GRID
-
+#= RESULT — HALF-LIFE GRID (FD 718, 2025/26, 275 matches, full-Kelly, no costs)
+# Full writeup: HALFLIFE_GRID_RESULTS.md
+#
+# Aggregate (monotonic — shorter HL wins on money):
+#   HL   bets  ROI%   growth
+#   30   760   13.82  1.044   <- only growth>1.0; BEST
+#   45   763   13.10  0.816
+#   60   762   12.49  0.626
+#   90   769   11.08  0.323
+#   120  773   10.32  0.217
+#
+# LogLoss diff_ll (INVERTED: longer HL marginally better, but range tiny 0.0016):
+#   30 -0.0332 | 45 -0.0326 | 60 -0.0323 | 90 -0.0317 | 120 -0.0316
+# GLM spread coef/p (agrees w/ ROI: short=strongest): 30:1.63/.071  60:1.34/.143  120:1.23/.183
+# RQR: flat & good — all pass Shapiro (HL120 borderline .047), std~0.94-0.99. Calibration not the lever.
+#
+# Per-market driver: HOME ~42% ROI ALL half-lives (robust); DRAW +25-28% all. The GAP comes from
+# UNDER ladder flipping with HL: under_25 HL30 +9.8% -> HL120 -10.2%; under_35 +8.4% -> -4.7%.
+# AWAY loss all (HL30 least-bad -5.6%, HL120 -18.2%). over_25 loser all HLs (adverse selection).
+#
+# VERDICT: use HL~=30 (recency-heavy). Monotonic trend -> worth sweeping below 30 (21/14), but
+# watch effective sample size (275 matches starves team hierarchy at very short HL).
 =#
 
 println("\nDone! Half-life grid complete.")
