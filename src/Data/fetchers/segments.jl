@@ -8,6 +8,7 @@ struct Ireland       <: DataTournemantSegment end
 struct IrelandFirstDivision <: DataTournemantSegment end
 struct SouthKorea    <: DataTournemantSegment end
 struct Norway    <: DataTournemantSegment end
+struct Veikkausliiga <: DataTournemantSegment end
 
 
 # HACK: 2026-04-15 - for DataLegacy DataStore
@@ -22,6 +23,7 @@ tournament_ids(::Ireland)       = [79]
 tournament_ids(::IrelandFirstDivision) = [718]
 tournament_ids(::SouthKorea)    = [3284, 6230]
 tournament_ids(::Norway)    = [5, 6]
+tournament_ids(::Veikkausliiga) = [31]   # Finnish top flight
 
 # Fallback method to catch missing definitions
 function tournament_ids(segment::DataTournemantSegment)
