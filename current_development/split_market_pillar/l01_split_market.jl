@@ -1,35 +1,30 @@
 # current_development/split_market_pillar/l01_split_market.jl
 #
 # LOADER (acts as a temporary module). Prototype of the AXIS-SPLIT market pillar
-# for the time-decay outfield engines. See NOTES.md for the why.
+# for the time-decay outfield engines. See NOTES.md for the why + the convergence story.
 #
 # Idea: the current market pillar anchors log_λ_h and log_λ_a INDEPENDENTLY with one
 # σ — which is exactly an ISOTROPIC penalty on (level, supremacy). We make it
-# ANISOTROPIC: hard-anchor the supremacy axis (log_h − log_a, "who wins") and leave the
-# level axis (log_h + log_a, "how many goals") loose / free.
+# ANISOTROPIC: anchor the supremacy axis (log_h − log_a, "who wins") tighter than the
+# level axis (log_h + log_a, "how many goals"), or leave level off entirely.
 #
 #   model_sup   = (log_λ_h + log κ_h) − (log_λ_a + log κ_a)
 #   model_level = (log_λ_h + log κ_h) + (log_λ_a + log κ_a)
 #   m_sup   = market_log_λ_h − market_log_λ_a          (from the inverted market)
 #   m_level = market_log_λ_h + market_log_λ_a
-#   ll = N(model_sup;   m_sup,   σ_supremacy)            # always on
-#      + level_active * N(model_level; m_level, σ_level) # off when σ_level == Inf
+#   ll = N(model_sup;   m_sup,   σ_sup)                 # supremacy anchor
+#      + level_active * N(model_level; m_level, σ_lev)  # level anchor (off if level_on=false)
 #
-# σ_supremacy (tight) and σ_level (loose; Inf = level pillar OFF) are FIXED config
-# fields — they replace the sampled `market_σ` and scalar `market_weight`. This makes
-# them the natural grid axes.
+# CONVERGENCE NOTE: an earlier version FIXED σ_supremacy/σ_level. Fixed tight σ makes a
+# stiff posterior — NUTS stalls at max_depth=10 and won't converge at max_depth=6 (R-hat
+# ~1.1–2.4). The ORIGINAL engines SAMPLE `market_σ` from a wide prior, which gives NUTS a
+# release valve. So here σ is SAMPLED from a prior; the anisotropy is encoded by the prior
+# MEANS (tighter supremacy prior than level prior), and we sweep those means. The prior
+# spread provides the valve so the model converges.
 #
-# The four rungs (per the agreed ladder):
-#   R1  SplitMarketPoissonGoalsModel   — Poisson goals, NO xG          (isolates the split)
-#   R2  SplitMarketPoissonXGModel      — Poisson goals + xG
-#   R3  SplitMarketNegBinXGModel       — NegBin goals + xG
-#   R4  SplitMarketDixonColesXGModel   — DC Poisson goals + xG (+ ρ anchored at σ_supremacy)
-#
-# Prediction routing (memory: dixoncoles-prediction-dispatch-union): every player model is
-# <: AbstractNegBinModel, and the Poisson/DC scorers are MORE-SPECIFIC Union overrides.
-# Our new structs are not in those Unions, so without help they fall through to the NegBin
-# scorer (the `:r` ArgumentError). R3 (NegBin) is fine on the default; R1/R2 (Poisson) and
-# R4 (DC) get explicit `extract_params` + `compute_score_matrix` overrides below.
+# Rungs: R1 Poisson goals-only / R2 Poisson+xG / R3 NegBin+xG / R4 DC+xG (+ρ at σ_sup).
+# Prediction routing (dixoncoles-prediction-dispatch-union): R1/R2 (Poisson) + R4 (DC) ship
+# explicit extract_params/compute_score_matrix overrides; R3 (NegBin) uses the default route.
 
 using Turing
 using Distributions
@@ -40,16 +35,7 @@ const Features = BayesianFootball.Features
 const Pred     = BayesianFootball.Predictions
 const RobustNegativeBinomial = BayesianFootball.MyDistributions.RobustNegativeBinomial
 
-# ============================================================================
-# Shared helper: translate config σ's into branch-free @model scalars.
-# σ_level == Inf  →  level_active = 0.0 and a dummy finite σ (term masked out),
-# keeping the @model body pure broadcast (no `if` on parameters; AD-safe).
-# ============================================================================
-function _split_market_scalars(σ_supremacy::Float64, σ_level::Float64)
-    level_active = isfinite(σ_level) ? 1.0 : 0.0
-    σ_level_eff  = isfinite(σ_level) ? σ_level : 1.0
-    return (σ_sup = σ_supremacy, σ_level_eff = σ_level_eff, level_active = level_active)
-end
+_level_active(config) = config.level_on ? 1.0 : 0.0
 
 # ============================================================================
 # Shared builder-side market unpacking (mirrors the src engines' masks/floors).
@@ -72,7 +58,6 @@ function _unpack_xg(data)
     return home_xg, away_xg, xg_mask
 end
 
-# Player rating centring (identical across engines).
 function _centre_ratings(hG, hD, hM, hF, aG, aD, aM, aF, base_rating)
     h_G_c = hG .- base_rating
     h_O_c = (hD .+ hM .+ hF) .- (10.0 * base_rating)
@@ -80,6 +65,10 @@ function _centre_ratings(hG, hD, hM, hF, aG, aD, aM, aF, base_rating)
     a_O_c = (aD .+ aM .+ aF) .- (10.0 * base_rating)
     return h_G_c, h_O_c, a_G_c, a_O_c
 end
+
+# Default sampled-σ priors (wide enough to converge; sweep the MEAN to vary anchor strength)
+const DEFAULT_SUP_PRIOR = truncated(Normal(0.10, 0.10), lower=0.02)
+const DEFAULT_LEV_PRIOR = truncated(Normal(0.50, 0.30), lower=0.05)
 
 # ============================================================================
 # R1: SplitMarketPoissonGoalsModel  (Poisson goals, NO xG)
@@ -100,8 +89,9 @@ Base.@kwdef struct SplitMarketPoissonGoalsModel{
       kappa_config::K
       player_ratings_feature::R
       market_feature_config::M = Features.DoublePoissonMarketFeature()
-      σ_supremacy::Float64 = 0.1
-      σ_level::Float64     = Inf
+      σ_supremacy_prior::Distribution = DEFAULT_SUP_PRIOR
+      σ_level_prior::Distribution     = DEFAULT_LEV_PRIOR
+      level_on::Bool                  = false
 end
 
 @model function build_split_poisson_goals_engine(
@@ -109,10 +99,12 @@ end
     home_goals, away_goals, match_weights,
     hG, hD, hM, hF, aG, aD, aM, aF,
     market_log_λ_h, market_log_λ_a, market_mask,
-    σ_supremacy::Float64, σ_level_eff::Float64, level_active::Float64,
+    level_active::Float64,
     n_teams::Int, n_seasons::Int, n_months::Int,
     config::SplitMarketPoissonGoalsModel
 )
+    σ_sup ~ config.σ_supremacy_prior
+    σ_lev ~ config.σ_level_prior
     inter ~ to_submodel(PreGame.build_interception(config.interception_config, n_seasons, n_months))
     ha    ~ to_submodel(PreGame.build_home_advantage(config.homeadvantage_config, n_teams))
     kap   ~ to_submodel(PreGame.build_kappa(config.kappa_config, n_teams))
@@ -145,15 +137,15 @@ end
     ll_goals_a = logpdf.(Poisson.(λ_a), away_goals)
     Turing.@addlogprob! sum((ll_goals_h .+ ll_goals_a) .* match_weights)
 
-    # --- Pillar C: SPLIT Market (level / supremacy) ---
+    # --- Pillar C: SPLIT Market (level / supremacy), σ SAMPLED ---
     market_rate_h = log_λ_h .+ log.(kap_h)
     market_rate_a = log_λ_a .+ log.(kap_a)
     model_sup   = market_rate_h .- market_rate_a
     model_level = market_rate_h .+ market_rate_a
     m_sup   = market_log_λ_h .- market_log_λ_a
     m_level = market_log_λ_h .+ market_log_λ_a
-    ll_sup   = logpdf.(Normal.(model_sup,   σ_supremacy), m_sup)
-    ll_level = logpdf.(Normal.(model_level, σ_level_eff), m_level)
+    ll_sup   = logpdf.(Normal.(model_sup,   σ_sup), m_sup)
+    ll_level = logpdf.(Normal.(model_level, σ_lev), m_level)
     Turing.@addlogprob! sum((ll_sup .+ level_active .* ll_level) .* match_weights .* market_mask)
 end
 
@@ -177,8 +169,9 @@ Base.@kwdef struct SplitMarketPoissonXGModel{
       player_ratings_feature::R
       market_feature_config::M = Features.DoublePoissonMarketFeature()
       ν_xg::Distribution = truncated(Normal(3.0, 0.5), lower=0.5)
-      σ_supremacy::Float64 = 0.1
-      σ_level::Float64     = Inf
+      σ_supremacy_prior::Distribution = DEFAULT_SUP_PRIOR
+      σ_level_prior::Distribution     = DEFAULT_LEV_PRIOR
+      level_on::Bool                  = false
 end
 
 @model function build_split_poisson_xg_engine(
@@ -187,11 +180,13 @@ end
     hG, hD, hM, hF, aG, aD, aM, aF,
     home_xg, away_xg, xg_mask,
     market_log_λ_h, market_log_λ_a, market_mask,
-    σ_supremacy::Float64, σ_level_eff::Float64, level_active::Float64,
+    level_active::Float64,
     n_teams::Int, n_seasons::Int, n_months::Int,
     config::SplitMarketPoissonXGModel
 )
-    ν_xg ~ config.ν_xg
+    ν_xg  ~ config.ν_xg
+    σ_sup ~ config.σ_supremacy_prior
+    σ_lev ~ config.σ_level_prior
     inter ~ to_submodel(PreGame.build_interception(config.interception_config, n_seasons, n_months))
     ha    ~ to_submodel(PreGame.build_home_advantage(config.homeadvantage_config, n_teams))
     kap   ~ to_submodel(PreGame.build_kappa(config.kappa_config, n_teams))
@@ -224,10 +219,7 @@ end
     ll_goals_a = logpdf.(Poisson.(λ_a), away_goals)
     Turing.@addlogprob! sum((ll_goals_h .+ ll_goals_a) .* match_weights)
 
-    # --- Pillar A: xG (Gamma) ---
-    # Sanitize the xG rate: a NaN log_λ (extreme init) makes the Gamma CONSTRUCTOR
-    # throw before the is_bad -Inf can reject the sample. Mirror the λ guard above /
-    # the gold-standard outfield_xg_dixon_coles.jl (which feeds a sanitized λ to Gamma).
+    # --- Pillar A: xG (Gamma) — sanitize rate so the Gamma constructor can't throw on NaN ---
     xg_rate_h = exp.(log_λ_h) .+ 1e-6
     xg_rate_a = exp.(log_λ_a) .+ 1e-6
     xg_rate_h = ifelse.(isnan.(xg_rate_h) .| isinf.(xg_rate_h), one.(xg_rate_h), xg_rate_h)
@@ -236,15 +228,15 @@ end
     ll_xg_a = logpdf.(Gamma.(ν_xg, xg_rate_a ./ ν_xg), away_xg)
     Turing.@addlogprob! sum((ll_xg_h .+ ll_xg_a) .* match_weights .* xg_mask)
 
-    # --- Pillar C: SPLIT Market (level / supremacy) ---
+    # --- Pillar C: SPLIT Market (level / supremacy), σ SAMPLED ---
     market_rate_h = log_λ_h .+ log.(kap_h)
     market_rate_a = log_λ_a .+ log.(kap_a)
     model_sup   = market_rate_h .- market_rate_a
     model_level = market_rate_h .+ market_rate_a
     m_sup   = market_log_λ_h .- market_log_λ_a
     m_level = market_log_λ_h .+ market_log_λ_a
-    ll_sup   = logpdf.(Normal.(model_sup,   σ_supremacy), m_sup)
-    ll_level = logpdf.(Normal.(model_level, σ_level_eff), m_level)
+    ll_sup   = logpdf.(Normal.(model_sup,   σ_sup), m_sup)
+    ll_level = logpdf.(Normal.(model_level, σ_lev), m_level)
     Turing.@addlogprob! sum((ll_sup .+ level_active .* ll_level) .* match_weights .* market_mask)
 end
 
@@ -268,8 +260,9 @@ Base.@kwdef struct SplitMarketNegBinXGModel{
       player_ratings_feature::R
       market_feature_config::M = Features.DoublePoissonMarketFeature()
       ν_xg::Distribution = truncated(Normal(3.0, 0.5), lower=0.5)
-      σ_supremacy::Float64 = 0.1
-      σ_level::Float64     = Inf
+      σ_supremacy_prior::Distribution = DEFAULT_SUP_PRIOR
+      σ_level_prior::Distribution     = DEFAULT_LEV_PRIOR
+      level_on::Bool                  = false
 end
 
 @model function build_split_negbin_xg_engine(
@@ -278,11 +271,13 @@ end
     hG, hD, hM, hF, aG, aD, aM, aF,
     home_xg, away_xg, xg_mask,
     market_log_λ_h, market_log_λ_a, market_mask,
-    σ_supremacy::Float64, σ_level_eff::Float64, level_active::Float64,
+    level_active::Float64,
     n_teams::Int, n_seasons::Int, n_months::Int,
     config::SplitMarketNegBinXGModel
 )
-    ν_xg ~ config.ν_xg
+    ν_xg  ~ config.ν_xg
+    σ_sup ~ config.σ_supremacy_prior
+    σ_lev ~ config.σ_level_prior
     inter ~ to_submodel(PreGame.build_interception(config.interception_config, n_seasons, n_months))
     disp  ~ to_submodel(PreGame.build_dispersion(config.dispersion_config, n_teams, n_months))
     ha    ~ to_submodel(PreGame.build_home_advantage(config.homeadvantage_config, n_teams))
@@ -329,10 +324,7 @@ end
     ll_goals_a = logpdf.(RobustNegativeBinomial.(r_a, λ_a), away_goals)
     Turing.@addlogprob! sum((ll_goals_h .+ ll_goals_a) .* match_weights)
 
-    # --- Pillar A: xG (Gamma) ---
-    # Sanitize the xG rate: a NaN log_λ (extreme init) makes the Gamma CONSTRUCTOR
-    # throw before the is_bad -Inf can reject the sample. Mirror the λ guard above /
-    # the gold-standard outfield_xg_dixon_coles.jl (which feeds a sanitized λ to Gamma).
+    # --- Pillar A: xG (Gamma) — sanitize rate so the Gamma constructor can't throw on NaN ---
     xg_rate_h = exp.(log_λ_h) .+ 1e-6
     xg_rate_a = exp.(log_λ_a) .+ 1e-6
     xg_rate_h = ifelse.(isnan.(xg_rate_h) .| isinf.(xg_rate_h), one.(xg_rate_h), xg_rate_h)
@@ -341,20 +333,20 @@ end
     ll_xg_a = logpdf.(Gamma.(ν_xg, xg_rate_a ./ ν_xg), away_xg)
     Turing.@addlogprob! sum((ll_xg_h .+ ll_xg_a) .* match_weights .* xg_mask)
 
-    # --- Pillar C: SPLIT Market (level / supremacy) ---
+    # --- Pillar C: SPLIT Market (level / supremacy), σ SAMPLED ---
     market_rate_h = log_λ_h .+ log.(kap_h)
     market_rate_a = log_λ_a .+ log.(kap_a)
     model_sup   = market_rate_h .- market_rate_a
     model_level = market_rate_h .+ market_rate_a
     m_sup   = market_log_λ_h .- market_log_λ_a
     m_level = market_log_λ_h .+ market_log_λ_a
-    ll_sup   = logpdf.(Normal.(model_sup,   σ_supremacy), m_sup)
-    ll_level = logpdf.(Normal.(model_level, σ_level_eff), m_level)
+    ll_sup   = logpdf.(Normal.(model_sup,   σ_sup), m_sup)
+    ll_level = logpdf.(Normal.(model_level, σ_lev), m_level)
     Turing.@addlogprob! sum((ll_sup .+ level_active .* ll_level) .* match_weights .* market_mask)
 end
 
 # ============================================================================
-# R4: SplitMarketDixonColesXGModel  (DC Poisson goals + xG, ρ anchored at σ_supremacy)
+# R4: SplitMarketDixonColesXGModel  (DC Poisson goals + xG, ρ anchored at σ_sup)
 # ============================================================================
 Base.@kwdef struct SplitMarketDixonColesXGModel{
     I<:PreGame.AbstractInterceptionConfig,
@@ -375,8 +367,9 @@ Base.@kwdef struct SplitMarketDixonColesXGModel{
       market_feature_config::M = Features.DixonColesMarketFeature()
       dixon_coles_config::C = PreGame.GlobalDixonColesConfig()
       ν_xg::Distribution = truncated(Normal(3.0, 0.5), lower=0.5)
-      σ_supremacy::Float64 = 0.1
-      σ_level::Float64     = Inf
+      σ_supremacy_prior::Distribution = DEFAULT_SUP_PRIOR
+      σ_level_prior::Distribution     = DEFAULT_LEV_PRIOR
+      level_on::Bool                  = false
 end
 
 @model function build_split_dixoncoles_xg_engine(
@@ -386,11 +379,13 @@ end
     home_xg, away_xg, xg_mask,
     market_log_λ_h, market_log_λ_a, market_ρ, market_mask,
     mask_00, mask_10, mask_01, mask_11, mask_other,
-    σ_supremacy::Float64, σ_level_eff::Float64, level_active::Float64,
+    level_active::Float64,
     n_teams::Int, n_seasons::Int, n_months::Int,
     config::SplitMarketDixonColesXGModel
 )
-    ν_xg ~ config.ν_xg
+    ν_xg  ~ config.ν_xg
+    σ_sup ~ config.σ_supremacy_prior
+    σ_lev ~ config.σ_level_prior
     inter ~ to_submodel(PreGame.build_interception(config.interception_config, n_seasons, n_months))
     ha    ~ to_submodel(PreGame.build_home_advantage(config.homeadvantage_config, n_teams))
     kap   ~ to_submodel(PreGame.build_kappa(config.kappa_config, n_teams))
@@ -438,21 +433,21 @@ end
     ll_goals_τ = log.(τ)
     Turing.@addlogprob! sum((ll_goals_h .+ ll_goals_a .+ ll_goals_τ) .* match_weights)
 
-    # --- Pillar A: xG (Gamma) ---
+    # --- Pillar A: xG (Gamma) — DC uses sanitized λ (already guarded above) ---
     ll_xg_h = logpdf.(Gamma.(ν_xg, λ_h ./ ν_xg), home_xg)
     ll_xg_a = logpdf.(Gamma.(ν_xg, λ_a ./ ν_xg), away_xg)
     Turing.@addlogprob! sum((ll_xg_h .+ ll_xg_a) .* match_weights .* xg_mask)
 
-    # --- Pillar C: SPLIT Market (level / supremacy) + ρ anchor at σ_supremacy ---
+    # --- Pillar C: SPLIT Market (level / supremacy) + ρ anchor at σ_sup, σ SAMPLED ---
     market_rate_h = log_λ_h .+ log.(kap_h)
     market_rate_a = log_λ_a .+ log.(kap_a)
     model_sup   = market_rate_h .- market_rate_a
     model_level = market_rate_h .+ market_rate_a
     m_sup   = market_log_λ_h .- market_log_λ_a
     m_level = market_log_λ_h .+ market_log_λ_a
-    ll_sup   = logpdf.(Normal.(model_sup,   σ_supremacy), m_sup)
-    ll_level = logpdf.(Normal.(model_level, σ_level_eff), m_level)
-    ll_ρ     = logpdf.(Normal.(ρ, σ_supremacy), market_ρ)
+    ll_sup   = logpdf.(Normal.(model_sup,   σ_sup), m_sup)
+    ll_level = logpdf.(Normal.(model_level, σ_lev), m_level)
+    ll_ρ     = logpdf.(Normal.(ρ, σ_sup), market_ρ)
     Turing.@addlogprob! sum((ll_sup .+ level_active .* ll_level .+ ll_ρ) .* match_weights .* market_mask)
 end
 
@@ -460,7 +455,6 @@ end
 # required_features
 # ============================================================================
 function Features.required_features(model::SplitMarketPoissonGoalsModel)
-    # NO XGFeature — goals-only rung.
     return Features.AbstractFeatureConfig[
         Features.TeamIDsFeature(), Features.GoalsFeature(), Features.DatesFeature(),
         Features.MonthFeature(), model.market_feature_config,
@@ -479,7 +473,7 @@ for T in (:SplitMarketPoissonXGModel, :SplitMarketNegBinXGModel, :SplitMarketDix
 end
 
 # ============================================================================
-# build_turing_model — shared front-matter, then per-engine call
+# build_turing_model
 # ============================================================================
 function _common_inputs(config, feature_set)
     data = feature_set.data
@@ -503,11 +497,11 @@ function _common_inputs(config, feature_set)
     aM = Vector{Float64}(data[:flat_away_M_rating]); aF = Vector{Float64}(data[:flat_away_F_rating])
 
     mlh, mla, mmask = _unpack_market(data)
-    sc = _split_market_scalars(config.σ_supremacy, config.σ_level)
 
     return (; data, n_teams, n_seasons, n_months, match_weights,
             home_ids, away_ids, season_ids, month_idx, home_goals, away_goals,
-            hG, hD, hM, hF, aG, aD, aM, aF, mlh, mla, mmask, sc)
+            hG, hD, hM, hF, aG, aD, aM, aF, mlh, mla, mmask,
+            level_active = _level_active(config))
 end
 
 function PreGame.build_turing_model(config::SplitMarketPoissonGoalsModel, feature_set)
@@ -516,8 +510,7 @@ function PreGame.build_turing_model(config::SplitMarketPoissonGoalsModel, featur
         c.home_ids, c.away_ids, c.season_ids, c.month_idx,
         c.home_goals, c.away_goals, c.match_weights,
         c.hG, c.hD, c.hM, c.hF, c.aG, c.aD, c.aM, c.aF,
-        c.mlh, c.mla, c.mmask,
-        c.sc.σ_sup, c.sc.σ_level_eff, c.sc.level_active,
+        c.mlh, c.mla, c.mmask, c.level_active,
         c.n_teams, c.n_seasons, c.n_months, config
     )
 end
@@ -530,8 +523,7 @@ function PreGame.build_turing_model(config::SplitMarketPoissonXGModel, feature_s
         c.home_goals, c.away_goals, c.match_weights,
         c.hG, c.hD, c.hM, c.hF, c.aG, c.aD, c.aM, c.aF,
         home_xg, away_xg, xg_mask,
-        c.mlh, c.mla, c.mmask,
-        c.sc.σ_sup, c.sc.σ_level_eff, c.sc.level_active,
+        c.mlh, c.mla, c.mmask, c.level_active,
         c.n_teams, c.n_seasons, c.n_months, config
     )
 end
@@ -544,8 +536,7 @@ function PreGame.build_turing_model(config::SplitMarketNegBinXGModel, feature_se
         c.home_goals, c.away_goals, c.match_weights,
         c.hG, c.hD, c.hM, c.hF, c.aG, c.aD, c.aM, c.aF,
         home_xg, away_xg, xg_mask,
-        c.mlh, c.mla, c.mmask,
-        c.sc.σ_sup, c.sc.σ_level_eff, c.sc.level_active,
+        c.mlh, c.mla, c.mmask, c.level_active,
         c.n_teams, c.n_seasons, c.n_months, config
     )
 end
@@ -566,16 +557,14 @@ function PreGame.build_turing_model(config::SplitMarketDixonColesXGModel, featur
         home_xg, away_xg, xg_mask,
         c.mlh, c.mla, market_ρ, c.mmask,
         mask_00, mask_10, mask_01, mask_11, mask_other,
-        c.sc.σ_sup, c.sc.σ_level_eff, c.sc.level_active,
+        c.level_active,
         c.n_teams, c.n_seasons, c.n_months, config
     )
 end
 
 # ============================================================================
-# extract_parameters — the sampled rate params are unchanged from the source
-# engines (only the market PRIOR changed), so these mirror the src extractors.
+# extract_parameters — sampled rate params unchanged; mirror the src extractors.
 # ============================================================================
-# Shared per-match log-λ reconstruction.
 function _recon_log_rates(model, row, data, inter_nt, ha_mat, kap_mat, p_dyn_nt, n_samples, n_seasons)
     team_map  = data[:team_map]
     ratings_map = data[:player_ratings_map]
@@ -610,7 +599,6 @@ function _recon_log_rates(model, row, data, inter_nt, ha_mat, kap_mat, p_dyn_nt,
     return log_λ_h, log_λ_a, κ_h, κ_a, h_id, a_id, m_idx
 end
 
-# Poisson-route extractor (R1 + R2): emits λ_h/λ_a (no r) → routes to our Poisson override.
 function _extract_poisson(model, df, feature_set, chain)
     data = feature_set.data
     n_seasons = Int(data[:n_seasons]); n_teams = Int(data[:n_teams])
@@ -635,7 +623,6 @@ end
 PreGame.extract_parameters(m::SplitMarketPoissonGoalsModel, df, fs, chain) = _extract_poisson(m, df, fs, chain)
 PreGame.extract_parameters(m::SplitMarketPoissonXGModel,    df, fs, chain) = _extract_poisson(m, df, fs, chain)
 
-# NegBin-route extractor (R3): emits r_h/r_a → routes to the AbstractNegBinModel scorer.
 function PreGame.extract_parameters(model::SplitMarketNegBinXGModel, df, feature_set, chain)
     data = feature_set.data
     n_seasons = Int(data[:n_seasons]); n_teams = Int(data[:n_teams]); n_months = 12
@@ -660,7 +647,6 @@ function PreGame.extract_parameters(model::SplitMarketNegBinXGModel, df, feature
     return results
 end
 
-# DC-route extractor (R4): emits θ_1/θ_2/θ_3(=ρ) → routes to our DC override.
 function PreGame.extract_parameters(model::SplitMarketDixonColesXGModel, df, feature_set, chain)
     data = feature_set.data
     n_seasons = Int(data[:n_seasons]); n_teams = Int(data[:n_teams])
@@ -686,9 +672,7 @@ function PreGame.extract_parameters(model::SplitMarketDixonColesXGModel, df, fea
 end
 
 # ============================================================================
-# Prediction overrides (so R1/R2/R4 don't fall through to the NegBin scorer).
-# R3 (NegBin) needs none — its r_h/r_a route to the AbstractNegBinModel default.
-# Kernels copied from src/predictions/score_computation/{poisson,dixoncoles}.jl.
+# Prediction overrides (R1/R2 Poisson, R4 DC). R3 NegBin uses the default route.
 # ============================================================================
 function _poisson_score(λ_h, λ_a; max_goals::Int=12)
     n = length(λ_h)
@@ -731,14 +715,12 @@ function _dc_score(θ_1, θ_2, ρv; max_goals::Int=12)
     return Pred.ScoreMatrix(S)
 end
 
-# Poisson route (R1, R2)
 Pred.extract_params(::SplitMarketPoissonGoalsModel, row) = (λ_h = row.λ_h, λ_a = row.λ_a)
 Pred.extract_params(::SplitMarketPoissonXGModel,    row) = (λ_h = row.λ_h, λ_a = row.λ_a)
 Pred.compute_score_matrix(::SplitMarketPoissonGoalsModel, params; max_goals::Int=12) = _poisson_score(params.λ_h, params.λ_a; max_goals)
 Pred.compute_score_matrix(::SplitMarketPoissonXGModel,    params; max_goals::Int=12) = _poisson_score(params.λ_h, params.λ_a; max_goals)
 
-# DC route (R4)
 Pred.extract_params(::SplitMarketDixonColesXGModel, row) = (θ_1 = row.θ_1, θ_2 = row.θ_2, ρ = row.θ_3)
 Pred.compute_score_matrix(::SplitMarketDixonColesXGModel, params; max_goals::Int=12) = _dc_score(params.θ_1, params.θ_2, params.ρ; max_goals)
 
-println("[l01] split-market loader ready: SplitMarketPoissonGoalsModel, SplitMarketPoissonXGModel, SplitMarketNegBinXGModel, SplitMarketDixonColesXGModel")
+println("[l01] split-market loader ready (sampled-σ): SplitMarketPoissonGoalsModel, SplitMarketPoissonXGModel, SplitMarketNegBinXGModel, SplitMarketDixonColesXGModel")

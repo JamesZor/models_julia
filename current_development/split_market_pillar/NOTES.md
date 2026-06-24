@@ -147,3 +147,71 @@ GLMEdge spread_fair_coef (signal): s02 cells +0.59/+0.70 (p≈0.07–0.08); s01 
 (hard supremacy anchor helps) may still hold on a stronger base where the structural model is
 trustworthy enough that anchoring only fixes the favourite without wrecking totals. Test R2
 (Poisson+xG) and R4 (DixonColes+xG, the r06 model) next, same grid + max_depth=6.
+
+### 2026-06-24 — xG Gamma NaN bug (BLOCKER, fixed)
+
+R2/R3 (and the src no-market DoublePoisson engine) recomputed `xg_rate = exp(log_λ)` from the
+RAW (unsanitized) `log_λ` and fed it to `Gamma(...)`. On extreme NUTS inits a NaN `log_λ`
+makes the **Gamma constructor throw** before the `is_bad → -Inf` guard rejects the sample.
+The queued trainer (`independent.jl:157`) only records a split once *all* chains succeed, so
+broad chain failures left **`training_results.items` empty** → every cell looked "DONE" but
+held no data → eval crashed on `vcat()` of an empty list. R1 (no xG) was immune.
+**Fix:** sanitize `xg_rate` with the `ifelse.(isnan|isinf, 1.0, ...)` pattern (mirrors the λ
+guard / gold-standard `outfield_xg_dixon_coles.jl`, which feeds a sanitized λ to Gamma). After
+the fix all cells produced 28 items. (The DC R4 engine already used sanitized λ → fine.)
+
+### 2026-06-24 — R2 results + no-market control (Poisson+xG, 200/100×2, max_depth=6)
+
+Added a **market-off control** (σ_sup=1e6 → supremacy penalty ~flat, σ_level=Inf) using the
+same fixed engine. Backtest **hurdle_G** (higher better):
+
+| metric | **MARKET-OFF** | sup02_levInf | sup02_lev10 | sup01_levInf | sup01_lev10 |
+|---|---|---|---|---|---|
+| TOTAL_G | **+0.0236** | −0.1636 | −0.0341 | −0.2222 | −0.2169 |
+| 1X2 | −0.0233 | −0.0029 | −0.0045 | −0.0109 | −0.0034 |
+| BTTS | **+0.0246** | +0.0008 | +0.0016 | −0.0200 | −0.0114 |
+| Totals | **+0.0223** | −0.1615 | −0.0312 | −0.1913 | −0.2022 |
+
+LogLoss diff (model−market): MARKET-OFF **−0.0235** (best), sup02_lev10 −0.0134,
+sup02_levInf +0.0085, sup01_levInf +0.0197, sup01_lev10 +0.2034.
+
+**VERDICT (answers "is the market pillar worth it?"): NO, on this base.**
+- The **no-market xG model is the only profitable one** (TOTAL_G +0.024) and beats *every*
+  market-anchored cell, on both backtest and LogLoss. Adding any market pillar net-hurts.
+- **But the premise has a kernel of truth on 1X2:** market cells beat market-off on
+  home/away (e.g. home −0.013 vs market-off −0.019; away ≈−0.001 vs −0.012) — the market
+  anchor genuinely improves "who wins". The problem is it **simultaneously wrecks Totals**
+  (market-off Totals +0.022 vs −0.03…−0.20), and the totals loss dwarfs the 1X2 gain.
+- **The split doesn't protect totals as intended.** Even σ_level=Inf (level fully free) still
+  has totals collapse (sup02_levInf Totals −0.162), because supremacy and level are **not
+  independent in the structural model** — they share the same team attack/defence params, so
+  anchoring the supremacy axis bleeds into the level/totals. The clean (level,supremacy)
+  rotation exists at the *rate* layer but not at the *parameter* layer.
+- Tighter supremacy (sup01) still worse than looser (sup02) — R1's finding **holds** with xG.
+- Least-bad market cell: **sup02_lev10** (loose supremacy + light level anchor) — the only one
+  with positive Totals (over/under_25 +0.012/+0.010) and TOTAL_G −0.034, closest to market-off.
+
+**Implication.** For totals/BTTS, run the model market-free (let it fade the market — matches
+[[totals-compression-is-denoising]] and [[staking-research-conclusions]] market-curation). If
+you want the market's 1X2 accuracy, take it at the PRICE/selection layer (bet only where model
+& market agree on the favourite), NOT by anchoring the latent rates — anchoring corrupts the
+totals edge. The surgical-supremacy-anchor idea, as a latent-rate prior, does not pay off here.
+
+### 2026-06-24 — ⚠️ CONVERGENCE FAILS — the R1/R2 verdicts above are NOT reliable
+
+`Diagnostics.check_convergence` on the R2 cells (200 samp / 100 warmup / 2 chains, max_depth=6):
+across 904 params **median R-hat 1.08, max 2.45, only 15% < 1.01, 21% > 1.2; ESS NaN**. The
+chains did NOT converge → every verdict above (no-market-wins, tighter-worse) may be a SAMPLING
+ARTIFACT, not a real effect. The short settings + max_depth=6 (needed to dodge the stall) also
+truncate NUTS trees → poor mixing on the stiff posterior.
+
+**Root tension:** fixed tight σ ⇒ stiff posterior ⇒ stalls at max_depth=10 but won't converge at
+max_depth=6. The ORIGINAL engines SAMPLE `market_σ` (truncated Normal) — that release valve is
+why r07 (DC, 800/300×4, max_depth=10) converges and the fixed-σ split doesn't. **Fixing σ created
+the stiffness.**
+
+**Correct path (not yet run):** make σ_supremacy/σ_level *sampled* from tight priors (sweep the
+prior MEANS, not fixed σ) so it's sampleable at full max_depth; rerun at ~800/300×4; verify
+R-hat<1.01 + ESS; then compare on backtest+RQR+LogLoss: (a) split-market, (b) ORIGINAL un-split
+goal+xG+market (the real "did splitting help" baseline), (c) market-off. Until then split-vs-unsplit
+is OPEN.
