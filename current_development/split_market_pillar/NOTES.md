@@ -215,3 +215,26 @@ prior MEANS, not fixed σ) so it's sampleable at full max_depth; rerun at ~800/3
 R-hat<1.01 + ESS; then compare on backtest+RQR+LogLoss: (a) split-market, (b) ORIGINAL un-split
 goal+xG+market (the real "did splitting help" baseline), (c) market-off. Until then split-vs-unsplit
 is OPEN.
+
+### 2026-06-24 — Convergence root-cause investigation (single split 18) — UNRESOLVED, base-model issue
+
+Sampled σ FIXED the stall (depth-10 fits complete). But convergence is still bad and it's the
+BASE player-rating engine, not the split. Test split: Ireland Premier (seg **79**), **540
+matches, 12 teams, 3 seasons** (train 2025 + 2 history, target biweek 17/2025), **only 176/540
+have xG**. Single-split fits, 300 warmup / 500-800 samp × 4 chains, depth 10:
+
+| variant (split 18) | max R-hat | median R-hat | median ESS |
+|---|---|---|---|
+| split, prior-mean centring, 800/300 (lucky) | 1.54 | 1.055 | 268 |
+| split, empirical-demean ratings | 2.33 | 1.44 | 8 |
+| split, GlobalInterception | 1.85 | 1.53 | 7 |
+| split, ZeroSumTeamKappa | 3.60 | 1.98 | 5.6 |
+| ORIGINAL un-split (HierKappa) | 2.85 | 1.57 | 8 |
+
+**None converge** (want R-hat<1.01, ESS≥100s). Run-to-run ESS swings 5↔268 = metastable posterior.
+Targeted single-ridge fixes (demean ratings, global intercept, zero-sum kappa) ALL failed —
+worst components: kappa (κ multiplicative on λ ↔ intercept ridge), ν_xg, σ_sup, then rating
+weights + ha. It's the JOINT weakly-identified structure, not one term. **⇒ r06/r07 and all
+split-market backtests are non-converged / screening-quality.** Resolving this is a dedicated
+base-model task: long-warmup sweep (≥2000), joint decorrelation/QR reparam, or fewer params for
+the data. The split-market question stays parked until the base model samples reliably.
