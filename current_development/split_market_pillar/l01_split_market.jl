@@ -225,8 +225,13 @@ end
     Turing.@addlogprob! sum((ll_goals_h .+ ll_goals_a) .* match_weights)
 
     # --- Pillar A: xG (Gamma) ---
+    # Sanitize the xG rate: a NaN log_λ (extreme init) makes the Gamma CONSTRUCTOR
+    # throw before the is_bad -Inf can reject the sample. Mirror the λ guard above /
+    # the gold-standard outfield_xg_dixon_coles.jl (which feeds a sanitized λ to Gamma).
     xg_rate_h = exp.(log_λ_h) .+ 1e-6
     xg_rate_a = exp.(log_λ_a) .+ 1e-6
+    xg_rate_h = ifelse.(isnan.(xg_rate_h) .| isinf.(xg_rate_h), one.(xg_rate_h), xg_rate_h)
+    xg_rate_a = ifelse.(isnan.(xg_rate_a) .| isinf.(xg_rate_a), one.(xg_rate_a), xg_rate_a)
     ll_xg_h = logpdf.(Gamma.(ν_xg, xg_rate_h ./ ν_xg), home_xg)
     ll_xg_a = logpdf.(Gamma.(ν_xg, xg_rate_a ./ ν_xg), away_xg)
     Turing.@addlogprob! sum((ll_xg_h .+ ll_xg_a) .* match_weights .* xg_mask)
@@ -325,8 +330,13 @@ end
     Turing.@addlogprob! sum((ll_goals_h .+ ll_goals_a) .* match_weights)
 
     # --- Pillar A: xG (Gamma) ---
+    # Sanitize the xG rate: a NaN log_λ (extreme init) makes the Gamma CONSTRUCTOR
+    # throw before the is_bad -Inf can reject the sample. Mirror the λ guard above /
+    # the gold-standard outfield_xg_dixon_coles.jl (which feeds a sanitized λ to Gamma).
     xg_rate_h = exp.(log_λ_h) .+ 1e-6
     xg_rate_a = exp.(log_λ_a) .+ 1e-6
+    xg_rate_h = ifelse.(isnan.(xg_rate_h) .| isinf.(xg_rate_h), one.(xg_rate_h), xg_rate_h)
+    xg_rate_a = ifelse.(isnan.(xg_rate_a) .| isinf.(xg_rate_a), one.(xg_rate_a), xg_rate_a)
     ll_xg_h = logpdf.(Gamma.(ν_xg, xg_rate_h ./ ν_xg), home_xg)
     ll_xg_a = logpdf.(Gamma.(ν_xg, xg_rate_a ./ ν_xg), away_xg)
     Turing.@addlogprob! sum((ll_xg_h .+ ll_xg_a) .* match_weights .* xg_mask)
