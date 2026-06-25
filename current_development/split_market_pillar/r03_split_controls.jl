@@ -71,11 +71,15 @@ _make_model(; market_on, level_on) = SplitMarketDoublePoissonModel(
 )
 
 # ==========================================
-# 3. RUN + DIAGNOSE one variant on the single split
+# 3. RUN ALL VARIANTS IN PARALLEL, THEN DIAGNOSE
 # ==========================================
-function run_and_diagnose(model, name)
-    println("\n", "="^70, "\n>> VARIANT: $name\n", "="^70)
-    task = Experiments.create_experiment_task(
+# Each experiment's queue holds only 1 split x 4 chains = 4 work items, so on its own it uses
+# 4 of the 16 pinned cores. Running the 3 variants concurrently fills 12 cores (<= 16, no
+# oversubscription). The queued trainer uses per-call locks/semaphore, so concurrent
+# run_experiment is safe — only the console output (3 progress meters) interleaves; ignore the
+# garbled progress bars. All 3 share identical required_features, so this is just 12 chains.
+function _build_task(model, name)
+    Experiments.create_experiment_task(
         ds_market, model, name, save_dir;
         target_seasons  = ["2026"],
         history_seasons = 2,
@@ -87,12 +91,6 @@ function run_and_diagnose(model, name)
         use_queue       = true,
         max_depth       = 10,
     )
-    results = Experiments.run_experiment(task)
-    Experiments.save_experiment(results)
-
-    chains = Experiments.Diagnostics.extract_chains(ds_market, results)
-    println(Experiments.Diagnostics.check_convergence(chains))   # prints ✅/⚠️ banner
-    return results, chains.df
 end
 
 variants = [
@@ -101,10 +99,27 @@ variants = [
     ("C_supremacy_level",_make_model(market_on=true,  level_on=true )),
 ]
 
+# --- Phase 1: run all 3 concurrently (12 chains across 16 pinned cores) ---
+println("\n>> Launching $(length(variants)) variants in parallel ($(length(variants))×4 = $(length(variants)*4) chains, $(Threads.nthreads()) threads)...")
+raw_results = Dict{String, Any}()
+rlock = ReentrantLock()
+@sync for (name, model) in variants
+    Threads.@spawn begin
+        res = Experiments.run_experiment(_build_task(model, name))
+        Experiments.save_experiment(res; quiet=true)
+        lock(rlock) do
+            raw_results[name] = res
+        end
+    end
+end
+
+# --- Phase 2: diagnose each sequentially (clean output; extract_chains rebuilds features) ---
 runs = Dict{String, NamedTuple}()
-for (name, model) in variants
-    results, conv_df = run_and_diagnose(model, name)
-    runs[name] = (; results, conv_df)
+for (name, _) in variants
+    println("\n", "="^70, "\n>> VARIANT: $name\n", "="^70)
+    chains = Experiments.Diagnostics.extract_chains(ds_market, raw_results[name])
+    println(Experiments.Diagnostics.check_convergence(chains))   # ✅/⚠️ banner
+    runs[name] = (; conv_df = chains.df)
 end
 
 # ==========================================
