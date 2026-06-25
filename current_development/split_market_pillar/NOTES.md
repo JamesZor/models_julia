@@ -239,6 +239,33 @@ split-market backtests are non-converged / screening-quality.** Resolving this i
 base-model task: long-warmup sweep (≥2000), joint decorrelation/QR reparam, or fewer params for
 the data. The split-market question stays parked until the base model samples reliably.
 
+### 2026-06-25 — level_weight sweep: no free lunch; supremacy "agreement" at lw=0 is fake (κ masking)
+
+`r04_level_weight_sweep.jl` (continuous `level_weight` multiplier on the level pillar; supremacy_weight=1;
+market_on=true; single split; all converge R-hat≤1.01):
+
+| level_weight | κ_std | σ_κ | σ_sup | σ_lev |
+|---|---|---|---|---|
+| 0.0  | 0.232 | 0.299 | 0.224 | 0.537 |
+| 0.25 | 0.202 | 0.272 | 0.240 | 0.433 |
+| 0.5  | 0.077 | 0.136 | 0.321 | 0.267 |
+| 1.0  | 0.026 | 0.068 | 0.386 | 0.159 |
+
+- **κ-artifact tames monotonically but the KNEE is at 0.5, not 0.25** — a *light* level anchor (0.25)
+  barely dents it (σ_κ 0.27); κ only snaps back between 0.25 and 0.5.
+- **No free-lunch sweet spot:** κ-artifact and totals-autonomy are coupled via σ_lev. By the time
+  level weight kills the artifact (lw 0.5, σ_κ 0.14), σ_lev has fallen to 0.27 (model half-pulled onto
+  market totals). You cannot have low level weight (own totals) AND clean κ simultaneously.
+- **σ_sup RISES with level weight (0.22→0.39): the tight σ_sup at lw=0 is FAKE.** κ secretly flexes
+  per-team to make model-supremacy match market-supremacy; pin κ (raise level weight) and the genuine
+  disagreement surfaces (σ_sup→0.39). So "weight level less to lean on the market's supremacy" buys a κ
+  artifact masquerading as supremacy agreement, NOT real supremacy signal. Honest picture (κ pinned):
+  model AGREES with market on totals (σ_lev 0.16), DISAGREES on supremacy (σ_sup 0.39).
+
+⇒ Closes the "can we down-weight level for more supremacy" question: NO clean latent-rate knob extracts
+supremacy-trust. Take the market's who-wins edge at the PRICE/selection layer, not by anchoring rates
+(consistent with the OLD verdict + [[inference-time-market-conditioning-no-edge]]).
+
 ### 2026-06-25 — UNPARKED: sampled-σ double-Poisson converges; supremacy-only κ blow-up is an ARTIFACT
 
 New self-contained loader `l02_split_market_poisson.jl` (`SplitMarketDoublePoissonModel`, R2:
