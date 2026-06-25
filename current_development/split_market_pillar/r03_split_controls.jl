@@ -58,7 +58,7 @@ kap_cfg   = PreGame.HierarchicalTeamKappa()
 feature_cfg_bayes = Features.PlayerRatingsFeature(Features.BayesianTracker(6.5, 1.0, 0.5, 0.01))
 dyn_cfg = PreGame.OutfieldPlayerDynamicsConfig(days_half_life=60.0)
 
-_make_model(; market_on, level_on) = SplitMarketDoublePoissonModel(
+_make_model(; market_on, level_weight, supremacy_weight=1.0) = SplitMarketDoublePoissonModel(
     interception_config    = inter_cfg,
     player_dynamics_config = dyn_cfg,
     dispersion_config      = disp_cfg,
@@ -67,7 +67,8 @@ _make_model(; market_on, level_on) = SplitMarketDoublePoissonModel(
     player_ratings_feature = feature_cfg_bayes,
     market_feature_config  = Features.DoublePoissonMarketFeature(),
     market_on              = market_on,
-    level_on               = level_on,
+    supremacy_weight       = supremacy_weight,
+    level_weight           = level_weight,
 )
 
 # ==========================================
@@ -94,9 +95,9 @@ function _build_task(model, name)
 end
 
 variants = [
-    ("A_supremacy_only", _make_model(market_on=true,  level_on=false)),
-    ("B_market_off",     _make_model(market_on=false, level_on=false)),
-    ("C_supremacy_level",_make_model(market_on=true,  level_on=true )),
+    ("A_supremacy_only", _make_model(market_on=true,  level_weight=0.0)),
+    ("B_market_off",     _make_model(market_on=false, level_weight=0.0)),
+    ("C_supremacy_level",_make_model(market_on=true,  level_weight=1.0)),
 ]
 
 # --- Phase 1: run all 3 concurrently (12 chains across 16 pinned cores) ---

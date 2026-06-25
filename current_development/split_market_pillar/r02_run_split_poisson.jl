@@ -72,7 +72,8 @@ model = SplitMarketDoublePoissonModel(
     player_ratings_feature = feature_cfg_bayes,
     market_feature_config  = Features.DoublePoissonMarketFeature(),
     market_on              = true,
-    level_on               = false,   # anchor supremacy only; let the model own totals
+    supremacy_weight       = 1.0,
+    level_weight           = 0.0,    # anchor supremacy only; let the model own totals
 )
 
 task = Experiments.create_experiment_task(
@@ -110,10 +111,10 @@ conv_diag_all.df
 # model_market_off = SplitMarketDoublePoissonModel(
 #     interception_config=inter_cfg, player_dynamics_config=dyn_cfg, dispersion_config=disp_cfg,
 #     homeadvantage_config=ha_cfg, kappa_config=kap_cfg, player_ratings_feature=feature_cfg_bayes,
-#     market_on=false, level_on=false,
+#     market_on=false, level_weight=0.0,
 # )
 # model_sup_and_level = SplitMarketDoublePoissonModel(
 #     interception_config=inter_cfg, player_dynamics_config=dyn_cfg, dispersion_config=disp_cfg,
 #     homeadvantage_config=ha_cfg, kappa_config=kap_cfg, player_ratings_feature=feature_cfg_bayes,
-#     market_on=true, level_on=true,
+#     market_on=true, level_weight=1.0,
 # )

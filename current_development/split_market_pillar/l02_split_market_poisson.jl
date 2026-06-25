@@ -37,8 +37,7 @@ const Pred     = BayesianFootball.Predictions
 const SUP_PRIOR = truncated(Normal(0.10, 0.10), lower=0.02)
 const LEV_PRIOR = truncated(Normal(0.50, 0.30), lower=0.05)
 
-# Build-time scalars (branch-free / AD-safe gating inside the @model body).
-_level_active(config)  = config.level_on  ? 1.0 : 0.0
+# Build-time scalar (branch-free / AD-safe gating inside the @model body).
 _market_active(config) = config.market_on ? 1.0 : 0.0
 
 # Builder-side unpacking, mirrors the src engine masks/floors.
@@ -93,7 +92,8 @@ Base.@kwdef struct SplitMarketDoublePoissonModel{
       σ_supremacy_prior::Distribution  = SUP_PRIOR
       σ_level_prior::Distribution      = LEV_PRIOR
       market_on::Bool                  = true    # false => market pillar OFF (control)
-      level_on::Bool                   = false   # false => anchor supremacy only (model owns totals)
+      supremacy_weight::Float64        = 1.0     # relative weight on the supremacy (who-wins) anchor
+      level_weight::Float64            = 0.0     # weight on the level (totals) anchor; 0 => model owns totals
 end
 
 # ==========================================
@@ -118,7 +118,8 @@ end
     market_log_λ_a::Vector{Float64},
     market_mask::Vector{Float64},
     market_active::Float64,
-    level_active::Float64,
+    supremacy_weight::Float64,
+    level_weight::Float64,
     n_teams::Int,
     n_seasons::Int,
     n_months::Int,
@@ -187,7 +188,7 @@ end
     ll_sup   = logpdf.(Normal.(model_sup,   σ_sup), m_sup)
     ll_level = logpdf.(Normal.(model_level, σ_lev), m_level)
     Turing.@addlogprob! market_active *
-        sum((ll_sup .+ level_active .* ll_level) .* match_weights .* market_mask)
+        sum((supremacy_weight .* ll_sup .+ level_weight .* ll_level) .* match_weights .* market_mask)
 end
 
 # ==========================================
@@ -237,7 +238,7 @@ function PreGame.build_turing_model(config::SplitMarketDoublePoissonModel, featu
         hG, hD, hM, hF, aG, aD, aM, aF,
         home_xg, away_xg, xg_mask,
         mlh, mla, mmask,
-        _market_active(config), _level_active(config),
+        _market_active(config), config.supremacy_weight, config.level_weight,
         n_teams, n_seasons, n_months, config
     )
 end
@@ -325,4 +326,4 @@ Pred.compute_score_matrix(::SplitMarketDoublePoissonModel, params; max_goals::In
     _poisson_score(params.λ_h, params.λ_a; max_goals)
 
 println("[l02] split-market loader ready (sampled-σ): SplitMarketDoublePoissonModel " *
-        "{goals + xG + split-market + outfield}; toggles market_on / level_on")
+        "{goals + xG + split-market + outfield}; knobs market_on / supremacy_weight / level_weight")
