@@ -85,9 +85,10 @@ end
     # 3. UNIFIED LIKELIHOOD PIPELINE (AD-Safe)
     # ==========================================
     int_m = view(inter.μ_base, season_indices) .+ view(inter.δ_month, month_indices)
+    home_adv    = view(ha, home_team_indices)
     
-    log_λ_h = clamp.(int_m .+ view(ha, home_team_indices) .+ att_h .+ def_a, -20.0, 20.0)
-    log_λ_a = clamp.(int_m                                .+ att_a .+ def_h, -20.0, 20.0)
+    log_λ_h = clamp.(int_m .+ att_h .+ def_a .+ home_adv, -20.0, 20.0)
+    log_λ_a = clamp.(int_m .+ att_a .+ def_h, -20.0, 20.0)
 
     kap_h = view(kap, home_team_indices)
     kap_a = view(kap, away_team_indices)
@@ -108,9 +109,15 @@ end
     Turing.@addlogprob! sum((ll_goals_h .+ ll_goals_a) .* match_weights)
 
     # --- Pillar A: xG (Gamma) ---
+    # NB: xg_rate is recomputed from the *raw* log_λ (not the kappa-scaled λ),
+    # so it must be sanitized independently — clamp(NaN,…)=NaN would otherwise
+    # reach the Gamma scale arg and throw DomainError(θ>0) before the is_bad
+    # -Inf rejection above can take effect (the goals pillar only sanitizes λ).
     xg_rate_h = exp.(log_λ_h) .+ 1e-6
     xg_rate_a = exp.(log_λ_a) .+ 1e-6
-    
+    xg_rate_h = ifelse.(isnan.(xg_rate_h) .| isinf.(xg_rate_h), one.(xg_rate_h), xg_rate_h)
+    xg_rate_a = ifelse.(isnan.(xg_rate_a) .| isinf.(xg_rate_a), one.(xg_rate_a), xg_rate_a)
+
     ll_xg_h = logpdf.(Gamma.(ν_xg, xg_rate_h ./ ν_xg), home_xg)
     ll_xg_a = logpdf.(Gamma.(ν_xg, xg_rate_a ./ ν_xg), away_xg)
     Turing.@addlogprob! sum((ll_xg_h .+ ll_xg_a) .* match_weights .* xg_mask)
