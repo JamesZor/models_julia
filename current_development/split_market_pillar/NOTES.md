@@ -238,3 +238,39 @@ weights + ha. It's the JOINT weakly-identified structure, not one term. **⇒ r0
 split-market backtests are non-converged / screening-quality.** Resolving this is a dedicated
 base-model task: long-warmup sweep (≥2000), joint decorrelation/QR reparam, or fewer params for
 the data. The split-market question stays parked until the base model samples reliably.
+
+### 2026-06-25 — UNPARKED: sampled-σ double-Poisson converges; supremacy-only κ blow-up is an ARTIFACT
+
+New self-contained loader `l02_split_market_poisson.jl` (`SplitMarketDoublePoissonModel`, R2:
+goals+xG+split-market+outfield), σ_sup/σ_lev SAMPLED from tight priors, independent `market_on`/
+`level_on` toggles. Runner `r02_*` (single) + `r03_split_controls.jl` (3 variants in parallel via
+`@sync`/`@spawn` — 3×4 chains across 16 pinned cores). Ireland, single split, 1000samp/500warmup×4,
+depth 10. **All three variants CONVERGE** (max R-hat 1.004/1.003/1.007) — the sampled-σ release valve
+resolves the stall; depth-6 cap no longer needed.
+
+| variant | max R-hat | κ_std | σ_κ | κ range | σ_sup | σ_lev |
+|---|---|---|---|---|---|---|
+| A supremacy-only (mkt on, lvl off) | 1.004 | **0.232** | **0.300** | 0.69–1.39 | 0.224 | 0.535 (=prior) |
+| B market-OFF                        | 1.003 | **0.007** | **0.073** | 1.09–1.11 | 0.138 (=prior) | 0.537 (=prior) |
+| C supremacy+level (both anchored)   | 1.007 | 0.027 | 0.070 | 1.02–1.10 | **0.386** | **0.160** |
+
+**The big team-strength κ spread under supremacy-only anchoring is a CONSTRAINT ARTIFACT, not real
+team finishing signal.** Ordering is B≈C ≪ A (predicted C<A<B — WRONG). Evidence + mechanism:
+- **B (market-off) = the model's own pure goals+xG view shows κ essentially UNIFORM** (σ_κ 0.073,
+  all teams ≈1.10). No per-team finishing variation is detectable in the data. If it were real, B
+  would show it.
+- **Only the half-anchored config A blows κ up** (σ_κ 0.30). In A the market pins the supremacy
+  DIFFERENCE `(log_λ_h+log κ_h)−(log_λ_a+log κ_a)` while log_λ is tied to xG and the LEVEL is free,
+  so κ is the only free param that can reconcile market-supremacy with xG-level → it absorbs the
+  per-team market-vs-xG disagreement (spurious variance). Add the level anchor (C) → κ gets a 2nd
+  constraint and collapses back (σ_κ 0.070); remove the market (B) → κ pooled (0.073).
+- ⇒ my earlier read ("supremacy anchor frees κ to express finishing efficiency") is WRONG; κ is
+  soaking up half-anchored tension, not skill.
+
+**Bonus (C, both axes anchored): the model AGREES with the market on LEVEL (σ_lev 0.16, tight) and
+DISAGREES on SUPREMACY (σ_sup 0.386, loose) — the REVERSE of the split premise.** The model's biggest
+divergence from the market is on who-wins, not totals; so hard-anchoring supremacy forces the largest
+distortion (which A then dumps into κ). This argues against the surgical-supremacy-anchor thesis at
+the latent-rate layer. Still single-split / screening-quality, but the B-vs-A contrast is clean and
+mechanistically explained. NEXT (if pursued): OOS backtest A/B/C + the original un-split baseline on
+a converged grid before any verdict.
