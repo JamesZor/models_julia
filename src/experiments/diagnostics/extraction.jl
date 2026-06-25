@@ -98,7 +98,7 @@ function _process_parameter_fold(model, feature_tuple, chain, meta)
     end
 
     # --- 1. Global Scalar Parameters ---
-    scalar_candidates = [:ν_xg, :σ_market, :market_σ]
+    scalar_candidates = [:ν_xg, :σ_market, :market_σ, :σ_sup, :σ_lev]
     for p in scalar_candidates
         if p in keys(chain)
             samples = vec(Array(chain[p]))
