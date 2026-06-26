@@ -25,6 +25,11 @@ const Evaluation  = BayesianFootball.Evaluation
 const Experiments = BayesianFootball.Experiments
 const Data        = BayesianFootball.Data
 
+# REQUIRED: defines SplitMarketDoublePoissonModel + its loader-local prediction overrides
+# (extract_params / compute_score_matrix). Without this the split experiments fail to
+# reconstruct/predict and evaluate_experiments drops their rows -> NaN in the matrices.
+include("l02_split_market_poisson.jl")
+
 # ==========================================
 # 1. LOAD saved grid + build Betfair eval ds1
 # ==========================================
