@@ -28,7 +28,7 @@ const Features    = BayesianFootball.Features
 const Experiments = BayesianFootball.Experiments
 const Data        = BayesianFootball.Data
 
-include("l05_split_market_dixoncoles.jl")
+include("current_development/split_market_pillar/l05_split_market_dixoncoles.jl")
 
 # ==========================================
 # 1. DATA — Betfair market pillar

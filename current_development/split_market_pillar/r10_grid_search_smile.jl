@@ -43,8 +43,8 @@ const Signals     = BayesianFootball.Signals
 # l03 = smile model; l02 = the split (sup+level) cells in the r05 grid must be loadable from disk
 # (JLD2 needs the SplitMarketDoublePoissonModel type defined). Including both prints a few
 # "redefinition of constant" warnings (shared SUP_PRIOR etc.) — harmless.
-include("l02_split_market_poisson.jl")
-include("l03_local_intensity_poisson.jl")
+include("current_development/split_market_pillar/l02_split_market_poisson.jl")
+include("current_development/split_market_pillar/l03_local_intensity_poisson.jl")
 
 # ==========================================
 # 1. DATA  (train pillar = SofaScore ds.odds, as r05)
