@@ -62,7 +62,7 @@ Left-join the chosen target columns from `ds.lineups` onto the prepared starter 
 (match_id, player_id). One lineup row per player-match, so the join is 1:1.
 """
 function attach_targets(df::DataFrame, ds::Data.DataStore, targets::Vector{Symbol})
-    t = select(ds.lineups, unique([:match_id, :player_id; targets])...)
+    t = select(ds.lineups, unique(vcat([:match_id, :player_id], targets))...)
     return leftjoin(df, t, on = [:match_id, :player_id])
 end
 
