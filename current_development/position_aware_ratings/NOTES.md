@@ -34,9 +34,12 @@ not tracked per position.
 | `PROMPT.md` | Fresh-session kickoff brief (verbatim) |
 | `NOTES.md` | This — goals, gates, findings log |
 | `l00_position_helpers.jl` | clean_pos taxonomy, modal-position, off-position flag, construction A & B builders |
-| `r00_position_eda.jl` | EDA across ALL leagues: coverage, multi-positionality, Δ, A-vs-B |
-| `l01_position_ratings_feature.jl` | *(conditional)* new extractor → position-conditioned `flat_*` vectors |
-| `r01_mvp_double_poisson.jl` | *(conditional)* baseline vs position-aware, per-line eval |
+| `r00_position_eda.jl` | Phase-1 EDA across ALL leagues: coverage, multi-positionality, Δ, A-vs-B (verdict: STOP) |
+| `RESEARCH_role_aware_ideas.md` | deep-research synthesis → the pivot (role-neutral target + market yardstick) |
+| `l01_roleneutral_helpers.jl` | **Option-1 EDA**: discover role-neutral targets, role-standardise (z within position), within-player FE |
+| `r01_roleneutral_eda.jl` | **Option-1 EDA** runner: per (league × target) off-modal output penalty across all leagues |
+| `l01_position_ratings_feature.jl` | *(superseded)* original rating-based extractor — not built (Gate-3 null) |
+| `r01_mvp_double_poisson.jl` | *(superseded)* original rating MVP — not built |
 
 ## Decision gates (Phase 1 EDA, all betdb leagues, 2023+ starters)
 1. **Coverage** — % player-matches with a real (non-defaulted) position + rating; position mix; defaulted-M share.
@@ -52,6 +55,20 @@ not tracked per position.
 
 ## Findings log
 <!-- YYYY-MM-DD — phase / gate — result. Append newest-first. -->
+- 2026-06-27 — **PIVOT after deep-research** (batch `batch-20260627-130505-1a266db9`; full synthesis in
+  `RESEARCH_role_aware_ideas.md`). The Gate-3 null is now *explained*: SofaScore/WhoScored/FotMob ratings
+  are computed **conditional on the position played** (role-specific event weights/baselines), so an
+  out-of-position player accruing normal counting stats gets a normal rating — the penalty is invisible
+  **by construction** (verified vs two first-party methodology pages). Two consequences:
+  1. To detect a role effect, switch the target from the (role-conditioned) rating to a **role-neutral
+     output** we already have per-player (xG, xA, `bigChanceCreated`, `touchesInOppBox`, shots…), and
+     judge everything **against the market** (per-line LogLoss + GLMEdge), not against the rating.
+  2. New plan: **Option 1 (this EDA)** redo the out-of-position test on role-neutral, role-standardized
+     output → `l01_roleneutral_helpers.jl` + `r01_roleneutral_eda.jl`. **Option 2 (later)** prior-informed
+     Bayesian RAPM (team xG-diff target, player rating/xG as priors) as a new team-strength signal.
+  - Sobering caveat carried into the plan: lineup/position edges **mostly don't survive the closing line**
+    (public lineup news is priced by KO); realistic upside is **totals/derivative markets**, not 1X2.
+    Gate any build on a GLMEdge the single rating doesn't already open.
 - 2026-06-27 — **Phase 1 VERDICT: STOP. Do not build the MVP.** Gate 2 passes, Gate 3 fails on
   every data-rich league. The SofaScore match rating already prices the role played that match, so
   a per-position rating carries no extra information over the single rating.
