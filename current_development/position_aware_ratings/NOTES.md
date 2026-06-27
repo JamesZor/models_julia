@@ -38,6 +38,7 @@ not tracked per position.
 | `RESEARCH_role_aware_ideas.md` | deep-research synthesis → the pivot (role-neutral target + market yardstick) |
 | `l01_roleneutral_helpers.jl` | **Option-1 EDA**: discover role-neutral targets, role-standardise (z within position), within-player FE |
 | `r01_roleneutral_eda.jl` | **Option-1 EDA** runner: per (league × target) off-modal output penalty across all leagues |
+| `r02_team_market_relevance.jl` | **Option-1 gate**: team off-position index vs de-vigged totals market (GLMEdge logit) — does it beat the market? |
 | `l01_position_ratings_feature.jl` | *(superseded)* original rating-based extractor — not built (Gate-3 null) |
 | `r01_mvp_double_poisson.jl` | *(superseded)* original rating MVP — not built |
 
