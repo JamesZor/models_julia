@@ -52,6 +52,30 @@ not tracked per position.
 
 ## Findings log
 <!-- YYYY-MM-DD — phase / gate — result. Append newest-first. -->
+- 2026-06-27 — **Phase 1 VERDICT: STOP. Do not build the MVP.** Gate 2 passes, Gate 3 fails on
+  every data-rich league. The SofaScore match rating already prices the role played that match, so
+  a per-position rating carries no extra information over the single rating.
+  - **Gate 1 (coverage): PASS everywhere.** Ireland/First-Div/Korea/Norway/Finland all ~100% real
+    position, 99–100% rated, 0% defaulted-M, date range 2023→2026. (ScottishLower is a dead league:
+    0% rated, static one-position-per-player — excluded.)
+  - **Gate 2 (multi-positionality): PASS, strongly.** Off-modal share of starter appearances:
+    Ireland 13.2%, First-Div 10.6%, Korea 14.7%, Norway 11.5%, Finland 12.2%; 48–62% of players
+    multi-positional; mean distinct pos 1.53–1.71. Players genuinely move position — the idea is NOT
+    moot on data grounds.
+  - **Gate 3 (out-of-position Δ): FAIL, decisively.** Within-player FE (controls is_home, minutes,
+    opp_strength all sane, |t|≫20) → off-modal coef ≈ 0 and insignificant, not sign-consistent:
+    Ireland +0.019 (t=1.40), First-Div −0.012 (t=−0.73), Korea −0.003 (t=−0.31), Norway −0.012
+    (t=−1.14), Finland −0.002 (t=−0.11). With Korea se≈0.008 on n≈31k, even a 0.02-pt effect is ruled
+    out. Playing off your modal position does **not** measurably change your match rating.
+  - **Decision rule:** build only if Gate 2 AND Gate 3 pass on ≥1 league. Gate 3 fails on all 5 →
+    **no Phase 2.** Clean negative result (a valid outcome per the brief).
+  - Gate 4 hit an ordering bug first run (`estimate_delta_table` read `pre_overall` before it was
+    built); fixed in l00. Re-run will add A-vs-B corroboration, but it cannot overturn a null Gate 3
+    (if there's no Δ, A and B ≈ overall by construction).
+  - **Implication for the live pipeline:** the current single-rating + position *weights*
+    (`PositionalPlayerDynamics`) is the right design; per-position rating tracking is not worth the
+    complexity. Don't revisit unless a finer position taxonomy (not G/D/M/F) or a non-rating target
+    (xG/xA per role) is proposed.
 - 2026-06-27 — Phase 1 EDA **built, not yet run**. `l00_position_helpers.jl` + `r00_position_eda.jl`
   cover all 4 gates over every betdb segment (2023+ starters). Key design choices:
   - `canonical_pos` returns `missing` for unmappable strings → *true*-M kept separate from

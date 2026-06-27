@@ -305,14 +305,18 @@ prediction. Also: how often A / B differ materially (>ε) from the baseline.
 """
 function ab_holdout_eval(df::DataFrame; test_frac::Float64=0.3, min_pos_apps::Int=4, ε::Float64=0.25)
     base = df[df.pos_is_real .& df.has_rating .& (.!ismissing).(df.is_off_modal), :]
-    sort!(base, :match_date)
     nrow(base) < 100 && return (n=nrow(base), note="too few rated off-modal-eligible rows")
 
-    dates = sort(unique(base.match_date))
+    # Build pre_overall + pre_A first (delta=nothing) so the train slice HAS pre_overall before
+    # we estimate B's δ from it — otherwise estimate_delta_table can't find :pre_overall.
+    full = add_constructions!(base; min_pos_apps=min_pos_apps, delta_table=nothing)
+    dates = sort(unique(full.match_date))
     cut = dates[clamp(floor(Int, (1-test_frac)*length(dates)), 1, length(dates))]
 
-    full = add_constructions!(base; min_pos_apps=min_pos_apps,
-                              delta_table=estimate_delta_table(base[base.match_date .<= cut, :]))
+    dt = estimate_delta_table(full[full.match_date .<= cut, :])
+    full.pre_B = [ (!ismissing(r.is_off_modal) && r.is_off_modal === true) ?
+                   r.pre_overall + get(dt, String(r.pos), 0.0) : r.pre_overall for r in eachrow(full) ]
+
     test = full[full.match_date .> cut, :]
     nrow(test) == 0 && return (n=0, note="empty test")
 

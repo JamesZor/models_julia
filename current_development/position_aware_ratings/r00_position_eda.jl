@@ -97,8 +97,12 @@ for seg in SEGMENTS
     end
 
     # ---- Gate 4: A vs B held-out next-match rating ----
-    ab = ab_holdout_eval(df; test_frac=0.3, min_pos_apps=4)
     println("\n[Gate 4 — A vs B]  chronological holdout, RMSE of pre-match estimate vs realised rating")
+    ab = try
+        ab_holdout_eval(df; test_frac=0.3, min_pos_apps=4)
+    catch e
+        println("  [Gate 4 failed] $(sprint(showerror, e))"); (note="errored",)
+    end
     if hasproperty(ab, :note)
         println("  ", ab.note)
     else
