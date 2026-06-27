@@ -177,7 +177,7 @@ off-modal Δ isn't just "fielded a weakened XI vs a strong side".
 """
 function add_opponent_strength!(df::DataFrame)
     g = combine(groupby(df, [:match_id, :team_side]),
-                :rating => (x -> sum(skipmissing(x))) => :team_strength)
+                :rating => (x -> sum(skipmissing(x); init=0.0)) => :team_strength)
     other(side) = side == "home" ? "away" : "home"
     out = copy(df)
     out.opp_side = other.(out.team_side)

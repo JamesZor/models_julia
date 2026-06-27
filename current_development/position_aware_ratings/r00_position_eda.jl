@@ -47,6 +47,7 @@ for seg in SEGMENTS
         println("[SKIP] load_datastore_cached failed: $(sprint(showerror, e))"); continue
     end
 
+  try   # one bad league must not abort the whole sweep
     df = prepare_starter_lineups(ds; from_year=2023)
     if nrow(df) == 0
         println("[SKIP] no 2023+ starter lineups."); continue
@@ -56,6 +57,7 @@ for seg in SEGMENTS
     cov = coverage_stats(df)
     println("\n[Gate 1 — COVERAGE]")
     @printf("  starter player-matches=%d   players=%d   matches=%d\n", cov.n, cov.n_players, cov.n_matches)
+    @printf("  match-date range: %s … %s\n", string(minimum(df.match_date)), string(maximum(df.match_date)))
     @printf("  %% real position=%.1f   %% rated=%.1f   %% defaulted-M=%.1f\n",
             cov.pct_real_pos, cov.pct_rated, cov.pct_defaultM)
     println("  real position mix (%): ", cov.mix_real)
@@ -73,10 +75,14 @@ for seg in SEGMENTS
                 mp.off_modal_share, mp.n_off_modal)
     end
 
+    # gates 3 & 4 need realised ratings; many minor leagues have none.
+    g3coef = NaN; g3t = NaN; g4o = NaN; g4a = NaN; g4b = NaN
+  if !any(df.has_rating)
+    println("\n[Gate 3 & 4]  no realised ratings in this league — N/A.")
+  else
     # ---- Gate 3: out-of-position Δ ----
     df_os = add_opponent_strength!(df)
     (m3, tbl3) = out_of_position_regression(df_os)
-    g3coef = NaN; g3t = NaN
     println("\n[Gate 3 — OUT-OF-POSITION Δ]  within-player FE: rating ~ off_modal + is_home + minutes + opp_str")
     if m3 === nothing
         println("  too few rows / no opponent strength — skipped.")
@@ -92,7 +98,6 @@ for seg in SEGMENTS
 
     # ---- Gate 4: A vs B held-out next-match rating ----
     ab = ab_holdout_eval(df; test_frac=0.3, min_pos_apps=4)
-    g4o = NaN; g4a = NaN; g4b = NaN
     println("\n[Gate 4 — A vs B]  chronological holdout, RMSE of pre-match estimate vs realised rating")
     if hasproperty(ab, :note)
         println("  ", ab.note)
@@ -106,11 +111,15 @@ for seg in SEGMENTS
                 ab.pct_A_differs, ab.pct_B_differs)
         g4o = om.rmse_overall; g4a = om.rmse_A; g4b = om.rmse_B
     end
+  end  # rating-gated block
 
     push!(summary, (name, cov.n, cov.pct_real_pos, cov.pct_defaultM,
                     mp.n_players == 0 ? NaN : mp.off_modal_share,
                     mp.n_players == 0 ? NaN : mp.pct_multipos_players,
                     g3coef, g3t, g4o, g4a, g4b))
+  catch e
+    println("[ERROR] $name gates failed: $(sprint(showerror, e))")
+  end  # per-league try
 end
 
 # ============================================================================
