@@ -55,6 +55,26 @@ not tracked per position.
 
 ## Findings log
 <!-- YYYY-MM-DD — phase / gate — result. Append newest-first. -->
+- 2026-06-27 — **Option-1 EDA RESULT: signal FOUND (positive).** `r01_roleneutral_eda.jl` re-ran the
+  out-of-position test on every role-neutral output, role-standardised within position (z), within-player
+  FE. Unlike the rating (Gate-3 null), the result splits cleanly:
+  - **Attacking THREAT drops off-position** (the hidden penalty): `onTargetScoringAttempt` negative in
+    **all 4 leagues that record it** (mean_t −3.68); `expected_goals` strongly negative (Veik t=−5.27,
+    First-Div −2.82); `goals` negative (Veik −4.18, Norway −2.38). Magnitude ≈ 0.08–0.17 role-sd.
+  - **Volume/involvement RISES off-position** (t=+8…+14 across all 5 leagues): total/accurate passes,
+    touches, long balls, clearances. Partly compositional (versatile high-touch M dropped into low-touch
+    roles carry their volume), partly playing safe. Dueling/contesting drifts negative (more passive).
+  - **Why Gate 3 was null, now mechanistic:** the composite rating nets the lost attacking output against
+    the *gained* safe involvement → ≈0. The threat dimension underneath genuinely degrades. ⇒ the pivot
+    was correct; the out-of-position signal lives in **attacking output (shots-on-target / xG / goals)**,
+    invisible to the rating.
+  - Coverage: shot/xG columns ~30–57% per league (n 10k–20k); present in Korea/Norway/Veik/First-Div, not
+    Ireland(79)/ScottishLower. ScottishLower still dead (off_modal all-false → NaN t).
+  - **NEXT (gate before building):** the per-player effect is real but small/sporadic; the deep-research
+    caveat says lineup edges rarely survive the close. So before any Turing build, run a **team-level
+    market-relevance EDA** (`r02`): does a team's off-position attacking-deployment index predict match
+    total goals / xG **beyond the de-vigged market** (totals lines, GLMEdge-style)? Pass → build the
+    Option-1 feature; null → move to Option 2 (prior-informed RAPM).
 - 2026-06-27 — **PIVOT after deep-research** (batch `batch-20260627-130505-1a266db9`; full synthesis in
   `RESEARCH_role_aware_ideas.md`). The Gate-3 null is now *explained*: SofaScore/WhoScored/FotMob ratings
   are computed **conditional on the position played** (role-specific event weights/baselines), so an
