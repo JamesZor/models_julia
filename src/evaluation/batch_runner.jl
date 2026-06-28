@@ -90,7 +90,7 @@ function display_summary_metric(df::DataFrame, metric_family::Symbol)
         cols = [:model, :crps_home_mean, :crps_away_mean, :crps_all_mean]
         println("\n--- CRPS Summary (Lower is Better) ---")
     elseif metric_family == :lpd
-        cols = [:model, :lpd_overall_model_lpd, :lpd_overall_market_lpd, :lpd_overall_diff_lpd, :lpd_overall_elpd, :lpd_overall_n_obs]
+        cols = [:model, :lpd_overall_model_lpd, :lpd_overall_model_std, :lpd_overall_model_skewness, :lpd_overall_model_kurtosis, :lpd_overall_market_lpd, :lpd_overall_diff_lpd, :lpd_overall_elpd, :lpd_overall_n_obs]
         # Also surface per-selection diff columns (e.g. lpd_under_25_overall_diff_lpd)
         per_line = filter(n -> occursin(r"^lpd_.+_overall_diff_lpd$", n) && n != "lpd_overall_diff_lpd", names(df))
         append!(cols, Symbol.(per_line))

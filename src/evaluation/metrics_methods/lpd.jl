@@ -12,10 +12,13 @@ LPD() = LPD(Symbol[])
 
 # --- The Components ---
 struct LPDComponent <: AbstractMetricComponent
-    model_lpd::Float64    # Mean per-match LPD (higher is better)
-    market_lpd::Float64   # Mean per-match LPD from market fair odds
-    diff_lpd::Float64     # Model - Market (positive = model is better)
-    elpd::Float64         # Total ELPD: sum of all per-match LPDs
+    model_lpd::Float64       # Mean per-match LPD (higher is better)
+    model_std::Float64       # Std of per-match LPD distribution
+    model_skewness::Float64  # Skewness of per-match LPD distribution
+    model_kurtosis::Float64  # Excess kurtosis of per-match LPD distribution
+    market_lpd::Float64      # Mean per-match LPD from market fair odds
+    diff_lpd::Float64        # Model - Market (positive = model is better)
+    elpd::Float64            # Total ELPD: sum of all per-match LPDs
     n_obs::Int
 end
 
@@ -115,6 +118,15 @@ function compute_metric(metric::LPD, exp::ExperimentResults, ds::DataStore, late
     n_obs       = nrow(analysis_df)
 
     return LPDResult(
-        LPDComponent(mean_model, mean_market, diff, elpd, n_obs)
+        LPDComponent(
+            mean_model,
+            std(lpd_model_array),
+            skewness(lpd_model_array),
+            kurtosis(lpd_model_array),
+            mean_market,
+            diff,
+            elpd,
+            n_obs,
+        )
     )
 end
