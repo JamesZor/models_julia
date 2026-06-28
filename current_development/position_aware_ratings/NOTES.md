@@ -56,6 +56,18 @@ not tracked per position.
 
 ## Findings log
 <!-- YYYY-MM-DD — phase / gate — result. Append newest-first. -->
+- 2026-06-28 — **Option-1 GATE (r02): NULL — drop the build.** Team-level off-position index (count of
+  starters off modal position, all + attacking-roles subset, both teams) vs de-vigged totals market,
+  `logit(over hit) ~ market_logit + index` across Ireland/Korea/Norway/Veik. **Not significant in a single
+  league** (`n_neg_sig=0/4`; best cell Korea over_15×off_att z=−1.67, p=0.09 = 1 marginal of 24). `mean_z`
+  −0.13…−0.74; `mean_dll≈−0.001` nats (in-sample, trivial). **Honest nuance:** coef is *consistently
+  negative* across all leagues+signals = the predicted direction (more off-position ⇒ fewer goals), so the
+  effect is REAL but too small and **already priced by the market** (exactly the deep-research "lineup edge
+  doesn't survive the close"). FirstDiv had no matched totals odds; ScottishLower index all-zero (skipped).
+  - **Full chain now characterised:** Gate 2 (players move position) ✓ → r01 (it degrades attacking output)
+    ✓ → Gate 3 (rating hides it) null+explained → r02 (market prices it) null. ⇒ **no position-aware
+    feature edge.** Proceed to **Option 2 (prior-informed Bayesian RAPM)** — different mechanism, doesn't
+    depend on the position-Δ.
 - 2026-06-27 — **Option-1 EDA RESULT: signal FOUND (positive).** `r01_roleneutral_eda.jl` re-ran the
   out-of-position test on every role-neutral output, role-standardised within position (z), within-player
   FE. Unlike the rating (Gate-3 null), the result splits cleanly:
