@@ -30,14 +30,14 @@ const Features    = BayesianFootball.Features
 const Experiments = BayesianFootball.Experiments
 const Data        = BayesianFootball.Data
 
-include("l04_split_market_negbin.jl")
+include("current_development/split_market_pillar/l04_split_market_negbin.jl")
 
 # ==========================================
 # 1. DATA — Betfair market pillar
 # ==========================================
 # 718 = Ireland First Division (over-dispersed, NB regime). Swap to Data.Ireland() for the
 # near-Poisson top flight (there NegBin ≈ double-Poisson).
-segment = Data.IrelandFirstDivision()
+segment = Data.Ireland()
 ds = Data.load_datastore_cached(segment)
 odds = Data.summarize_betfair_market(ds, open_window=(-100000.0, -10.0), close_window=(-20.0, 0.0))
 ds_market = Data.DataStore(
@@ -97,6 +97,50 @@ chains_obj = Experiments.Diagnostics.extract_chains(ds_market, results)
 println("\n--- Convergence Diagnostics (R-hat & ESS) ---")
 conv = Experiments.Diagnostics.check_convergence(chains_obj)
 display(conv.df)
+
+#=
+julia> display(conv.df)
+35×11 DataFrame
+ Row │ std         mean        ess      train_season  raw_symbol            rhat      target_season  fold   week   parameter             entity               
+     │ Float64     Float64     Float64  String        Symbol                Float64   String         Int64  Int64  String                String               
+─────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │  0.327855    3.25026        NaN  2026          ν_xg                  1.00062   2026               0      0  ν_xg                  global
+   2 │  0.0353883   0.386455       NaN  2026          σ_sup                 1.00051   2026               0      0  σ_sup                 global
+   3 │  0.0244765   0.159793       NaN  2026          σ_lev                 1.00131   2026               0      0  σ_lev                 global
+   4 │  0.0504884   0.225327       NaN  2026          ha.γ_team_raw[1]      1.00023   2026               0      0  home_advantage        bohemian
+   5 │  0.0518027   0.211407       NaN  2026          ha.γ_team_raw[2]      1.00069   2026               0      0  home_advantage        cork-city
+   6 │  0.0499821   0.218334       NaN  2026          ha.γ_team_raw[3]      0.999684  2026               0      0  home_advantage        derry-city
+   7 │  0.0504883   0.212006       NaN  2026          ha.γ_team_raw[4]      0.999529  2026               0      0  home_advantage        drogheda-united
+   8 │  0.0539797   0.220687       NaN  2026          ha.γ_team_raw[5]      1.0014    2026               0      0  home_advantage        dundalk-fc
+   9 │  0.0500719   0.229292       NaN  2026          ha.γ_team_raw[6]      1.00097   2026               0      0  home_advantage        galway-united
+  10 │  0.0496657   0.219012       NaN  2026          ha.γ_team_raw[7]      1.00076   2026               0      0  home_advantage        shamrock-rovers
+  11 │  0.0504003   0.22475        NaN  2026          ha.γ_team_raw[8]      1.00301   2026               0      0  home_advantage        shelbourne
+  12 │  0.0499427   0.224939       NaN  2026          ha.γ_team_raw[9]      1.00322   2026               0      0  home_advantage        sligo-rovers
+  13 │  0.0490406   0.224916       NaN  2026          ha.γ_team_raw[10]     1.00035   2026               0      0  home_advantage        st-patricks-athletic
+  14 │  0.0499119   0.227651       NaN  2026          ha.γ_team_raw[11]     0.999766  2026               0      0  home_advantage        waterford-fc
+  15 │  0.0441482   0.221234       NaN  2026          ha.γ_base             1.00145   2026               0      0  ha.γ_base             global
+  16 │  0.0212589   0.0253389      NaN  2026          ha.σ_γ                1.0011    2026               0      0  ha.σ_γ                global
+  17 │  0.0674408   1.09218        NaN  2026          kap.κ_team_raw[1]     1.00208   2026               0      0  kappa                 bohemian
+  18 │  0.061619    1.04586        NaN  2026          kap.κ_team_raw[2]     1.00039   2026               0      0  kappa                 cork-city
+  19 │  0.067265    1.02187        NaN  2026          kap.κ_team_raw[3]     1.00124   2026               0      0  kappa                 derry-city
+  20 │  0.0637074   1.02807        NaN  2026          kap.κ_team_raw[4]     1.00102   2026               0      0  kappa                 drogheda-united
+  21 │  0.0753695   1.06509        NaN  2026          kap.κ_team_raw[5]     1.00108   2026               0      0  kappa                 dundalk-fc
+  22 │  0.0615613   1.06956        NaN  2026          kap.κ_team_raw[6]     1.00234   2026               0      0  kappa                 galway-united
+  23 │  0.0622731   1.0491         NaN  2026          kap.κ_team_raw[7]     1.00075   2026               0      0  kappa                 shamrock-rovers
+  24 │  0.0630706   1.05498        NaN  2026          kap.κ_team_raw[8]     0.999579  2026               0      0  kappa                 shelbourne
+  25 │  0.06887     1.09419        NaN  2026          kap.κ_team_raw[9]     1.00109   2026               0      0  kappa                 sligo-rovers
+  26 │  0.0635182   1.08197        NaN  2026          kap.κ_team_raw[10]    1.00102   2026               0      0  kappa                 st-patricks-athletic
+  27 │  0.0705935   1.09689        NaN  2026          kap.κ_team_raw[11]    1.00038   2026               0      0  kappa                 waterford-fc
+  28 │  0.0851475   0.643919       NaN  2026          kap.κ_base            1.00027   2026               0      0  kap.κ_base            global
+  29 │  0.0415807   0.068086       NaN  2026          kap.σ_κ               1.00244   2026               0      0  kap.σ_κ               global
+  30 │  0.0672413  -0.125539       NaN  2026          p_dyn.w_G_att         1.00049   2026               0      0  p_dyn.w_G_att         global
+  31 │  0.0658728   0.169177       NaN  2026          p_dyn.w_G_def         1.00088   2026               0      0  p_dyn.w_G_def         global
+  32 │  0.0155974   0.108839       NaN  2026          p_dyn.w_Outfield_att  1.00118   2026               0      0  p_dyn.w_Outfield_att  global
+  33 │  0.0144181  -0.123087       NaN  2026          p_dyn.w_Outfield_def  1.00061   2026               0      0  p_dyn.w_Outfield_def  global
+  34 │ 21.3183     32.5835         NaN  2026          disp.log_r            1.00059   2026               0      0  r_home                global
+  35 │ 10.3723     26.3158         NaN  2026          disp.log_r            1.00059   2026               0      0  r_away                global
+=#
+
 
 println("\n--- Dispersion rows (the NegBin r; small r = over-dispersed, large r ≈ Poisson) ---")
 disp_rows = filter(r -> occursin("disp", lowercase(string(r.raw_symbol))) ||

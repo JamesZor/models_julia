@@ -3,6 +3,50 @@
 Research stream for the time-decay **outfield** engines. Lives in its own folder because
 `ab_test_dixon_coles/` has been stretched beyond its original purpose.
 
+> **Smile-pillar results & verdict:** see [`RESULTS_smile_grid.md`](RESULTS_smile_grid.md) — the
+> smile grid (r10), per-line diagnostics (r12/r13), and pooled-totals GLMEdge (r14). TL;DR:
+> `li_smile50` is the keeper (best BTTS GLMEdge p=0.01 + top pooled-totals coef); route smile→totals/BTTS,
+> supremacy→1X2; next decisive test is the cross-league pool (a future runner).
+
+## Canonical naming (single source of truth — use these everywhere)
+
+A model is **two independent axes**; name each with ONE fixed token (mixing them is what kept the names
+slipping). Reference name = `<pillar>-<disp>`; cell name (with knob) = `<pillar>_<disp>_<knob><val>`.
+
+**Axis A — market pillar** (the research axis):
+
+| colloquial | canonical | struct prefix | knob |
+|---|---|---|---|
+| "olds" / old market | **`iso`** (isotropic: shared σ + scalar weight) | src `*Market*` engines | `mw` (market_weight) |
+| "sup+level" | **`split`** (anisotropic supremacy + level) | `SplitMarket*Model` (l02/l04/l05/l06) | `lw` (level_weight) |
+| "local intensity" / smile | **`smile`** (supremacy + per-strike Λ(K) smile) | `LocalIntensitySmile*Model` (l03) | `sw` (smile_weight) |
+| structural-only control | **`none`** / nomarket | — | — |
+
+**Axis B — dispersion (goals likelihood):** `pois` (double-Poisson) · `nb` (NegBin) · `cmp` (COM-Poisson,
+sub-Poisson capable) · `dc` (Dixon-Coles).
+
+Examples: `smile-pois`, `split-nb`, `cmp-split`, `iso-pois`; cells `split_nb_lw50`, `smile_pois_sw50`,
+`iso_pois_mw100`.
+
+**Saved-cell aliases** (DON'T rename the `.jls` folders / saved names — loading breaks; canonical is for
+new work + prose):
+
+| saved name | canonical |
+|---|---|
+| `dp_nomarket` | `none_pois` |
+| `dp_old_mw50/100` | `iso_pois_mw50/100` |
+| `dp_split_lw0/25/50/100` | `split_pois_lw0/25/50/100` |
+| `li_sup_only` | `smile_pois_sw0` (smile off ⇒ supremacy only) |
+| `li_smile50/100` | `smile_pois_sw50/100` |
+| `li_smile_only` | `smile_pois_sup0` (smile on, supremacy off) |
+
+Smile-dispersion extensions (when built) parallel the split structs:
+`LocalIntensitySmileNegBinModel` / `…CMPModel` / `…DixonColesModel`. The smile pillar is
+likelihood-agnostic — extend by swapping (1) the goals likelihood and (2) the per-line O/U pricing CDF;
+keep the market smile inversion Poisson-referenced. NB/CMP (likelihood dispersion) and the smile (pricing
+dispersion) attack the same thin-tail problem → test the factorial `{pois,nb,cmp,dc} × {iso,split,smile}`,
+don't reflexively stack both.
+
 ## Why
 
 The current market pillar (every `*Market*` engine) anchors the two log goal-rates

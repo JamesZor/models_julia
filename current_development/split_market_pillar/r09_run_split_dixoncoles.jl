@@ -95,6 +95,48 @@ println("\n--- Convergence Diagnostics (R-hat & ESS) ---")
 conv = Experiments.Diagnostics.check_convergence(chains_obj)
 display(conv.df)
 
+#=
+julia> display(conv.df)
+33×11 DataFrame
+ Row │ std        mean        ess      train_season  raw_symbol            rhat      target_season  fold   week   parameter             entity               
+     │ Float64    Float64     Float64  String        Symbol                Float64   String         Int64  Int64  String                String               
+─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ 0.319414    3.24742        NaN  2026          ν_xg                  1.00274   2026               0      0  ν_xg                  global
+   2 │ 0.0345272   0.386161       NaN  2026          σ_sup                 1.00087   2026               0      0  σ_sup                 global
+   3 │ 0.025297    0.160025       NaN  2026          σ_lev                 1.00263   2026               0      0  σ_lev                 global
+   4 │ 0.0509344   0.227079       NaN  2026          ha.γ_team_raw[1]      1.00078   2026               0      0  home_advantage        bohemian
+   5 │ 0.0513365   0.212431       NaN  2026          ha.γ_team_raw[2]      1.00008   2026               0      0  home_advantage        cork-city
+   6 │ 0.0510091   0.219181       NaN  2026          ha.γ_team_raw[3]      0.999577  2026               0      0  home_advantage        derry-city
+   7 │ 0.0519738   0.212407       NaN  2026          ha.γ_team_raw[4]      1.00201   2026               0      0  home_advantage        drogheda-united
+   8 │ 0.0561859   0.222079       NaN  2026          ha.γ_team_raw[5]      1.00088   2026               0      0  home_advantage        dundalk-fc
+   9 │ 0.0510595   0.23071        NaN  2026          ha.γ_team_raw[6]      1.00039   2026               0      0  home_advantage        galway-united
+  10 │ 0.0510321   0.220608       NaN  2026          ha.γ_team_raw[7]      1.00306   2026               0      0  home_advantage        shamrock-rovers
+  11 │ 0.0509069   0.22583        NaN  2026          ha.γ_team_raw[8]      1.00133   2026               0      0  home_advantage        shelbourne
+  12 │ 0.0521286   0.226242       NaN  2026          ha.γ_team_raw[9]      1.00134   2026               0      0  home_advantage        sligo-rovers
+  13 │ 0.0521842   0.225693       NaN  2026          ha.γ_team_raw[10]     1.00175   2026               0      0  home_advantage        st-patricks-athletic
+  14 │ 0.0511854   0.229381       NaN  2026          ha.γ_team_raw[11]     1.00198   2026               0      0  home_advantage        waterford-fc
+  15 │ 0.0455924   0.223068       NaN  2026          ha.γ_base             0.999616  2026               0      0  ha.γ_base             global
+  16 │ 0.0205994   0.0258232      NaN  2026          ha.σ_γ                1.00121   2026               0      0  ha.σ_γ                global
+  17 │ 0.063757    1.09199        NaN  2026          kap.κ_team_raw[1]     1.00115   2026               0      0  kappa                 bohemian
+  18 │ 0.0593294   1.0475         NaN  2026          kap.κ_team_raw[2]     1.00189   2026               0      0  kappa                 cork-city
+  19 │ 0.0687058   1.0228         NaN  2026          kap.κ_team_raw[3]     1.00114   2026               0      0  kappa                 derry-city
+  20 │ 0.0636135   1.02859        NaN  2026          kap.κ_team_raw[4]     1.00033   2026               0      0  kappa                 drogheda-united
+  21 │ 0.0732847   1.06516        NaN  2026          kap.κ_team_raw[5]     0.999983  2026               0      0  kappa                 dundalk-fc
+  22 │ 0.0611967   1.06883        NaN  2026          kap.κ_team_raw[6]     1.00162   2026               0      0  kappa                 galway-united
+  23 │ 0.0622674   1.04906        NaN  2026          kap.κ_team_raw[7]     1.00004   2026               0      0  kappa                 shamrock-rovers
+  24 │ 0.0610469   1.05533        NaN  2026          kap.κ_team_raw[8]     1.0016    2026               0      0  kappa                 shelbourne
+  25 │ 0.0652163   1.09394        NaN  2026          kap.κ_team_raw[9]     1.0003    2026               0      0  kappa                 sligo-rovers
+  26 │ 0.0611534   1.08144        NaN  2026          kap.κ_team_raw[10]    1.00255   2026               0      0  kappa                 st-patricks-athletic
+  27 │ 0.0657136   1.09663        NaN  2026          kap.κ_team_raw[11]    1.0024    2026               0      0  kappa                 waterford-fc
+  28 │ 0.082108    0.642848       NaN  2026          kap.κ_base            1.00041   2026               0      0  kap.κ_base            global
+  29 │ 0.0414732   0.0667929      NaN  2026          kap.σ_κ               1.00454   2026               0      0  kap.σ_κ               global
+  30 │ 0.0685012  -0.127073       NaN  2026          p_dyn.w_G_att         0.999852  2026               0      0  p_dyn.w_G_att         global
+  31 │ 0.0636671   0.170458       NaN  2026          p_dyn.w_G_def         1.0002    2026               0      0  p_dyn.w_G_def         global
+  32 │ 0.0157378   0.108924       NaN  2026          p_dyn.w_Outfield_att  1.00097   2026               0      0  p_dyn.w_Outfield_att  global
+  33 │ 0.0148175  -0.123085       NaN  2026          p_dyn.w_Outfield_def  1.00138   2026               0      0  p_dyn.w_Outfield_def  global
+=#
+
+
 chain = results.training_results.items[1][1]
 println("\n--- Dixon-Coles correlation ρ (after 0.3·tanh squash) ---")
 if Symbol("dc.ρ_base") in keys(chain)
@@ -112,5 +154,13 @@ for p in (:σ_sup, :σ_lev, :ν_xg)
         println("  $p: mean=$(round(mean(v),digits=4))  std=$(round(std(v),digits=4))")
     end
 end
+
+
+
+
+#=
+(ρ≈0 = DC correction negligible ⇒ ≈ double-Poisson; |ρ|>~0.05 = real low-score structure)
+=#
+
 println("\nNext: full-CV + r06_per_line_eval.jl (point include at l05) — look for edge on BTTS /")
 println("correct-score (where ρ reshapes the low-score cells), not totals.")
