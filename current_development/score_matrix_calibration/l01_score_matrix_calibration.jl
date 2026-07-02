@@ -9,7 +9,6 @@ Also implements functions to fit the bias on all data and via a time-decay walk-
 =#
 
 using DataFrames
-using GLM
 using LogExpFunctions # for logit / logistic
 using Statistics
 using Dates
@@ -61,80 +60,79 @@ function tilt_score_matrix!(P::Matrix{Float64}, masks::Vector{BitVector}, gammas
     return P
 end
 
-"""
-    fit_global_bias(df_market::DataFrame)
-Fits a simple intercept-only logistic regression on the provided market data.
-Returns the fitted gamma.
-Data should contain `is_winner` (1.0/0.0) and `prob_model` (the raw model mean probability).
-"""
-function fit_global_bias(df_market::DataFrame)
-    df_fit = dropmissing(df_market, [:is_winner, :prob_model])
-    nrow(df_fit) == 0 && return 0.0
-    
-    eps = 1e-6
-    df_fit.actual = Float64.(df_fit.is_winner)
-    df_fit.logit_prob = logit.(clamp.(Float64.(df_fit.prob_model), eps, 1.0 - eps))
-    
-    form = @formula(actual ~ 1)
-    glm_model = glm(form, df_fit, Binomial(), LogitLink(), offset=df_fit.logit_prob)
-    
-    return coef(glm_model)[1]
+# ------------------------------------------------------------------------------
+# INTERCEPT-ONLY LOGISTIC SHIFT (the calibration γ)
+# ------------------------------------------------------------------------------
+# γ solves the (optionally weighted) intercept-only logistic MLE with the model's
+# logit as a fixed offset:   Σ w_i·( logistic(γ + logit(model_p_i)) − y_i ) = 0.
+# This is monotone increasing in γ, so a bisection is exact and robust.
+#
+# The target `y` is the reference we calibrate the per-line MEAN onto:
+#   • target = actual outcomes (is_winner ∈ {0,1})  ⇒ calibrate to REALITY.
+#   • target = de-vigged market prob (prob_fair_close ∈ (0,1)) ⇒ strip model−market skew.
+# For a binary y this reproduces the GLM intercept-only fit exactly; for a fractional
+# y (the market prob) it is the natural quasi-likelihood analogue and needs no GLM.
+function _fit_shift(y::Vector{Float64}, logit_p::Vector{Float64}, w::Vector{Float64})
+    f(γ) = sum(w .* (logistic.(γ .+ logit_p) .- y))   # increasing in γ; root = MLE
+    lo, hi = -20.0, 20.0
+    f(lo) > 0.0 && return lo                            # degenerate: mean model ≫ target
+    f(hi) < 0.0 && return hi
+    for _ in 1:100
+        m = 0.5 * (lo + hi)
+        f(m) > 0.0 ? (hi = m) : (lo = m)
+        hi - lo < 1e-10 && break
+    end
+    return 0.5 * (lo + hi)
 end
 
 """
-    fit_walk_forward_bias(df_market::DataFrame; half_life_days::Float64 = 60.0)
-Calculates the walking forward bias gamma for each match using ONLY past data.
-Observations are weighted with an exponential time decay.
-Returns a Dict mapping `match_id` -> gamma.
+    fit_global_bias(df_market::DataFrame; target::Symbol = :is_winner)
+Global (pooled) calibration shift γ centering the tilted per-line mean onto `target`.
+`df_market` must contain `prob_model` and the `target` column (`is_winner` for reality,
+`prob_fair_close` for the market). Returns the scalar γ.
 """
-function fit_walk_forward_bias(df_market::DataFrame; half_life_days::Float64 = 90.0)
-    df_fit = dropmissing(df_market, [:is_winner, :prob_model, :match_date])
-    nrow(df_fit) == 0 && return Dict{String, Float64}()
-    
+function fit_global_bias(df_market::DataFrame; target::Symbol = :is_winner)
+    df_fit = dropmissing(df_market, [target, :prob_model])
+    nrow(df_fit) == 0 && return 0.0
     eps = 1e-6
-    df_fit.actual = Float64.(df_fit.is_winner)
-    df_fit.logit_prob = logit.(clamp.(Float64.(df_fit.prob_model), eps, 1.0 - eps))
-    
-    # Sort by date
+    y = clamp.(Float64.(df_fit[!, target]), eps, 1.0 - eps)
+    o = logit.(clamp.(Float64.(df_fit.prob_model), eps, 1.0 - eps))
+    return _fit_shift(y, o, ones(length(y)))
+end
+
+"""
+    fit_walk_forward_bias(df_market::DataFrame; half_life_days = 90.0, target = :is_winner)
+Walk-forward calibration shift γ per match, fit on ONLY past data with an exponential
+time decay (half-life in days). Same `target` semantics as `fit_global_bias`.
+Returns a Dict mapping `match_id` -> γ (0.0 until `min_history` past matches exist).
+"""
+function fit_walk_forward_bias(df_market::DataFrame; half_life_days::Float64 = 90.0,
+                               target::Symbol = :is_winner)
+    df_fit = dropmissing(df_market, [target, :prob_model, :match_date])
+    nrow(df_fit) == 0 && return Dict{eltype(df_market.match_id), Float64}()
+
+    eps = 1e-6
+    df_fit = copy(df_fit)
     sort!(df_fit, :match_date)
-    
+    y_all = clamp.(Float64.(df_fit[!, target]), eps, 1.0 - eps)
+    o_all = logit.(clamp.(Float64.(df_fit.prob_model), eps, 1.0 - eps))
+    dates = df_fit.match_date
+
     match_gammas = Dict{eltype(df_market.match_id), Float64}()
-    
-    # Start predicting only when we have at least N past matches
     min_history = 20
-    
     decay_rate = log(2) / half_life_days
-    
+
     for i in 1:nrow(df_fit)
-        target_match = df_fit[i, :]
-        
-        if i <= min_history
-            match_gammas[target_match.match_id] = 0.0
+        mid = df_fit.match_id[i]
+        # strictly-past rows (guards same-day leakage)
+        past = findall(dates[1:(i-1)] .< dates[i])
+        if length(past) < min_history
+            match_gammas[mid] = 0.0
             continue
         end
-        
-        # All data strictly before the current date
-        past_data = df_fit[1:(i-1), :]
-        past_data = past_data[past_data.match_date .< target_match.match_date, :]
-        
-        if nrow(past_data) < min_history
-            match_gammas[target_match.match_id] = 0.0
-            continue
-        end
-        
-        # Calculate time weights
-        days_diff = (target_match.match_date .- past_data.match_date) ./ Dates.Day(1)
+        days_diff = (dates[i] .- dates[past]) ./ Dates.Day(1)
         wts = exp.(-decay_rate .* days_diff)
-        
-        form = @formula(actual ~ 1)
-        
-        try
-            glm_model = glm(form, past_data, Binomial(), LogitLink(), wts=wts, offset=past_data.logit_prob)
-            match_gammas[target_match.match_id] = coef(glm_model)[1]
-        catch e
-            match_gammas[target_match.match_id] = 0.0
-        end
+        match_gammas[mid] = _fit_shift(y_all[past], o_all[past], wts)
     end
-    
     return match_gammas
 end
