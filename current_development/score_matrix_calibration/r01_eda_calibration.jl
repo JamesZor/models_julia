@@ -19,8 +19,11 @@ const Experiments = BayesianFootball.Experiments
 const Predictions = BayesianFootball.Predictions
 const Data = BayesianFootball.Data
 
-include("current_development/split_market_pillar/l03_local_intensity_poisson.jl")
-include("current_development/score_matrix_calibration/l01_score_matrix_calibration.jl")
+# Resolve loader paths from the package root so this runs identically whether the file is
+# `include()`d (nested includes are otherwise resolved relative to THIS file's dir) or pasted.
+const _ROOT = pkgdir(BayesianFootball)
+include(joinpath(_ROOT, "current_development/split_market_pillar/l03_local_intensity_poisson.jl"))
+include(joinpath(_ROOT, "current_development/score_matrix_calibration/l01_score_matrix_calibration.jl"))
 
 println("[INFO] Loading Ireland dataset...")
 ds = Data.load_datastore_cached(Data.Ireland(); max_age_hours=99999)
