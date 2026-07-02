@@ -19,8 +19,8 @@ const Experiments = BayesianFootball.Experiments
 const Predictions = BayesianFootball.Predictions
 const Data = BayesianFootball.Data
 
-include("../split_market_pillar/l03_local_intensity_poisson.jl")
-include("l01_score_matrix_calibration.jl")
+include("current_development/split_market_pillar/l03_local_intensity_poisson.jl")
+include("current_development/score_matrix_calibration/l01_score_matrix_calibration.jl")
 
 println("[INFO] Loading Ireland dataset...")
 ds = Data.load_datastore_cached(Data.Ireland(); max_age_hours=99999)
@@ -43,11 +43,7 @@ adf = innerjoin(adf, ds1.matches[:, [:match_id, :match_date]], on=:match_id)
 dropmissing!(adf, [:prob_fair_close, :is_winner])
 adf.spread = Float64.(adf.prob_model) .- Float64.(adf.prob_fair_close)
 
-selections_to_test = [
-    (:btts_yes, "BTTS", ""),
-    (:home, "1X2", ""),
-    (:over, "OverUnder", "2.5")
-]
+selections_to_test = [:btts_yes, :home, :over_25]
 
 println("\n" * "="^80)
 println("1. PARAMETER COMPARISON: Global vs Walk-Forward (Half-life: 90 days)")
@@ -60,11 +56,8 @@ N_matches = length(match_ids)
 gammas_global = Dict{Symbol, Float64}()
 gammas_wf = Dict{Symbol, Dict{eltype(match_ids), Float64}}()
 
-for (sel, mname, mline) in selections_to_test
-    df_sel = adf[(adf.selection .== String(sel)) .& (adf.market_name .== mname), :]
-    if mline != ""
-        df_sel = df_sel[df_sel.market_line .== mline, :]
-    end
+for sel in selections_to_test
+    df_sel = adf[Symbol.(adf.selection) .== sel, :]
     
     println("Market: $(sel) | Found $(nrow(df_sel)) matches")
     
