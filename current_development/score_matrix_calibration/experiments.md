@@ -62,6 +62,32 @@ per-match deviations (r13 showed btts glm_coef +7.2, p=0.01 — deviation edge s
 
 ---
 
+## Experiment r02: Market-target calibration — pooled vs walk-forward (DONE)
+**Goal:** validate the PRODUCTION (market-target) tilt centers per-line bias, and that a γ fit on
+PAST data only (walk-forward, 90d half-life) still removes the skew OUT-OF-SAMPLE.
+File: `r02_basic_calibration.jl`. Marginal-space `cal_p = logistic(γ_mkt + logit(model_p))`
+(pricing-route agnostic). `g_real` reported alongside (diagnostic, not applied).
+
+**Result (li_smile50, Ireland):** pooled centers everything (in-sample, by construction). The
+honest column is walk-forward `wf_t`:
+
+| line | raw_t | **wf_t (OOS)** | n_wf | note |
+|---|---|---|---|---|
+| btts_yes | 5.29 | **1.92** | 182 | skew removed OOS |
+| over_15 | −6.74 | **1.66** | 192 | skew removed OOS |
+| over_25 | −3.97 | **−0.61** | 225 | skew removed OOS |
+| away | 2.04 | 1.01 | 249 | improved |
+| home | −1.49 | 0.59 | 249 | ~centered already |
+| **draw** | −0.95 | **−3.7** | 249 | **WF OVER-corrects a line that wasn't skewed** |
+| over_35 | 0.27 | −1.3 | 182 | mild over-correction (already centered) |
+
+**Verdict:** the systematic per-line skews (BTTS +2.4pp, totals compression) are STABLE — a
+past-only γ removes them out-of-sample (|t|: 5–6.7 → <2). The failure mode is calibrating lines
+that were never skewed (draw, over_35): WF γ drifts and injects bias. **→ r03 must GATE
+calibration on significance (|raw_t| ≳ 2), leaving already-centred lines untouched.**
+
+---
+
 ## Experiment 2: Kelly Backtest Impact (To be built)
 **Goal:** Pass the (market-target) walk-forward calibrated score matrix into the structural Kelly
 solver (`unified_staking/l01_structural_kelly.jl`, implementing (P)/(U-MC) of
