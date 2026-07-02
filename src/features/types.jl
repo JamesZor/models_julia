@@ -54,6 +54,15 @@ Base.@kwdef struct RegularizedDixonColesNegativeBinomialMarketFeature <: Abstrac
     penalty_weight::Float64 = 0.05
 end
 
+# 6. Local-Intensity SMILE target (per-strike market-implied Poisson rate Λ^mkt(K)).
+# NB: a plain AbstractFeatureConfig (NOT AbstractMarketFeatureConfig) — it ships its own
+# dedicated `add_feature!` (Poisson-CDF inversion of de-vigged O/U) in market_extractors.jl,
+# and must NOT be caught by the generic market-fit extractor. Kmax=4 is the keeper default
+# (strikes 5,6 are thin/selection-biased). See docs: local-intensity / smile pillar.
+Base.@kwdef struct MarketSmileFeature <: AbstractFeatureConfig
+    Kmax::Int = 4
+end
+
 # --- Time Features ---
 struct TimeIndicesFeature <: AbstractFeatureConfig end
 struct DatesFeature <: AbstractFeatureConfig end

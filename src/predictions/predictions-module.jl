@@ -19,6 +19,7 @@ include("interface.jl")
 
 # 2. Score Computations (The Physics)
 include("score_computation/poisson.jl")
+include("./score_computation/smile_poisson.jl")
 include("./score_computation/bivariate_poisson.jl")
 include("score_computation/dixoncoles.jl") # When ready
 # include("score_computation/mvpln.jl") # When ready
