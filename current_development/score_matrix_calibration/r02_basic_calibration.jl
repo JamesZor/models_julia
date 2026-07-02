@@ -77,34 +77,38 @@ println("  bias = cal_p − market.  pooled→0 by construction; WF is the hones
 println("  g_real = reality-target γ (DIAGNOSTIC ONLY, not applied) — big |g_real−g_mkt| ⇒ market≠reality.")
 println("="^104)
 
-tbl = DataFrame(line=Symbol[], n=Int[],
-                raw_b=Float64[], raw_t=Float64[],
-                pool_b=Float64[], pool_t=Float64[],
-                n_wf=Int[], wf_b=Float64[], wf_t=Float64[],
-                g_mkt=Float64[], g_mkt_wf=Float64[], g_real=Float64[])
+function build_validation_table(adf::DataFrame, selections)
+    tbl = DataFrame(line=Symbol[], n=Int[],
+                    raw_b=Float64[], raw_t=Float64[],
+                    pool_b=Float64[], pool_t=Float64[],
+                    n_wf=Int[], wf_b=Float64[], wf_t=Float64[],
+                    g_mkt=Float64[], g_mkt_wf=Float64[], g_real=Float64[])
+    for s in selections
+        d = adf[adf.sel_sym .== s, :]
+        nrow(d) < 5 && continue
+        d = sort(d, :match_date)
+        mp = Float64.(d.prob_model); mk = Float64.(d.prob_fair_close)
 
-for s in selections
-    d = adf[adf.sel_sym .== s, :]
-    nrow(d) < 5 && continue
-    d = sort(d, :match_date)
-    mp = Float64.(d.prob_model); mk = Float64.(d.prob_fair_close)
+        g_mkt_g  = fit_global_bias(d; target=:prob_fair_close)
+        g_mkt_wf = fit_walk_forward_bias(d; target=:prob_fair_close, half_life_days=90.0)
+        g_real_g = fit_global_bias(d; target=:is_winner)
 
-    g_mkt_g  = fit_global_bias(d; target=:prob_fair_close)
-    g_mkt_wf = fit_walk_forward_bias(d; target=:prob_fair_close, half_life_days=90.0)
-    g_real_g = fit_global_bias(d; target=:is_winner)
+        pool_p = _cal(mp, g_mkt_g)
+        γ_row  = [get(g_mkt_wf, m, 0.0) for m in d.match_id]
+        wf_p   = _cal(mp, γ_row)
+        active = γ_row .!= 0.0                               # OOS matches with a fitted γ
 
-    pool_p = _cal(mp, g_mkt_g)
-    γ_row  = [get(g_mkt_wf, m, 0.0) for m in d.match_id]
-    wf_p   = _cal(mp, γ_row)
-    active = γ_row .!= 0.0                                   # OOS matches with a fitted γ
+        (rb, rt) = _biast(mp, mk)
+        (pb, pt) = _biast(pool_p, mk)
+        (wb, wt) = sum(active) >= 3 ? _biast(wf_p[active], mk[active]) : (NaN, NaN)
 
-    (rb, rt) = _biast(mp, mk)
-    (pb, pt) = _biast(pool_p, mk)
-    (wb, wt) = sum(active) >= 3 ? _biast(wf_p[active], mk[active]) : (NaN, NaN)
-
-    push!(tbl, (s, nrow(d), rb, rt, pb, pt, sum(active), wb, wt,
-                round(g_mkt_g, digits=3), _gmed(g_mkt_wf), round(g_real_g, digits=3)))
+        push!(tbl, (s, nrow(d), rb, rt, pb, pt, sum(active), wb, wt,
+                    round(g_mkt_g, digits=3), _gmed(g_mkt_wf), round(g_real_g, digits=3)))
+    end
+    return tbl
 end
+
+tbl = build_validation_table(adf, selections)
 show(tbl; allrows=true, allcols=true, truncate=0); println()
 
 println("""
