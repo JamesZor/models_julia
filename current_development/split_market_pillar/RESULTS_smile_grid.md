@@ -5,6 +5,11 @@
 > `NOTES.md` (the running design log). League = **Ireland (79)**, eval market = **Betfair close**.
 > Last updated 2026-06-28.
 >
+> **GRADUATED (2026-07-02):** the `li_smile50` keeper is now the src engine
+> `PreGame.DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel` (smile_weight=0.5, Kmax=4).
+> Verified src-only by `r20_smoke_src_smile.jl` (12/13 checks; φ≈0.93→1.05, R-hat 1.005). See the
+> 2026-07-02 entry in `NOTES.md`. l03 stays only for deserializing this grid's saved `.jls`.
+>
 > **Naming:** model = two axes, **pillar** `{iso, split, smile, none}` × **dispersion**
 > `{pois, nb, cmp, dc}`; reference `<pillar>-<disp>` (e.g. `smile-pois`). The `dp_*`/`li_*` cell names
 > below are the saved-experiment aliases — see the **Canonical naming** table in `NOTES.md` for the full

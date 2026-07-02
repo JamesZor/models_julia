@@ -34,7 +34,7 @@ Component-driven architecture using `Turing.jl`. Mathematical "Lego blocks" are 
 - **Team-level engines** (`engines/team_level/`): goals, xg, copula-goals, market variants — split into `standard/` and `time_decay/`
 - **Player-level engines** (`engines/player_level/`): outfield xg, hierarchical player, Dixon-Coles variants — split into `standard/` and `time_decay/`
 
-Key exported models: `DynamicGoalsModel`, `DynamicXGModel`, `DynamicCopulaGoalsTimeDecayModel`, and many market/player variants.
+Key exported models: `DynamicGoalsModel`, `DynamicXGModel`, `DynamicCopulaGoalsTimeDecayModel`, `DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel` (local-intensity per-strike totals "smile" pillar — prices O/U via its own intensity `λ_tot·φ(K)` while 1X2/BTTS/CS use the goals grid; see `src/predictions/score_computation/smile_poisson.jl`), and many market/player variants.
 
 Each model must implement `Features.required_features(model)` returning a `Vector{Symbol}` to declare which data features it needs.
 

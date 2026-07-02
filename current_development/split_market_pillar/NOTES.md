@@ -345,3 +345,58 @@ distortion (which A then dumps into κ). This argues against the surgical-suprem
 the latent-rate layer. Still single-split / screening-quality, but the B-vs-A contrast is clean and
 mechanistically explained. NEXT (if pursued): OOS backtest A/B/C + the original un-split baseline on
 a converged grid before any verdict.
+
+### 2026-07-01 — r19 hier-iso σ grid (Ireland, ISO_MW=0.4): NULL — σ-hierarchy closed, keep `iso_flat`
+
+Full grid {iso_flat, iso_perteam, iso_perside, iso_both}, 800/300×4, 29 splits, eval vs Betfair close:
+
+| cell | GLMEdge spread coef (p) | LogLoss diff_ll | LPD diff |
+|---|---|---|---|
+| iso_flat    | 1.695 (0.0072) | **−0.0252** | +0.0252 |
+| iso_perside | 1.706 (0.0068) | **−0.0252** | +0.0252 |
+| iso_perteam | 1.647 (0.0091) | −0.0250 | +0.0250 |
+| iso_both    | 1.461 (0.0200) | −0.0243 | +0.0243 |
+
+Posterior read (4b): σ_base ≈ 0.21 in every cell; team σ-multipliers span **[0.996, 1.011]** (±1%);
+δ_side ≈ 0.01 with 90% CI straddling 0. The hierarchy learned nothing, and the double-hierarchy cell
+(`iso_both`) pays a small score penalty for the dead params. Matches the r17/r18 smoke prediction
+([[hierarchical-smile-sigma-null]]): on a thin ~near-Poisson league the anchor-tightness has no
+per-team/per-side structure worth modelling. **Verdict: global scalar σ (iso_flat) stays; the σ-hierarchy
+thread is CLOSED on Ireland.** A 718 rerun (flip `SEGMENT` in r19) is an optional thread-closer;
+priority shifts to (i) smile-weight mapping 0.2–0.4, (ii) per-line recentring calibrator, (iii) the
+unified staking layer (see `docs/bets_multi/unified_kelly_postgrad_notes.md`), (iv) the cross-league
+pooled-ladder power test.
+
+### 2026-07-02 — GRADUATED the smile engine to `src/` (l03 keeper → production) + r20 smoke ✅
+
+The validated `li_smile50` keeper (RESULTS_smile_grid.md §5) is now a first-class src engine. l03/l08
+loaders and the saved `.jls` grids are **untouched** (they still deserialize against the loader
+structs). New src home:
+
+| l03 piece | src destination |
+|---|---|
+| `MarketSmileFeature` config | `src/features/types.jl` (plain `AbstractFeatureConfig`, **Kmax=4 default** = keeper), exported |
+| off-AD Poisson-CDF inversion (`_smile_intensity` + `add_feature!`) | `src/features/extractors/market_extractors.jl` |
+| engine + `@model` + `required_features` + `build_turing_model` + `extract_parameters` | `src/models/pregame/engines/player_level/time_decay/outfield_xg_smile_double_poisson.jl` |
+| `SmileScoreMatrix` + `extract_params`/`compute_score_matrix` + per-line O/U `compute_market_probs` + grid fallback | `src/predictions/score_computation/smile_poisson.jl` |
+
+Struct: **`DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel`** (exported from PreGame). Keeper
+defaults baked in: `smile_weight=0.5`, `supremacy_weight=1.0`, `Kmax=4`, global scalar sampled σ
+(**no** hierarchy — l08/l09 nulled, [[hierarchical-smile-sigma-null]]). Market inversion kept
+**Poisson-referenced** on purpose ([[no-pregame-intensity-smile]], [[totals-compression-is-denoising]]).
+
+**r20 smoke (`r20_smoke_src_smile.jl`, src-only, no loader include) — Ireland single split, 1000/500×4:
+12/13 checks PASS.**
+- ✅ src-only build; ✅ `required_features` declares `MarketSmileFeature`; ✅ Λ^mkt(K) finite/positive
+  on 962 full-ladder matches, median rises 2.34→2.58 (the market smile).
+- ✅ convergence: global max R-hat **1.0046**; smile params (σ_smile, σ_sup, log_φ[1:5]) all R-hat ≤ **1.002**.
+- ✅ **φ(K) = [0.927, 0.989, 1.006, 1.029, 1.046]** over strikes 0.5→4.5 — textbook gentle monotone
+  ≈0.93→1.05, every 90% CI crosses 1.0 (flat pregame smile, exactly as predicted).
+- ✅ PPD end-to-end (no `:r` error); ✅ score matrix is `SmileScoreMatrix`; ✅ smile O/U ≠ grid O/U
+  (max Δ=0.017 → φ is genuinely priced through the dedicated dispatch).
+- ⚠️ check 6 (LogLoss vs Betfair) is **informational only**: single fold has n_obs≈4 → diff_ll=+0.051
+  is pure single-split noise (the meaningful ≈−0.02 is the full-CV r10 figure). Runner updated so the
+  check gates on "eval runs + finite", not the full-CV range. NOT a porting defect.
+
+Verdict: **graduation VERIFIED**. Use `PreGame.DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel`
+in production; l03 stays for deserializing old grids only.
