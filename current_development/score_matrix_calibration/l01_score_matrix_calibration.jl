@@ -98,7 +98,7 @@ function fit_walk_forward_bias(df_market::DataFrame; half_life_days::Float64 = 9
     # Sort by date
     sort!(df_fit, :match_date)
     
-    match_gammas = Dict{String, Float64}()
+    match_gammas = Dict{eltype(df_market.match_id), Float64}()
     
     # Start predicting only when we have at least N past matches
     min_history = 20

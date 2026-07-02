@@ -46,7 +46,7 @@ adf.spread = Float64.(adf.prob_model) .- Float64.(adf.prob_fair_close)
 selections_to_test = [
     (:btts_yes, "BTTS", ""),
     (:home, "1X2", ""),
-    (:over_25, "OverUnder", "2.5")
+    (:over, "OverUnder", "2.5")
 ]
 
 println("\n" * "="^80)
@@ -58,10 +58,15 @@ N_matches = length(match_ids)
 
 # We will store the gammas for later score matrix calibration
 gammas_global = Dict{Symbol, Float64}()
-gammas_wf = Dict{Symbol, Dict{String, Float64}}()
+gammas_wf = Dict{Symbol, Dict{eltype(match_ids), Float64}}()
 
 for (sel, mname, mline) in selections_to_test
-    df_sel = adf[adf.selection .== String(sel), :]
+    df_sel = adf[(adf.selection .== String(sel)) .& (adf.market_name .== mname), :]
+    if mline != ""
+        df_sel = df_sel[df_sel.market_line .== mline, :]
+    end
+    
+    println("Market: $(sel) | Found $(nrow(df_sel)) matches")
     
     g_global = fit_global_bias(df_sel)
     g_wf = fit_walk_forward_bias(df_sel; half_life_days=90.0)
@@ -91,7 +96,7 @@ mask_btts = mask_for("BTTS", "", "btts_yes")
 
 # We'll calculate the model probability of btts_yes before and after tilting.
 # For simplicity, we just rebuild the state probability matrices.
-results = DataFrame(match_id=String[], raw_p=Float64[], tilted_global_p=Float64[], tilted_wf_p=Float64[])
+results = DataFrame(match_id=eltype(match_ids)[], raw_p=Float64[], tilted_global_p=Float64[], tilted_wf_p=Float64[])
 
 for r in eachrow(latents.df)
     mid = r.match_id
