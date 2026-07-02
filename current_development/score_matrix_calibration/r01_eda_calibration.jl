@@ -123,8 +123,10 @@ for r in eachrow(latents.df)
     push!(results, (mid, raw_prob, global_prob, wf_prob))
 end
 
-# Merge with market data to compute bias and t-stats
-df_eval = innerjoin(results, adf[adf.selection .== "btts_yes", [:match_id, :prob_fair_close]], on=:match_id)
+# Merge with market data to compute bias and t-stats.
+# NOTE: adf.selection is a Symbol column (mf.selection from model_inference is Symbol[]),
+# so we must compare against :btts_yes, not the String "btts_yes" (which matches nothing).
+df_eval = innerjoin(results, adf[Symbol.(adf.selection) .== :btts_yes, [:match_id, :prob_fair_close]], on=:match_id)
 
 function print_bias_stats(name, model_p, market_p)
     sp = model_p .- market_p
