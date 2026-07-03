@@ -121,6 +121,30 @@ function grade_selection(
         elseif sel_str == "cs_any_other_draw"
             return home_score == away_score && home_score >= 4
         end
+    elseif market_name == "DoubleChance"
+        if selection == :DC_1X
+            return home_score >= away_score
+        elseif selection == :DC_X2
+            return away_score >= home_score
+        elseif selection == :DC_12
+            return home_score != away_score
+        end
+    elseif market_name == "DrawNoBet"
+        if home_score == away_score
+            return missing            # draw -> stake refunded (push)
+        elseif selection == :dnb_home
+            return home_score > away_score
+        elseif selection == :dnb_away
+            return away_score > home_score
+        end
+    elseif market_name == "AsianHandicap"
+        side, L = Markets.parse_ah_selection(selection)
+        # v1: quarter lines split the stake -> not settleable with a Bool. Grade
+        # missing so they are excluded from the backtest.
+        Markets.ah_is_quarter(L) && return missing
+        margin = home_score - away_score
+        adj = (side === :home ? margin : -margin) + L
+        return adj > 0 ? true : adj < 0 ? false : missing   # ==0 -> push
     end
 
     return missing

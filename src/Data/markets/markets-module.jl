@@ -10,12 +10,16 @@ using Statistics
 
 export 
     # Types
-    AbstractMarket, 
-    Market1X2, 
-    MarketOverUnder, 
-    MarketBTTS, 
+    AbstractMarket,
+    Market1X2,
+    MarketOverUnder,
+    MarketBTTS,
     MarketDC,
-    MarketConfig, 
+    MarketCorrectScore,
+    MarketDrawNoBet,
+    MarketAsianHandicap,
+    standard_asian_handicaps,
+    MarketConfig,
     MarketData,
 
     # Constants
@@ -40,6 +44,9 @@ include("implementations/1x2.jl")
 include("implementations/over_under.jl")
 include("implementations/btts.jl")
 include("./implementations/double_chance.jl")
+include("implementations/correct_score.jl")
+include("implementations/draw_no_bet.jl")
+include("implementations/asian_handicap.jl")
 
 # 4. The Processing Engine (ETL)
 include("processing.jl")
@@ -48,13 +55,21 @@ include("processing.jl")
 """
     get_standard_market_config()
 
-Returns a default MarketConfig containing the most common markets:
-- 1X2 (Full Time)
-- Over/Under 2.5
+Returns a default MarketConfig containing the common Betfair markets:
+- 1X2 (Full Time), Double Chance, Draw No Bet
+- Over/Under 0.5 .. 10.5
 - BTTS (Both Teams To Score)
+- Correct Score
+- Asian Handicap (whole/half lines, both sides)
 """
 function get_standard_market_config()
-  return MarketConfig( reduce(vcat, ( [Market1X2(), MarketBTTS(), MarketDC()], [MarketOverUnder( (i +0.5) ) for i in 0:10 ] ) ))
+  scalar_markets = AbstractMarket[
+      Market1X2(), MarketBTTS(), MarketDC(),
+      MarketDrawNoBet(), MarketCorrectScore()
+  ]
+  over_unders = [MarketOverUnder(i + 0.5) for i in 0:10]
+  asian_handicaps = standard_asian_handicaps()
+  return MarketConfig(reduce(vcat, (scalar_markets, over_unders, asian_handicaps)))
 end
 
 

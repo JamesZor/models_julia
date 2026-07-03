@@ -33,6 +33,9 @@ include("market_inference/1x2.jl")
 include("market_inference/over_under.jl")
 include("market_inference/btts.jl")
 include("market_inference/double_chance.jl")
+include("market_inference/correct_score.jl")
+include("market_inference/draw_no_bet.jl")
+include("market_inference/asian_handicap.jl")
 
 # 4. Main Orchestrator
 include("inference.jl")

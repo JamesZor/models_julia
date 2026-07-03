@@ -45,8 +45,9 @@ export
     load_datastore_sql, load_datastore_cached,
     
     # Re-export Markets
-    MarketConfig, Market1X2, MarketOverUnder, MarketBTTS
-    
+    MarketConfig, Market1X2, MarketOverUnder, MarketBTTS, MarketDC,
+    MarketCorrectScore, MarketDrawNoBet, MarketAsianHandicap, standard_asian_handicaps
+
     # (Plus whatever preprocessing/splitting exports you need)
 
 end
