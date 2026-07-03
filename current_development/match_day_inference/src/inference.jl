@@ -57,42 +57,56 @@ function find_experiment_path(saved_paths::Vector{String}, name_prefix::String)
 end
 
 """
-    compute_todays_matches_pdds(ds::Data.DataStore, experiment, todays_matches::AbstractDataFrame, json_dir::String)
+    compute_todays_matches_latents(ds::Data.DataStore, experiment, todays_matches::AbstractDataFrame, json_dir::String)
 
-Runs the full inference pipeline for the given matchday fixtures.
+Runs the inference pipeline up to the LatentStates (per-match posterior parameter draws) for the
+given matchday fixtures, WITHOUT collapsing to market probabilities. Exposed so callers that need
+the raw λ draws (e.g. the unified structural-Kelly staking panel) can reuse the same posterior
+without re-running the (expensive) MCMC parameter extraction.
 """
-function compute_todays_matches_pdds(ds::Data.DataStore, experiment, todays_matches::AbstractDataFrame, json_dir::String)
+function compute_todays_matches_latents(ds::Data.DataStore, experiment, todays_matches::AbstractDataFrame, json_dir::String)
     println("└── [Inference] Starting inference pipeline...")
-    
+
     model = experiment.config.model
     tracker = model.player_ratings_feature.tracker
-    
+
     # 1. Build Ratings Map
     todays_ratings_map = build_matchday_ratings_map(ds, tracker, todays_matches, json_dir)
-    
+
     # 2. Extract History/Target splits and create features
     boundaries_with_meta = BayesianFootball.Data.create_id_boundaries(ds, experiment.config.splitter)
     feature_collection = BayesianFootball.Features.create_features(boundaries_with_meta, ds, model)
-    
+
     # 3. Extract the last training split indices, chain, and features
     last_split_idx = length(experiment.training_results)
     chain = experiment.training_results[last_split_idx][1]
     feature_set = feature_collection[last_split_idx][1]
-    
+
     # 4. Inject today's matchday ratings
     inject_matchday_features!(feature_set, todays_ratings_map)
-    
+
     # 5. Extract parameters for today's matches
     println("└── [MCMC] Extracting parameters across posterior chain samples...")
     raw_preds = BayesianFootball.Models.PreGame.extract_parameters(
         model, todays_matches, feature_set, chain
     )
-    
-    # 6. Generate Posterior Predictive Distribution (PPD)
+
+    return LatentStates(raw_preds_to_df(raw_preds), model)
+end
+
+"""
+    compute_todays_matches_pdds(ds::Data.DataStore, experiment, todays_matches::AbstractDataFrame, json_dir::String)
+
+Runs the full inference pipeline for the given matchday fixtures and returns the PPD. Thin wrapper
+around `compute_todays_matches_latents` + `model_inference`.
+"""
+function compute_todays_matches_pdds(ds::Data.DataStore, experiment, todays_matches::AbstractDataFrame, json_dir::String)
+    latents = compute_todays_matches_latents(ds, experiment, todays_matches, json_dir)
+
+    # Generate Posterior Predictive Distribution (PPD)
     println("└── [Predictions] Running model inference (PPD simulation)...")
-    latents = LatentStates(raw_preds_to_df(raw_preds), model)
     ppd = model_inference(latents)
-    
+
     println("└── [Success] Match day inference complete!")
     return ppd
 end

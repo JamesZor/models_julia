@@ -142,9 +142,15 @@ json_lineups_dir = "./current_development/match_day_inference/data/lineups"
 # ==========================================
 println("\n=== 4. Running Match Day Inference ===")
 ppd   = compute_todays_matches_pdds(ds, expr, todays_matches, json_lineups_dir)
-ppd_2 = compute_todays_matches_pdds(ds, expr_2, todays_matches, json_lineups_dir)
+# Smile model: keep the latents (λ draws) so the unified structural-Kelly panel can reuse
+# the same posterior without re-running MCMC extraction.
+latents_2 = compute_todays_matches_latents(ds, expr_2, todays_matches, json_lineups_dir)
+ppd_2 = BayesianFootball.Predictions.model_inference(latents_2)
 # NOTE: do NOT overwrite with `model_inference(ds, expr)` — that re-predicts the
 # saved experiment's stale target matchday, not today's fixtures.
+
+# Paper bankroll for the unified staking panel (£); set to 0.0 for %-only display.
+BANKROLL = 50.0
 
 println("\n$label_1 1X2 Probabilities:")
 show(subset(ppd.df, :market_name => ByRow(==("1X2"))))
@@ -168,11 +174,16 @@ try
     # Run the live betting dashboard comparing both models side-by-side (one-shot display)
     print_live_betting_dashboard_compare(ppd, label_1, ppd_2, label_2, redis_conn, todays_matches; kelly_fraction=0.00)
 
+    # UNIFIED structural-Kelly portfolio panel (Smile-DP, Over/Under + BTTS only, cap 0.10, 2% comm)
+    print_unified_staking_dashboard(latents_2, redis_conn, todays_matches;
+        label=label_2, cap=0.10, commission=0.02, bankroll=BANKROLL)
+
     # Example polling loop (uncomment to run interactive live poller):
     # println("Press Ctrl+C to exit live betting monitor.")
     # while true
     #     print("\e[2J\e[H") # Clear terminal
     #     print_live_betting_dashboard_compare(ppd, label_1, ppd_2, label_2, redis_conn, todays_matches; kelly_fraction=0.5)
+    #     print_unified_staking_dashboard(latents_2, redis_conn, todays_matches; label=label_2, cap=0.10, commission=0.02, bankroll=BANKROLL)
     #     sleep(60.0)
     # end
 catch e
