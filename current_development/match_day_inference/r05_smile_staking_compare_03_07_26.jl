@@ -64,20 +64,22 @@ end
 # 2. PER-LEAGUE DRIVER — train (or load) smile, run match-day inference, show BOTH staking layers
 # ==========================================================================================
 """
-    run_smile_league(ds, save_dir; label, train, bankroll)
+    run_smile_league(ds, save_dir; label, train, exp_prefix, bankroll)
 
-Trains (or loads) the smile model on `ds`, runs today's match-day inference, and prints the
-per-bet Bayesian–McHale dashboard and the unified structural-Kelly panel side by side.
-Returns `(; expr, ppd, latents, todays_matches)`.
+Loads (default) or re-trains the smile model on `ds`, runs today's match-day inference, and
+prints the per-bet Bayesian–McHale dashboard and the unified structural-Kelly panel side by
+side. `exp_prefix` is the saved experiment's name prefix — the existing r05 runners save the
+smile experiment as `double_poisson_smile_<date>`. Returns `(; expr, ppd, latents, todays_matches)`.
 """
 function run_smile_league(ds::D.DataStore, save_dir::String;
-                          label::String="Smile-DP", train::Bool=true, bankroll::Float64=BANKROLL)
-    mkpath(save_dir)
+                          label::String="Smile-DP", train::Bool=false,
+                          exp_prefix::String="double_poisson_smile", bankroll::Float64=BANKROLL)
     model = build_smile_model()
 
     if train
+        mkpath(save_dir)
         task = Experiments.create_experiment_task(
-            ds, model, "smile_$(today())", save_dir;
+            ds, model, "$(exp_prefix)_$(today())", save_dir;
             target_seasons  = ["2026"],
             history_seasons = 2,
             warmup_period   = 23,
@@ -92,7 +94,7 @@ function run_smile_league(ds::D.DataStore, save_dir::String;
     end
 
     saved = Experiments.list_experiments(save_dir, data_dir="")
-    expr  = Experiments.load_experiment(find_experiment_path(saved, "smile"))
+    expr  = Experiments.load_experiment(find_experiment_path(saved, exp_prefix))
 
     println("\n=== Fetching Today's Fixtures ($label) ===")
     todays_matches = fetch_todays_matches(ds)
@@ -127,20 +129,21 @@ end
 
 # ==========================================================================================
 # 3a. LEAGUE OF IRELAND — PREMIER DIVISION  (Ireland(), tournament 79)
-#     Uses the datastore odds pillar as-is (matches the existing r05_ireland runner).
+#     Loads the smile experiment already trained by r05_ireland_03_07_26.jl
+#     (save_dir "./data/match_day_ireland/july/", name "double_poisson_smile_<date>").
 # ==========================================================================================
 ds_premier = D.load_datastore_cached(D.Ireland())
-premier = run_smile_league(ds_premier, "./data/match_day_ireland/july_smile/";
-                           label="Smile-DP · Premier", train=true)
+premier = run_smile_league(ds_premier, "./data/match_day_ireland/july/";
+                           label="Smile-DP · Premier", train=false)
 
 # ==========================================================================================
 # 3b. LEAGUE OF IRELAND — FIRST DIVISION  (IrelandFirstDivision(), tournament 718)
-#     Swap the Betfair-summarized book into ds.odds as the training market pillar
-#     (matches the existing r05_first_div_ireland runner).
+#     Swap the Betfair-summarized book into ds.odds (must match how r05_first_div trained),
+#     then load its smile experiment from "./data/match_day_ireland_first/july/".
 # ==========================================================================================
 ds_fd_raw = D.load_datastore_cached(D.IrelandFirstDivision())
 odds_bf   = D.summarize_betfair_market(ds_fd_raw, open_window=(-100000.0, -10.0), close_window=(-20.0, 0.0))
 ds_first  = D.DataStore(ds_fd_raw.segment, ds_fd_raw.matches, ds_fd_raw.statistics,
                         odds_bf, ds_fd_raw.lineups, ds_fd_raw.incidents, ds_fd_raw.betfair_odds)
-first = run_smile_league(ds_first, "./data/match_day_ireland_first/july_smile/";
-                         label="Smile-DP · First Div", train=true)
+first = run_smile_league(ds_first, "./data/match_day_ireland_first/july/";
+                         label="Smile-DP · First Div", train=false)
