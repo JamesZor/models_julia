@@ -36,7 +36,7 @@ function proj_cap!(a::AbstractVector{Float64}, cap::Float64)
     a .= max.(a, 0.0)
     s = sum(a)
     if s > cap
-        u = sort(a, rev=true)
+        u = Base.sort(a, rev=true)   # qualify: DataFrames also exports `sort` (ambiguous under full package load)
         css = cumsum(u)
         ρ = findlast(i -> u[i] + (cap - css[i]) / i > 0, 1:length(a))
         θ = (css[ρ] - cap) / ρ
