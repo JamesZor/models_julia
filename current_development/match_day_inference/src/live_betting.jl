@@ -595,3 +595,189 @@ function print_live_betting_dashboard(ppd::Predictions.PPD, redis_conn,
     return print_live_betting_dashboard(ppd, redis_conn, todays_matches, market_id_lookup;
                                         kelly_fraction=kelly_fraction, min_edge=min_edge)
 end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PRETTY-PRINTED DASHBOARD — TWO-MODEL COMPARISON
+# ═══════════════════════════════════════════════════════════════════════════════
+
+"""
+    _lookup_ppd_distribution(ppd, mid, market_name, market_line, sel)
+
+Finds the posterior predictive distribution for a specific (match, market, line,
+selection) tuple in a PPD, or `nothing` if that model has no row for it (e.g. the
+two compared models expose different O/U lines).
+"""
+function _lookup_ppd_distribution(ppd::Predictions.PPD, mid::Int, market_name::String,
+                                   market_line::Float64, sel::Symbol)
+    rows = subset(ppd.df,
+        :match_id => ByRow(==(mid)),
+        :market_name => ByRow(==(market_name)),
+        :market_line => ByRow(==(market_line)),
+        :selection => ByRow(==(sel))
+    )
+    return isempty(rows) ? nothing : rows[1, :distribution]
+end
+
+"""
+    _build_match_table_compare(ppd_1, ppd_2, redis_conn, market_id_lookup, home, away, mid, kelly_std)
+
+Builds the PrettyTables matrix for a single match, showing both models' probabilities,
+EV, and Kelly stakes side by side against the live Betfair book. Markets/selections are
+driven by `ppd_1`; `ppd_2` values fall back to "----" where that model has no matching row.
+"""
+function _build_match_table_compare(ppd_1::Predictions.PPD, ppd_2::Predictions.PPD,
+                                     redis_conn, market_id_lookup,
+                                     home::String, away::String, mid::Int,
+                                     kelly_std)
+    available = get_available_markets_for_match(market_id_lookup, home, away)
+
+    table_rows = NamedTuple[]
+    hlines = Int[]
+
+    for mkt in available
+        ppd_rows_1 = subset(ppd_1.df,
+            :match_id => ByRow(==(mid)),
+            :market_name => ByRow(==(mkt.ppd_market)),
+            :market_line => ByRow(==(mkt.ppd_line))
+        )
+        isempty(ppd_rows_1) && continue
+
+        live_odds = fetch_live_odds_for_market(redis_conn, market_id_lookup, home, away, mkt)
+        market_label = market_display_name(mkt.ppd_market, mkt.ppd_line)
+        first_in_group = true
+
+        for sel_row in eachrow(ppd_rows_1)
+            sel = sel_row.selection
+            dist_1 = sel_row.distribution
+            p_1 = mean(dist_1)
+
+            dist_2 = _lookup_ppd_distribution(ppd_2, mid, mkt.ppd_market, mkt.ppd_line, sel)
+            p_2 = dist_2 === nothing ? NaN : mean(dist_2)
+
+            odds_info = get(live_odds, sel, (back=NaN, lay=NaN, back_size=0.0, lay_size=0.0))
+            back_odds = odds_info.back
+            lay_odds = odds_info.lay
+
+            ev_1 = NaN; stake_1 = 0.0
+            ev_2 = NaN; stake_2 = 0.0
+            if !isnan(back_odds) && back_odds > 1.0
+                ev_1 = (p_1 * back_odds) - 1.0
+                stake_1 = compute_stake(kelly_std, dist_1, back_odds)
+                if dist_2 !== nothing
+                    ev_2 = (p_2 * back_odds) - 1.0
+                    stake_2 = compute_stake(kelly_std, dist_2, back_odds)
+                end
+            end
+
+            sel_label = selection_display_name(sel, mkt.ppd_market)
+            is_value = (!isnan(ev_1) && ev_1 > 0.0) || (!isnan(ev_2) && ev_2 > 0.0)
+
+            mid_odds = (!isnan(back_odds) && !isnan(lay_odds)) ? (back_odds + lay_odds) / 2.0 : NaN
+            mid_pct = (!isnan(mid_odds) && mid_odds > 0.0) ? 1.0 / mid_odds : NaN
+
+            push!(table_rows, (
+                market = first_in_group ? market_label : "",
+                selection = is_value ? "* $sel_label" : "  $sel_label",
+                p1 = p_1,
+                p2 = p_2,
+                mid_pct = mid_pct,
+                back = back_odds,
+                lay = lay_odds,
+                ev1 = ev_1,
+                ev2 = ev_2,
+                kelly1 = stake_1,
+                kelly2 = stake_2,
+            ))
+            first_in_group = false
+        end
+
+        push!(hlines, length(table_rows))
+    end
+
+    isempty(table_rows) && return nothing
+
+    if !isempty(hlines) && hlines[end] == length(table_rows)
+        pop!(hlines)
+    end
+
+    n = length(table_rows)
+    data = Matrix{Any}(undef, n, 11)
+    has_value = false
+
+    for (i, r) in enumerate(table_rows)
+        data[i, 1]  = r.market
+        data[i, 2]  = r.selection
+        data[i, 3]  = @sprintf("%.1f%%", r.p1 * 100)
+        data[i, 4]  = isnan(r.p2) ? "----" : @sprintf("%.1f%%", r.p2 * 100)
+        data[i, 5]  = isnan(r.mid_pct) ? "----" : @sprintf("%.1f%%", r.mid_pct * 100)
+        data[i, 6]  = isnan(r.back) ? "----" : @sprintf("%.2f", r.back)
+        data[i, 7]  = isnan(r.lay)  ? "----" : @sprintf("%.2f", r.lay)
+        data[i, 8]  = isnan(r.ev1)  ? "----" : (r.ev1 > 0 ? @sprintf("+%.1f%%", r.ev1 * 100) : @sprintf("%.1f%%", r.ev1 * 100))
+        data[i, 9]  = isnan(r.ev2)  ? "----" : (r.ev2 > 0 ? @sprintf("+%.1f%%", r.ev2 * 100) : @sprintf("%.1f%%", r.ev2 * 100))
+        data[i, 10] = r.kelly1 > 0 ? @sprintf("%.2f%%", r.kelly1 * 100) : "----"
+        data[i, 11] = r.kelly2 > 0 ? @sprintf("%.2f%%", r.kelly2 * 100) : "----"
+
+        if (!isnan(r.ev1) && r.ev1 > 0) || (!isnan(r.ev2) && r.ev2 > 0)
+            has_value = true
+        end
+    end
+
+    return (data=data, hlines=hlines, has_value=has_value)
+end
+
+"""
+    print_live_betting_dashboard_compare(ppd_1, label_1, ppd_2, label_2, redis_conn, todays_matches, market_id_lookup; kelly_fraction=0.5)
+
+PrettyTables-formatted live betting dashboard comparing two models' probabilities, EV,
+and Kelly stakes side by side against Betfair odds across 1X2, Over/Under, and BTTS markets.
+"""
+function print_live_betting_dashboard_compare(ppd_1::Predictions.PPD, label_1::String,
+                                               ppd_2::Predictions.PPD, label_2::String,
+                                               redis_conn, todays_matches::AbstractDataFrame,
+                                               market_id_lookup; kelly_fraction=0.5)
+    kelly_std = KellyCriterion(kelly_fraction)
+
+    table_format = PrettyTables.TextTableFormat(borders = PrettyTables.text_table_borders__unicode_rounded)
+
+    println("\n" * "="^135)
+    println(" LIVE MATCHDAY MODEL COMPARISON | $label_1  vs  $label_2 | Kelly: $kelly_fraction | $(Dates.format(now(), "HH:MM:SS"))")
+    println("="^135)
+
+    for row in eachrow(todays_matches)
+        mid = Int(row.match_id)
+        home = String(row.home_team)
+        away = String(row.away_team)
+
+        result = _build_match_table_compare(ppd_1, ppd_2, redis_conn, market_id_lookup, home, away, mid, kelly_std)
+
+        if result === nothing
+            println("\n> $home vs $away (ID: $mid)")
+            println("   [!] No model predictions or live markets found.")
+            continue
+        end
+
+        value_tag = result.has_value ? " [\$]" : ""
+        println("\n> $home vs $away (ID: $mid)$value_tag")
+
+        pretty_table(
+            result.data;
+            column_labels = ["Market", "Selection", "$label_1 %", "$label_2 %", "Mid %", "Back", "Lay",
+                              "$label_1 EV", "$label_2 EV", "$label_1 Kelly", "$label_2 Kelly"],
+            table_format = table_format,
+            alignment = [:l, :l, :r, :r, :r, :r, :r, :r, :r, :r, :r]
+        )
+    end
+
+    println("\n" * "="^135)
+    println(" * = Value Bet (EV > 0, either model) | [\$] = Match has value bets | Kelly = Std Kelly ($kelly_fraction frac)")
+    println("="^135 * "\n")
+end
+
+function print_live_betting_dashboard_compare(ppd_1::Predictions.PPD, label_1::String,
+                                               ppd_2::Predictions.PPD, label_2::String,
+                                               redis_conn, todays_matches::AbstractDataFrame;
+                                               kelly_fraction=0.5)
+    market_id_lookup = get_live_market_mappings(redis_conn)
+    return print_live_betting_dashboard_compare(ppd_1, label_1, ppd_2, label_2, redis_conn, todays_matches,
+                                                market_id_lookup; kelly_fraction=kelly_fraction)
+end

@@ -41,6 +41,22 @@ function raw_preds_to_df(raw_preds)
 end
 
 """
+    find_experiment_path(saved_paths::Vector{String}, name_prefix::String)
+
+Finds the experiment path whose folder name starts with `name_prefix` (e.g. the
+`config.name` a task was created with, before the timestamp suffix). Used to pick a
+specific model out of `Experiments.list_experiments` results instead of relying on
+mtime-sort order when comparing multiple models trained in the same run.
+"""
+function find_experiment_path(saved_paths::Vector{String}, name_prefix::String)
+    idx = findfirst(p -> startswith(basename(p), name_prefix), saved_paths)
+    if idx === nothing
+        error("No experiment found matching prefix '$name_prefix' among $(length(saved_paths)) saved paths.")
+    end
+    return saved_paths[idx]
+end
+
+"""
     compute_todays_matches_pdds(ds::Data.DataStore, experiment, todays_matches::AbstractDataFrame, json_dir::String)
 
 Runs the full inference pipeline for the given matchday fixtures.
