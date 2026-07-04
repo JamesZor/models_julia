@@ -179,7 +179,43 @@ Reads:
    revisit only if units get coarser (fewer units ⇒ more obs each) or model–market
    divergence δ grows (bigger per-obs information).
 
-## Experiment 3+ (sensitivity, later)
+## Experiment 3: fixed w=0.5 vs EB-learned trust — status: DONE (2026-07-04, r04, ~30 min)
+
+Question (user): if the learned w is flat anyway, why not hard-code w=0.5? Race
+(identical books, same seeds as Experiment 1): FLAT_1pct · U_cap02 (w=1, raw model) ·
+TRUST05_U_cap02 (hard-coded 0.5) · TRUST_U_cap02 (EB), two worlds × 300 seasons:
+GOOD = base cfg (real edge + bias); BAD = σ_mod=0.12 > σ_mkt (junk model, same bias).
+
+| world | strategy | medW | q05W | q95W | meanG | medDD | ruin% |
+|---|---|---|---|---|---|---|---|
+| good | FLAT_1pct | 1.136 | 0.739 | 1.772 | +0.00043 | 22.6% | 0 |
+| good | U_cap02 (w=1) | 0.933 | 0.128 | 7.185 | −0.00018 | 78.9% | 0 |
+| good | **TRUST05 (fixed .5)** | **1.269** | 0.589 | 2.695 | **+0.00073** | 35.3% | 0 |
+| good | TRUST_EB | 1.205 | 0.568 | 3.037 | +0.00065 | 41.0% | 0 |
+| bad | FLAT_1pct | 0.986 | 0.536 | 1.919 | +0.00002 | 34.5% | 0 |
+| bad | U_cap02 (w=1) | 0.110 | 0.009 | 4.111 | −0.00626 | 97.1% | 18.3 |
+| bad | TRUST05 (fixed .5) | 0.843 | 0.214 | 4.037 | −0.00034 | 65.0% | 0 |
+| bad | **TRUST_EB** | **0.877** | 0.280 | 3.557 | −0.00031 | **59.0%** | 0 |
+
+End-of-season EB w medians: GOOD [0.535 0.499 0.532 0.544 0.531 0.528 0.538] (hugs 0.5);
+BAD [0.381 0.431 0.386 0.409 0.374 0.391 0.413] — **pulled to ≈0.39 within one season**.
+
+Reads:
+1. **User intuition confirmed for the good-model case**: fixed 0.5 beats EB (medW 1.269
+   vs 1.205, +0.00073 vs +0.00065, DD 35% vs 41%). The EB fit pays an estimation-noise
+   tax (~0.0001/match) to learn a number that happens to be ≈0.5 anyway.
+2. **The machinery's real job is insurance.** In the junk-model world the raw model is
+   catastrophic (ruin 18%); half-trust rescues most of it (−0.0063 → −0.0003, ruin 0);
+   and EB then beats fixed 0.5 on BOTH growth and drawdown by learning w↓0.39 in one
+   season. Global level (pooled, ~4.2k obs/season) is learnable fast even when per-line
+   w isn't. Direction right, speed modest: one season gets 0.5→0.39, not to the truth —
+   over seasons it keeps sliding toward abstention while fixed 0.5 donates forever.
+3. **Practical recipe**: STAKE with w=0.5 (or an EB fit with a strong prior at 0.5);
+   RUN the EB fit alongside as a monitor — alarm / cut exposure when the pooled
+   posterior w0 drops below ~0.4. Decouples the good-world tax from the bad-world
+   insurance. Per-line sharpness arrives later with multi-season/league data (E2a).
+
+## Experiment 4+ (sensitivity, later)
 - Cold-start trust (n_prehist=0) vs warm.
 - σ_mod sweep (model quality) and γ sweep (bias size): where does TRUST_* stop paying?
 - Vig sweep; FLB power-law vig (v2).
