@@ -63,9 +63,10 @@ Base.@kwdef struct SimConfig
     n_teams::Int = 10
     n_matches::Int = 330        # betting campaign length (66 rounds of 5)
     n_prehist::Int = 270        # no-betting pre-history for trust warm-start (0 = cold start)
-    # league level — calibrated by r01_calibrate_ireland.jl (Ireland Premier, tournament 79)
-    μ::Float64 = 0.11           # log base away rate   (r01 bakes the real number)
-    ha::Float64 = 0.22          # base home advantage  (r01 bakes the real number)
+    # league level — calibrated by r01_calibrate_ireland.jl (Ireland Premier 79, n=1013,
+    # 2026-07-04: mean goals 1.404/1.098, HW 42.8%, draw 27.5%, over2.5 47.0%)
+    μ::Float64 = 0.0532         # log base away rate = log(1.098) − σ0²
+    ha::Float64 = 0.2459        # home advantage = log(1.404/1.098)
     σ0::Float64 = 0.20          # initial α,β spread (SyntheticData default)
     σ_in::Float64 = 0.015       # per-round strength RW vol (SyntheticData default)
     σ_ha::Float64 = 0.01        # per-round home-adv RW vol
@@ -76,10 +77,10 @@ Base.@kwdef struct SimConfig
     γ_btts::Float64 = 0.10      # model BTTS-yes tilt (pure bias)
     σ_post::Float64 = 0.05      # posterior width on log-λ
     S::Int = 100                # posterior draws
-    # market frictions — per-family overrounds at the close (r01 bakes real numbers)
-    O_1x2::Float64 = 1.06
-    O_ou::Float64 = 1.05
-    O_btts::Float64 = 1.06
+    # market frictions — per-family closing overrounds (r01, Ireland empirical)
+    O_1x2::Float64 = 1.0841
+    O_ou::Float64 = 1.0491
+    O_btts::Float64 = 1.0696
     ruin_floor::Float64 = 0.01  # wealth below this ⇒ ruined, betting frozen
 end
 

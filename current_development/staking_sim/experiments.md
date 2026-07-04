@@ -35,16 +35,20 @@ make_outputs()   # results/summary.csv + plots/p1..p4
 ```
 Then locally: `scp 'james@192.168.1.88:~/bet_project/BayesianFootball/current_development/staking_sim/plots/*.png' ~/bet_project/docs/bets_multi/figs_sim/`
 
-## Calibration (r01) — status: PENDING
+## Calibration (r01) — status: DONE (2026-07-04, server, n=1013 matches)
 Ireland Premier (tournament 79), from `.cache/datastore_Ireland.jls`:
 
 | dial | value | source |
 |---|---|---|
-| μ (log base away rate) | TBD | log(mean_away) − σ0² (Jensen) |
-| ha (home advantage) | TBD | log(mean_home/mean_away) |
-| O_1x2 / O_ou / O_btts | TBD | mean(overround_close) per family |
+| μ (log base away rate) | **0.0532** | log(mean_away=1.098) − σ0² (Jensen) |
+| ha (home advantage) | **0.2459** | log(1.404/1.098) |
+| O_1x2 / O_ou / O_btts | **1.0841 / 1.0491 / 1.0696** | mean(overround_close) per family |
 
-Sanity targets: sim-vs-empirical mean goals, home-win %, draw %, over-2.5 % within ~5%.
+Sanity (15×330-match campaigns vs empirical): home goals 1.387 vs 1.404, away 1.098 vs
+1.098, HW 44.7% vs 42.8%, draw 24.8% vs 27.5%, over2.5 44.4% vs 47.0%. Draw gap = pure
+double Poisson lacks low-score correlation — accepted for the toy. NOTE: a single long
+continuous run is the wrong sanity check (zero-sum RW spread grows unboundedly and
+inflates goals 5–15% over ~1000 rounds); campaigns are fresh per replication.
 
 ## Conventions (stated once, uniform across strategies)
 - Ruin: cumulative W < 0.01 ⇒ betting frozen for the rest of the season (logw = 0 after).

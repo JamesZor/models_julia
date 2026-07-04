@@ -60,13 +60,20 @@ println("    O_ou::Float64 = $(round(O_ou, digits=4))")
 println("    O_btts::Float64 = $(round(O_btts, digits=4))")
 println("="^70)
 
-# ---- sanity: simulate 5k matches at the calibrated dials ----
+# ---- sanity: simulate 15 CAMPAIGN-LENGTH chunks at the calibrated dials ----
+# (one long continuous run is the wrong check: the zero-sum random walk's cross-team
+#  spread grows without bound over ~1000 rounds and inflates goal means ~5–15%; the MC
+#  uses fresh 330-match campaigns, so the honest sanity check does too.)
 using Random
 cfg = SimConfig(μ=μ_cal, ha=ha_cal, O_1x2=O_1x2, O_ou=O_ou, O_btts=O_btts,
-                n_matches=5000, n_prehist=0)
-sims = simulate_campaign(cfg, Xoshiro(2026); S=2)
-sh = [sm.score[1] for sm in sims]; sa = [sm.score[2] for sm in sims]
-println("SIM (5k matches @ calibrated dials)  vs  EMPIRICAL")
+                n_matches=330, n_prehist=0)
+sh = Int[]; sa = Int[]
+for s in 1:15
+    for sm in simulate_campaign(cfg, Xoshiro(3000 + s); S=2)
+        push!(sh, sm.score[1]); push!(sa, sm.score[2])
+    end
+end
+println("SIM (15×330-match campaigns @ calibrated dials)  vs  EMPIRICAL")
 println("  mean home goals  $(round(mean(sh),digits=3))  vs  $(round(mh,digits=3))")
 println("  mean away goals  $(round(mean(sa),digits=3))  vs  $(round(ma,digits=3))")
 println("  home win %       $(round(100mean(sh.>sa),digits=1))  vs  $(round(100emp_hw,digits=1))")
