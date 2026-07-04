@@ -216,17 +216,21 @@ function run_season(cfg::SimConfig, seed::Integer; S_dec=50, kgrid=0.05:0.05:1.0
     ruined = Dict(s => false for s in strategies)
     cumW = Dict(s => 1.0 for s in strategies)
     w_trace = Vector{Tuple{Int,Vector{Float64}}}()
-    needs_trust = any(startswith(s, "TRUST") for s in strategies)
+    needs_eb = "TRUST_U_cap02" in strategies || "TRUST_UMC" in strategies
+    needs_t05 = "TRUST05_U_cap02" in strategies       # hard-coded w = 0.5 control (E3)
+    w_half = fill(0.5, 7)
 
     for (i, sm) in enumerate(ms)
         dists = sel_dists(sm)
         pbar_sel = MMASK' * sm.pbar
-        if needs_trust && i > 1 && (i - 1) % refit_every == 0
+        if needs_eb && i > 1 && (i - 1) % refit_every == 0
             w_units = fit_trust_eb(hist)[1]
             push!(w_trace, (i, copy(w_units)))
         end
-        mult = needs_trust ?
+        mult = needs_eb ?
             coherent_multiplier(sm.pbar, blend_targets(pbar_sel, sm.q_mkt, w_units)) : ones(1)
+        mult05 = needs_t05 ?
+            coherent_multiplier(sm.pbar, blend_targets(pbar_sel, sm.q_mkt, w_half)) : ones(1)
         for s in strategies
             if ruined[s]
                 push!(logw[s], 0.0)
@@ -244,6 +248,7 @@ function run_season(cfg::SimConfig, seed::Integer; S_dec=50, kgrid=0.05:0.05:1.0
                 s == "U_cap100"   ? stakes_unified(sm; cap=1.0) :
                 s == "U_UMC"      ? stakes_umc(sm; cap=1.0, S_dec=S_dec, kgrid=kgrid) :
                 s == "TRUST_U_cap02" ? stakes_unified(sm; cap=0.2, p=normalize_mult(sm.pbar, mult)) :
+                s == "TRUST05_U_cap02" ? stakes_unified(sm; cap=0.2, p=normalize_mult(sm.pbar, mult05)) :
                 s == "TRUST_UMC"  ? stakes_umc(sm; cap=1.0, S_dec=S_dec, kgrid=kgrid,
                                                P=apply_mult(sm.P, mult),
                                                pbar=normalize_mult(sm.pbar, mult)) :
