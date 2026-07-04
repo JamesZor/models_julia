@@ -122,7 +122,65 @@ Reads vs the expected headlines:
 6. Benchmarks: FLAT_1pct is embarrassingly competitive (+0.00043, DD 22.6%, zero ruin);
    K_quarter has the best medW (1.227) but at double the drawdown of TRUST_UMC.
 
-## Experiment 2+ (sensitivity, later)
+## Experiment 2: trust identifiability + time-decayed fit — status: DONE (2026-07-04, r03, 1.2 min)
+
+Question (user): p4 shows learned w ≈ flat across lines (only draw slightly different) —
+sensitivity issue? Would time-decay weighting (recent matches matter more) capture regime
+shifts? Files: `r03_trust_experiments.jl`; `fit_trust_eb` gained a `halflife` kwarg (l02).
+
+**E2a — identifiability ladder** (EB fit on 300→20k obs/line, 30 reps) + per-line Fisher
+info Î = mean(δ²/(p̃(1−p̃))) on 40k matches (`results/e2_summary.txt`, plot p5):
+
+| unit | Î/obs | n for sd(ŵ)=0.1 | med ŵ @600 | med ŵ @20k | w growth-oracle |
+|---|---|---|---|---|---|
+| home | 0.0075 | 13.3k | 0.55 | 0.67 | 0.72 |
+| draw | 0.0023 | **43.9k** | 0.54 | 0.45 | 0.48 |
+| away | 0.0064 | 15.6k | 0.58 | 0.72 | 0.72 |
+| over_15 | 0.0067 | 15.0k | 0.52 | 0.61 | 0.90 |
+| over_25 | 0.0090 | 11.1k | 0.57 | 0.61 | 0.96 |
+| over_35 | 0.0090 | 11.1k | 0.57 | 0.57 | 1.00 |
+| btts_yes | 0.0044 | 22.8k | 0.52 | 0.70 | 0.64 |
+
+Reads:
+1. **Flat w is information, not a fit bug.** Lines separate with n exactly as the Fisher
+   arithmetic prices: sharp w needs 11k–44k obs/line, a campaign gives ~600, so the EB
+   pooled prior (≈0.53) dominates everything. 1X2 + BTTS converge cleanly to their oracles
+   by 10–20k (home 0.67, away 0.72, draw DOWN to 0.45, btts 0.70).
+2. **Why the draw looks special in p4**: it carries 3–4× less information per observation
+   than any other line (draw prob is nearly flat in strength differences ⇒ model and market
+   rarely disagree) AND its optimum (0.45–0.48) is the only 1X2 one *below* the pooled
+   mean — its weak likelihood nudges consistently down while home/away nudge up.
+3. **Trust-for-calibration ≠ trust-for-growth on totals.** Even at 20k obs the Bernoulli
+   fit puts totals at 0.57–0.61 vs growth-oracle 0.90–1.00: per-bet totals edges are tiny,
+   so the growth objective is nearly flat in w (argmax rides the boundary) while the
+   log-score optimum is interior. v3 idea: fit w against realized growth on curated bets.
+
+**E2b — time decay** (half-life H ∈ {∞,1000,400,150} obs in the trust log-lik; 2 worlds ×
+30 reps × 2000 matches, walk-forward refit/30, score = blend−market Bernoulli log-score
+×1000 on the NEXT 30 matches; DRIFT world flips bias signs at m1000: γ_tot −0.05→+0.05,
+γ_btts +0.10→−0.10; same seeds both worlds ⇒ paired; plots p6/p7):
+
+| world | window | static | H=1000 | H=400 | H=150 |
+|---|---|---|---|---|---|
+| static | m300–1000 | 1.111 | 1.124 | 1.136 | 1.146 |
+| static | m1000–2000 | 1.415 | 1.419 | 1.414 | 1.405 |
+| drift | m300–1000 | 1.113 | 1.126 | 1.139 | 1.149 |
+| drift | m1000–2000 | 1.200 | 1.206 | 1.206 | 1.208 |
+
+Reads:
+4. **Decay is a no-op at these information rates** — spreads of ±0.01 on an advantage of
+   1.2–1.4. Even the hard sign-flip costs ALL fits equally (post-flip 1.42→1.20) and
+   H=150 recovers just +0.008 over static. p6 shows why: every fit, decayed or not, hugs
+   the pooled prior near 0.5–0.6 and barely reacts to the flip — there is no sharpness to
+   protect, so there is nothing for decay to save.
+5. **The blend is already regime-robust.** Half-trust is near-optimal in BOTH bias regimes
+   (drift-world oracle [0.64, 1.0, 0.64, 0.58, 0.52, 0.50, 0.74] — still mid-range), so the
+   EB prior's conservatism doubles as regime insurance. Verdict: don't add decay in v1;
+   revisit only if units get coarser (fewer units ⇒ more obs each) or model–market
+   divergence δ grows (bigger per-obs information).
+
+## Experiment 3+ (sensitivity, later)
 - Cold-start trust (n_prehist=0) vs warm.
 - σ_mod sweep (model quality) and γ sweep (bias size): where does TRUST_* stop paying?
 - Vig sweep; FLB power-law vig (v2).
+- Fit w against realized growth on curated bets (closes the calibration-vs-growth gap, E2a read 3).
