@@ -142,18 +142,23 @@ end
 """
 EB partial-pooled per-unit trust (port of _verify_trust.py T4 fit_ws): per-unit Bernoulli
 log-lik over a w grid, logit-normal prior with (w0, τ) by marginal likelihood, posterior mean.
+`halflife` (in observations) exponentially down-weights old observations in the log-lik —
+Inf (default) = the untouched static fit; finite H targets drifting per-line bias (r03/E2b).
 """
 function fit_trust_eb(h::TrustHist; wgrid=collect(0.0:0.005:1.0),
-                      w0grid=range(-2.0, 2.0, length=17), τgrid=(0.25, 0.5, 1.0, 2.0))
+                      w0grid=range(-2.0, 2.0, length=17), τgrid=(0.25, 0.5, 1.0, 2.0),
+                      halflife::Real=Inf)
     nw = length(wgrid)
     LL = zeros(7, nw)
     for u in 1:7
-        isempty(h.y[u]) && continue
+        n = length(h.y[u])
+        n == 0 && continue
         for (wi, w) in enumerate(wgrid)
             s = 0.0
-            @inbounds for i in eachindex(h.y[u])
+            @inbounds for i in 1:n
                 p̃ = clamp(w * h.p[u][i] + (1.0 - w) * h.q[u][i], 1e-9, 1 - 1e-9)
-                s += h.y[u][i] * log(p̃) + (1.0 - h.y[u][i]) * log1p(-p̃)
+                ll = h.y[u][i] * log(p̃) + (1.0 - h.y[u][i]) * log1p(-p̃)
+                s += isinf(halflife) ? ll : exp2(-(n - i) / halflife) * ll
             end
             LL[u, wi] = s
         end
