@@ -92,10 +92,13 @@ function run_real_season(built; cap=0.2, refit_every=25, min_edge=0.03, w0_start
             push!(w0_trace, (i, hp.w0))
         end
 
-        mult_eb  = coherent_multiplier(sm.pbar, blend_targets(pbar_sel, sm.q_mkt, w_eb))
-        mult_05  = coherent_multiplier(sm.pbar, blend_targets(pbar_sel, sm.q_mkt, W_HALF))
-        mult_cur = coherent_multiplier(sm.pbar, blend_targets(pbar_sel, sm.q_mkt, W_CUR))
-        mult_one = coherent_multiplier(sm.pbar, blend_targets(pbar_sel, sm.q_mkt, W_ONE))
+        # cycles=50: the smile imprints 3 NESTED over-constraints (o15⊃o25⊃o35) that overlap
+        # 1X2/BTTS; the sim default (10) under-converges the IPF on real smile targets to ~1e-3.
+        # 50 reproduces the smile PPD probs to <1e-6 (verification item 3) at trivial extra cost.
+        mult_eb  = coherent_multiplier(sm.pbar, blend_targets(pbar_sel, sm.q_mkt, w_eb);   cycles=50)
+        mult_05  = coherent_multiplier(sm.pbar, blend_targets(pbar_sel, sm.q_mkt, W_HALF); cycles=50)
+        mult_cur = coherent_multiplier(sm.pbar, blend_targets(pbar_sel, sm.q_mkt, W_CUR);  cycles=50)
+        mult_one = coherent_multiplier(sm.pbar, blend_targets(pbar_sel, sm.q_mkt, W_ONE);  cycles=50)
 
         # verification 3: w=1 grid tilt reproduces the smile over-probs (units 4/6/8)
         gtilt = normalize_mult(sm.pbar, mult_one)
