@@ -11,8 +11,12 @@ a DataStore we don't need). λ convention identical:
 Three observers of each match:
   • TRUTH   λ_h, λ_a                        → the score  ~ Poisson each side.
   • MARKET  λ·exp(ε), ε~N(0,σ_mkt²) fresh   → its own 12×12 grid → de-vigged q_sel;
-            quoted odds d = 1/(q_sel·O_fam) (multiplicative per-family overround, so
-            proportional de-vig is exact in-sim; no favourite-longshot bias — v2 dial).
+            quoted implied prob π ∝ q^ρ_flb within each market group, scaled to O_fam
+            (ρ_flb = 1 recovers plain multiplicative vig; ρ_flb < 1 = favourite–longshot
+            bias: longshot odds shaded shorter, favourites relatively better value).
+            `devig_quotes=true` makes q_mkt the PROPORTIONAL de-vig of the quoted odds
+            (what the real pipeline can observe) instead of the market's fair belief —
+            under FLB the two differ, and the real pipeline gets the contaminated one.
   • MODEL   λ·exp(ε), ε~N(0,σ_mod²)         → grid → PER-LINE BIAS TILT applied
             (γ_tot totals compression + γ_btts BTTS boost, the li_smile50 signature from
             score_matrix_calibration/experiments.md); "posterior" = S mean-corrected
@@ -48,6 +52,8 @@ const SEL_SPECS = [("1X2", 0.0, "home"), ("1X2", 0.0, "draw"), ("1X2", 0.0, "awa
 const SEL_MASKS = [BitVector(mask_for(n, l, s)) for (n, l, s) in SEL_SPECS]
 const MMASK = Float64.(hcat(SEL_MASKS...))          # 144 × 11
 const FAM_OF_SEL = [1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3]  # 1=1X2, 2=OU, 3=BTTS
+# quoting groups: each is one market whose fair probs sum to 1 (vig/FLB applied per group)
+const MKT_GROUPS = ((1, 2, 3), (4, 5), (6, 7), (8, 9), (10, 11))
 
 # trust units: 7 lines (complement shares its unit's w); representative sel per unit
 const UNIT_OF_SEL = [1, 2, 3, 4, 4, 5, 5, 6, 6, 7, 7]
@@ -81,6 +87,8 @@ Base.@kwdef struct SimConfig
     O_1x2::Float64 = 1.0841
     O_ou::Float64 = 1.0491
     O_btts::Float64 = 1.0696
+    ρ_flb::Float64 = 1.0        # favourite–longshot shading exponent (π ∝ q^ρ; 1 = off)
+    devig_quotes::Bool = false  # q_mkt from proportional de-vig of quotes (realistic under FLB)
     ruin_floor::Float64 = 0.01  # wealth below this ⇒ ruined, betting frozen
 end
 
@@ -143,11 +151,26 @@ end
 function sim_match(cfg::SimConfig, λh::Float64, λa::Float64, rng::AbstractRNG; S::Int=cfg.S)
     h = rand(rng, Poisson(λh)); a = rand(rng, Poisson(λa))
 
-    # market observer → de-vigged probs → quoted odds with per-family overround
+    # market observer → fair probs → quoted odds: per-group π ∝ q^ρ_flb scaled to O_fam
     gm = dp_grid(λh * exp(cfg.σ_mkt * randn(rng)), λa * exp(cfg.σ_mkt * randn(rng)))
     q = MMASK' * gm
     O = (cfg.O_1x2, cfg.O_ou, cfg.O_btts)
-    d = [1.0 / (q[m] * O[FAM_OF_SEL[m]]) for m in 1:11]
+    d = Vector{Float64}(undef, 11)
+    for grp in MKT_GROUPS
+        Ofam = O[FAM_OF_SEL[grp[1]]]
+        z = sum(q[m]^cfg.ρ_flb for m in grp)     # = 1 when ρ_flb = 1 (fair probs sum to 1)
+        for m in grp
+            d[m] = z / (q[m]^cfg.ρ_flb * Ofam)
+        end
+    end
+    if cfg.devig_quotes
+        for grp in MKT_GROUPS
+            s = sum(1.0 / d[m] for m in grp)
+            for m in grp
+                q[m] = (1.0 / d[m]) / s
+            end
+        end
+    end
 
     # model observer: point belief + posterior draws, bias tilt on every grid
     λmh = λh * exp(cfg.σ_mod * randn(rng))
