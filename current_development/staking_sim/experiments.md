@@ -215,7 +215,7 @@ Reads:
    posterior w0 drops below ~0.4. Decouples the good-world tax from the bad-world
    insurance. Per-line sharpness arrives later with multi-season/league data (E2a).
 
-## Experiment 4: heterogeneous per-line quality (FLB + sup-blind worlds) — status: RUNNING (2026-07-05, r05)
+## Experiment 4: heterogeneous per-line quality (FLB + sup-blind worlds) — status: DONE (2026-07-05, r05, 26 min)
 
 Question (user, from split_market_pillar/r10 real backtest on Ireland): home/away 1X2
 lines show NEGATIVE growth/ROI across nearly all model configs while btts_yes/some totals
@@ -254,7 +254,54 @@ E1/E3): FLAT_1pct · U_cap02 · TRUST05 (flat .5) · TRUST_EB · CURATED05. Key 
 does EB separate per-line within ONE season (600 obs/line but big δ), and what does
 structural curation buy over it / cost in the healthy world?
 
-Results: (pending — job 98dd173e)
+Results (e4_summary.txt):
+
+| world | strategy | medW | q05W | q95W | meanG | medDD | ruin% |
+|---|---|---|---|---|---|---|---|
+| base | FLAT_1pct | 1.136 | 0.739 | 1.772 | +0.00043 | 22.6% | 0 |
+| base | U_cap02 (w=1) | 0.933 | 0.128 | 7.185 | −0.00018 | 78.9% | 0 |
+| base | **TRUST05 (flat .5)** | **1.269** | 0.589 | 2.695 | **+0.00073** | 35.3% | 0 |
+| base | TRUST_EB | 1.205 | 0.568 | 3.037 | +0.00065 | 41.0% | 0 |
+| base | CURATED05 | 1.238 | 0.624 | 2.497 | +0.00059 | **33.9%** | 0 |
+| supblind | FLAT_1pct | 1.064 | 0.655 | 1.784 | +0.00020 | 27.3% | 0 |
+| supblind | U_cap02 (w=1) | 0.165 | 0.009 | 4.648 | −0.00548 | 95.8% | 13.0 |
+| supblind | TRUST05 (flat .5) | 0.925 | 0.207 | 3.545 | −0.00024 | 61.0% | 0 |
+| supblind | TRUST_EB | 1.034 | 0.345 | 3.154 | +0.00004 | 51.5% | 0 |
+| supblind | **CURATED05** | **1.194** | 0.549 | 2.590 | **+0.00050** | **36.0%** | 0 |
+| supblind_flb | FLAT_1pct | 1.017 | 0.712 | 1.438 | +0.00003 | 22.4% | 0 |
+| supblind_flb | U_cap02 (w=1) | 0.162 | 0.009 | 3.897 | −0.00544 | 95.4% | 11.0 |
+| supblind_flb | TRUST05 (flat .5) | 0.879 | 0.243 | 2.733 | −0.00055 | 58.2% | 0 |
+| supblind_flb | TRUST_EB | 0.927 | 0.350 | 2.387 | −0.00024 | 48.8% | 0 |
+| supblind_flb | **CURATED05** | **1.126** | 0.608 | 1.853 | **+0.00028** | **29.4%** | 0 |
+
+End-of-season EB w medians: base [.535 .499 .532 | .544 .531 .528 .538];
+supblind [.337 .460 .345 | .515 .499 .502 .504];
+supblind_flb [.337 .465 .349 | .528 .493 .529 .502].
+
+Reads:
+1. **E1–E3's flat learned w WAS partly a world artifact.** With per-line heterogeneous
+   quality (junk supremacy, good level) the EB fit separates WITHIN ONE SEASON: 1X2 w
+   pulled to ≈0.34 while totals/BTTS stay ≈0.50 — per-line, not just the pooled level.
+   Big model–market δ on the junk lines ⇒ high Fisher info ⇒ the worst lines are the
+   fastest to learn. E2's 11k–44k-obs pessimism applies to lines that only differ subtly.
+2. **But one season of learning isn't enough to win**: TRUST_EB only rescues to
+   ≈breakeven (+0.00004 / −0.00024) because it donates on 1X2 while w converges.
+   **Structural curation dominates**: CURATED05 keeps ≈base-world performance in both
+   junk worlds (+0.0005 / +0.00028, DD ≈30–36%) — knowing WHICH lines are junk (from
+   r10-style evidence) is worth far more than learning it in-season.
+3. **Curation is cheap insurance in the healthy world**: base-world cost vs TRUST05 is
+   only −0.00014/match (1.238 vs 1.269 medW) and it has the best drawdown — giving up
+   genuine 1X2 edge also gives up its variance.
+4. **Fixed flat 0.5 is NOT safe under heterogeneity** (E3 recipe refined): TRUST05 loses
+   money in both junk worlds (−0.00024/−0.00055) — a constant half-trust keeps donating
+   on lines the model can't price. The E3 "stake at 0.5 + EB monitor" recipe upgrades to:
+   **fix w per line family from offline evidence (0 on 1X2, 0.5 on totals/BTTS), keep the
+   EB fit running as the alarm** — in the sim its 1X2 w hitting 0.34 in one season is
+   exactly the alarm firing.
+5. FLB on top of sup-blindness changes rankings nowhere; it just shaves everyone's G
+   (denser junk-side books). The r10 signature needs the sup-blind dial, not the FLB one.
+
+## Experiment 5+ (sensitivity, later)
 
 ## Experiment 5+ (sensitivity, later)
 - Cold-start trust (n_prehist=0) vs warm.
