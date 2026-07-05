@@ -215,8 +215,49 @@ Reads:
    posterior w0 drops below ~0.4. Decouples the good-world tax from the bad-world
    insurance. Per-line sharpness arrives later with multi-season/league data (E2a).
 
-## Experiment 4+ (sensitivity, later)
+## Experiment 4: heterogeneous per-line quality (FLB + sup-blind worlds) — status: RUNNING (2026-07-05, r05)
+
+Question (user, from split_market_pillar/r10 real backtest on Ireland): home/away 1X2
+lines show NEGATIVE growth/ROI across nearly all model configs while btts_yes/some totals
+are positive — is the sim's flat learned w an artifact of giving the model an edge on
+EVERY line? Hypotheses: (a) favourite–longshot bias (dominant-team league shades longshot
+odds) poisons 1X2; (b) the model has no real supremacy information (level yes, split no).
+
+New dials (l01): `ρ_flb` power-law shading π ∝ q^ρ per market group (1 = off);
+`devig_quotes` (q_mkt = proportional de-vig of the QUOTES, what the real pipeline sees);
+`σ_mod_lvl`/`σ_mod_sup` level/supremacy decomposition of the model's noise
+(ε_h = ε_lvl + ε_sup, ε_a = ε_lvl − ε_sup; i.i.d. σ_mod ⇔ both = σ_mod/√2; market ⇔ 0.0566).
+New strategy (l02): `CURATED05_U_cap02` — w hard-coded [0,0,0,.5,.5,.5,.5] (soft market
+curation: 1X2 blended fully to market ⇒ vig-moat abstention on those lines).
+
+**Diagnostic (e4_diag.txt, 40k matches/world, plug-in Kelly @ 3% min_edge):**
+- **FLB alone does NOT reproduce the signature.** Even ρ=0.85: home/away EV/bet stays
+  +0.08 (model's genuine 1X2 info edge + the 3% filter self-protect — shaded longshots
+  simply stop clearing the filter: draw bets 695→40, home avg odds 3.15→2.24). Oracle w
+  barely moves. FLB is benign when the model truly knows supremacy.
+- **Sup-blind world (σ_lvl=0.035 < mkt 0.0566 < σ_sup=0.12) reproduces r10 exactly**:
+  home/away EV/bet −0.014/−0.003, G/match ≈ −0.003 each, with the tell-tale
+  over-activity (≈7k bets vs ≈2k in base — junk supremacy noise manufactures fake 1X2
+  edges); totals/BTTS keep +0.03..0.13 EV/bet. +FLB: draw −0.047 too.
+  Oracle w: base [.80 .52 .76 | .86 .92 .98 .72] → supblind_flb [.22 .00 .12 | .76 .62 .46 .66].
+- **The EB calibration fit SEES this defect** (unlike pure odds-quality): at 5k obs it
+  fits [.18 .24 .20 | .78 .55 .49 .64] ≈ oracle. Sup-blindness makes model 1X2 probs
+  genuinely noisy ⇒ big model–market δ ⇒ HIGH Fisher info ⇒ junk lines are the FASTEST
+  to learn. (Contrast E2: lines with small δ are slow but also matter least.)
+- Streamed-oracle fix: l02's `oracle_trust` runs ONE 40k campaign — the zero-sum RW
+  drifts unboundedly (σ_in·√8000 ≈ 1.3) and seed 12 flips all oracle w to 0. r05 adds
+  `oracle_trust_stream` (fresh 330-match campaigns). E1's crosses survive the check:
+  streamed base oracle [.80 .52 .76 .86 .92 .98 .72] ≈ E1's [.72 .48 .72 .90 .96 1.0 .64].
+
+**Race** (r05 `run_e4`, 300 seasons × worlds base/supblind/supblind_flb, same seeds as
+E1/E3): FLAT_1pct · U_cap02 · TRUST05 (flat .5) · TRUST_EB · CURATED05. Key question:
+does EB separate per-line within ONE season (600 obs/line but big δ), and what does
+structural curation buy over it / cost in the healthy world?
+
+Results: (pending — job 98dd173e)
+
+## Experiment 5+ (sensitivity, later)
 - Cold-start trust (n_prehist=0) vs warm.
 - σ_mod sweep (model quality) and γ sweep (bias size): where does TRUST_* stop paying?
-- Vig sweep; FLB power-law vig (v2).
+- Vig sweep beyond ρ_flb; overround level sweep.
 - Fit w against realized growth on curated bets (closes the calibration-vs-growth gap, E2a read 3).
