@@ -57,14 +57,24 @@ function run_ext_season(matches; cap=0.2, refit_every=25, min_edge=0.03, w0_star
         p_cur = ext_tilted_pbar(em, W_CUR)
         p_eb  = ext_tilted_pbar(em, w_eb)
 
+        M = length(em.d)
         for s in strategies
             if ruined[s]; push!(logw[s], 0.0); continue; end
-            a = if s == "FLAT_1pct"          ext_flat(em, p_one; min_edge=min_edge, cap=cap)
-                elseif s == "U_cap02"        (length(em.d)==0 ? Float64[] : solve_P(p_one, em.R; cap=cap))
-                elseif s == "TRUST05_U_cap02"  (length(em.d)==0 ? Float64[] : solve_P(p_05, em.R; cap=cap))
-                elseif s == "CURATED05_U_cap02"(length(em.d)==0 ? Float64[] : solve_P(p_cur, em.R; cap=cap))
-                elseif s == "TRUST_EB_U_cap02" (length(em.d)==0 ? Float64[] : solve_P(p_eb, em.R; cap=cap))
-                else error("unknown $s") end
+            a = if s == "FLAT_1pct"
+                    ext_flat(em, p_one; min_edge=min_edge, cap=cap)
+                elseif M == 0
+                    Float64[]
+                elseif s == "U_cap02"
+                    solve_P(p_one, em.R; cap=cap)
+                elseif s == "TRUST05_U_cap02"
+                    solve_P(p_05, em.R; cap=cap)
+                elseif s == "CURATED05_U_cap02"
+                    solve_P(p_cur, em.R; cap=cap)
+                elseif s == "TRUST_EB_U_cap02"
+                    solve_P(p_eb, em.R; cap=cap)
+                else
+                    error("unknown $s")
+                end
             r = isempty(a) ? 1.0 : max(1.0 + dot(a, em.settle), 1e-12)
             push!(logw[s], log(r)); cumW[s] *= r
             nbets[s] += count(>(1e-8), a); turn[s] += isempty(a) ? 0.0 : sum(a)
