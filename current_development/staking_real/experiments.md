@@ -242,6 +242,49 @@ markets the model has edge on from the ones it doesn't.)
   Confirms [[portfolio-kelly-partial-hedge]] on real data: the cap only pays off once the junk
   markets are curated out; on the raw book it just accelerates ruin.
 
+## Trust-learning dynamics — learning rate × refit cadence (`r04_wlearn_cadence.jl`)
+
+Two hyperparameters of the EB trust *estimator* were fixed arbitrarily in r01 (full memory, refit
+every 25 matches). r04 sweeps both learning-rate mechanisms against the **weekly** refit cadence
+(Ireland ≈ 5 matches/week; refit on ISO-week boundaries, robust to the 97-day off-season gap),
+evaluating TRUST_EB. `run_real_season` gained backward-compatible `halflife`/`ema_alpha`/`refit_at`
+kwargs (the `(H=∞, α=1, ~5wk)` cell reproduces r01 exactly: termW 2.999, home_w 0.180).
+
+**Grid A — forgetting half-life H (weeks) × cadence K.** Full memory dominates every cell:
+
+| | K=1 | K=4 | K=8 |
+|---|---:|---:|---:|
+| **H=∞** termW / home_w | 3.71 / 0.19 | 2.94 / 0.18 | 3.83 / 0.18 |
+| H=4wk | 1.27 / 0.44 | 1.08 / 0.38 | 1.60 / 0.38 |
+| H=1wk | 0.93 / 0.51 | 0.90 / 0.45 | 1.09 / 0.45 |
+
+**Grid B — EMA step-size α × cadence K.** α=1 (no smoothing) best-or-tied; smoothing cuts jitter
+but lags:
+
+| | termW (K=1) | termW (K=8) | jitter (K=1) |
+|---|---:|---:|---:|
+| **α=1.0** | 3.71 | 3.83 | 0.0152 |
+| α=0.5 | 3.57 | 2.66 | 0.0083 |
+| α=0.15 | 3.12 | 1.34 | 0.0038 |
+
+**Verdict — the per-line bias is STATIONARY** (confirms the staking-sim E2 "time-decay = no-op" on
+real data):
+1. **Full memory (H=∞) dominates** — shortening the half-life strictly hurts growth (termW 3.7→0.9,
+   G +0.005→−0.000), drawdown (0.86→0.94) *and* reactivity. Counter-intuitively, forgetting makes
+   the alarm react **less**: a short effective sample makes the EB pool each unit back to the 0.5
+   prior, so home w stalls at 0.44–0.51 instead of falling to 0.18. Full memory crosses home-w<0.35
+   at match 75; short memory **never** crosses. Reactivity to a *persistent* bias comes from
+   *accumulating* evidence, not forgetting.
+2. **No smoothing (α=1) is best-or-tied.** EMA is the real *stability* knob (jitter 0.031→0.004,
+   a beautifully smooth w-path) but it **lags** the persistent signal and costs growth as cadence
+   slows. Use it only if you want a calmer path, and keep cadence frequent if so.
+3. **Cadence barely matters at full memory** — termW 2.9–3.9 across K=1..8, maxDD ~0.86 flat. Refit
+   anywhere from weekly to 8-weekly.
+
+**Operating point:** full memory (H=∞), no EMA (α=1), refit every ~4–6 weeks — i.e. the r01 default
+is already near-optimal; the estimator doesn't need tuning because the bias is stable.
+(`results/e_wlearn.txt`, `wlearn_halflife.csv`, `wlearn_ema.csv`.)
+
 ## v2 backlog (remaining)
 
 Per-family EB trust units for CS/DC/AH (auto-abstention, above); `U_UMC`/`TRUST_UMC` k* shrinkage
