@@ -57,7 +57,8 @@ NamedTuple with per-strategy logw/turnover/ruin, per-family & per-selection P/L 
 the EB w-trajectory + pooled w0 path, and the max w=1 smile-tilt reproduction error.
 """
 function run_real_season(built; cap=0.2, refit_every=25, min_edge=0.03, w0_start=0.5,
-                         strategies=REAL_STRATEGIES)
+                         strategies=REAL_STRATEGIES,
+                         halflife=Inf, ema_alpha=1.0, refit_at::Union{Nothing,AbstractSet{Int}}=nothing)
     matches   = built.matches
     smile_sel = built.smile_sel
     smile_dists = built.smile_dists
@@ -86,8 +87,10 @@ function run_real_season(built; cap=0.2, refit_every=25, min_edge=0.03, w0_start
         pbar_sel = smile_sel[i]
         sdists   = smile_dists[i]
 
-        if i > 1 && (i - 1) % refit_every == 0
-            w_eb, hp = fit_trust_eb(hist)
+        do_refit = refit_at === nothing ? (i > 1 && (i - 1) % refit_every == 0) : (i in refit_at)
+        if do_refit
+            w_new, hp = fit_trust_eb(hist; halflife=halflife)
+            w_eb = ema_alpha == 1.0 ? w_new : (1.0 - ema_alpha) .* w_eb .+ ema_alpha .* w_new
             push!(w_trace, (i, copy(w_eb)))
             push!(w0_trace, (i, hp.w0))
         end
