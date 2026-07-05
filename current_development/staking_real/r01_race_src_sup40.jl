@@ -250,3 +250,48 @@ function run_and_report(built, c::Float64; outdir=joinpath(@__DIR__, "results"))
 
     return (rs=rs, body=body, tag=tag)
 end
+
+"""
+    save_plots(rs; outdir) → paths
+
+Regenerate the two deliverable PNGs from a run struct (needs `using Plots; gr()` and a headless
+GR backend: `ENV["GKSwstype"]="100"` BEFORE `using Plots`, else `savefig` hangs on this box):
+  • p1_eb_trust_trajectory.png — the money shot: per-unit EB `w` over the season + pooled w̄0
+    (home/away fall, totals/BTTS hold ≈0.5).
+  • p2_wealth_race.png — cumulative bankroll (log) per strategy.
+"""
+function save_plots(rs; outdir=joinpath(@__DIR__, "plots"))
+    @eval Main using Plots
+    Base.invokelatest(_save_plots_impl, rs, outdir)
+end
+
+function _save_plots_impl(rs, outdir)
+    Plots = Main.Plots; Plots.gr(); mkpath(outdir)
+    xs = [i for (i, _) in rs.w_trace]; W = reduce(hcat, [w for (_, w) in rs.w_trace])'
+    cols = Dict("home"=>:red, "away"=>:orangered, "draw"=>:darkorange, "over_15"=>:seagreen,
+                "over_25"=>:mediumseagreen, "over_35"=>:teal, "btts_yes"=>:purple)
+    lst = Dict("home"=>:solid, "away"=>:solid, "draw"=>:solid, "over_15"=>:dot,
+               "over_25"=>:dot, "over_35"=>:dot, "btts_yes"=>:dashdot)
+    p = Plots.plot(size=(560,360), legend=:outerright, legendfontsize=6, xlabel="match",
+                   ylabel="EB trust w", ylims=(0.0,0.75), framestyle=:box, grid=true,
+                   titlefontsize=8, title="src_sup40_sw40 · EB per-unit trust trajectory (n=275)")
+    Plots.hline!(p, [0.5], ls=:dash, lc=:gray, lw=1.0, label="cold 0.5")
+    for (u, nm) in enumerate(UNIT_NAMES)
+        Plots.plot!(p, xs, W[:,u], lw=2.0, lc=cols[nm], ls=lst[nm], marker=:circle, ms=2, label=nm)
+    end
+    x0 = [i for (i,_) in rs.w0_trace]; wbar = [1/(1+exp(-w0)) for (_,w0) in rs.w0_trace]
+    Plots.plot!(p, x0, wbar, lw=2.6, lc=:black, ls=:dash, label="pooled w0")
+    Plots.savefig(p, joinpath(outdir, "p1_eb_trust_trajectory.png"))
+
+    scol = Dict("FLAT_1pct"=>:gray40, "PB_BK_cap02"=>:brown, "U_cap02"=>:red,
+                "TRUST05_U_cap02"=>:orange, "CURATED05_U_cap02"=>:seagreen, "TRUST_EB_U_cap02"=>:royalblue)
+    p2 = Plots.plot(size=(560,360), legend=:topleft, legendfontsize=6, xlabel="match",
+                    ylabel="bankroll (log)", yscale=:log10, framestyle=:box, grid=true,
+                    titlefontsize=8, title="src_sup40_sw40 · staking race (c=0.02, cap 0.2)")
+    for s in REAL_STRATEGIES
+        wc = exp.(cumsum(rs.logw[s])); Plots.plot!(p2, 1:length(wc), max.(wc, 1e-3), lw=2.0, lc=scol[s], label=s)
+    end
+    Plots.hline!(p2, [1.0], ls=:dash, lc=:black, lw=1, label="")
+    Plots.savefig(p2, joinpath(outdir, "p2_wealth_race.png"))
+    return (joinpath(outdir, "p1_eb_trust_trajectory.png"), joinpath(outdir, "p2_wealth_race.png"))
+end

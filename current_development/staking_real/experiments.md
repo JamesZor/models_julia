@@ -1,0 +1,161 @@
+# staking_real — Real-Data Staking MVP (run log)
+
+Backtest the sim-validated staking layer — per-line trust blend → coherent IPF grid tilt →
+capped unified Kelly (P), with the EB trust fit as a junk-line alarm — on the **real OOS
+matches** of the `src_sup40_sw40` L1 engine (League of Ireland Premier, 2025–26, Betfair
+close), and answer the MVP question:
+
+> **Does the EB fit pull trust `w` DOWN on the markets the model is bad at (home/away 1X2)
+> while HOLDING the good ones (unders, BTTS)?**
+
+Answer (275 matches): **yes, decisively** — see §Results. This is signature-reading, not
+ranking; the EB alarm moving the right way matters more than any single strategy's P/L.
+
+Background: sim lab `../staking_sim/` (E1–E4) + `docs/bets_multi/staking_sim_report.pdf`;
+memory note `staking-sim-mc-race`. The sim's "sup-blind" world (E4) predicted exactly this
+signature and ordering; this run reproduces it on real books.
+
+---
+
+## Preflight (Hetzner / kaimon)
+
+- Server: `/root/BayesianFootball`, `Threads.nthreads()=16` (32 HT / 16 cores). kaimon REPL.
+- Payload present: `data/double_poisson_smile_src_grid/src_sup40_sw40_20260704_050900/`.
+- Data: `Data.Ireland()` datastore → `summarize_betfair_market(open=(-1e5,-10), close=(-20,0))`
+  swapped into `ds1.odds` (exactly as r21:157). 293 OOS matches in the engine's latents;
+  **275** have a Betfair close book (the backtest set). `is_winner` is clean `Bool`.
+- `extract_oos_predictions(ds1, res)` → per-draw `λ_h/λ_a/λ_tot/φ` (3200 draws = 800×4).
+  `Predictions.model_inference(lat)` → smile-correct per-selection PPD.
+  Both cached to `results/_lat_ppd_cache.jls` (gitignored) so the race reloads in seconds.
+
+## Design
+
+**Adapter** (`l01_real_books.jl`, `build_real_books`): real L1 predictions + Betfair close →
+the SAME `SimMatch` the sim lab races, so the sim `l02` machinery runs verbatim.
+- `SimMatch.P` = plain double-Poisson grids (144×S) from the posterior λ draws — the coherent
+  substrate the unified solver needs. `pbar` = grid mean.
+- **Smile subtlety** (the key design point): `src_sup40_sw40` prices O/U through
+  `Λ = λ_tot·φ(K)` (`SmileScoreMatrix`), NOT the plain grid — confirmed on match 1:
+  grid over-2.5 = 0.267 vs smile PPD = 0.289 (≈2.2pp). So the per-UNIT **model targets** for
+  the trust blend + the raw-unified (w=1) tilt come from the smile PPD (carried as
+  `smile_sel` [11] and `smile_dists` [11×S]); O/U = smile probs, 1X2/BTTS = grid by
+  construction. The runner imprints `smile_sel` onto the grid via `coherent_multiplier` (IPF),
+  so **every** unified strategy — incl. raw U (w=1) — prices O/U exactly as b21 certified.
+- Book = core 11 selections (1X2, O/U 1.5/2.5/3.5, BTTS), fixed sim order. Commission `c`
+  folds into payout `d_eff = 1+(odds_close−1)(1−c)` for BOTH decisions and settlement.
+  Missing line ⇒ `d=1.0` (pure-loss column ⇒ solver never stakes it) and `q_mkt=model prob`
+  (blend no-op). Settlement prefers graded `is_winner`, falls back to the true-score mask.
+
+**Strategies** (`r01_race_src_sup40.jl`, pluggable registry — new system = one `elseif`):
+`FLAT_1pct` · `PB_BK_cap02` (per-bet Bayesian–McHale Kelly 0.03 on smile draws, Σa≤0.2 — the
+b21-comparable baseline) · `U_cap02` (raw unified, w=1, smile-tilted) · `TRUST05_U_cap02`
+(flat w=0.5) · `CURATED05_U_cap02` (w=[0,0,0,.5,.5,.5,.5]) · `TRUST_EB_U_cap02` (EB-learned w,
+cold-start 0.5, refit every 25). All bet from match 1, share books, compound sequentially,
+ruin-freeze < 0.01. Race run at c=0.02 and c=0.
+
+---
+
+## Results (n=275, c=0.02 unless noted)
+
+### Race table
+
+| strategy | term_W | G/match ± SE | maxDD | n_bets | turnover | ruined |
+|---|---:|---:|---:|---:|---:|:--:|
+| FLAT_1pct | 1.87 | +0.00228 ± 0.00178 | 0.26 | 692 | 6.9 | – |
+| PB_BK_cap02 | 0.57 | −0.00205 ± 0.01223 | 0.98 | 701 | 41.9 | – |
+| U_cap02 | **0.01** | −0.01686 ± 0.01308 | 1.00 | 827 | 49.4 | **YES** |
+| TRUST05_U_cap02 | 0.71 | −0.00123 ± 0.00984 | 0.95 | 1052 | 41.8 | – |
+| **CURATED05_U_cap02** | **26.86** | **+0.01197 ± 0.00402** | 0.42 | 787 | 25.9 | – |
+| TRUST_EB_U_cap02 | 2.98 | +0.00397 ± 0.00867 | 0.87 | 1049 | 39.8 | – |
+
+c=0 (frictionless) same ordering, wider spread: CURATED 44.6, TRUST_EB 4.71, FLAT 1.95,
+TRUST05 1.28, PB_BK 0.82, U 0.02 (ruined). Full tables: `results/e_real_summary_c020.txt`,
+`results/e_real_summary_c000.txt`.
+
+**Ordering = sim E4 exactly: `CURATED ≻ TRUST_EB ≻ FLAT ≻ TRUST05 ≻ PB_BK ≻ raw U (ruin)`.**
+Raw unified (w=1) over-stakes the model's bad 1X2 and goes bankrupt; flat-0.5 still bleeds on
+1X2; curation (abstain 1X2, half-trust totals/BTTS) wins by a mile; the EB fit lands between
+flat and curated because it *learns* the curation over the season rather than being handed it.
+
+### EB trust w-trajectory — the money shot (identical at c=0.02 and c=0; w-fit is commission-blind)
+
+| match | home | draw | away | over_15 | over_25 | over_35 | btts_yes |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 (cold) | 0.500 | 0.500 | 0.500 | 0.500 | 0.500 | 0.500 | 0.500 |
+| 101 | 0.294 | 0.389 | 0.461 | 0.510 | 0.469 | 0.484 | 0.597 |
+| 201 | 0.209 | 0.384 | 0.299 | 0.530 | 0.454 | 0.478 | 0.580 |
+| **251 (final)** | **0.180** | 0.374 | **0.330** | 0.546 | 0.520 | 0.503 | **0.638** |
+
+Pooled `w̄0` drifts +0.56 → 0.44/0.38 as the bad 1X2 evidence accumulates. **Home w 0.50→0.18,
+away 0.50→0.33 (both FALL hard); over_15/25/35 hold ≈0.50–0.55; btts_yes rises to 0.64.**
+→ **The EB alarm pulls trust off exactly the markets b21 flagged bad and holds the good ones.**
+Plots: `plots/p1_eb_trust_trajectory.png` (money shot) + `plots/p2_wealth_race.png` — regenerate
+with `save_plots(out02.rs)` (needs `ENV["GKSwstype"]="100"` set BEFORE `using Plots`, else GR
+`savefig` hangs headless). PNGs live server-side; not in the local commit because the Hetzner box
+can't push (see §Infra note) — the data is in `results/w_trace_c020.csv` + the tables above.
+
+### Per-family P/L attribution (net staked £/unit, linear; c=0.02)
+
+- FLAT: 1X2 +0.01 (roi +0.3%), totals +0.40 (+13.3%), BTTS +0.34 (+32.4%).
+- CURATED05: 1X2 +0.06 (only residual from the renorm, w=0 ⇒ ~no 1X2 bets), totals +1.14,
+  BTTS +2.73 — its edge is totals+BTTS, 1X2 exposure ≈ removed.
+- TRUST_EB: 1X2 +0.71, totals +0.81, BTTS +2.67 — still carries some 1X2 early (before w falls).
+  BTTS is the dominant profit centre for every unified strategy (roi ≈ +25–35%).
+(Attribution is additive net-P/L; joint log-growth is not family-separable — read directional.)
+
+### b21 adapter cross-check — PB_BK_cap02 per-selection ROI vs b21 `src_sup40_sw40`
+
+**11/11 sign agreement** (c=0.02): home −7.3% (b21 −9.4), draw +17.6 (+33.5), away +24.9
+(+22.7), over_15 −0.3 (−7.5), under_15 +25.6 (+42.0), over_25 +0.7 (+1.8), under_25 +17.1
+(+12.2), over_35 +23.6 (+16.0), under_35 +8.0 (+9.0), btts_yes +33.7 (+32.6), btts_no +58.8
+(+48.2). Same signs + same ballpark magnitudes ⇒ the adapter prices/settles like the certified
+r21 pipeline. (11/11 also at c=0.)
+
+## Verification checklist
+
+1. Solver / include sanity — `build_real_books` + race run clean after includes. ✔
+2. **b21 cross-check** — PB_BK_cap02 per-line signs match b21 (11/11). ✔
+3. **Smile w=1 tilt** — post-IPF grid reproduces the smile PPD over-probs to
+   `max|Δ| = 1.9e-9 < 1e-6` (needs `cycles=50`: 3 nested over-constraints overlap 1X2/BTTS;
+   the sim default 10 under-converges to ~1e-3 — immaterial to stakes but fixed for hygiene). ✔
+4. **Missing-line handling** — match 1 has no Betfair BTTS line ⇒ `d(btts)=1.0`, `q=model`,
+   zero stake on BTTS; stakes only on present selections. ✔
+5. **MVP question answered with numbers** — final EB w: home 0.18 / away 0.33 (< 0.5) vs
+   over/btts 0.50–0.64 (≥ 0.5). ✔
+
+---
+
+## Reads / verdict
+
+- **The staking layer transfers from sim to real.** The E4 verdict — *curated per-line w ≻
+  EB-learned ≻ flat 0.5 ≻ raw model* — reproduces on 275 real Ireland matches with the actual
+  `src_sup40_sw40` engine and Betfair close books. Raw unified Kelly at w=1 **bankrupts**
+  (ruin) by over-trusting the model's bad 1X2; the vig-moat abstention (w→0 on 1X2) is what
+  turns the model into a profitable book.
+- **The EB alarm works on real data.** With no hand-tuning it drove home/away trust to
+  0.18/0.33 and held totals/BTTS at ≈0.5+, i.e. it *discovered* the curation. It underperforms
+  hand-set CURATED only because it pays a learning cost (bets some 1X2 in the first ~100
+  matches before the evidence lands). That's the intended role: a junk-line alarm, not an oracle.
+- **The smile pricing matters and is faithfully carried.** O/U priced by Λ=λ_tot·φ (not the
+  plain grid) shifts totals ~2pp; imprinting it via the IPF tilt keeps every unified strategy
+  consistent with the pricing b21 certified (cross-check 11/11).
+- **Caveat — sample.** 275 matches, one league, one season: signature-reading. G/match SEs
+  overlap zero for several strategies; CURATED's +0.012 ± 0.004 is the cleanest signal. Don't
+  over-rank on terminal W (path-dependent, single realisation).
+
+## Infra note (update memory)
+
+The Hetzner kaimon box has **no git push credentials** (public-repo fetch works; push has no
+credential helper / token / gh / ssh key → `could not read Username`). The documented
+"commit results server-side → push → pull locally" loop is currently broken. Workaround used:
+run + serialize results on the server, transfer plots via base64, **commit everything from
+local** (which has working push creds). After pushing from local, `git reset --hard
+origin/…` on the server to realign. See memory `server-file-sync-workflow`.
+
+## v2 backlog (not built)
+
+Extended book (O/U 0.5/4.5/5.5 + correct-score with own trust units); `U_UMC`/`TRUST_UMC` k*
+shrinkage overlay; partial-hedge φ overlay; growth-fit w (vs EB); Bet365-anchored `q_mkt`
+variant ([[betfair-vs-bet365-market-anchor]]); block-bootstrap CIs on terminal W; multi-league
+(718 First Division, Veikkausliiga) once those engines exist. The registry is pluggable so a
+NEW staking system is one `elseif` in `stake_for` + one name in `REAL_STRATEGIES`.
