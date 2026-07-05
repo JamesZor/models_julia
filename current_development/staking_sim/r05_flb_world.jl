@@ -45,6 +45,46 @@ if !@isdefined(fit_trust_eb)
 end
 
 const R5_RESULTS = joinpath(@__DIR__, "results"); mkpath(R5_RESULTS)
+
+"""
+Streamed oracle trust: like l02's `oracle_trust` but over FRESH cfg.n_matches campaigns
+instead of one long run — the single-campaign version drifts unboundedly (σ_in·√rounds ≈ 1.3
+at 40k matches) and a lucky/unlucky seed flips the whole answer (seed 12 → all-zero w).
+"""
+function oracle_trust_stream(cfg::SimConfig; n=40_000, seed=1, wgrid=collect(0.0:0.02:1.0))
+    rng = Xoshiro(seed)
+    p = [Float64[] for _ in 1:7]; q = [Float64[] for _ in 1:7]
+    pt = [Float64[] for _ in 1:7]; dd = [Float64[] for _ in 1:7]
+    k = 0
+    while k < n
+        for sm in simulate_campaign(cfg, rng; n_matches=cfg.n_matches, S=16)
+            ps = MMASK' * sm.pbar
+            for u in 1:7
+                m = UNIT_REP_SEL[u]
+                push!(p[u], ps[m]); push!(q[u], sm.q_mkt[m])
+                push!(pt[u], sm.p_true[m]); push!(dd[u], sm.d[m])
+            end
+        end
+        k += cfg.n_matches
+    end
+    worac = zeros(7)
+    for u in 1:7
+        best, bw = -Inf, 0.0
+        for w in wgrid
+            g = 0.0
+            @inbounds for i in eachindex(pt[u])
+                b = dd[u][i] - 1.0
+                p̃ = w * p[u][i] + (1.0 - w) * q[u][i]
+                f = min(max(0.0, (p̃ * dd[u][i] - 1.0) / b), 0.98)
+                g += pt[u][i] * log1p(b * f) + (1.0 - pt[u][i]) * log1p(-f)
+            end
+            g /= length(pt[u])
+            g > best && ((best, bw) = (g, w))
+        end
+        worac[u] = bw
+    end
+    return worac
+end
 const E4_STRATS = ["FLAT_1pct", "U_cap02", "TRUST05_U_cap02", "TRUST_U_cap02",
                    "CURATED05_U_cap02"]
 
@@ -82,12 +122,15 @@ function flb_diag(; ρgrid=[1.0, 0.95, 0.90, 0.85], n=40_000, n_eb=5_000, seed=1
             push!(lines, @sprintf("  %-11s %5d  %5.2f  %+8.4f  %+9.6f",
                                   SEL_NAMES[m], nb[m], od[m] / nb[m], ev[m] / nb[m], gl[m] / n))
         end
-        # (b) what each fitting objective sees
-        worac = oracle_trust(cfg; n=n, seed=seed + 1)
+        # (b) what each fitting objective sees — both streamed over fresh campaigns
+        worac = oracle_trust_stream(cfg; n=n, seed=seed + 1)
         rng2 = Xoshiro(seed + 2)
-        hist = TrustHist()
-        for sm in simulate_campaign(cfg, rng2; n_matches=n_eb, S=16)
-            push_hist!(hist, sm, MMASK' * sm.pbar)
+        hist = TrustHist(); k_eb = 0
+        while k_eb < n_eb
+            for sm in simulate_campaign(cfg, rng2; n_matches=cfg.n_matches, S=16)
+                push_hist!(hist, sm, MMASK' * sm.pbar)
+            end
+            k_eb += cfg.n_matches
         end
         w_eb, hyp = fit_trust_eb(hist)
         push!(lines, "  oracle w (growth):      " * join(round.(worac, digits=2), " "))
