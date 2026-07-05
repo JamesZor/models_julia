@@ -196,6 +196,52 @@ hand-excluding. The engine already supports this — it's a book/unit wiring cha
 **CorrectScore excluded**. On Ireland this is the whole extended universe; AH/DC/DNB await a league
 with liquidity.
 
+## Follow-ups — low-trust cold start + cap sweep (`r03_cap_and_init.jl`, core-11 book)
+
+**A. Low-trust cold start (w0=0.3) — "which markets earn trust?"** Start every unit distrusting
+the model (w=0.3, defer to market) and watch which the EB fit raises. From the 0.3 baseline
+(`results/e_init_w03.txt`):
+
+| unit | 0.3 → final | Δ |
+|---|---|---:|
+| btts_yes | 0.30 → 0.638 | **+0.34** ↑ |
+| over_15 | 0.30 → 0.546 | +0.25 ↑ |
+| over_25 | 0.30 → 0.520 | +0.22 ↑ |
+| over_35 | 0.30 → 0.503 | +0.20 ↑ |
+| draw | 0.30 → 0.374 | +0.07 ↑ |
+| away | 0.30 → 0.330 | +0.03 · flat |
+| **home** | 0.30 → 0.180 | **−0.12 ↓** |
+
+From "trust nothing", the model **earns** trust on BTTS + the whole totals ladder, a little on
+draw, ~none on away, and **home is the only market that loses trust**. (The EB estimate is
+empirical-Bayes/data-pooled, so the *learned* w is cold-start-invariant — 0.3 only reframes the
+baseline + drives matches 1-25 staking. The content is the ranking, which cleanly separates the
+markets the model has edge on from the ones it doesn't.)
+
+**B. Cap sweep (Σa ≤ cap) — growth/risk curve** (`results/cap_sweep.csv`, `e_cap_sweep.txt`):
+
+| cap | CURATED W | CURATED G | CURATED maxDD | TRUST_EB W | PB_BK W |
+|---:|---:|---:|---:|---:|---:|
+| 0.05 | 5.7 | +0.0064 | 0.40 | 1.01 | 1.78 |
+| 0.10 | 12.4 | +0.0091 | 0.43 | 1.66 | 1.29 |
+| 0.20 | 26.8 | +0.0120 | 0.42 | 3.00 | 0.57 |
+| **0.30** | 36.3 | +0.0131 | 0.40 | 3.69 | 0.08 |
+| **0.40** | **38.0** | **+0.0132** | **0.39** | **4.33** | ruin |
+| 0.50 | 33.1 | +0.0127 | 0.39 | 4.00 | ruin |
+| 1.00 | 27.5 | +0.0121 | 0.45 | 4.21 | ruin |
+
+- **Curation makes the cap safe.** CURATED's max-drawdown holds ~0.40 across the WHOLE cap range
+  (0.05→1.0) while growth peaks at **cap ≈ 0.30–0.40** (W 38×, G +0.0132), then declines past 0.5
+  (mild over-betting). Removing the bad markets means aggressive sizing just compounds the
+  totals/BTTS edge without blowing up drawdown.
+- **Without curation the cap is a substitute for shrinkage:** PB_BK degrades monotonically to ruin
+  by cap 0.4; raw U ruins from cap 0.2. Both are best at the tightest cap (0.05).
+- **TRUST_EB** peaks at cap ≈ 0.40 (W 4.3×) but at ~0.88 drawdown — it still carries 1X2 early,
+  so it can't be sized as fat as hand-curated. FLAT_1pct is cap-invariant (≈7 bets × 1%).
+- **Operating point:** curated per-line w + **cap ≈ 0.3–0.4** (growth-optimal, drawdown ~0.40).
+  Confirms [[portfolio-kelly-partial-hedge]] on real data: the cap only pays off once the junk
+  markets are curated out; on the raw book it just accelerates ruin.
+
 ## v2 backlog (remaining)
 
 Per-family EB trust units for CS/DC/AH (auto-abstention, above); `U_UMC`/`TRUST_UMC` k* shrinkage
