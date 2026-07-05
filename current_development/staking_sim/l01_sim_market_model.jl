@@ -79,6 +79,11 @@ Base.@kwdef struct SimConfig
     # observers
     σ_mkt::Float64 = 0.08       # market log-λ obs noise (fresh per match/side)
     σ_mod::Float64 = 0.05       # model log-λ obs noise (< σ_mkt ⇒ genuine info edge)
+    # optional level/supremacy decomposition of the MODEL's noise (E4 sup-blind worlds):
+    # ε_h = ε_lvl + ε_sup, ε_a = ε_lvl − ε_sup. i.i.d. σ_mod ⇔ σ_lvl = σ_sup = σ_mod/√2
+    # (market i.i.d. σ_mkt ⇒ 0.0566 per component). NaN = use i.i.d. σ_mod (default).
+    σ_mod_lvl::Float64 = NaN    # model noise on the level component (total intensity)
+    σ_mod_sup::Float64 = NaN    # model noise on the supremacy component (home/away split)
     γ_tot::Float64 = -0.05      # model totals tilt on H+A (pure bias)
     γ_btts::Float64 = 0.10      # model BTTS-yes tilt (pure bias)
     σ_post::Float64 = 0.05      # posterior width on log-λ
@@ -173,8 +178,15 @@ function sim_match(cfg::SimConfig, λh::Float64, λa::Float64, rng::AbstractRNG;
     end
 
     # model observer: point belief + posterior draws, bias tilt on every grid
-    λmh = λh * exp(cfg.σ_mod * randn(rng))
-    λma = λa * exp(cfg.σ_mod * randn(rng))
+    if isnan(cfg.σ_mod_lvl)
+        λmh = λh * exp(cfg.σ_mod * randn(rng))
+        λma = λa * exp(cfg.σ_mod * randn(rng))
+    else
+        εl = cfg.σ_mod_lvl * randn(rng)
+        εs = cfg.σ_mod_sup * randn(rng)
+        λmh = λh * exp(εl + εs)
+        λma = λa * exp(εl - εs)
+    end
     corr = exp(-cfg.σ_post^2 / 2)                      # mean-corrected lognormal draws
     P = Matrix{Float64}(undef, GG * GG, S)
     for s in 1:S

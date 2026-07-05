@@ -89,16 +89,29 @@ const E4_STRATS = ["FLAT_1pct", "U_cap02", "TRUST05_U_cap02", "TRUST_U_cap02",
                    "CURATED05_U_cap02"]
 
 """
-Per-selection plug-in-Kelly diagnostics (min_edge 3%, half-cap like the real filter) on
-`n` fresh matches per ρ: bets, mean quoted odds, mean per-bet true EV, growth contribution.
-Then, for each ρ: oracle trust w (growth) and the EB calibration fit's w on a 5k-match
-history — prediction (b) says the latter won't move even when the former collapses on 1X2.
+The E4 worlds. FLB-only turned out NOT to reproduce the real r10 signature (model's
+genuine 1X2 info edge + the 3% filter self-protect against shading — see e4_diag.txt),
+so the candidate world is SUP-BLIND: model sharp on the level component (total intensity,
+σ_lvl 0.035 < market's 0.0566) but junk on supremacy (σ_sup 0.12 ≫ 0.0566) — matching
+"our model is not great at picking home/away up" — with and without FLB on top.
 """
-function flb_diag(; ρgrid=[1.0, 0.95, 0.90, 0.85], n=40_000, n_eb=5_000, seed=11)
-    out = Dict{Float64,Any}()
+e4_worlds() = [
+    "base"         => SimConfig(devig_quotes=true),
+    "flb09"        => SimConfig(ρ_flb=0.90, devig_quotes=true),
+    "supblind"     => SimConfig(σ_mod_lvl=0.035, σ_mod_sup=0.12, devig_quotes=true),
+    "supblind_flb" => SimConfig(σ_mod_lvl=0.035, σ_mod_sup=0.12, ρ_flb=0.90, devig_quotes=true),
+]
+
+"""
+Per-selection plug-in-Kelly diagnostics (min_edge 3%, half-cap like the real filter) on
+`n` fresh matches per world: bets, mean quoted odds, mean per-bet true EV, growth
+contribution. Then, per world: streamed oracle trust w (growth) and the EB calibration
+fit's w on a streamed history — does the fitting objective SEE the defect?
+"""
+function flb_diag(; worlds=e4_worlds(), n=40_000, n_eb=5_000, seed=11)
+    out = Dict{String,Any}()
     lines = String[]
-    for ρ in ρgrid
-        cfg = SimConfig(ρ_flb=ρ, devig_quotes=true)
+    for (wname, cfg) in worlds
         rng = Xoshiro(seed)
         nb = zeros(Int, 11); ev = zeros(11); gl = zeros(11); od = zeros(11)
         for _ in 1:(n ÷ 1000)
@@ -115,7 +128,7 @@ function flb_diag(; ρgrid=[1.0, 0.95, 0.90, 0.85], n=40_000, n_eb=5_000, seed=1
                 end
             end
         end
-        push!(lines, "ρ_flb = $ρ  ($n matches, min_edge 3%)")
+        push!(lines, "world = $wname  (ρ_flb=$(cfg.ρ_flb), σ_lvl=$(cfg.σ_mod_lvl), σ_sup=$(cfg.σ_mod_sup); $n matches, min_edge 3%)")
         push!(lines, "  sel          bets  avg_d   EV/bet    G/match")
         for m in 1:11
             nb[m] == 0 && continue
@@ -137,7 +150,7 @@ function flb_diag(; ρgrid=[1.0, 0.95, 0.90, 0.85], n=40_000, n_eb=5_000, seed=1
         push!(lines, "  EB w (calib, $(n_eb)m):  " * join(round.(w_eb, digits=2), " ") *
                      "   (w0=$(round(hyp.w0, digits=2)), τ=$(hyp.τ))")
         push!(lines, "")
-        out[ρ] = (nb=nb, ev=ev, gl=gl, worac=worac, w_eb=w_eb)
+        out[wname] = (nb=nb, ev=ev, gl=gl, worac=worac, w_eb=w_eb)
     end
     txt = join(lines, "\n")
     write(joinpath(R5_RESULTS, "e4_diag.txt"), txt)
@@ -146,9 +159,9 @@ function flb_diag(; ρgrid=[1.0, 0.95, 0.90, 0.85], n=40_000, n_eb=5_000, seed=1
     return out
 end
 
-function run_e4(; N=300, ρ=0.90, base_seed=20260704, chunk=25)
+function run_e4(; N=300, worlds=e4_worlds(), base_seed=20260704, chunk=25)
     res = Dict{String,Any}()
-    for (wn, cfg) in (("flb", SimConfig(ρ_flb=ρ, devig_quotes=true)), ("base", SimConfig()))
+    for (wn, cfg) in worlds
         acc = Vector{Any}(undef, N)
         for lo in 1:chunk:N
             hi = min(lo + chunk - 1, N)
@@ -170,7 +183,7 @@ end
 function summarize_e4(res=deserialize(joinpath(R5_RESULTS, "e4.jls")))
     lines = String[]
     push!(lines, "world,strategy,medW,q05W,q95W,meanG,medDD,ruin_pct")
-    for wn in ("flb", "base")
+    for wn in sort(collect(keys(res)))
         acc = res[wn]
         for s in E4_STRATS
             sums = [summarize_logw(a.results[s].logw) for a in acc]
