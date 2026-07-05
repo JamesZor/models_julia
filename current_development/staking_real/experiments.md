@@ -152,10 +152,55 @@ run + serialize results on the server, transfer plots via base64, **commit every
 local** (which has working push creds). After pushing from local, `git reset --hard
 origin/…` on the server to realign. See memory `server-file-sync-workflow`.
 
-## v2 backlog (not built)
+## v2 — Extended multi-market book (`l02_real_ext_book.jl` + `r02_ext_book.jl`)
 
-Extended book (O/U 0.5/4.5/5.5 + correct-score with own trust units); `U_UMC`/`TRUST_UMC` k*
-shrinkage overlay; partial-hedge φ overlay; growth-fit w (vs EB); Bet365-anchored `q_mkt`
-variant ([[betfair-vs-bet365-market-anchor]]); block-bootstrap CIs on terminal W; multi-league
-(718 First Division, Veikkausliiga) once those engines exist. The registry is pluggable so a
-NEW staking system is one `elseif` in `stake_for` + one name in `REAL_STRATEGIES`.
+Generalized the core-11 book to EVERY market family we can price off the score grid. The one new
+primitive is `sel_payoff(mn, sel, ml, h, a, d)` → net-return-per-state (win d−1 / lose −1 /
+**push 0** / **AH-quarter = mean of its two component lines**), driving BOTH the model return
+matrix `R` (over the 144 grid states) and settlement (at the real score). It mirrors
+`grade_selection` extended from a Bool to a Float. CorrectScore/DoubleChance/DrawNoBet/AsianHandicap
+are deterministic grid functions, so they're priced off the SAME coherently-tilted grid and staked
+jointly by the unified Kelly — **no new trust units, no IPF conflicts.** The tilt is extended to the
+full smile O/U ladder (over_05..over_45), reproduced to **7.5e-10** (verified).
+
+**Betfair coverage (Ireland OOS, 275 matches):** only 1X2 + O/U(0.5–5.5) + BTTS + **CorrectScore**
+have books. **AsianHandicap and DrawNoBet are absent; DoubleChance has no OOS liquidity.** The
+AH/DC/DNB code is correct and auto-activates on any league/match that carries them. Book size:
+min 3 / median 15 / max 36 selections per match.
+
+**Result (c=0.02; `results/e_ext_summary_c020.txt`, and c=0):**
+
+| strategy | term_W (with CS) | CorrectScore ROI | term_W (CS excluded) |
+|---|---:|---:|---:|
+| CURATED05_U_cap02 | 3.08 | −16.9% | **34.07** |
+| TRUST_EB_U_cap02 | 0.74 | −26.8% | 5.16 |
+| FLAT_1pct | 0.36 | −10.4% | 2.13 |
+| TRUST05_U_cap02 | 0.20 | −27.3% | 1.19 |
+| U_cap02 (w=1) | 0.01 (ruin) | −25.5% | 0.01 (ruin) |
+
+**Two findings:**
+1. **The extended O/U ladder ADDS value.** With CorrectScore excluded, CURATED hits **34.1× > the
+   core-11 book's 26.8×** (71× at c=0) — the extra 0.5/4.5/5.5 totals lines are profitable
+   (U_cap02 totals ROI +54%). The generalized engine is correct and worth keeping.
+2. **CorrectScore is a systematic P/L drag.** Negative ROI for EVERY strategy (−10% to −27%); the
+   model has **no exact-score edge vs Betfair**. Staking it (turnover 8–13 units) destroys the
+   totals/BTTS edge — CURATED 34.1× → 3.1×. This matches the b21 CS rows (most cs_* lines negative;
+   several −100% ROI). **Curate CorrectScore out, exactly like the 1X2 vig-moat abstention.**
+
+The EB trust trajectory is identical to r01 (same 7 core units) — the alarm guards 1X2/totals/BTTS
+but NOT CorrectScore, because CS isn't a trust unit. **Follow-up:** give CorrectScore (and each new
+family) its own EB trust unit so the alarm learns to abstain on it automatically, rather than
+hand-excluding. The engine already supports this — it's a book/unit wiring change in the runner.
+
+**Recommended book for this engine:** full O/U ladder + BTTS (bet), 1X2 curated toward market,
+**CorrectScore excluded**. On Ireland this is the whole extended universe; AH/DC/DNB await a league
+with liquidity.
+
+## v2 backlog (remaining)
+
+Per-family EB trust units for CS/DC/AH (auto-abstention, above); `U_UMC`/`TRUST_UMC` k* shrinkage
+overlay; partial-hedge φ overlay; growth-fit w (vs EB); Bet365-anchored `q_mkt` variant
+([[betfair-vs-bet365-market-anchor]]); block-bootstrap CIs on terminal W; multi-league (718 First
+Division, Veikkausliiga — and any top division that carries AsianHandicap) once those engines exist.
+The registry is pluggable: a new staking system is one `elseif`; a new market family is automatic
+via `sel_payoff` + Betfair coverage.

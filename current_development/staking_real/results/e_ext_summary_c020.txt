@@ -1,0 +1,68 @@
+EXTENDED-BOOK STAKING RACE — src_sup40_sw40 · Ireland 2025-26 · n=275 matches
+commission c = 0.02   ·   bettable selections/match: min 3 / median 15 / max 36
+book = 1X2 + O/U(0.5–5.5) + BTTS + CorrectScore (DC/DNB/AH auto-join where present)
+
+================================================================================
+SUMMARY TABLE
+================================================================================
+strategy               term_W     G/match±SE    maxDD  n_bets  turnover   ruined
+FLAT_1pct              0.3639  -0.00368±0.00554   0.791    2024     20.24        -
+U_cap02                0.0094  -0.01697±0.01325   0.999    1312     42.19      YES
+TRUST05_U_cap02        0.1984  -0.00588±0.01052   0.980    2050     48.95        -
+CURATED05_U_cap02      3.0752  +0.00408±0.00655   0.767    1901     39.46        -
+TRUST_EB_U_cap02       0.7359  -0.00112±0.00962   0.954    2049     48.02        -
+
+================================================================================
+PER-FAMILY P/L ATTRIBUTION (now incl. CorrectScore)
+================================================================================
+strategy           family           profit  turnover     roi%  n_bets
+FLAT_1pct          1X2             -0.1155    3.4300    -3.37     343
+FLAT_1pct          totals          +0.8070    6.9600   +11.59     696
+FLAT_1pct          BTTS            +0.3800    1.4400   +26.39     144
+FLAT_1pct          CorrectScore    -0.8756    8.4100   -10.41     841
+U_cap02            1X2             +0.3353   22.9854    +1.46     270
+U_cap02            totals          +4.4425    8.2133   +54.09     301
+U_cap02            BTTS            +0.3160    2.5914   +12.19      56
+U_cap02            CorrectScore    -2.1375    8.4005   -25.45     685
+TRUST05_U_cap02    1X2             +1.1665   20.6399    +5.65     395
+TRUST05_U_cap02    totals          +2.5786   12.6400   +20.40     527
+TRUST05_U_cap02    BTTS            +1.9516    6.1882   +31.54     149
+TRUST05_U_cap02    CorrectScore    -2.5888    9.4810   -27.31     979
+CURATED05_U_cap02  1X2             +0.0804    2.5652    +3.14     173
+CURATED05_U_cap02  totals          +2.0201   17.6122   +11.47     587
+CURATED05_U_cap02  BTTS            +2.6529    8.1279   +32.64     150
+CURATED05_U_cap02  CorrectScore    -1.8792   11.1520   -16.85     991
+TRUST_EB_U_cap02   1X2             +1.4036   16.3419    +8.59     369
+TRUST_EB_U_cap02   totals          +2.4664   13.9480   +17.68     536
+TRUST_EB_U_cap02   BTTS            +2.3762    7.8238   +30.37     150
+TRUST_EB_U_cap02   CorrectScore    -2.6565    9.9038   -26.82     994
+
+================================================================================
+EB TRUST w-TRAJECTORY (7 core units — unchanged from r01)
+================================================================================
+ match      home    draw    away over_15 over_25 over_35btts_yes
+     1     0.500   0.500   0.500   0.500   0.500   0.500   0.500
+    26     0.544   0.456   0.641   0.559   0.474   0.506   0.571
+    51     0.377   0.397   0.544   0.527   0.457   0.507   0.584
+    76     0.355   0.399   0.546   0.520   0.494   0.525   0.588
+   101     0.294   0.389   0.461   0.510   0.469   0.484   0.597
+   126     0.323   0.419   0.526   0.517   0.493   0.506   0.602
+   151     0.309   0.434   0.459   0.556   0.504   0.532   0.596
+   176     0.258   0.421   0.364   0.534   0.478   0.514   0.595
+   201     0.209   0.384   0.299   0.530   0.454   0.478   0.580
+   226     0.188   0.347   0.297   0.519   0.494   0.482   0.578
+   251     0.180   0.374   0.330   0.546   0.520   0.503   0.638
+FINAL per-unit w: home=0.180  draw=0.374  away=0.330  over_15=0.546  over_25=0.520  over_35=0.503  btts_yes=0.638
+================================================================================
+CorrectScore CURATION — terminal W with CS in the book vs CS excluded  (c=0.02)
+================================================================================
+strategy            W (with CS)   W (no CS)     Δ
+FLAT_1pct           0.364         2.133         +1.77
+U_cap02             0.009         0.01          +0.0
+TRUST05_U_cap02     0.198         1.191         +0.99
+CURATED05_U_cap02   3.075         34.071        +31.0
+TRUST_EB_U_cap02    0.736         5.157         +4.42
+
+Read: the model has NO edge on CorrectScore vs Betfair (per-family ROI −17..−27%);
+staking it destroys the totals/BTTS edge. The extended O/U ladder (0.5/4.5/5.5) DOES add
+value — no-CS CURATED (34.1x) beats the core-11 book (26.8x). Curate CS out, like 1X2.
