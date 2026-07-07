@@ -89,7 +89,8 @@ trust_weights(ft::FittedEBTrust, ::StakingMatch) = ft.w
 trust_weights(ft::FittedEBTrust) = ft.w
 
 "Sample each unit's grid posterior D times → 7 × D. Trust uncertainty flows into staking."
-function trust_draws(ft::FittedEBTrust, ::StakingMatch; D::Int=64, rng::AbstractRNG=Random.default_rng())
+function trust_draws(ft::FittedEBTrust, ::StakingMatch; D::Int=64, rng=Random.default_rng())
+    rng = rng === nothing ? Random.default_rng() : rng
     W = Matrix{Float64}(undef, 7, D)
     for u in 1:7
         cdf = cumsum(ft.post[u])

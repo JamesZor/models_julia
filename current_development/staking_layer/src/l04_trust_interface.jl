@@ -57,8 +57,9 @@ fit_trust(model::AbstractTrustModel, ::TrustHist) =
 trust_weights(ft, ::StakingMatch) =
     error("trust_weights not implemented for $(typeof(ft))")
 
-"Per-match per-unit weight draws (7 × D). Default: replicate the point estimate D times."
-trust_draws(ft, m::StakingMatch; D::Int=64) = repeat(trust_weights(ft, m), 1, D)
+"Per-match per-unit weight draws (7 × D). Default: replicate the point estimate D times.
+`rng` is accepted (and ignored here) so all fitted types share one call signature."
+trust_draws(ft, m::StakingMatch; D::Int=64, rng=nothing) = repeat(trust_weights(ft, m), 1, D)
 
 "Match-free per-unit point weights — valid for non-hierarchical models (the 7 core units).
 The extended book uses this (it has no per-team structure). Hierarchical models must be queried
@@ -82,3 +83,33 @@ end
 fit_trust(model::FlatTrust, ::TrustHist) = FittedConstantTrust(copy(model.w))
 trust_weights(ft::FittedConstantTrust, ::StakingMatch) = ft.w
 trust_weights(ft::FittedConstantTrust) = ft.w
+
+# ---------- override wrapper (composition) ----------
+
+"""
+Wrap a base trust model and hard-override specific units to fixed weights. The 1X2-curated /
+totals-EB hybrid is `OverrideTrust(EBTrust(), Dict(1=>0.0, 2=>0.0, 3=>0.0))` — learn totals/BTTS
+trust but abstain on 1X2 like CURATED. Reusable for any base model + any unit mask.
+"""
+struct OverrideTrust <: AbstractTrustModel
+    base::AbstractTrustModel
+    overrides::Dict{Int,Float64}     # unit index (1..7) => fixed w
+end
+
+struct FittedOverride
+    base::Any
+    overrides::Dict{Int,Float64}
+end
+
+fit_trust(m::OverrideTrust, h::TrustHist) = FittedOverride(fit_trust(m.base, h), m.overrides)
+
+function _apply_over(w::Vector{Float64}, ov::Dict{Int,Float64})
+    w = copy(w); for (u, v) in ov; w[u] = v; end; return w
+end
+trust_weights(ft::FittedOverride, m::StakingMatch) = _apply_over(trust_weights(ft.base, m), ft.overrides)
+trust_weights(ft::FittedOverride) = _apply_over(trust_weights(ft.base), ft.overrides)
+function trust_draws(ft::FittedOverride, m::StakingMatch; D::Int=64, rng=nothing)
+    W = trust_draws(ft.base, m; D=D, rng=rng)
+    for (u, v) in ft.overrides; @views W[u, :] .= v; end
+    return W
+end

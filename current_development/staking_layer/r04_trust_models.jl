@@ -54,3 +54,24 @@ end
 
 inp = build_real_inputs()
 run_and_report_trust(inp)
+
+#=
+TRUST-MODEL RACE (EB vs Bayesian) — src_sup40_sw40 · n=282 · c=0.02
+
+policy                   term_W   G/match±SE    maxDD  n_bets  turnover   ruined
+CURATED05               17.5310  +0.01016±0.00399   0.509     831     27.22        -
+TRUST_EB                 1.6190  +0.00171±0.00852   0.877    1104     41.41        -
+TRUST_BAYES              1.4874  +0.00141±0.00797   0.887    1048     34.92        -
+EB_dist                  2.1669  +0.00274±0.00819   0.864    2049     42.53        -
+BAYES_dist               1.7199  +0.00192±0.00754   0.868    1934     33.92        -
+
+END-OF-SEASON PER-UNIT TRUST (EB mean vs Bayes mean ± 90% CI):
+unit           EB_w    Bayes       Bayes 90% CI
+home          0.166    0.148     [0.015, 0.369]
+draw          0.339    0.231     [0.016, 0.571]
+away          0.305    0.229     [0.028, 0.505]
+over_15       0.506    0.337     [0.035, 0.843]
+over_25       0.457    0.308     [0.027, 0.789]
+over_35       0.484    0.330     [0.026, 0.846]
+=#
+

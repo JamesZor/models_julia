@@ -91,36 +91,115 @@ end
 trust_weights(ft::FittedBayesTrust, ::StakingMatch) = ft.w
 trust_weights(ft::FittedBayesTrust) = ft.w
 
-function trust_draws(ft::FittedBayesTrust, ::StakingMatch; D::Int=64, rng::AbstractRNG=Random.default_rng())
+function trust_draws(ft::FittedBayesTrust, ::StakingMatch; D::Int=64, rng=nothing)
     ns = size(ft.wdraws, 2)
     idx = ns <= D ? (1:ns) : round.(Int, range(1, ns, length=D))
     return ft.wdraws[:, collect(idx)]
 end
 
-# ---------- hierarchical per-team trust (STUB — roadmap step 3) ----------
+# ---------- hierarchical per-team trust (roadmap step 3) ----------
 
 """
-Per-team hierarchical trust (NOT YET IMPLEMENTED — the immediate next experiment).
+Per-team hierarchical trust. Two pooling axes: per-unit global trust `w0_u`, and a per-team
+random effect `b_{u,t}` that shrinks to zero when a team is thin (`σ_u` = between-team spread of
+unit u — the key output: σ_u ≈ 0 ⇒ no real team variation on unit u, so hierarchy buys nothing
+there; σ_u > 0 ⇒ that unit's trust genuinely differs by team).
 
-The team-id plumbing is already in place (`TrustHist.home/away`, `StakingMatch.home/away`), so
-implementing this is: add the `@model` below and a team-indexed `trust_weights(ft, m)` that reads
-`m.home`/`m.away`. Sketch (per unit u, team t):
-
-    w0_u ~ Normal(0, 1.5);   σ_u ~ truncated(Normal(0,1); lower=0)
-    b_{u,t} ~ Normal(0, σ_u)                      # team random effect, shrinks to 0 when thin
-    w_{u,t} = logistic(w0_u + b_{u,t})
+    w0_u ~ Normal(0, 1.5)
+    σ_u  ~ truncated(Normal(0, 0.75); lower=0)          # between-team spread, per unit
+    z_{u,t} ~ Normal(0,1),  w_{u,t} = logistic(w0_u + σ_u·z_{u,t})   # non-centred
     y_i ~ Bernoulli( w_{u(i), team(i)}·p_i + (1 − w_{u(i), team(i)})·q_i )
 
-Run the l05/l06 EB-vs-Bayes race first, then Step-0 EDA (r05) to confirm per-team w actually
-separates before paying for this second (team) pooling axis.
+Teams are grouped by the match's HOME team (the axis r05 measured). `trust_weights(ft, m)` reads
+`m.home`; unseen teams fall back to the pooled `logistic(w0_u)`.
 """
 Base.@kwdef struct HierarchicalTrust <: AbstractTrustModel
-    nsamples::Int = 800
-    nadapt::Int   = 500
+    nsamples::Int   = 800
+    nadapt::Int     = 500
     accept::Float64 = 0.8
-    seed::Int     = 20260707
+    seed::Int       = 20260707
+    σ_prior::Float64 = 0.75      # half-Normal scale on the between-team spread σ_u
+    w0_cold::Float64 = 0.5
 end
 
-fit_trust(::HierarchicalTrust, ::TrustHist) =
-    error("HierarchicalTrust: not implemented — roadmap step 3. Team ids are already captured " *
-          "in TrustHist.home/away; see the docstring for the @model to add.")
+@model function _hier_trust_model(p, q, y, unit, lin, U, UT, σ_prior)
+    w0 ~ filldist(Normal(0.0, 1.5), U)
+    σ  ~ filldist(truncated(Normal(0.0, σ_prior); lower=0.0), U)
+    z  ~ filldist(Normal(0.0, 1.0), UT)
+    w  = logistic.(w0[unit] .+ σ[unit] .* z[lin])       # per-observation weight
+    p̃  = clamp.(w .* p .+ (1.0 .- w) .* q, 1e-9, 1 - 1e-9)
+    y ~ product_distribution(Bernoulli.(p̃))
+    return w
+end
+
+"""
+Fitted hierarchical trust. `wmean` is 7 × T (dense teams); `teammap` sends a raw team id to its
+dense column; `pooled_w`/`w0draws` are the fallback for unseen teams; `σ` = between-team spread
+posterior mean per unit (the hierarchy verdict).
+"""
+struct FittedHierTrust
+    w0::Vector{Float64}            # 7 posterior-mean global logit-trust
+    σ::Vector{Float64}             # 7 between-team spread (posterior mean)
+    wmean::Matrix{Float64}         # 7 × T posterior-mean per-team weights
+    wdraws::Array{Float64,3}       # 7 × T × S per-team weight draws
+    w0draws::Matrix{Float64}       # 7 × S pooled (unseen-team) weight draws = logistic(w0)
+    pooled_w::Vector{Float64}      # 7 fallback point weights
+    teammap::Dict{Int,Int}         # raw team id => dense column
+    team_names_dense::Vector{Int}  # dense column => raw team id
+end
+
+"Flatten history using the HOME team as the grouping factor; returns dense team indexing."
+function _flatten_hist_team(h::TrustHist)
+    p = Float64[]; q = Float64[]; y = Float64[]; unit = Int[]; teamraw = Int[]
+    for u in 1:7, i in eachindex(h.y[u])
+        push!(p, h.p[u][i]); push!(q, h.q[u][i]); push!(y, h.y[u][i]); push!(unit, u); push!(teamraw, h.home[u][i])
+    end
+    teams = sort(unique(teamraw)); teammap = Dict(t => j for (j, t) in enumerate(teams))
+    tdense = [teammap[t] for t in teamraw]
+    return p, q, y, unit, tdense, teammap, teams
+end
+
+function fit_trust(model::HierarchicalTrust, h::TrustHist)
+    if nobs(h) == 0
+        w0d = fill(0.0, 7, model.nsamples)
+        return FittedHierTrust(zeros(7), zeros(7), fill(model.w0_cold, 7, 1),
+                               fill(model.w0_cold, 7, 1, model.nsamples), fill(model.w0_cold, 7, model.nsamples),
+                               fill(model.w0_cold, 7), Dict{Int,Int}(), Int[])
+    end
+    p, q, y, unit, tdense, teammap, teams = _flatten_hist_team(h)
+    U = 7; T = length(teams); UT = U * T
+    lin = @. unit + (tdense - 1) * U                    # linear index into the U*T z-vector
+    m = _hier_trust_model(p, q, y, unit, lin, U, UT, model.σ_prior)
+    rng = Xoshiro(model.seed)
+    chn = sample(rng, m, NUTS(model.nadapt, model.accept), model.nsamples; progress=false)
+
+    W0 = reduce(hcat, [vec(Array(chn[Symbol("w0[$u]")])) for u in 1:U])'   # U × S
+    Σ  = reduce(hcat, [vec(Array(chn[Symbol("σ[$u]")]))  for u in 1:U])'   # U × S
+    S = size(W0, 2)
+    Z = Array{Float64,3}(undef, U, T, S)
+    for u in 1:U, t in 1:T
+        Z[u, t, :] = vec(Array(chn[Symbol("z[$(u + (t - 1) * U)]")]))
+    end
+    wdraws = Array{Float64,3}(undef, U, T, S)
+    for u in 1:U, t in 1:T, s in 1:S
+        wdraws[u, t, s] = logistic(W0[u, s] + Σ[u, s] * Z[u, t, s])
+    end
+    w0draws = logistic.(W0)                              # U × S pooled fallback
+    wmean = dropdims(mean(wdraws, dims=3), dims=3)       # U × T
+    return FittedHierTrust(vec(mean(W0, dims=2)), vec(mean(Σ, dims=2)), wmean, wdraws, w0draws,
+                           vec(mean(w0draws, dims=2)), teammap, teams)
+end
+
+function trust_weights(ft::FittedHierTrust, m::StakingMatch)
+    t = get(ft.teammap, m.home, 0)
+    return t == 0 ? ft.pooled_w : ft.wmean[:, t]
+end
+trust_weights(ft::FittedHierTrust) = ft.pooled_w     # match-free fallback = pooled
+
+function trust_draws(ft::FittedHierTrust, m::StakingMatch; D::Int=64, rng=nothing)
+    t = get(ft.teammap, m.home, 0)
+    src = t == 0 ? ft.w0draws : @view ft.wdraws[:, t, :]
+    ns = size(src, 2)
+    idx = ns <= D ? (1:ns) : round.(Int, range(1, ns, length=D))
+    return Array(src[:, collect(idx)])
+end
