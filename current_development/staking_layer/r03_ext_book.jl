@@ -8,13 +8,13 @@ Each "strategy" is a trust model staked over the full ExtMatch book; `drop_fams`
 Run (server): include preflight_real.jl, then this file.
 =#
 using BayesianFootball
-include(joinpath(@__DIR__, "src", "loader.jl"))
-isdefined(Main, :build_real_inputs) || include(joinpath(@__DIR__, "preflight_real.jl"))
+include(joinpath(pkgdir(BayesianFootball), "current_development", "staking_layer", "src", "loader.jl"))
+isdefined(Main, :build_real_inputs) || include(joinpath(STAKING_LAYER_DIR, "preflight_real.jl"))
 using Printf
 
 const CS = FAM_ID["CorrectScore"]
 
-function run_and_report_ext(inp, c::Float64; outdir=joinpath(@__DIR__, "results"))
+function run_and_report_ext(inp, c::Float64; outdir=joinpath(STAKING_LAYER_DIR, "results"))
     mkpath(outdir)
     src = RealSource(lat=inp.lat, ppd=inp.ppd, odds_bf=inp.odds_bf, matches_df=inp.ds1.matches, c=c)
     ext = build_ext_books(src)

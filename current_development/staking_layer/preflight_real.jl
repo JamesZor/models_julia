@@ -16,7 +16,9 @@ const Data        = BayesianFootball.Data
 const Experiments = BayesianFootball.Experiments
 const Predictions = BayesianFootball.Predictions
 
-const _CACHE = joinpath(@__DIR__, "results", "_lat_ppd_cache.jls")
+const _ROOT  = pkgdir(BayesianFootball)
+const _SLDIR = joinpath(_ROOT, "current_development", "staking_layer")
+const _CACHE = joinpath(_SLDIR, "results", "_lat_ppd_cache.jls")
 
 function build_real_inputs(; rebuild::Bool=false)
     ds = Data.load_datastore_cached(Data.Ireland())
@@ -29,7 +31,7 @@ function build_real_inputs(; rebuild::Bool=false)
         return (; lat, ppd, odds_bf, ds1)
     end
 
-    hits = filter(isdir, readdir(joinpath(@__DIR__, "..", "..", "data", "double_poisson_smile_src_grid"), join=true))
+    hits = filter(isdir, readdir(joinpath(_ROOT, "data", "double_poisson_smile_src_grid"), join=true))
     src_dir = findfirst(p -> occursin("src_sup40_sw40", p), hits)
     src_dir === nothing && error("preflight: no src_sup40_sw40 experiment payload found under data/double_poisson_smile_src_grid/")
     res = Experiments.load_experiment(hits[src_dir])

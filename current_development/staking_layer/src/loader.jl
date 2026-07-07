@@ -14,6 +14,9 @@ does `include(".../src/loader.jl")`. Graduates to a proper `src/` module once va
     l10 run_race / run_ext_race + metrics + reporting
 =#
 const _SL = @__DIR__
+"Absolute path to the staking_layer/ module dir — use this (not @__DIR__) in runners so they
+resolve correctly whether included, run as a script, or pasted line-by-line at the REPL."
+const STAKING_LAYER_DIR = dirname(_SL)
 include(joinpath(_SL, "l01_book_schema.jl"))
 include(joinpath(_SL, "l02_kelly.jl"))
 include(joinpath(_SL, "l03_coherent_pricing.jl"))

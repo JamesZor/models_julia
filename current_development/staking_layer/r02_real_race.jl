@@ -10,8 +10,8 @@ Run (server / kaimon, after the payload is present):
     include("current_development/staking_layer/r02_real_race.jl")
 =#
 using BayesianFootball
-include(joinpath(@__DIR__, "src", "loader.jl"))
-isdefined(Main, :build_real_inputs) || include(joinpath(@__DIR__, "preflight_real.jl"))
+include(joinpath(pkgdir(BayesianFootball), "current_development", "staking_layer", "src", "loader.jl"))
+isdefined(Main, :build_real_inputs) || include(joinpath(STAKING_LAYER_DIR, "preflight_real.jl"))
 using Printf
 
 # b21 per-selection ROI% (src_sup40_sw40, BayesianKelly, Betfair) — adapter cross-check target.
@@ -29,7 +29,7 @@ real_policies() = [
 ]
 
 "Run + report the real race at commission c; writes results/e_real_summary_cXXX.txt + w_trace CSV."
-function run_and_report_real(inp, c::Float64; outdir=joinpath(@__DIR__, "results"))
+function run_and_report_real(inp, c::Float64; outdir=joinpath(STAKING_LAYER_DIR, "results"))
     mkpath(outdir)
     src = RealSource(lat=inp.lat, ppd=inp.ppd, odds_bf=inp.odds_bf, matches_df=inp.ds1.matches, c=c)
     loaded = load_matches(src)

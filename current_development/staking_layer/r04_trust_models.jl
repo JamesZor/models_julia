@@ -15,11 +15,11 @@ so the EB-vs-Bayes gap (Bayes pools harder — see the smoke test) is quantified
 Run (server): include preflight_real.jl, then this file.
 =#
 using BayesianFootball
-include(joinpath(@__DIR__, "src", "loader.jl"))
-isdefined(Main, :build_real_inputs) || include(joinpath(@__DIR__, "preflight_real.jl"))
+include(joinpath(pkgdir(BayesianFootball), "current_development", "staking_layer", "src", "loader.jl"))
+isdefined(Main, :build_real_inputs) || include(joinpath(STAKING_LAYER_DIR, "preflight_real.jl"))
 using Printf, Statistics
 
-function run_and_report_trust(inp; c::Float64=0.02, outdir=joinpath(@__DIR__, "results"))
+function run_and_report_trust(inp; c::Float64=0.02, outdir=joinpath(STAKING_LAYER_DIR, "results"))
     mkpath(outdir)
     src = RealSource(lat=inp.lat, ppd=inp.ppd, odds_bf=inp.odds_bf, matches_df=inp.ds1.matches, c=c)
     loaded = load_matches(src)

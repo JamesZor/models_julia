@@ -11,7 +11,7 @@ MC suite (that remains the staking_sim results until re-run cell-by-cell).
 Run:  julia --project current_development/staking_layer/r01_sim_race.jl
 =#
 using BayesianFootball
-include(joinpath(@__DIR__, "src", "loader.jl"))
+include(joinpath(pkgdir(BayesianFootball), "current_development", "staking_layer", "src", "loader.jl"))
 using Printf
 
 # sup-blind world: good level (totals) info, junk supremacy → 1X2 should lose trust
@@ -31,7 +31,7 @@ policies = [
 ]
 rs = run_race(loaded, policies; refit_every=30, seed=20260707)
 
-outdir = joinpath(@__DIR__, "results"); mkpath(outdir)
+outdir = joinpath(STAKING_LAYER_DIR, "results"); mkpath(outdir)
 lines = String[]
 push!(lines, "SIMULATED STAKING RACE — sup-blind world · n=$(rs.n) · SimSource(seed=20260707)")
 push!(lines, "max_tilt_err = $(rs.max_tilt_err)")
