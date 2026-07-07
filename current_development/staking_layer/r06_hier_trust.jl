@@ -32,10 +32,14 @@ function run_hier(inp; c::Float64=0.02, refit_hier::Int=50, outdir=joinpath(STAK
     lines = String[]
     push!(lines, "HIERARCHICAL PER-TEAM TRUST — src_sup40_sw40 · Ireland · n=$(length(loaded.matches)) · c=$c")
     push!(lines, "")
-    push!(lines, "(1) BETWEEN-TEAM SPREAD σ_u  — is there real per-team signal? (σ≈0 ⇒ no)")
-    push!(lines, @sprintf("%-10s %10s %10s", "unit", "w0(pooled)", "σ_u"))
+    push!(lines, "(1) IS THERE REAL PER-TEAM SIGNAL?")
+    push!(lines, "    Primary = realized per-team w-spread (hierarchically SHRUNK — the denoised r05).")
+    push!(lines, "    σ_u is weakly identified (floats near its prior when signal is absent) — secondary.")
+    push!(lines, "    Sim null reference: home-unit shrunk spread ≈ 0.02 in a true-σ=0 world.")
+    push!(lines, @sprintf("%-10s %10s %12s %10s", "unit", "w0(pooled)", "team-spread", "σ_u"))
     for u in 1:7
-        push!(lines, @sprintf("%-10s %10.3f %10.3f", UNIT_NAMES[u], fh.pooled_w[u], fh.σ[u]))
+        spread = length(fh.team_names_dense) > 1 ? std(fh.wmean[u, :]) : 0.0
+        push!(lines, @sprintf("%-10s %10.3f %12.3f %10.3f", UNIT_NAMES[u], fh.pooled_w[u], spread, fh.σ[u]))
     end
     # per-team home-unit trust, shrunk by the hierarchy (compare to r05's unpooled fits)
     push!(lines, ""); push!(lines, "per-team HOME-unit trust (hierarchically shrunk):")

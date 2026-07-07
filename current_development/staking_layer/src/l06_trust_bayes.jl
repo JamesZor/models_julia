@@ -118,7 +118,9 @@ Base.@kwdef struct HierarchicalTrust <: AbstractTrustModel
     nadapt::Int     = 500
     accept::Float64 = 0.8
     seed::Int       = 20260707
-    σ_prior::Float64 = 0.75      # half-Normal scale on the between-team spread σ_u
+    σ_prior::Float64 = 0.4       # half-Normal scale on between-team spread σ_u (tighter ⇒ shrinks
+                                 # harder to 0 when there's no signal; σ_u is weakly identified so
+                                 # the realized per-team w-spread is the honest diagnostic, not σ_u)
     w0_cold::Float64 = 0.5
 end
 

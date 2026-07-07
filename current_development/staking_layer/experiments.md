@@ -32,6 +32,26 @@ the source folders' `experiments.md` and are the parity targets here.
 - `r04` EB-vs-Bayes race + posterior table; `r05` team-w EDA (step-0 precondition for hierarchy).
 - On parity: retire `staking_sim/` + `staking_real/` + `unified_staking/` (kept until then).
 
+## 2026-07-07 (cont.) — HierarchicalTrust (step 3) built + validated on sim
+
+Motivated by r05 (team spread concentrated in home/away 1X2, 4× totals) + r04 (learned trust
+bleeds on 1X2 because it doesn't abstain hard enough → CURATED 17.5× ≫ EB 1.6×; distributional
+staking helps, EB_dist 2.17 > EB 1.62).
+
+- **`HierarchicalTrust`** (l06): `w_{u,t} = logistic(w0_u + σ_u·z_{u,t})`, grouped by home team,
+  non-centred, `y ~ product_distribution(Bernoulli.(p̃))`. Fitted object carries per-(unit,team)
+  means + draws + a pooled fallback for unseen teams.
+- **`OverrideTrust`** (l04): composition wrapper hard-overriding units → the 1X2-abstain / totals-EB
+  **HYBRID** is `OverrideTrust(EBTrust(), Dict(1=>0,2=>0,3=>0))`.
+- **`r06_hier_trust.jl`**: σ_u + shrunk per-team-spread diagnostic + race (CURATED/EB/HYBRID/HIER/HIER_dist).
+- **Validated on sim (a true-σ=0 world → the null test):** hierarchical fit samples cleanly; the
+  realized per-team home-w spread shrinks to **0.010** (correctly "no team variation"). CAVEAT
+  discovered: **σ_u is weakly identified** and floats near its prior when signal is absent (0.6 at
+  σ_prior=0.75, 0.31 at 0.4) — so the honest diagnostic is the *shrunk per-team w-spread*, not σ_u.
+  Default σ_prior tightened to 0.4. Hybrid override validated (1X2 rows hard-zeroed, EB totals/BTTS).
+- **Pending server (r06 on real data):** does home/away team-spread exceed the ~0.02 sim-null floor
+  (real signal) while totals stay at it? And does HIER/HYBRID beat CURATED 17.5×?
+
 ## How to run
 
 ```julia

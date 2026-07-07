@@ -26,7 +26,7 @@ Everything downstream of `w` is agnostic to how `w` was produced. Swapping the t
 | `l03_coherent_pricing.jl` | `blend_targets`, `coherent_multiplier` (IPF tilt), `normalize_mult` |
 | `l04_trust_interface.jl` | `AbstractTrustModel`, `TrustHist` (+team ids), `FlatTrust`/`CuratedTrust` |
 | `l05_trust_eb.jl` | `EBTrust` — empirical-Bayes point + grid-posterior draws |
-| `l06_trust_bayes.jl` | `BayesianTrust` (Turing) + `HierarchicalTrust` stub |
+| `l06_trust_bayes.jl` | `BayesianTrust` + `HierarchicalTrust` (per-team, Turing) |
 | `l07_policy.jl` | `FlatPolicy`, `PerBetKellyPolicy`, `UnifiedPolicy` + `stake_for` |
 | `l08_sim_source.jl` | `SimSource` — the simulated double-Poisson league |
 | `l09_real_source.jl` | `RealSource` (real L1 + Betfair) + the extended multi-market book |
@@ -59,7 +59,10 @@ them via `m.home`/`m.away` in `trust_weights(ft, m)`.
 - `r02_real_race.jl`  — real EB parity race (reproduces `staking_real` `e_real_summary_c020.txt`).
 - `r03_ext_book.jl`   — extended 7-family book (O/U ladder adds value, CorrectScore drag).
 - `r04_trust_models.jl` — **EB vs Bayesian** trust race + per-unit posterior comparison.
-- `r05_team_eda.jl`   — Step-0 EDA: does per-unit `w` vary by team? (precondition for hierarchy).
+- `r05_team_eda.jl`   — Step-0 EDA: unpooled per-team `w` (does it vary by team?).
+- `r06_hier_trust.jl` — **hierarchical per-team trust**: σ_u + shrunk team-spread diagnostic +
+  race (CURATED vs EB vs HYBRID vs HIER). `OverrideTrust(EBTrust(), Dict(1=>0,2=>0,3=>0))` = the
+  1X2-abstain / totals-EB hybrid.
 
 `r02`–`r05` need the real L1 inputs — run `preflight_real.jl` first (needs the
 `src_sup40_sw40` experiment payload on the server; caches to `results/_lat_ppd_cache.jls`).
@@ -69,7 +72,8 @@ them via `m.home`/`m.away` in `trust_weights(ft, m)`.
 0. **EDA** (`r05`) — confirm team-level trust signal exists.
 1. **Distributional `w`** — done: `UnifiedPolicy(distributional=true)` averages the Kelly solve over `trust_draws`.
 2. **Bayesian trust** (`BayesianTrust`, l06) — done: Turing model, MCMC `w` draws.
-3. **Hierarchical per-team `w`** — stub in l06; team-id plumbing already in place.
+3. **Hierarchical per-team `w`** — done (`HierarchicalTrust`, l06): `w_{u,t}=logistic(w0_u+σ_u·z_{u,t})`,
+   grouped by home team. Diagnostic = shrunk per-team spread (σ_u is prior-sensitive when signal is thin).
 
 ## Status
 
