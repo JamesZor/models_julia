@@ -49,8 +49,18 @@ staking helps, EB_dist 2.17 > EB 1.62).
   discovered: **σ_u is weakly identified** and floats near its prior when signal is absent (0.6 at
   σ_prior=0.75, 0.31 at 0.4) — so the honest diagnostic is the *shrunk per-team w-spread*, not σ_u.
   Default σ_prior tightened to 0.4. Hybrid override validated (1X2 rows hard-zeroed, EB totals/BTTS).
-- **Pending server (r06 on real data):** does home/away team-spread exceed the ~0.02 sim-null floor
-  (real signal) while totals stay at it? And does HIER/HYBRID beat CURATED 17.5×?
+- **VERDICT (server, real data, n=282):**
+  - **(1) NO per-team signal.** Hierarchically-shrunk team-spread: home **0.005**, away 0.007, all
+    others 0.002 — every unit BELOW the ~0.02 sim-null floor. Per-team home-w collapses to 0.146
+    (Shamrock) … 0.160 (Bohemian), a 0.014 range. **r05's "Bohemian 0.60 vs Shamrock 0.28" was
+    28-obs noise** — proper pooling crushes it. σ_u ~0.31 (prior-dominated, as flagged). Kill step 3:
+    the model's 1X2 badness is UNIFORM across teams, not team-specific.
+  - **(2) HYBRID wins.** term_W: **HYBRID 19.23** (G +0.0105) ≥ CURATED 17.53 (+0.0102) ≫ HIER_dist
+    2.39 ≻ TRUST_HIER 2.20 ≻ TRUST_EB 1.78. Hard-abstaining 1X2 is worth ~9×; the whole EB→CURATED
+    gap was the soft 1X2 trust bleeding. TRUST_HIER doesn't abstain (pools 1X2 to ~0.15) so it bleeds
+    like EB. Distributional still helps within the soft family (HIER_dist > HIER > EB).
+  - **OPERATING POINT: HYBRID = `OverrideTrust(EBTrust(), Dict(1=>0,2=>0,3=>0))`** — abstain 1X2,
+    EB-learn totals/BTTS. Marginally beats fixed CURATED, same drawdown (0.509). Hierarchy retired.
 
 ## How to run
 
