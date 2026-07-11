@@ -46,6 +46,11 @@ const BEST_HS = 2        # ⚠ history_seasons winner from r03
 const RERUN_CONTROLS = false   # true if (BEST_HL, BEST_HS) was NOT a Grid-A cell (none_pois
                                # control then needs training here); iso_pois control ALWAYS runs
                                # (Grid A only had the nb iso reference).
+# ⚠ RUNTIME BUDGET (r01 finding: smile trees run deep — median 127 leapfrogs/iter at depth 10,
+# ≈20× the DP base; see r01b probe). Set MAX_DEPTH to the r01b winner (5 or 6). Grid-B cell
+# wall ≈ 6 × r01b probe wall (192 tasks = 6 waves of 32 threads); if still too heavy, trim
+# CHAINS to 3 and/or SAMPLES to 600, or drop TARGETS to the last 2 seasons (32 folds).
+const MAX_DEPTH = 10     # ⚠ set to r01b probe winner before launching
 
 # ==========================================
 # 1. DATA + GRID SPEC
@@ -115,7 +120,7 @@ for (name, model) in specs
             warmup          = WARMUP,
             chains          = CHAINS,
             use_queue       = true,
-            max_depth       = 10,
+            max_depth       = MAX_DEPTH,
         )
         res = Experiments.run_experiment(task)
         Experiments.save_experiment(res)

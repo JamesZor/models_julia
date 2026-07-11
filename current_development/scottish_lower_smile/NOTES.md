@@ -66,7 +66,9 @@ Grid-cell suffixes: `hl<days>` (days_half_life), `hs<n>` (history_seasons), `sup
 - `l01_team_dp_league.jl` — loader: `LeagueFeature` + the 3 engines + prediction overrides +
   NB `required_features` fix.
 - `r01_smoke.jl` — short-window smoke (3 engines, last season, biweek≥16): convergence,
-  δ_league read, PPD end-to-end, smile≠grid O/U. Output → `r01_out.txt`.
+  δ_league read, PPD end-to-end, smile≠grid O/U. ✅ run 2026-07-12, 29/29 (`r01_out.txt`).
+- `r01b_smile_depth_probe.jl` — smile runtime fix probe: max_depth {6, 5} vs the depth-10
+  reference (215m). Sets `MAX_DEPTH` for r04. **Run before Grid B** (~2–3 h total).
 - `r02_grid_decay_history.jl` — Stage A grid: `none_pois_hl{60,120,180,365}_hs{1,2,3}` + nb refs,
   saves to `data/scottish_decay_grid/`, gate → `r02_convergence.txt`. Overnight (~5–8 h).
 - `r03_eval_decay.jl` — Stage A per-line eval (LogLoss diff / GLMEdge / RQR vs Bet365 close).
@@ -136,3 +138,22 @@ The src changes are additive and grid-independent, so they shipped ahead of the 
   `Features.DoublePoissonMarketFeature()`; the dead export is removed. l01's temporary override
   deleted. (Any old code that imported `Features.MarketLambdaFeature` was already broken.)
 - Verify with `r06_smoke_src.jl` after the grids; then bake winner defaults + `Pkg.test()`.
+
+### 2026-07-12 — r01 smoke PASSED 29/29 ✅ + ⚠ SMILE RUNTIME FINDING (r01_out.txt)
+
+Stage 1 CLOSED on quality: all 3 engines converge (global max R-hat ≤ 1.016, every new param
+≤ 1.007); δ_league reads correctly (δ₅₆−δ₅₇ ≈ +0.02–0.035, expected +0.047; smile CI excludes 0);
+smile prices genuinely (smile vs grid O/U max Δ 0.042); σ_smile ≈ 0.052 (market-hugging, same as
+Ireland), σ_sup ≈ 0.249 (loose — model disagrees with market on supremacy, echoes Ireland);
+iso σ_market ≈ 0.134 healthy.
+
+**⚠ Runtime:** same 5-split window — none 11m / iso 40m / **smile 3h35m** (~20×). Chain
+internals: median tree_depth 4/5/7 (max 8), median leapfrogs/iter **15/31/127**. The tight
+sampled σ_smile≈0.05 pillar makes NUTS take ~8.5× more gradient evals/iter × ~2.3× per-eval
+(the [n×5] smile matrix). Code audited vs `docs/turing_ad_performance_guide.md` — compliant
+(broadcast-only, masks, views; it's the graduated player-engine pattern); the cost is leapfrog
+COUNT (geometry), not an AD defect. Trees max at 8 ⇒ depth-8 cap is a no-op; binding caps are
+6 (~2×) / 5 (~4×). → **`r01b_smile_depth_probe.jl`** tests max_depth {6, 5} (sampled-σ release
+valve should keep them mixing). Grid A (r02) is unaffected — none cells are the fast ones; run
+it now. Grid B waits for the r01b verdict (set `MAX_DEPTH` in r04; budget rule: cell wall ≈ 6 ×
+probe wall).
