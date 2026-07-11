@@ -112,6 +112,9 @@ Live match_day_inference wiring for these leagues = follow-up session (NOT this 
   (relegated from Championship / promoted from Lowland) → pooled team map + league offset justified.
 - **Fold counts (targets 23/24–25/26, hs=2)**: match_week 104 · **match_biweek 48** (chosen) ·
   match_month 21. History ≈ 720 matches/fold.
+  UPDATE 2026-07-12: grids run with **`warmup_period=0`** (user decision) — season-START folds
+  included, since week-1 prediction off decayed prior seasons is the operational regime (season
+  kicks off in weeks). ~+15 folds (~63/cell), ~+30% runtime. r04 aligned to match.
 - **Market inversion**: DP λ plausible on 99.9% of 1969 odds-matches (λ_home med 1.48);
   smile full-ladder on 1832 (93%), median Λ^mkt(K) rises 2.37→2.91 — textbook market smile.
 - **Phantom confirmed**: `required_features(::DynamicMarketGoalsTimeDecayModel)` throws

@@ -109,7 +109,7 @@ for (name, model, hs) in specs
             ds, model, name, save_dir;
             target_seasons  = TARGETS,
             history_seasons = hs,
-            warmup_period   = 5,
+            warmup_period   = 0,
             dynamics_col    = DYN_COL,
             samples         = SAMPLES,
             warmup          = WARMUP,

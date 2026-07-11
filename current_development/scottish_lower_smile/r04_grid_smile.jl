@@ -114,7 +114,7 @@ for (name, model) in specs
             ds, model, name, save_dir;
             target_seasons  = TARGETS,
             history_seasons = BEST_HS,
-            warmup_period   = 5,
+            warmup_period   = 0,   # match r02: include season-start folds (the operational regime)
             dynamics_col    = DYN_COL,
             samples         = SAMPLES,
             warmup          = WARMUP,
