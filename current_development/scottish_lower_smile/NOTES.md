@@ -62,16 +62,57 @@ Grid-cell suffixes: `hl<days>` (days_half_life), `hs<n>` (history_seasons), `sup
 ## Files
 
 - `r00_data_qa.jl` — Stage 0 data QA (seasons, odds-ladder coverage, league diff, team churn,
-  fold counts, inversion sanity, phantom-feature confirmation).
+  fold counts, inversion sanity, phantom-feature confirmation). ✅ run 2026-07-11 (`r00_out.txt`).
 - `l01_team_dp_league.jl` — loader: `LeagueFeature` + the 3 engines + prediction overrides +
   NB `required_features` fix.
-- `r01_smoke.jl` — single-split smoke: convergence, δ_league read, PPD end-to-end, smile≠grid O/U.
-- (planned) `r02_grid_decay_history.jl` / `r03_eval_decay.jl` — Stage A.
-- (planned) `r04_grid_smile.jl` / `r05_eval_smile.jl` — Stage B.
+- `r01_smoke.jl` — short-window smoke (3 engines, last season, biweek≥16): convergence,
+  δ_league read, PPD end-to-end, smile≠grid O/U. Output → `r01_out.txt`.
+- `r02_grid_decay_history.jl` — Stage A grid: `none_pois_hl{60,120,180,365}_hs{1,2,3}` + nb refs,
+  saves to `data/scottish_decay_grid/`, gate → `r02_convergence.txt`. Overnight (~5–8 h).
+- `r03_eval_decay.jl` — Stage A per-line eval (LogLoss diff / GLMEdge / RQR vs Bet365 close).
+  → record (hl\*, hs\*) here in NOTES.
+- `r04_grid_smile.jl` — Stage B grid: `smile_pois_sup{40,70,100}_sw{0,40,50}` + iso control at
+  (hl\*, hs\*). **⚠ EDIT `BEST_HL`/`BEST_HS`/`RERUN_CONTROLS` at the top after r03.**
+  Saves to `data/scottish_smile_grid/`, gate → `r04_convergence.txt`. Overnight (~4–7 h).
+- `r05_eval_smile.jl` — Stage B per-line eval + family routing table + BayesianKelly tearsheet +
+  informational Betfair-25/26 CLV. **⚠ EDIT `_TAG` to match r04.**
 - (planned) `RESULTS_scottish_grid.md`, graduation + `r06_smoke_src.jl` — Stage 4.
+
+### Run order (server, kaimon REPL; fresh REPL restart after every git pull with struct changes)
+
+```julia
+# after: git -C /root/BayesianFootball pull
+include(joinpath(pkgdir(BayesianFootball), "current_development/scottish_lower_smile/r01_smoke.jl"))   # gate: all ✅
+include(joinpath(pkgdir(BayesianFootball), "current_development/scottish_lower_smile/r02_grid_decay_history.jl"))  # overnight
+include(joinpath(pkgdir(BayesianFootball), "current_development/scottish_lower_smile/r03_eval_decay.jl"))
+# -> record (hl*, hs*) in NOTES, edit r04 header, push/pull
+include(joinpath(pkgdir(BayesianFootball), "current_development/scottish_lower_smile/r04_grid_smile.jl"))           # overnight
+include(joinpath(pkgdir(BayesianFootball), "current_development/scottish_lower_smile/r05_eval_smile.jl"))
+```
+Kaimon note: long includes trip the 10-min no-activity gate — the eval "fails" but Julia keeps
+running; queue a trivial `ex` on the same session to catch completion, or run from a tmux REPL.
 
 Live match_day_inference wiring for these leagues = follow-up session (NOT this stream).
 
 ## Findings log
 
-(append dated entries here as runners complete)
+### 2026-07-11 — r00 data QA (server) ✅ Stage 0 CLOSED
+
+- **Season strings**: `"20/21"…"25/26"` (String7, slash format — use these in `target_seasons`).
+  180 matches/season/tournament (20/21 COVID-half 90; 25/26 has 175 — few postponements).
+- **O/U ladder**: dense u05–u65 every season; u75 patchy. **Kmax=4 comfortably dense**
+  (≥300/360 per strike per season). 1X2 + BTTS ≈ full coverage.
+- **Dispersion**: V/M 0.935 (56) / 0.953 (57) — sub-Poisson confirmed; DP base correct, NB inert.
+- **δ_league scale**: level gap |log(2.817/2.688)| = **0.047** → prior N(0, 0.1) comfortably covers.
+- **Team churn is real**: 2–4 teams swap divisions EVERY season + 1–3 new-to-segment teams
+  (relegated from Championship / promoted from Lowland) → pooled team map + league offset justified.
+- **Fold counts (targets 23/24–25/26, hs=2)**: match_week 104 · **match_biweek 48** (chosen) ·
+  match_month 21. History ≈ 720 matches/fold.
+- **Market inversion**: DP λ plausible on 99.9% of 1969 odds-matches (λ_home med 1.48);
+  smile full-ladder on 1832 (93%), median Λ^mkt(K) rises 2.37→2.91 — textbook market smile.
+- **Phantom confirmed**: `required_features(::DynamicMarketGoalsTimeDecayModel)` throws
+  `UndefVarError: MarketLambdaFeature` — l01 override required.
+- **SURPRISE — Betfair EXISTS for 25/26 only**: `ds.betfair_odds` has 108,924 ticks over 315
+  matches, all season 25/26 (earlier betdb `match_meta` join said 0 — wrong join path). Not enough
+  for grid eval (one season) → **Bet365 close stays the benchmark**; use Betfair 25/26 as a
+  secondary CLV check on the final winner only.
