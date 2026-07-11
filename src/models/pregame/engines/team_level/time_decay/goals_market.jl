@@ -111,7 +111,7 @@ function Features.required_features(model::DynamicMarketGoalsTimeDecayModel)
         Features.GoalsFeature(), 
         Features.DatesFeature(), 
         Features.MonthFeature(), 
-        Features.MarketLambdaFeature(),
+        Features.DoublePoissonMarketFeature(),
         Features.TimeIndicesFeature()
     ] 
 end

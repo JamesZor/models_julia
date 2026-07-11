@@ -178,7 +178,7 @@ function Features.required_features(model::DynamicMarketXGPlayerTimeDecayModel)
        Features.DatesFeature(), 
        Features.MonthFeature(), 
        Features.XGFeature(), 
-       Features.MarketLambdaFeature(),
+       Features.DoublePoissonMarketFeature(),
         model.player_ratings_feature,
        Features.TimeIndicesFeature()
     ] 

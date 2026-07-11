@@ -76,7 +76,9 @@ Grid-cell suffixes: `hl<days>` (days_half_life), `hs<n>` (history_seasons), `sup
   Saves to `data/scottish_smile_grid/`, gate → `r04_convergence.txt`. Overnight (~4–7 h).
 - `r05_eval_smile.jl` — Stage B per-line eval + family routing table + BayesianKelly tearsheet +
   informational Betfair-25/26 CLV. **⚠ EDIT `_TAG` to match r04.**
-- (planned) `RESULTS_scottish_grid.md`, graduation + `r06_smoke_src.jl` — Stage 4.
+- `r06_smoke_src.jl` — Stage 4 verification: src-only build/train/price of the graduated engine.
+  **⚠ EDIT `SUP_W`/`SMILE_W`/`HL`/`HS` to the r05 winner first.**
+- `RESULTS_scottish_grid.md` — results template; fill as runners complete.
 
 ### Run order (server, kaimon REPL; fresh REPL restart after every git pull with struct changes)
 
@@ -116,3 +118,21 @@ Live match_day_inference wiring for these leagues = follow-up session (NOT this 
   matches, all season 25/26 (earlier betdb `match_meta` join said 0 — wrong join path). Not enough
   for grid eval (one season) → **Bet365 close stays the benchmark**; use Betfair 25/26 as a
   secondary CLV check on the final winner only.
+
+### 2026-07-12 — Stage 4 src graduation LANDED (structure; winner defaults pending r05)
+
+The src changes are additive and grid-independent, so they shipped ahead of the grid verdicts:
+- **`DynamicSmileDoublePoissonGoalsLeagueTimeDecayModel`** in
+  `src/models/pregame/engines/team_level/time_decay/goals_smile_league.jl` (included + exported
+  from PreGame). Defaults = Ireland keeper (sup 1.0 / sw 0.5 / hl 180) — **⚠ update to the r05
+  winner before production** (marked in-file).
+- **`Features.LeagueFeature`** graduated: struct in `src/features/types.jl`, extractor in
+  `src/features/extractors/core_extractors.jl`, exported. l01 now aliases it (`const LeagueFeature
+  = Features.LeagueFeature`); loader-local copies removed.
+- **Smile dispatch widened**: `AbstractSmilePoissonEngines` Union in
+  `src/predictions/score_computation/smile_poisson.jl` covers the player + team smile engines
+  for `extract_params`/`compute_score_matrix` (O/U keeps pricing through `SmileScoreMatrix`).
+- **Phantom `MarketLambdaFeature` FIXED in src**: all 8 `*Market*` engines now request
+  `Features.DoublePoissonMarketFeature()`; the dead export is removed. l01's temporary override
+  deleted. (Any old code that imported `Features.MarketLambdaFeature` was already broken.)
+- Verify with `r06_smoke_src.jl` after the grids; then bake winner defaults + `Pkg.test()`.

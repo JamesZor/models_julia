@@ -22,3 +22,16 @@ function add_feature!(F_data::Dict, ::GoalsFeature, ordered_ids, team_map::Dict,
     F_data[:flat_home_goals] = [Int(score_map[id][1]) for id in ordered_ids]
     F_data[:flat_away_goals] = [Int(score_map[id][2]) for id in ordered_ids]
 end
+
+# 3. League index (pooled multi-division segments — e.g. ScottishLower [56, 57]).
+# League indices are keyed off the FULL DataStore (not the split) so they are stable across
+# folds; :league_lookup (match_id -> league_idx) is stashed for prediction-time reconstruction.
+function add_feature!(F_data::Dict, ::LeagueFeature, ordered_ids, team_map::Dict, ds::Data.DataStore)
+    league_ids = sort(unique(Int.(ds.matches.tournament_id)))
+    league_map = Dict(t => i for (i, t) in enumerate(league_ids))
+    league_lookup = Dict(Int(r.match_id) => league_map[Int(r.tournament_id)]
+                         for r in eachrow(ds.matches))
+    F_data[:flat_league_ids] = [league_lookup[Int(id)] for id in ordered_ids]
+    F_data[:n_leagues]       = length(league_ids)
+    F_data[:league_lookup]   = league_lookup
+end

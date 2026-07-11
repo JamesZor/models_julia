@@ -10,6 +10,10 @@ abstract type AbstractFeatureConfig end
 # --- Core Features ---
 struct TeamIDsFeature <: AbstractFeatureConfig end
 struct GoalsFeature <: AbstractFeatureConfig end
+# Per-match league/tournament index for pooled multi-division segments (e.g. ScottishLower
+# [56, 57]). Indices are keyed off the FULL DataStore (stable across splits) and a
+# match_id -> league_idx lookup is stashed for prediction-time reconstruction.
+struct LeagueFeature <: AbstractFeatureConfig end
 
 # --- Stats Features ---
 struct XGFeature <: AbstractFeatureConfig end

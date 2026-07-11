@@ -144,7 +144,7 @@ function Features.required_features(model::DynamicMarketXGModel)
         Features.GoalsFeature(), 
         Features.MonthFeature(), 
         Features.XGFeature(), 
-        Features.MarketLambdaFeature(),
+        Features.DoublePoissonMarketFeature(),
         Features.TimeIndicesFeature()
     ] 
 end

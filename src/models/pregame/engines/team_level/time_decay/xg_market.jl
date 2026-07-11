@@ -148,7 +148,7 @@ function Features.required_features(model::DynamicMarketXGTimeDecayModel)
         Features.DatesFeature(), 
         Features.MonthFeature(), 
         Features.XGFeature(), 
-        Features.MarketLambdaFeature(),
+        Features.DoublePoissonMarketFeature(),
         Features.TimeIndicesFeature()
     ] 
 end

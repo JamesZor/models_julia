@@ -43,21 +43,10 @@ const SMILE_PRIOR  = truncated(Normal(0.15, 0.10), lower=0.02)
 const MARKET_PRIOR = truncated(Normal(0.10, 0.20), lower=0.01)
 
 # ==========================================
-# 0. LEAGUE FEATURE (loader-local; graduates to src/features at Stage 4)
+# 0. LEAGUE FEATURE — GRADUATED to src (Stage 4): Features.LeagueFeature + its extractor in
+# src/features/extractors/core_extractors.jl (emits :flat_league_ids, :n_leagues, :league_lookup).
 # ==========================================
-struct LeagueFeature <: Features.AbstractFeatureConfig end
-
-function Features.add_feature!(F_data::Dict, ::LeagueFeature, ordered_ids, team_map::Dict, ds::Data.DataStore)
-    # League index keyed off the FULL DataStore (not the split) so indices are stable across
-    # folds and available at prediction time via :league_lookup.
-    league_ids = sort(unique(Int.(ds.matches.tournament_id)))
-    league_map = Dict(t => i for (i, t) in enumerate(league_ids))
-    league_lookup = Dict(Int(r.match_id) => league_map[Int(r.tournament_id)]
-                         for r in eachrow(ds.matches))
-    F_data[:flat_league_ids] = [league_lookup[Int(id)] for id in ordered_ids]
-    F_data[:n_leagues]       = length(league_ids)
-    F_data[:league_lookup]   = league_lookup
-end
+const LeagueFeature = Features.LeagueFeature
 
 # ==========================================
 # 0b. SHARED BUILDER HELPERS
@@ -486,20 +475,11 @@ function Pred.compute_score_matrix(::TeamSmileDPGoalsModel, params; max_goals::I
 end
 
 # ==========================================
-# 6. FIX: phantom Features.MarketLambdaFeature in the src NB market engine
+# 6. (RESOLVED) phantom Features.MarketLambdaFeature
 # ==========================================
-# src required_features references MarketLambdaFeature, which is exported but never defined —
-# calling it throws UndefVarError. Real producer of flat_market_λ_home/away is
-# DoublePoissonMarketFeature. Loader-local override; src fix lands at graduation.
-function Features.required_features(model::PreGame.DynamicMarketGoalsTimeDecayModel)
-    return Features.AbstractFeatureConfig[
-        Features.TeamIDsFeature(), Features.GoalsFeature(), Features.DatesFeature(),
-        Features.MonthFeature(), Features.DoublePoissonMarketFeature(),
-        Features.TimeIndicesFeature(),
-    ]
-end
+# The phantom was fixed IN SRC at Stage 4 (all *Market* engines now request
+# DoublePoissonMarketFeature; the dead export is gone) — no loader override needed anymore.
 
 println("[l01] scottish team loader ready: TeamDPGoalsModel (none_pois) / TeamIsoDPGoalsModel " *
         "(iso_pois, knob market_weight) / TeamSmileDPGoalsModel (smile_pois, knobs supremacy_weight" *
-        "/smile_weight) — pooled leagues via zero-sum δ_league (LeagueFeature); NB market " *
-        "required_features phantom fixed.")
+        "/smile_weight) — pooled leagues via zero-sum δ_league (Features.LeagueFeature).")

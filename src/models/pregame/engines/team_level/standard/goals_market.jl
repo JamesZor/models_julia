@@ -122,7 +122,7 @@ function Features.required_features(model::DynamicMarketGoalsModel)
         Features.TeamIDsFeature(), 
         Features.GoalsFeature(), 
         Features.MonthFeature(), 
-        Features.MarketLambdaFeature(),
+        Features.DoublePoissonMarketFeature(),
         Features.TimeIndicesFeature()
     ] 
 end

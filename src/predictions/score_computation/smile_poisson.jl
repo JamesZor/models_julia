@@ -10,8 +10,16 @@
 # plain Poisson Union route (that would silently price O/U without φ and "de-smile" the model).
 
 using Distributions
-using ..Models.PreGame: DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel
+using ..Models.PreGame: DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel,
+                        DynamicSmileDoublePoissonGoalsLeagueTimeDecayModel
 using ..Data: MarketOverUnder, AbstractMarket, outcomes
+
+# All engines that price O/U through the smile (λ_tot·φ(K)) — extend this Union when a new
+# smile engine graduates; do NOT let a smile engine fall through to a plain grid route.
+const AbstractSmilePoissonEngines = Union{
+    DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel,
+    DynamicSmileDoublePoissonGoalsLeagueTimeDecayModel,
+}
 
 # Carry the (λ_h,λ_a) grid PLUS per-sample per-strike model intensities Λ^model(K)=λ_tot·φ(K).
 struct SmileScoreMatrix <: AbstractScoreMatrix
@@ -20,7 +28,7 @@ struct SmileScoreMatrix <: AbstractScoreMatrix
 end
 
 # 1. Adapter: DataFrame Row -> NamedTuple
-extract_params(::DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel, row) =
+extract_params(::AbstractSmilePoissonEngines, row) =
     (λ_h = row.λ_h, λ_a = row.λ_a, λ_tot = row.λ_tot, φ = row.φ)
 
 # Grid kernel (independent double-Poisson), identical math to score_computation/poisson.jl.
@@ -43,7 +51,7 @@ function _smile_poisson_grid(λ_h, λ_a; max_goals::Int=12)
 end
 
 # 2. Kernel: Params -> SmileScoreMatrix
-function compute_score_matrix(::DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel, params; max_goals::Int=12)
+function compute_score_matrix(::AbstractSmilePoissonEngines, params; max_goals::Int=12)
     grid = _smile_poisson_grid(params.λ_h, params.λ_a; max_goals)
     # Λ^model(K) = λ_tot · φ(K), shape [nK × n_samples]. params.φ is [n_samples × nK].
     Λ = transpose(params.λ_tot .* params.φ)          # (n_samples × nK)' -> (nK × n_samples)
