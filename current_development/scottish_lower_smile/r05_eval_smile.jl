@@ -13,9 +13,19 @@ Plus a per-strike O/U focus table: does φ pricing beat the grid at the 0.5/1.5 
 Secondary (winner only, informational): Betfair CLV on 25/26 — ds.betfair_odds covers 315
 matches of 25/26 only; too thin to decide anything, prints for the record.
 
-Cells below the r04_convergence.txt gate are excluded.
+Cells below the r04_convergence.txt gate are excluded. NOTE the two-tier gate (2026-07-13
+redesign): depth-6 smile cells use the RANKING gate (≤1.05) — their table rows pick the
+winner but nothing graduates from them; the winner re-runs at depth 10 in r04b (hard gate),
+then re-run this file with INCLUDE_CONFIRM=true. The _confirm row pools 3 target seasons
+(Grid-B rows pool 2) — compare per-line SIGNS/pattern, not exact pooled values.
 
-    include(joinpath(pkgdir(BayesianFootball), "current_development/scottish_lower_smile/r05_eval_smile.jl"))
+RUNTIME: ~1–2h; run with stdout redirected to r05_out.txt (kaimon 10-min gate kills the eval
+job cosmetically; Julia finishes — read the file):
+    open("current_development/scottish_lower_smile/r05_out.txt","w") do io
+        redirect_stdout(io) do
+            include(joinpath(pkgdir(BayesianFootball), "current_development/scottish_lower_smile/r05_eval_smile.jl"))
+        end
+    end
 =#
 
 using Revise
@@ -32,7 +42,8 @@ const Data        = BayesianFootball.Data
 const ROOT = pkgdir(BayesianFootball)
 include(joinpath(ROOT, "current_development/scottish_lower_smile/l01_team_dp_league.jl"))
 
-const _TAG = "hl365_hs2"   # r03 winner — matches r04's BEST_HL/BEST_HS
+const _TAG = "hl365_hs2"          # r03 winner — matches r04's BEST_HL/BEST_HS
+const INCLUDE_CONFIRM = false     # ⚠ set true after r04b to append the depth-10 winner row
 
 # ==========================================
 # 1. LOAD saved Grid-B (+ reused Grid-A controls)
@@ -49,6 +60,14 @@ if !any(r -> occursin("none_pois", r.config.name), all_results)
         isempty(fa_ctl) || append!(all_results, Experiments.load_experiments(fa_ctl))
     catch e
         @warn "could not load Grid-A control $ctl_name" exception=e
+    end
+end
+if INCLUDE_CONFIRM
+    try
+        fc = Experiments.list_experiments("scottish_smile_confirm"; data_dir=joinpath(ROOT, "data"))
+        isempty(fc) || append!(all_results, Experiments.load_experiments(fc))
+    catch e
+        @warn "could not load r04b confirm cell" exception=e
     end
 end
 println("[INFO] Loaded $(length(all_results)) experiments: ",

@@ -1,20 +1,30 @@
 #=
-r04 — GRID B: supremacy_weight × smile_weight on the team smile engine (ScottishLower).
+r04 — GRID B (FAST-RANK REDESIGN 2026-07-13): supremacy_weight × smile_weight on the team
+smile engine (ScottishLower), at the Grid-A winner hl365_hs2.
 
-⚠ EDIT FIRST: set BEST_HL / BEST_HS below to the Grid-A winner from r03 (recorded in NOTES.md).
+WHY the redesign: r01b depth probe — full spec (60 folds × 4 chains, depth 10) ≈ 25h/CELL
+(smile geometry: ~127 leapfrogs/iter). Depth 6 halves tree cost and is PROVEN UNBIASED
+(σ_smile/σ_sup/δ_gap match the depth-10 reference to 4 decimals) but mixes sluggishly
+(fold-1 log_φ R-hat 1.077, ESS≈45 at 600 samples → samples=1200 doubles ESS). Depth 5 is
+broken (R-hat 1.38). USER DECISION: depth-6 cells are for RANKING ONLY; the per-family
+winner from r05 is re-run at depth 10 / full spec in r04b_winner_confirm.jl, where the
+hard gate applies before graduation.
 
-Cells (canonical NOTES.md naming; all at the Grid-A winning decay/history):
-  smile_pois_sup{40,70,100}_sw{0,40,50}   — 9 cells on TeamSmileDPGoalsModel
-      (the sw=0 column doubles as the supremacy-only rung, li_sup_only analogue)
-  none_pois_hl*_hs*                       — structural control (RE-USED from Grid A if the
-      winner cell is already saved there; re-run here only if hl*/hs* was NOT a Grid-A cell)
-  iso_pois_mw100_hl*_hs*                  — isotropic-pillar control on the SAME Poisson base
-      (this is the "old pillar vs smile pillar" A/B at team level)
+Cells (canonical naming; all at hl365_hs2; sw=0.4 column dropped — 0.4 vs 0.5 never a live axis):
+  smile_pois_sup{40,70,100}_sw50   — depth 6, samples 1200  (ranking gate: R-hat ≤ 1.05 new params)
+  smile_pois_sup{40,70,100}_sw0    — depth 10, samples 1200 (supremacy-only rung; loose geometry,
+                                     hard gate — no smile pillar so no depth problem)
+  iso_pois_mw100                   — depth 10 control (old pillar vs smile A/B on same base)
+  none_pois ctl                    — depth 10 structural control, RE-RUN at THIS spec (the Grid-A
+                                     cell pools 3 target seasons → not comparable to 2-season rows)
 
-Settings identical to r02: targets 23/24→25/26, GroupedCVConfig [56,57], match_biweek,
-800/300 × 4 chains, depth 10. 11 cells ≈ 4–7 h → overnight.
+Settings: targets 24/25→25/26 (2 seasons → ~40 folds), GroupedCVConfig [56,57], match_biweek,
+1200/300 × 3 chains. Budget @16 threads: 3×~6.6h (sw50) + 3×~2.8h (sw0) + ~2.5h (iso) + ~1h
+(none) ≈ 30h ≈ 1.5 nights. (-t 32 shaves ~30%.)
 
-Convergence gate per cell → r04_convergence.txt (≥95% folds R-hat ≤ 1.01 to be read in r05).
+Convergence gate per cell → r04_convergence.txt: reports BOTH %folds all-param R-hat≤1.01
+(hard) and ≤1.05 (ranking). Depth-6 cells are expected to fail the hard line — that is priced
+in; they must pass the ranking line. Controls must pass the hard line.
 
 Run on the server (kaimon REPL) after git pull:
     include(joinpath(pkgdir(BayesianFootball), "current_development/scottish_lower_smile/r04_grid_smile.jl"))
@@ -27,6 +37,7 @@ using Distributions
 using Statistics
 using MCMCChains
 using ThreadPinning
+using Dates
 
 pinthreads(:cores)
 
@@ -39,18 +50,10 @@ const ROOT = pkgdir(BayesianFootball)
 include(joinpath(ROOT, "current_development/scottish_lower_smile/l01_team_dp_league.jl"))
 
 # ==========================================
-# 0. GRID-A WINNER — EDIT AFTER r03 ⚠
+# 0. GRID-A WINNER (r03, 2026-07-13)
 # ==========================================
-const BEST_HL = 365.0    # r03 winner (2026-07-13): best family-pooled LogLoss on ALL of x12/btts/totals
-const BEST_HS = 2        # r03 winner: hs3 adds nothing (slightly worse), hs1 truncates the decay
-const RERUN_CONTROLS = false   # true if (BEST_HL, BEST_HS) was NOT a Grid-A cell (none_pois
-                               # control then needs training here); iso_pois control ALWAYS runs
-                               # (Grid A only had the nb iso reference).
-# ⚠ RUNTIME BUDGET (r01 finding: smile trees run deep — median 127 leapfrogs/iter at depth 10,
-# ≈20× the DP base; see r01b probe). Set MAX_DEPTH to the r01b winner (5 or 6). Grid-B cell
-# wall ≈ 6 × r01b probe wall (192 tasks = 6 waves of 32 threads); if still too heavy, trim
-# CHAINS to 3 and/or SAMPLES to 600, or drop TARGETS to the last 2 seasons (32 folds).
-const MAX_DEPTH = 10     # ⚠ set to r01b probe winner before launching
+const BEST_HL = 365.0    # r03 winner: best family-pooled LogLoss on ALL of x12/btts/totals
+const BEST_HS = 2        # r03 winner: hs3 adds nothing, hs1 truncates the decay
 
 # ==========================================
 # 1. DATA + GRID SPEC
@@ -60,38 +63,41 @@ ds = Data.load_datastore_cached(Data.ScottishLower())
 save_dir = joinpath(ROOT, "data/scottish_smile_grid/")
 mkpath(save_dir)
 
-TARGETS = ["23/24", "24/25", "25/26"]
+TARGETS = ["24/25", "25/26"]   # trimmed: 2 target seasons (~40 folds)
 DYN_COL = :match_biweek
-SAMPLES = 800
+SAMPLES = 1200                 # doubled vs Grid A: recovers ESS at depth 6 (r01b: ESS≈45 @600)
 WARMUP  = 300
-CHAINS  = 4
+CHAINS  = 3
+
+DEPTH_SMILE = 6                # ranking-only cells (sw>0)
+DEPTH_LOOSE = 10               # sw=0 / iso / none — loose geometry, hard gate
 
 dyn_cfg = PreGame.TimeDecayDynamics(days_half_life = BEST_HL)
 _tag = "hl$(Int(BEST_HL))_hs$(BEST_HS)"
 
-SUPS = [0.4, 0.7, 1.0]
-SWS  = [0.0, 0.4, 0.5]
-
-specs = Tuple{String, Any}[]
-for sup in SUPS, sw in SWS
+# (name, model, max_depth)
+specs = Tuple{String, Any, Int}[]
+for sup in (0.4, 0.7, 1.0), sw in (0.0, 0.5)
+    depth = sw > 0 ? DEPTH_SMILE : DEPTH_LOOSE
     push!(specs, ("smile_pois_sup$(Int(100sup))_sw$(Int(100sw))_$(_tag)",
                   TeamSmileDPGoalsModel(dynamics_config = dyn_cfg,
-                                        supremacy_weight = sup, smile_weight = sw)))
+                                        supremacy_weight = sup, smile_weight = sw),
+                  depth))
 end
 push!(specs, ("iso_pois_mw100_$(_tag)",
-              TeamIsoDPGoalsModel(dynamics_config = dyn_cfg, market_weight = 1.0)))
-if RERUN_CONTROLS
-    push!(specs, ("none_pois_$(_tag)_ctl", TeamDPGoalsModel(dynamics_config = dyn_cfg)))
-end
+              TeamIsoDPGoalsModel(dynamics_config = dyn_cfg, market_weight = 1.0), DEPTH_LOOSE))
+push!(specs, ("none_pois_$(_tag)_ctl", TeamDPGoalsModel(dynamics_config = dyn_cfg), DEPTH_LOOSE))
 
-println("[INFO] Grid B: $(length(specs)) cells (history_seasons=$BEST_HS) -> ",
-        join(first.(specs), ", "))
+println("[INFO] Grid B: $(length(specs)) cells (hs=$BEST_HS, targets=$(TARGETS)) -> ",
+        join([s[1] * " [d$(s[3])]" for s in specs], ", "))
 
 # ==========================================
-# 2. RUN (identical loop to r02)
+# 2. RUN — cheap depth-10 cells FIRST (fast signal), then the depth-6 smile cells
 # ==========================================
+sort!(specs, by = s -> s[3] == DEPTH_SMILE)   # loose cells first
+
 function _fold_convergence(res)
-    n_ok = 0; worst = 0.0; n = length(res.training_results.items)
+    n = length(res.training_results.items); n_hard = 0; n_rank = 0; worst = 0.0
     for it in res.training_results.items
         er = DataFrame(MCMCChains.ess_rhat(it[1]))
         rcol = :rhat in propertynames(er) ? :rhat :
@@ -100,15 +106,16 @@ function _fold_convergence(res)
         mr = isempty(vals) ? NaN : maximum(vals)
         isnan(mr) && continue
         worst = max(worst, mr)
-        mr <= 1.01 && (n_ok += 1)
+        mr <= 1.01 && (n_hard += 1)
+        mr <= 1.05 && (n_rank += 1)
     end
-    return n, n_ok, worst
+    return n, n_hard, n_rank, worst
 end
 
 gate_lines = String[]
 t_start = time()
-for (name, model) in specs
-    println("\n", "#"^72, "\n# CELL: $name  (elapsed $(round((time()-t_start)/60, digits=1)) min)\n", "#"^72)
+for (name, model, depth) in specs
+    println("\n", "#"^72, "\n# CELL: $name  depth=$depth  (elapsed $(round((time()-t_start)/60, digits=1)) min)\n", "#"^72)
     try
         task = Experiments.create_experiment_task(
             ds, model, name, save_dir;
@@ -120,15 +127,19 @@ for (name, model) in specs
             warmup          = WARMUP,
             chains          = CHAINS,
             use_queue       = true,
-            max_depth       = MAX_DEPTH,
+            max_depth       = depth,
         )
         res = Experiments.run_experiment(task)
         Experiments.save_experiment(res)
 
-        n, n_ok, worst = _fold_convergence(res)
-        pct = n == 0 ? 0.0 : round(100n_ok / n, digits=1)
-        gate = "$name: folds=$n converged(R-hat≤1.01)=$n_ok ($(pct)%) worst=$(round(worst, digits=4))" *
-               (n == 0 ? "  ⚠ SILENT DROP — no items!" : pct < 95 ? "  ⚠ BELOW GATE" : "  ✅")
+        n, n_hard, n_rank, worst = _fold_convergence(res)
+        p_hard = n == 0 ? 0.0 : round(100n_hard / n, digits=1)
+        p_rank = n == 0 ? 0.0 : round(100n_rank / n, digits=1)
+        is_rank_cell = depth == DEPTH_SMILE
+        ok = n > 0 && (is_rank_cell ? p_rank >= 95 : p_hard >= 95)
+        gate = "$name [d$depth]: folds=$n  ≤1.01: $n_hard ($(p_hard)%)  ≤1.05: $n_rank ($(p_rank)%)  worst=$(round(worst, digits=4))" *
+               (n == 0 ? "  ⚠ SILENT DROP — no items!" :
+                ok ? (is_rank_cell ? "  ✅ (ranking gate)" : "  ✅ (hard gate)") : "  ⚠ BELOW GATE")
         println("[GATE] ", gate)
         push!(gate_lines, gate)
     catch e
@@ -140,9 +151,12 @@ for (name, model) in specs
 end
 
 open(joinpath(ROOT, "current_development/scottish_lower_smile/r04_convergence.txt"), "w") do io
-    println(io, "r04 Grid B convergence gate — ", string(now()), "  (hl=$(BEST_HL), hs=$(BEST_HS))")
+    println(io, "r04 Grid B convergence gate — ", string(now()),
+            "  (hl=$(BEST_HL), hs=$(BEST_HS), targets=$(TARGETS), $(SAMPLES)/$(WARMUP)×$(CHAINS))")
+    println(io, "Gate: depth-10 cells HARD (≥95% folds ≤1.01); depth-6 smile cells RANKING (≥95% ≤1.05,")
+    println(io, "r01b-justified: depth-6 posteriors unbiased vs depth-10, winner re-confirmed in r04b).")
     foreach(l -> println(io, l), gate_lines)
 end
 
 println("\n[INFO] Grid B complete in $(round((time()-t_start)/3600, digits=2)) h. ",
-        "Gate written to r04_convergence.txt. Next: r05_eval_smile.jl")
+        "Gate written to r04_convergence.txt. Next: r05_eval_smile.jl, then r04b_winner_confirm.jl")

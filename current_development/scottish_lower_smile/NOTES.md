@@ -191,3 +191,31 @@ numbers read with caveat).
 **Files updated:** r04 `BEST_HL=365.0/BEST_HS=2` (RERUN_CONTROLS stays false — winner IS a
 Grid-A cell, none_pois control reused from scottish_decay_grid), r05 `_TAG="hl365_hs2"`.
 **Next:** r01b depth probe (sets r04 MAX_DEPTH) → r04 Grid B → r05.
+
+### 2026-07-13 — r01b depth probe: BOTH caps fail hard gate → Grid B REDESIGNED (fast-rank + confirm)
+
+**Probe result (r01b_out.txt; ref depth-10: 215m, R-hat ≤1.007):**
+depth 6 = 84.9m wall, worst new-param R-hat **1.077**; depth 5 = 43.2m, **1.379**. BUT posterior
+means are IDENTICAL to depth-10 (σ_smile .0515/.0516, σ_sup .249/.2493, δ_gap .035/.035) — caps
+truncate trajectories ⇒ sluggish-but-UNBIASED mixing. Per-fold diagnosis at depth 6: fold 1 the
+log_φ block (1.077, ESS≈45 @600 samples — too thin for tails); folds 2–5 only team ratings
+1.02–1.04 (ESS 100–265). Depth 5 = genuinely broken; discarded.
+
+**Budget reality (measured task times @16t: d10≈107m, d6≈42m, d5≈21m per chain):** original
+Grid B (10 cells × 60 folds × 4ch, depth 10) ≈ 25h/cell ≈ 10 days — infeasible.
+
+**USER DECISION (option A of three): fast-rank + depth-10 confirm.** r04 rewritten:
+- Grid: sup{40,70,100} × sw{0,50} + iso ctl + none ctl (8 cells; sw=0.4 column dropped).
+- Trimmed: targets 24/25→25/26 (~40 folds), 1200/300 × 3 chains (samples doubled → ESS ×2).
+- Per-cell depth: sw>0 cells depth 6 (**RANKING gate ≥95% folds ≤1.05**); sw=0/iso/none depth 10
+  (hard gate — loose geometry, no smile pillar). Cheap cells run first.
+- none_pois ctl RE-RUN at this spec (Grid-A cell pools 3 seasons — not comparable).
+- Budget ≈ 30h ≈ 1.5 nights @16t.
+- **NOTHING graduates from a depth-6 cell**: new `r04b_winner_confirm.jl` re-trains the r05
+  winner at the Grid-A reference spec (depth 10, 3 seasons, 800/300×4, ~25h) under the HARD
+  gate; then r05 re-run with INCLUDE_CONFIRM=true (compare per-line signs/pattern — confirm row
+  pools 3 seasons vs Grid-B 2).
+- r05: INCLUDE_CONFIRM knob + stdout-redirect run pattern documented in header.
+
+Run order now: r04 (user, overnight) → r05 (redirect) → pick per-family winner → r04b
+(overnight) → r05 INCLUDE_CONFIRM=true → Stage-4 winner defaults + r06.
