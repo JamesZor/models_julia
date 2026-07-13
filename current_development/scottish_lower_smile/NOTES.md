@@ -160,3 +160,34 @@ COUNT (geometry), not an AD defect. Trees max at 8 ⇒ depth-8 cap is a no-op; b
 valve should keep them mixing). Grid A (r02) is unaffected — none cells are the fast ones; run
 it now. Grid B waits for the r01b verdict (set `MAX_DEPTH` in r04; budget rule: cell wall ≈ 6 ×
 probe wall).
+
+### 2026-07-13 — r02 Grid A DONE (30.75h server) + r03 eval verdict: **hl365_hs2** ✅ Stage 2 CLOSED
+
+**Convergence gate (r02_convergence.txt):** 12/14 cells ≥95% folds R-hat≤1.01 (60 folds/cell,
+warmup_period=0). Excluded: `none_pois_hl60_hs3` (91.7%, marginal — dead corner anyway) and
+`iso_nb_mw100_hl180_hs2` (75%, worst 1.021 — NB+iso-pillar mixes poorly; reference row only,
+numbers read with caveat).
+
+**r03 verdict — BEST_HL=365, BEST_HS=2** (`none_pois_hl365_hs2`), from `r03_out.txt`:
+- Family-pooled LogLoss diff vs Bet365 close: hl365_hs2 best on **all three families** among
+  gate-passing structural cells — x12 0.0143 (next: hl365_hs3 .0150, hl180_hs2 .0154),
+  btts 0.0014, totals 0.0002 (≈ market-level on totals with NO pillar).
+- Monotone hl gradient on x12 (hl60 .0168 → hl120 .0157 → hl180 .0154 → hl365 .0143): long
+  memory wins despite promotion/relegation churn — sub-Poisson, stable-strength leagues.
+- GLMEdge: short half-lives are actively pathological — significant NEGATIVE away coefs
+  (hl60 ≈ −5.2, hl120 ≈ −4.4, hl180_hs1 −3.4 ⇒ over-reactive ratings anti-predict vs market);
+  at hl365 every coef n.s. and closest to 0. hs axis flat; hs2 ≥ hs3 everywhere (older seasons
+  add nothing), hs1 truncates the 365-day decay.
+- RQR all cells well-centred (|mean| ≤ 0.03, std ≈ 1) — no goal-calibration pathology anywhere.
+- References behaved: none_nb_hl180_hs2 ≤ none_pois_hl180_hs2 on every family (r inert on
+  sub-Poisson data ⇒ **Poisson base confirmed**, no dispersion escalation). iso_nb (below gate)
+  still shows the pillar doing its usual work (x12 .0083, totals −.0030) — motivates Grid B.
+- Per-line note: over_K and under_K LogLoss diffs are IDENTICAL by construction (binary log
+  score counts both sides) — the "wins both sides" check is per-strike, not per-side.
+- Eval runtime gotcha: r03 = ~2h wall on the server (14 cells × 60 folds × 1070-match PPDs);
+  kaimon 10-min gate kills the *eval*, Julia finishes fine — run with stdout redirected to
+  r03_out.txt and read the file (pattern now standard for r05).
+
+**Files updated:** r04 `BEST_HL=365.0/BEST_HS=2` (RERUN_CONTROLS stays false — winner IS a
+Grid-A cell, none_pois control reused from scottish_decay_grid), r05 `_TAG="hl365_hs2"`.
+**Next:** r01b depth probe (sets r04 MAX_DEPTH) → r04 Grid B → r05.

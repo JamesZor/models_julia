@@ -41,8 +41,8 @@ include(joinpath(ROOT, "current_development/scottish_lower_smile/l01_team_dp_lea
 # ==========================================
 # 0. GRID-A WINNER — EDIT AFTER r03 ⚠
 # ==========================================
-const BEST_HL = 180.0    # ⚠ days_half_life winner from r03
-const BEST_HS = 2        # ⚠ history_seasons winner from r03
+const BEST_HL = 365.0    # r03 winner (2026-07-13): best family-pooled LogLoss on ALL of x12/btts/totals
+const BEST_HS = 2        # r03 winner: hs3 adds nothing (slightly worse), hs1 truncates the decay
 const RERUN_CONTROLS = false   # true if (BEST_HL, BEST_HS) was NOT a Grid-A cell (none_pois
                                # control then needs training here); iso_pois control ALWAYS runs
                                # (Grid A only had the nb iso reference).

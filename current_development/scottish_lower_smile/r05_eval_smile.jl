@@ -32,7 +32,7 @@ const Data        = BayesianFootball.Data
 const ROOT = pkgdir(BayesianFootball)
 include(joinpath(ROOT, "current_development/scottish_lower_smile/l01_team_dp_league.jl"))
 
-const _TAG = "hl180_hs2"   # ⚠ match r04's BEST_HL/BEST_HS tag
+const _TAG = "hl365_hs2"   # r03 winner — matches r04's BEST_HL/BEST_HS
 
 # ==========================================
 # 1. LOAD saved Grid-B (+ reused Grid-A controls)

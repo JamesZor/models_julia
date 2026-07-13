@@ -55,6 +55,9 @@ season_strings = sort(unique(String.(ds.matches.season)))
 TARGET = season_strings[end]
 
 model = TeamSmileDPGoalsModel(
+    # hl=180 ON PURPOSE (matches the r01 depth-10 REF posteriors below) — NOT the Grid-A winner
+    # (hl365_hs2). The depth verdict transfers: tree depth is driven by the σ_smile pillar
+    # geometry, not the decay half-life. r04 runs at the winner.
     dynamics_config  = PreGame.TimeDecayDynamics(days_half_life = 180.0),
     supremacy_weight = 1.0,
     smile_weight     = 0.5,
