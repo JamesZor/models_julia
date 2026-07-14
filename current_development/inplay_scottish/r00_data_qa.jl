@@ -79,11 +79,14 @@ recon_summary = combine(groupby(recon, :tournament_id),
 goals_inc = subset(ds.incidents, :incident_type => ByRow(==("goal")))
 mm = [ _incident_minute(r) for r in eachrow(goals_inc) ]
 minute_sanity = (
-    n            = length(mm),
-    min          = minimum(mm), max = maximum(mm),
-    frac_h1_stop = mean(45 .< mm .<= 45 + 10),      # 45+x stoppage mass
-    frac_h2_stop = mean(90 .< mm),
-    sentinel_999 = sum(coalesce.(goals_inc.added_time, 0) .== 999),
+    n             = length(mm),
+    min           = minimum(mm), max = maximum(mm),
+    # SofaScore clamps stoppage goals to exactly 45/90 with added_time=0 in this feed
+    # (verified 2026-07-14: all 129 t=45 and 302 t=90 goals have added_time=0), so the
+    # terminal NHPP slices must carry extended exposure (injury_time1/2 or league mean).
+    frac_clamp_45 = mean(mm .== 45),
+    frac_clamp_90 = mean(mm .== 90),
+    sentinel_999  = sum(coalesce.(goals_inc.added_time, 0) .== 999),
 )
 
 reds = DataFrame(match_id=Int[], n_reds=Int[])

@@ -64,3 +64,23 @@ Thin Betfair LTP is enough: we need fair value, not fills.
 ## Log
 
 - 2026-07-14: stream created. Deep-research batch dispatched. r00 written.
+- 2026-07-14: **r00 ran on homelab kaimon** (fresh datastore fetched from betdb, cache
+  rebuilt). Verdict:
+  - Training seasons: 57 all six (20/21–25/26); 56 four (20/21, 21/22, 22/23, 24/25);
+    56's 23/24 (71/180) + 25/26 (16/175) excluded pending incident re-scrape.
+  - Score-path reconstruction exact for 98.9% (56) / 99.4% (57) of incident matches.
+  - **Stoppage clamping**: ALL stoppage goals sit at exactly mm=45 (129) or mm=90 (302)
+    with added_time=0 → terminal NHPP slices need extended exposure (injury_time1/2
+    exist in sofascore.matches but are NOT fetched into the DataStore; use league-mean
+    stoppage or extend the fetcher).
+  - Betfair (eval only): median 49 1X2 prints/match, in-match gap p50 ≈ 1.05 min,
+    p90 ≈ 4.1–4.6 min; **identifiable full-1X2 5-min bins only 23% (56) / 18% (57)**
+    (4-min LOCF + ≥6 selections) — harsher than the concept-map audit; confirms
+    eval-only role. Goal-jump anchoring finds a price jump for 81%/76% of goals;
+    off1≈3.0±1.5, off2≈18.0±2.9 (medians sit on the priors → fallback-heavy on thin
+    prints; acceptable for eval binning).
+  - Red cards: 305 matches (18% of incident matches), 327 total — enough to fit β_man.
+- 2026-07-14: **WP0 done** → RESEARCH.md. Key: Vecer/Kopriva/Ichiba 2009 market-implied
+  red-card opponent multiplier ×1.2 ≈ our Ireland man_adv fit (+0.18 log) — use as
+  prior centre; compose-posteriors = cut Bayes (draw pairing, Jacob et al. 2017);
+  BRB λ = log β/log α composes with ℓ1 costs in one DCP program.
