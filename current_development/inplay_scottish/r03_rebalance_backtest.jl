@@ -125,9 +125,13 @@ function run_match(ms)
         ra = count(c -> !c.home && c.t < t_m, ms.reds)
         P̄ = fair_state(ms, t_m, gh, ga, rh, ra)
 
-        fills = forward_prices(bfm, t_w)          # execution prices (realistic)
+        raw_fills = forward_prices(bfm, t_w)      # next actual prints
+        # limit-order discipline: reject fills > 10% (log) from the decision quote —
+        # the solver never authorized the post-goal repriced print
+        fills = Dict(s => p for (s, p) in raw_fills
+                     if haskey(prices, s) && abs(log(p / prices[s])) <= 0.10)
 
-        # EXIT: decision on LOCF fair value, FILL at the next actual print
+        # EXIT: decision on LOCF fair value, FILL at the next accepted print
         for b in book0
             (b.sel in exited || !haskey(prices, b.sel)) && continue
             e = sel_prob(P̄, b.sel) - 1.0 / prices[b.sel]
@@ -138,7 +142,7 @@ function run_match(ms)
             end
         end
 
-        # REBAL: solve on LOCF quotes, fill each leg at the next actual print
+        # REBAL: solve on LOCF quotes, fill each leg at the next accepted print
         avail = [Contract(s, prices[s], cells_for(s, G)) for s in CURATED if haskey(prices, s)]
         isempty(avail) && continue
         π_now = payoff_vector(trades[:rebal], G; comm = COMM)
@@ -153,9 +157,9 @@ function run_match(ms)
     fh = count(g -> g.home, ms.goals); fa = count(g -> !g.home, ms.goals)
     (mid = ms.mid, n_bets = length(book0), stake0 = sum(b.stake for b in book0),
      n_exits = length(exited), n_rebal = n_rebal_trades,
-     G_hold  = log(settle(trades[:hold],  fh, fa)),
-     G_exit  = log(settle(trades[:exit],  fh, fa)),
-     G_rebal = log(settle(trades[:rebal], fh, fa)))
+     G_hold  = log(max(settle(trades[:hold],  fh, fa), 1e-6)),
+     G_exit  = log(max(settle(trades[:exit],  fh, fa), 1e-6)),
+     G_rebal = log(max(settle(trades[:rebal], fh, fa), 1e-6)))   # 1e-6 = ruin floor
 end
 
 results = NamedTuple[]
