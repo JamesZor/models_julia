@@ -32,6 +32,8 @@ const Samplers = BayesianFootball.Samplers
 Base.@kwdef struct NHPPXConfig
     hier_time::Bool  = true
     hier_state::Bool = false      # Ireland verdict: linear state suffices
+    hier_lead::Bool  = false      # r01b: team-specific δ_lead[team] slope on `leading`
+    hier_trail::Bool = false      # r01b: team-specific δ_trail[team] slope on `trailing`
     Δt::Float64      = 5.0
     Tend::Float64    = 95.0       # mm=90-clamped stoppage mass lives in [90,95)
     σ_α::Float64     = 2.0
@@ -40,6 +42,8 @@ Base.@kwdef struct NHPPXConfig
     man_prior_σ::Float64 = 0.3
     σ_time_prior::ContinuousUnivariateDistribution = truncated(Normal(0, 0.5); lower = 0.0)
     σ_state_prior::ContinuousUnivariateDistribution = truncated(Normal(0, 0.5); lower = 0.0)
+    σ_lead_prior::ContinuousUnivariateDistribution  = truncated(Normal(0, 0.3); lower = 0.0)
+    σ_trail_prior::ContinuousUnivariateDistribution = truncated(Normal(0, 0.3); lower = 0.0)
 end
 
 # ---------------------------------------------------------------------------
@@ -113,6 +117,7 @@ function build_slices(mseqs; Δt = 5.0, Tend = 95.0)
     z = similar(off); lpg = similar(off); tr = similar(off); ld = similar(off)
     man = similar(off); gsi = Vector{Int}(undef, n); tix = Vector{Int}(undef, n)
     mid = Vector{Int}(undef, n); ishome = Vector{Bool}(undef, n)
+    team = Vector{String}(undef, n)
     k = 0
     for ms in mseqs
         for b in 1:nb
@@ -124,19 +129,19 @@ function build_slices(mseqs; Δt = 5.0, Tend = 95.0)
             rh = count(c ->  c.home && c.t < lo, ms.reds)
             ra = count(c -> !c.home && c.t < lo, ms.reds)
             gd = gh - ga
-            for (h, yc, pg, gds, mans) in ((true,  yh, ms.pgh,  gd, ra - rh),
-                                           (false, ya, ms.pga, -gd, rh - ra))
+            for (h, yc, pg, gds, mans, tm) in ((true,  yh, ms.pgh,  gd, ra - rh, ms.home),
+                                               (false, ya, ms.pga, -gd, rh - ra, ms.away))
                 k += 1
                 y[k] = yc; off[k] = log(Δt); z[k] = (tmid - 45) / 45
                 lpg[k] = log(pg); tr[k] = Float64(gds < 0); ld[k] = Float64(gds > 0)
                 man[k] = Float64(mans); gsi[k] = clamp(gds, -3, 3) + 4; tix[k] = b
-                mid[k] = ms.mid; ishome[k] = h
+                mid[k] = ms.mid; ishome[k] = h; team[k] = tm
             end
         end
     end
     DataFrame(y = y, off = off, z = z, log_pg = lpg, trailing = tr, leading = ld,
               man_adv = man, gs_idx = gsi, time_idx = tix, match_id = mid,
-              is_home = ishome)
+              is_home = ishome, team = team)
 end
 
 # ---------------------------------------------------------------------------
@@ -144,7 +149,8 @@ end
 # ---------------------------------------------------------------------------
 
 @model function nhppx_intensity(y, offset, z, log_pg, trailing, leading, man_adv,
-                                gs_idx, time_idx, n_states, n_timebins, config::NHPPXConfig)
+                                gs_idx, time_idx, team_idx, n_states, n_timebins,
+                                n_teams, config::NHPPXConfig)
     α     ~ Normal(0, config.σ_α)
     β     ~ Normal(0, config.σ_β)
     γ_tr  ~ Normal(0, 0.5)
@@ -162,13 +168,33 @@ end
         z_gs ~ filldist(Normal(0, 1), n_states)
         logλ = logλ .+ view(z_gs .* σ_gs, gs_idx)
     end
+    if config.hier_lead       # team-specific response to being AHEAD (r01b)
+        σ_ld ~ config.σ_lead_prior
+        z_ld ~ filldist(Normal(0, 1), n_teams)
+        logλ = logλ .+ view(z_ld .* σ_ld, team_idx) .* leading
+    end
+    if config.hier_trail      # team-specific response to being BEHIND (r01b)
+        σ_trl ~ config.σ_trail_prior
+        z_trl ~ filldist(Normal(0, 1), n_teams)
+        logλ = logλ .+ view(z_trl .* σ_trl, team_idx) .* trailing
+    end
     μ = exp.(clamp.(logλ .+ offset, -20.0, 20.0)) .+ 1e-6
     @addlogprob! sum(logpdf.(Poisson.(μ), y))
 end
 
-make_nhppx_model(df::DataFrame, c::NHPPXConfig) =
+"Stable team index for a slice frame: sorted unique names -> 1..n."
+function team_indexer(df::DataFrame)
+    names = sort(unique(df.team))
+    tmap = Dict(n => i for (i, n) in enumerate(names))
+    return [tmap[t] for t in df.team], names
+end
+
+function make_nhppx_model(df::DataFrame, c::NHPPXConfig)
+    tidx, tnames = team_indexer(df)
     nhppx_intensity(df.y, df.off, df.z, df.log_pg, df.trailing, df.leading, df.man_adv,
-                    df.gs_idx, df.time_idx, 7, Int(cld(c.Tend, c.Δt)), c)
+                    df.gs_idx, df.time_idx, tidx, 7, Int(cld(c.Tend, c.Δt)),
+                    length(tnames), c)
+end
 
 # ---------------------------------------------------------------------------
 # 6. GLM CV harness (fast workhorse for spec races; l07 pattern)
