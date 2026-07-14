@@ -103,12 +103,16 @@ Thin Betfair LTP is enough: we need fair value, not fills.
   80'; **in-play conditioning beats frozen-pregame at every checkpoint** (BTTS Brier
   0.246→0.074 at 80'). Per-selection biases within ~1 SE (n=300). Outstanding:
   gate iii (Betfair identifiable-bin comparison on 56 24/25) = r02b.
-- 2026-07-14: **r01b (user Q: hierarchical team δ_lead?) = NULL.** Non-centred team
-  slopes on leading/trailing: σ_ld = 0.075 [0.007, 0.178], σ_trl = 0.10 [0.011, 0.222]
-  — both hug zero (hierarchical-σ-null pattern again); shrunk team spread only
-  −0.05…+0.06; Stage-B race auto-skipped. In the hier fit the GLOBAL γ_ld CI widens to
-  [−0.02, 0.19] ⇒ not credibly non-zero. Verdict: keep global linear spec; γ_ld flip
-  is most consistent with pregame-λ frailty, not team character. max R̂ 1.008.
+- 2026-07-14: **r01b (user Q: hierarchical team δ_lead?) = NULL, race CONFIRMS.**
+  Non-centred team slopes on leading/trailing: σ_ld = 0.075 [0.007, 0.178],
+  σ_trl = 0.10 [0.011, 0.222] — both hug zero (hierarchical-σ-null pattern again);
+  shrunk team spread only −0.05…+0.06. In the hier fit the GLOBAL γ_ld CI widens to
+  [−0.02, 0.19] ⇒ not credibly non-zero. **Held-out race (75/25 by match, plug-in
+  posterior-mean, 179 test matches): hier − base = −0.0174 ± 0.0079 per match,
+  t = −2.19 — hier is significantly WORSE OOS despite +7.2 in-sample loglik** —
+  Ireland's "team hierarchies hurt OOS" reproduced at 715 matches. Verdict: keep the
+  global linear spec; the γ_ld flip is most consistent with pregame-λ frailty, not
+  team character. max R̂ 1.008.
 - 2026-07-14: **r02b (WP3 gate iii) PASSED — with two data-validity lessons.**
   56 24/25, 143 matches, 661 identifiable bins. Raw comparison is POISONED by
   (a) settled selections and (b) ONE-SIDED thin markets (single traded side → vig-strip
