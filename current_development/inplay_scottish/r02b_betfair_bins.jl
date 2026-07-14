@@ -39,7 +39,7 @@ rows = DataFrame(mid = Int[], t_w = Float64[], t_m = Float64[], sel = Symbol[],
 n_skipped = 0
 for ms in eval_ms
     bfm = subset(bf, :match_id => ByRow(==(ms.mid)))
-    isempty(bfm) && (n_skipped += 1; continue)
+    isempty(bfm) && (global n_skipped += 1; continue)
     anchors = anchor_goals(bf, ds, ms.mid)
     cm = make_clock_map(anchors)
     fh = count(g -> g.home, ms.goals); fa = count(g -> !g.home, ms.goals); tot = fh + fa
@@ -76,6 +76,33 @@ end
 fam(sel) = startswith(String(sel), "over") || startswith(String(sel), "under") ? :ou :
            (sel in (:home, :draw, :away) ? :x12 : :btts)
 rows.family = fam.(rows.sel)
+
+# --- validity filters (verified necessary 2026-07-14) -----------------------
+# (a) LIVE selections only: a settled OU line / BTTS trades stale or not at all.
+# (b) TWO-SIDED markets only: with thin prints an OU line often has one traded
+#     side in the LOCF window and the vig-strip normalises it to p_fair = 1.0 —
+#     these rows made raw market logloss look absurd (2.9 OU / 5.9 BTTS).
+gmap = Dict(m.mid => m.goals for m in eval_ms)
+function is_live(r)
+    g = gmap[r.mid]; tot = count(x -> x.t < r.t_m, g); s = String(r.sel)
+    if startswith(s, "over_") || startswith(s, "under_")
+        return tot <= parse(Int, s[end-1:end-1])
+    elseif r.sel in (:btts_yes, :btts_no)
+        return !(any(x -> x.home && x.t < r.t_m, g) && any(x -> !x.home && x.t < r.t_m, g))
+    end
+    return true
+end
+pairname(s) = (t = String(s); startswith(t, "over_") ? "ou_" * t[6:end] :
+               startswith(t, "under_") ? "ou_" * t[7:end] :
+               (s in (:btts_yes, :btts_no) ? "btts" : "x12"))
+rows.live = map(is_live, eachrow(rows))
+rows.grp = pairname.(rows.sel)
+gsz = combine(groupby(rows, [:mid, :t_w, :grp]), nrow => :nsel, :p_fair => sum => :psum)
+rows = leftjoin(rows, gsz, on = [:mid, :t_w, :grp])
+rows.two_sided = map(r -> r.grp == "x12" || (r.nsel == 2 && 0.98 < r.psum < 1.02),
+                     eachrow(rows))
+rows = subset(rows, :live => identity, :two_sided => identity)
+# ----------------------------------------------------------------------------
 ll(p, y) = -(y .* log.(clamp.(p, 1e-9, 1)) .+ (1 .- y) .* log.(clamp.(1 .- p, 1e-9, 1)))
 
 agreement = combine(groupby(rows, :family),

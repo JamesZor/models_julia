@@ -103,7 +103,22 @@ Thin Betfair LTP is enough: we need fair value, not fills.
   80'; **in-play conditioning beats frozen-pregame at every checkpoint** (BTTS Brier
   0.246→0.074 at 80'). Per-selection biases within ~1 SE (n=300). Outstanding:
   gate iii (Betfair identifiable-bin comparison on 56 24/25) = r02b.
-- NEXT: r02b (Betfair-bin eval, reuse ../match_inplay_explore/l01 clock map) and
-  WP4 r03 (rebalancer backtest vs hold / exit-rule τ=−0.05, book from the staking
-  winner config; l03 solver is written and pushed). Full-fat NUTS re-runs and grids
-  belong on mcmc-beast once the pregame grid finishes.
+- 2026-07-14: **r01b (user Q: hierarchical team δ_lead?) = NULL.** Non-centred team
+  slopes on leading/trailing: σ_ld = 0.075 [0.007, 0.178], σ_trl = 0.10 [0.011, 0.222]
+  — both hug zero (hierarchical-σ-null pattern again); shrunk team spread only
+  −0.05…+0.06; Stage-B race auto-skipped. In the hier fit the GLOBAL γ_ld CI widens to
+  [−0.02, 0.19] ⇒ not credibly non-zero. Verdict: keep global linear spec; γ_ld flip
+  is most consistent with pregame-λ frailty, not team character. max R̂ 1.008.
+- 2026-07-14: **r02b (WP3 gate iii) PASSED — with two data-validity lessons.**
+  56 24/25, 143 matches, 661 identifiable bins. Raw comparison is POISONED by
+  (a) settled selections and (b) ONE-SIDED thin markets (single traded side → vig-strip
+  normalises p_fair to 1.0; raw market logloss 2.9 OU / 5.9 BTTS is an artifact —
+  filters now built into r02b). On live two-sided rows: agreement corr 0.94/0.98/0.95
+  (1X2/OU/BTTS), MAE 3.6–5.1 pts; reality-pricing is a statistical TIE (t = 0.15 / 1.05
+  / −2.10, the last on only 27 matches). The composed engine is market-grade fair value
+  — and prices the ~⅓ of OU rows + ~½ of BTTS rows where the exchange is one-sided or
+  absent, which is exactly the coverage position management needs.
+- NEXT: WP4 r03 rebalancer backtest (l03 solver written+pushed): book v1 from the
+  decay-grid winner (unified-Kelly, curated totals/BTTS) — awaiting user's call on
+  v1-now vs after the smile grid; race = hold vs exit-rule τ=−0.05 vs rebalancer.
+  Full-fat NUTS re-runs and grids belong on mcmc-beast once the pregame grid finishes.
