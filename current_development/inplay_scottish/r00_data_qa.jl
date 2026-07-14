@@ -32,7 +32,7 @@ ds = BF.Data.load_datastore_cached(BF.Data.ScottishLower())
 include(joinpath(@__DIR__, "..", "match_inplay_explore", "l01_inplay_inverse.jl"))
 
 const MATCH_COLS = [:match_id, :tournament_id, :season_id, :season,
-                    :home_score, :away_score, :start_timestamp]
+                    :home_score, :away_score, :match_date]
 matches = select(ds.matches, MATCH_COLS)
 
 # ---------------------------------------------------------------------------
