@@ -84,3 +84,26 @@ Thin Betfair LTP is enough: we need fair value, not fills.
   red-card opponent multiplier ×1.2 ≈ our Ireland man_adv fit (+0.18 log) — use as
   prior centre; compose-posteriors = cut Bayes (draw pairing, Jacob et al. 2017);
   BRB λ = log β/log α composes with ℓ1 costs in one DCP program.
+- 2026-07-14: **WP2 done (r01 on homelab, 7m39s, all R̂ ≤ 1.008).** 715 matches /
+  27,170 slices / 1,934 goals / 1,046 red-affected rows. **Scotland ≠ Ireland:**
+  - GLM race: time>pg_only t=6.29; **state−time t=0.51 (NULL — Ireland was 3.15)**;
+    +man_adv t=8.85 (dominant).
+  - Posterior: α=−4.584 (net level 0.99 after shape — see r02 gate), β=0.163 (rates
+    rise), γ_tr=+0.02±0.06 (nil), **γ_ld=+0.09 (sign FLIPPED vs Ireland −0.24)**,
+    **γ_man=0.53 ⇒ ×1.70** (Titman-scale, crushed the ×1.2 Vecer prior — red cards
+    are THE in-play repricing event in these leagues), σ_time=0.08 (first-5-min dip
+    −0.12, post-HT bump +0.09).
+  - Late-checkpoint remaining-goals bias: +0.020/+0.014/+0.003 (60'/75'/85') — clean.
+  - Open question (r01b candidate): γ_ld>0 may be a frailty/selection artifact
+    (teams outperforming their pregame λ both lead AND keep scoring).
+- 2026-07-14: **WP3 gates i+ii PASSED (r02, 22s).** t=0 kernel = 0.988 (composed
+  kickoff intensity within 1.2% of pregame λ; consistent with the known ~5% pregame
+  hot-ness); max composed-vs-pregame price gap < 0.01 across all 17 selections.
+  Outcome calibration: Brier tightens 0.14→0.05 (OU) / 0.25→0.07 (BTTS) from KO to
+  80'; **in-play conditioning beats frozen-pregame at every checkpoint** (BTTS Brier
+  0.246→0.074 at 80'). Per-selection biases within ~1 SE (n=300). Outstanding:
+  gate iii (Betfair identifiable-bin comparison on 56 24/25) = r02b.
+- NEXT: r02b (Betfair-bin eval, reuse ../match_inplay_explore/l01 clock map) and
+  WP4 r03 (rebalancer backtest vs hold / exit-rule τ=−0.05, book from the staking
+  winner config; l03 solver is written and pushed). Full-fat NUTS re-runs and grids
+  belong on mcmc-beast once the pregame grid finishes.
