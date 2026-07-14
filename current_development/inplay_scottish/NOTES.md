@@ -122,7 +122,27 @@ Thin Betfair LTP is enough: we need fair value, not fills.
   / −2.10, the last on only 27 matches). The composed engine is market-grade fair value
   — and prices the ~⅓ of OU rows + ~½ of BTTS rows where the exchange is one-sided or
   absent, which is exactly the coverage position management needs.
-- NEXT: WP4 r03 rebalancer backtest (l03 solver written+pushed): book v1 from the
-  decay-grid winner (unified-Kelly, curated totals/BTTS) — awaiting user's call on
-  v1-now vs after the smile grid; race = hold vs exit-rule τ=−0.05 vs rebalancer.
-  Full-fat NUTS re-runs and grids belong on mcmc-beast once the pregame grid finishes.
+- 2026-07-14: **WP4 r03 v1 DONE — three-iteration story, each step a lesson:**
+  1. **As-of fills = fake edge, amplified by the optimiser** (l04's Ireland lesson
+     reproduced): LOCF fills gave REBAL e^2.44/match (×10^161 — absurd); EXIT t=3.66
+     also inflated. NEVER trust as-of in-play backtests.
+  2. **Forward fills (first print after decision, 1-min lag, 10% limit-order
+     tolerance) + honest settlement**: unconstrained REBAL is RUINOUS (−4.06/match,
+     ruin paths from lay liabilities): with NO per-line edge vs the exchange (r02b
+     tie), a Kelly optimiser free to ADD is trading noise minus costs, and the
+     limit-order filter adverse-selects stale quotes. "Exit yes, add no"
+     rediscovered by the optimiser's failure mode.
+  3. **REBAL-RO (reduce-only: box-constrained prox, may hedge/shrink held positions,
+     never adds) WINS the race**: HOLD +0.0017 < EXIT τ=−0.05 +0.0044 < REBAL-RO
+     +0.0067 G/match (×1.30 / ×1.95 / ×2.76 over 152 matches), no ruin, ~1.1 hedge
+     trades/match, and LOWEST SE (0.0084 vs 0.0094) — the variance-reduction
+     signature of correct hedging. Uplifts not yet individually significant
+     (t≈1.26–1.29 at n=152) — power, not design: extend eval to 57's 140 betfair
+     matches + swap in the smile-grid winner book when it lands.
+  Book v1: curated totals+BTTS backs, edge≥0.03 vs Betfair pregame close, joint-Kelly
+  stakes capped Σ≤0.2 (avg 1.9 bets / 0.098 stake per match; 27 matches no book).
+- NEXT: (a) swap smile-grid winner book into r03 when the mcmc-beast grid lands;
+  (b) extend eval set (57 betfair matches; consider latents for 56 20/21–22/23 via a
+  backfill run); (c) graduation candidates once stable: l01 NHPP engine + l02 composer
+  + l03 reduce-only rebalancer → src/; (d) red-card-triggered rebalance cadence
+  (γ_man=×1.70 is the one event where fair value moves most).
