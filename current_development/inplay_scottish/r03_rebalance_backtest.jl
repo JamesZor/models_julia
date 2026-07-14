@@ -8,10 +8,11 @@ model edge ≥ 0.03 vs Betfair pregame close (LOCF −60..0 min), stakes from th
 log-growth solver at t=0 (joint Kelly), rescaled to Σ ≤ 0.2 (portfolio cap).
 Swap in the smile-grid winner's book when that lands.
 
-Execution realism caveats (v1, note before trusting magnitudes):
-  - fills at LTP (no spread/size data historically) — c models the crossing cost;
-  - lay commission encoding in l03 is ~2nd-order approximate;
-  - LTP staleness 4 min (same as the fair-value work).
+EXECUTION: decisions price off LOCF fair value, but ALL in-play fills are FORWARD —
+first actual print in (t_w+lag, t_w+lag+window] per selection (l04's lesson: as-of
+fills at stale LTP give the optimiser fake post-goal edge; first run here produced an
+absurd e^2.44/match REBAL under as-of fills — kept as the :asof rows for reference).
+Other caveats: no spread/size data (c models crossing), lay commission ~2nd-order.
 Eval set: 56 24/25 (betfair + incidents + latents). W0 = 1 per match.
 =#
 
@@ -61,6 +62,18 @@ sel_prob(P̄, sel) = sum(P̄[cells_for(sel, G)])
 "Equivalent lay stake that flattens a net back exposure s@o_e at current odds o_n."
 exit_stake(s, o_e, o_n; comm = COMM) =
     s * (1 + (o_e - 1) * (1 - comm)) / (1 + (o_n - 1) * (1 - comm))
+
+"FORWARD fill prices: first print per selection in (t_w+lag, t_w+lag+window]."
+function forward_prices(bf_match::AbstractDataFrame, t_w::Real; lag = 1.0, window = 5.0)
+    out = Dict{Symbol, Float64}()
+    sub = filter(r -> (t_w + lag) < r.minutes_to_kickoff <= (t_w + lag + window), bf_match)
+    isempty(sub) && return out
+    for gdf in groupby(sub, :selection)
+        r = first(sort(gdf, :minutes_to_kickoff))
+        out[r.selection] = r.traded_price
+    end
+    return out
+end
 
 "Terminal wealth of a trade list given the final score."
 function settle(trades, fh, fa; W0 = 1.0)
@@ -112,25 +125,27 @@ function run_match(ms)
         ra = count(c -> !c.home && c.t < t_m, ms.reds)
         P̄ = fair_state(ms, t_m, gh, ga, rh, ra)
 
-        # EXIT: pre-committed full exit per contract at e ≤ τ
+        fills = forward_prices(bfm, t_w)          # execution prices (realistic)
+
+        # EXIT: decision on LOCF fair value, FILL at the next actual print
         for b in book0
             (b.sel in exited || !haskey(prices, b.sel)) && continue
             e = sel_prob(P̄, b.sel) - 1.0 / prices[b.sel]
-            if e <= TAU_EXIT
-                push!(trades[:exit], Trade(b.sel, prices[b.sel],
-                                           -exit_stake(b.stake, b.price, prices[b.sel])))
+            if e <= TAU_EXIT && haskey(fills, b.sel)
+                push!(trades[:exit], Trade(b.sel, fills[b.sel],
+                                           -exit_stake(b.stake, b.price, fills[b.sel])))
                 push!(exited, b.sel)
             end
         end
 
-        # REBAL: convex program over currently priced curated selections
+        # REBAL: solve on LOCF quotes, fill each leg at the next actual print
         avail = [Contract(s, prices[s], cells_for(s, G)) for s in CURATED if haskey(prices, s)]
         isempty(avail) && continue
         π_now = payoff_vector(trades[:rebal], G; comm = COMM)
         r = rebalance(P̄, π_now, avail; W0 = 1.0, c = CROSS, comm = COMM)
         for (i, c) in enumerate(avail)
-            abs(r.Δa[i]) > 1e-4 || continue
-            push!(trades[:rebal], Trade(c.sel, c.price, r.Δa[i]))
+            (abs(r.Δa[i]) > 1e-4 && haskey(fills, c.sel)) || continue
+            push!(trades[:rebal], Trade(c.sel, fills[c.sel], r.Δa[i]))
             n_rebal_trades += 1
         end
     end
