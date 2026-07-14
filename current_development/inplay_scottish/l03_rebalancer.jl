@@ -93,9 +93,16 @@ soft(x, τ) = sign(x) * max(abs(x) - τ, 0.0)
 `P̄` :: G×G posterior-predictive mean matrix (sums to 1).  `π` :: G×G payoff state.
 `c` :: proportional crossing cost per unit stake (spread haircut). Returns the new
 trades Δa (aligned with `contracts`); zeros = inside the no-trade region.
+
+Optional `lower`/`upper` box bounds per contract restrict the trade direction —
+e.g. `upper = zeros(K)` with `lower = -flatten` gives a REDUCE-ONLY rebalancer
+(optimal partial hedge/exit; never adds exposure). Prox of ℓ1 + box = clamped
+soft-threshold.
 """
 function rebalance(P̄::AbstractMatrix, π::AbstractMatrix, contracts::Vector{Contract};
-                   W0 = 1.0, c = 0.01, comm = 0.02, max_iter = 500, tol = 1e-9)
+                   W0 = 1.0, c = 0.01, comm = 0.02, max_iter = 500, tol = 1e-9,
+                   lower = fill(-Inf, length(contracts)),
+                   upper = fill(Inf, length(contracts)))
     K = length(contracts)
     R = [back_return(ct.price, ct.win; comm = comm) for ct in contracts]  # K grids
     p = vec(P̄); πv = vec(π); Rv = [vec(r) for r in R]
@@ -119,10 +126,10 @@ function rebalance(P̄::AbstractMatrix, π::AbstractMatrix, contracts::Vector{Co
     Δa = zeros(K); f = obj(Δa); η = 0.1
     for _ in 1:max_iter
         g = grad(Δa)
-        # backtracking proximal step
+        # backtracking proximal step (prox of ℓ1 + box = clamped soft-threshold)
         stepped = false
         for _ in 1:40
-            cand = soft.(Δa .+ η .* g, η * c)
+            cand = clamp.(soft.(Δa .+ η .* g, η * c), lower, upper)
             fc = obj(cand)
             if fc > f - 1e-15 && isfinite(fc)
                 if fc - f < tol && maximum(abs.(cand .- Δa)) < 1e-8

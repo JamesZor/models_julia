@@ -114,6 +114,7 @@ function run_match(ms)
     cm = make_clock_map(anchors)
     trades = Dict(:hold => copy(book0), :exit => copy(book0), :rebal => copy(book0))
     exited = Set{Symbol}(); n_rebal_trades = 0
+    remaining = Dict(b.sel => 1.0 for b in book0)   # unflattened fraction (REBAL-RO)
 
     for t_w in 10.0:5.0:110.0
         prices = latest_prices(bfm, t_w; staleness = 4.0)
@@ -142,14 +143,23 @@ function run_match(ms)
             end
         end
 
-        # REBAL: solve on LOCF quotes, fill each leg at the next accepted print
-        avail = [Contract(s, prices[s], cells_for(s, G)) for s in CURATED if haskey(prices, s)]
-        isempty(avail) && continue
+        # REBAL-RO: reduce-only — may partially hedge held positions, NEVER adds
+        # (unconstrained adds were ruinous: no per-line edge vs the exchange +
+        # adverse-selection fills; see NOTES 2026-07-14). Solve on LOCF quotes,
+        # fill at the next accepted print, scaled to the fill price.
+        held = [b for b in book0 if get(remaining, b.sel, 0.0) > 1e-3 && haskey(prices, b.sel)]
+        isempty(held) && continue
+        avail = [Contract(b.sel, prices[b.sel], cells_for(b.sel, G)) for b in held]
+        flat = [remaining[b.sel] * exit_stake(b.stake, b.price, prices[b.sel]) for b in held]
         π_now = payoff_vector(trades[:rebal], G; comm = COMM)
-        r = rebalance(P̄, π_now, avail; W0 = 1.0, c = CROSS, comm = COMM)
-        for (i, c) in enumerate(avail)
-            (abs(r.Δa[i]) > 1e-4 && haskey(fills, c.sel)) || continue
-            push!(trades[:rebal], Trade(c.sel, fills[c.sel], r.Δa[i]))
+        r = rebalance(P̄, π_now, avail; W0 = 1.0, c = CROSS, comm = COMM,
+                      lower = -flat, upper = zeros(length(held)))
+        for (i, b) in enumerate(held)
+            (r.Δa[i] < -1e-4 && haskey(fills, b.sel)) || continue
+            frac = clamp(-r.Δa[i] / flat[i], 0.0, 1.0)
+            fillΔ = -frac * remaining[b.sel] * exit_stake(b.stake, b.price, fills[b.sel])
+            push!(trades[:rebal], Trade(b.sel, fills[b.sel], fillΔ))
+            remaining[b.sel] *= (1.0 - frac)
             n_rebal_trades += 1
         end
     end
@@ -175,7 +185,7 @@ function line(gs, name)
      total_growth = exp(sum(gs)), worst = minimum(gs), ruined = any(gs .<= log(1e-6)))
 end
 race = DataFrame([line(gdf.G_hold, "HOLD"), line(gdf.G_exit, "EXIT τ=-0.05"),
-                  line(gdf.G_rebal, "REBAL c=$(CROSS)")])
+                  line(gdf.G_rebal, "REBAL-RO c=$(CROSS)")])
 d_exit = gdf.G_exit .- gdf.G_hold; d_reb = gdf.G_rebal .- gdf.G_hold
 uplift = (exit_vs_hold = (mean = mean(d_exit), t = mean(d_exit)/(std(d_exit)/sqrt(nrow(gdf)))),
           rebal_vs_hold = (mean = mean(d_reb), t = mean(d_reb)/(std(d_reb)/sqrt(nrow(gdf)))),
