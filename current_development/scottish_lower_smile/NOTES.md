@@ -235,3 +235,11 @@ Full evidence embedded in RESULTS_scottish_grid.md §3. Headlines:
 - Ireland routing does NOT transfer to team-level goals-only: pillar value = LEVEL DENOISING only.
 - Endgame decision OPEN (§3.7): A = iso mw{25,40,70}+mw100@4ch sweep/confirm (~24h, recommended);
   B = graduate iso_mw100 as-is; C = smile fair-shot d10 (~25h, expected null).
+
+### 2026-07-17 — Endgame option A chosen: iso mw sweep (r07) + eval (r08)
+
+User picked §3.7 option A. r07: iso mw{25,40,70}@3ch + mw100_c4@4ch, depth 10, Grid-B spec
+(24/25→25/26, 1200/300), HARD gate, ~24h → data/scottish_iso_grid/. r08: eval vs Grid-B refs
+(none ctl, old iso_mw100 for reproduction check, sup100_sw0 for BTTS), money lens via globals
+(R08_TEARSHEET — r05 try-scope lesson). Decision family = TOTALS. Then Stage 4: graduate
+TeamIsoDPGoalsModel → src with winning mw default.
