@@ -219,3 +219,19 @@ Grid B (10 cells × 60 folds × 4ch, depth 10) ≈ 25h/cell ≈ 10 days — infe
 
 Run order now: r04 (user, overnight) → r05 (redirect) → pick per-family winner → r04b
 (overnight) → r05 INCLUDE_CONFIRM=true → Stage-4 winner defaults + r06.
+
+### 2026-07-16/17 — Grid B DONE (58.1h) + r05 verdict: ISO PILLAR WINS TOTALS; smile/supremacy add nothing
+
+Full evidence embedded in RESULTS_scottish_grid.md §3. Headlines:
+- Gate: sw0×{40,70,100} 100% hard ✅; none 97.5% ✅; iso 60% ⚠ (worst 1.027); **all 3 depth-6
+  sw50 cells FAILED even the ranking gate** (0% ≤1.01, ~50% ≤1.05, worst 1.27–1.31; log_φ ESS
+  19–30, bad folds scattered across the season). r01b probe misled — it only sampled mid-season
+  folds. **Depth caps are DEAD for the smile pillar; lesson recorded.**
+- Routing (LogLoss + Kelly agree): totals → iso_mw100 (−0.0058 pooled, ROI +10…+30% across the
+  ladder, hurdle_G>0); 1X2 → nobody (Kelly home −ROI for all; Ireland lesson repeats); BTTS →
+  sw0 marginal (only hurdle_G ≥ 0).
+- Supremacy anchor is TOXIC on totals when alone (+0.0076; bets over_4.5 on 81% of matches at
+  −18.9%); smile repairs but never approaches iso; sup weight axis dead flat (40≈70≈100).
+- Ireland routing does NOT transfer to team-level goals-only: pillar value = LEVEL DENOISING only.
+- Endgame decision OPEN (§3.7): A = iso mw{25,40,70}+mw100@4ch sweep/confirm (~24h, recommended);
+  B = graduate iso_mw100 as-is; C = smile fair-shot d10 (~25h, expected null).
