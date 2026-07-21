@@ -223,17 +223,29 @@ try
         @error "gradient benchmark failed" exception=(e, catch_backtrace())
     end
 
-    global probe_ch = sample(tm, NUTS(200, 0.65; max_depth = 8,
-                                      adtype = AutoReverseDiff(compile = true)), 200)
+    # 1000 warmup, NOT 200: the conversion posterior is ~15× tighter than its prior
+    # (sd ≈ 0.03 on the logit), so the diagonal mass matrix needs real adaptation. At 200
+    # warmup the chain is still in the burn-in transient — it reported p₂ = 0.249 with a
+    # +339 gradient still pushing it toward the mode. At 1000 it lands on the MLE exactly.
+    global probe_ch = sample(tm, NUTS(1000, 0.65; max_depth = 8,
+                                      adtype = AutoReverseDiff(compile = true)), 500)
     lp = vec(Array(probe_ch[:lp]))
     _mark("0b.2 probe chain finite (no -Inf/NaN flood)", all(isfinite, lp))
 
+    # Gate against THIS FOLD's data-implied MLE (from the sufficient statistics), not the
+    # league-wide EDA number — a much sharper self-validating test.
+    Ss = d.suff_h.S_sot  + d.suff_a.S_sot;  Sm = d.suff_h.S_miss + d.suff_a.S_miss
+    Sg = d.suff_h.S_goal + d.suff_a.S_goal; Sv = d.suff_h.S_save + d.suff_a.S_save
+    p1_mle, p2_mle = Ss / (Ss + Sm), Sg / (Sg + Sv)
     p1p = 1 ./ (1 .+ exp.(-vec(Array(probe_ch[:p1_raw]))))
     p2p = 1 ./ (1 .+ exp.(-vec(Array(probe_ch[:p2_raw]))))
-    println("  probe p₁ = $(_r(mean(p1p)))  p₂ = $(_r(mean(p2p)))  " *
-            "μ_base[end] = $(_r(mean(vec(Array(probe_ch[Symbol("inter.μ_base[$(Int(fs.data[:n_seasons]))]")]))), 3))")
-    _mark("0b.3 probe p₁ ≈ 0.44 (±0.08)", abs(mean(p1p) - 0.44) < 0.08)
-    _mark("0b.4 probe p₂ ≈ 0.32 (±0.08)", abs(mean(p2p) - 0.32) < 0.08)
+    println("  probe p₁ = $(_r(mean(p1p), 4)) (MLE $(_r(p1_mle, 4)))  " *
+            "p₂ = $(_r(mean(p2p), 4)) (MLE $(_r(p2_mle, 4)))  " *
+            "μ_base[end] = $(_r(mean(vec(Array(probe_ch[Symbol("inter.μ_base[$(Int(fs.data[:n_seasons]))]")]))), 3))  " *
+            "step=$(_r(mean(vec(Array(probe_ch[:step_size]))), 4))  " *
+            "depth=$(_r(mean(vec(Array(probe_ch[:tree_depth]))), 2))")
+    _mark("0b.3 probe p₁ hits the fold MLE (±0.02)", abs(mean(p1p) - p1_mle) < 0.02)
+    _mark("0b.4 probe p₂ hits the fold MLE (±0.02)", abs(mean(p2p) - p2_mle) < 0.02)
 catch e
     _mark("0b. compile probe ran", false)
     @error "compile probe FAILED" exception=(e, catch_backtrace())
@@ -255,7 +267,9 @@ for (name, model) in specs
             warmup_period   = 16,
             dynamics_col    = :match_biweek,
             samples         = 600,
-            warmup          = 600,
+            warmup          = 1000,   # see the probe note: the tight conversion posterior
+                                      # needs real mass-matrix adaptation, and at ~0.027 s
+                                      # per iteration the extra warmup is nearly free
             chains          = 4,
             use_queue       = true,
             # depth 8 caps a leapfrog at 255 steps. The first attempt at depth 10 with the
