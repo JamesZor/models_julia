@@ -35,6 +35,7 @@ using Distributions
 using Statistics
 using MCMCChains
 using ThreadPinning
+using DynamicPPL, LogDensityProblems, ReverseDiff   # guide §8 gradient benchmark
 
 pinthreads(:cores)
 
@@ -155,7 +156,73 @@ try
            all(d.goals_h_c .<= d.sot_h_c) && all(d.goals_a_c .<= d.sot_a_c)
     _mark("0b.1 safe dummies hold (no k>n anywhere ⇒ no -Inf×0 NaN)", safe)
 
+    # ---- 0b-bis: the sufficient-statistic likelihood is EXACT ----------------------------
+    # The builder folds counts/masks/decay weights into constants and drops log(y!) and the
+    # binomial coefficients (parameter-free, and the cascade/marginal routing is fixed by
+    # data). So naive − sufficient must be the SAME constant at every parameter draw; the
+    # variance of that difference across draws is the test.
+    function _naive_ll(d, log_λ_h, log_λ_a, p1_raw, p2_raw, fw)
+        p1, p2 = 1 / (1 + exp(-p1_raw)), 1 / (1 + exp(-p2_raw))
+        tot = 0.0
+        for (S, log_λ, shots, sot, sm, sot_c, goals_c, cm, goals) in (
+            (:h, log_λ_h, d.shots_h_s, d.sot_h_s, d.stats_mask_h, d.sot_h_c, d.goals_h_c,
+             d.casc_mask_h, d.home_goals),
+            (:a, log_λ_a, d.shots_a_s, d.sot_a_s, d.stats_mask_a, d.sot_a_c, d.goals_a_c,
+             d.casc_mask_a, d.away_goals))
+            λ = exp.(log_λ)
+            ll = fw .* (logpdf.(Poisson.(λ), shots) .* sm .+
+                        logpdf.(Binomial.(shots, p1), sot) .* sm) .+
+                 cm .* logpdf.(Binomial.(sot_c, p2), goals_c) .+
+                 (1 .- cm) .* logpdf.(Poisson.(λ .* p1 .* p2), goals)
+            tot += sum(ll .* d.match_weights)
+        end
+        return tot
+    end
+    function _suff_ll(d, log_λ_h, log_λ_a, p1_raw, p2_raw, fw)
+        lp1, lq1 = -log1pexp(-p1_raw), -log1pexp(p1_raw)
+        lp2, lq2 = -log1pexp(-p2_raw), -log1pexp(p2_raw)
+        tot = 0.0
+        for (S, log_λ) in ((d.suff_h, log_λ_h), (d.suff_a, log_λ_a))
+            λ = exp.(log_λ)
+            tot += fw * (sum(S.c_shots_lin .* log_λ) - sum(S.c_shots_rate .* λ) +
+                         S.S_sot * lp1 + S.S_miss * lq1) +
+                   S.S_goal * lp2 + S.S_save * lq2 +
+                   sum(S.c_marg_lin .* log_λ) + S.S_marg_goals * (lp1 + lp2) -
+                   exp(lp1 + lp2) * sum(S.c_marg_rate .* λ)
+        end
+        return tot
+    end
+    n_rows = length(d.home_goals)
+    diffs = Float64[]
+    for _ in 1:6
+        lh = m_funnel.shot_scale .+ 0.3 .* randn(n_rows)
+        la = m_funnel.shot_scale .+ 0.3 .* randn(n_rows)
+        pr1, pr2 = randn(), randn()
+        push!(diffs, _naive_ll(d, lh, la, pr1, pr2, m_funnel.funnel_weight) -
+                     _suff_ll(d, lh, la, pr1, pr2, m_funnel.funnel_weight))
+    end
+    spread = maximum(diffs) - minimum(diffs)
+    println("  naive − sufficient: const ≈ $(_r(mean(diffs), 2)), spread over 6 draws = " *
+            "$(round(spread, sigdigits=3))  (must be ~0 — a pure data-only offset)")
+    _mark("0b.1b sufficient-statistic likelihood is exact (spread < 1e-6)", spread < 1e-6)
+
     tm = PreGame.build_turing_model(m_funnel, fs)
+
+    # ---- 0b-ter: gradient benchmark (docs/turing_ad_performance_guide.md §8) -------------
+    try
+        vi = DynamicPPL.VarInfo(tm); tm(vi); θ = vi[:]
+        lf = DynamicPPL.LogDensityFunction(tm)
+        tape = ReverseDiff.compile(ReverseDiff.GradientTape(x -> LogDensityProblems.logdensity(lf, x), θ))
+        g = similar(θ)
+        t_grad = minimum(@elapsed(ReverseDiff.gradient!(g, tape, θ)) for _ in 1:20)
+        println("  gradient eval = $(round(t_grad * 1000, digits=3)) ms over $(length(θ)) params " *
+                "(guide target < 1 ms)")
+        _mark("0b.1c gradient eval < 1 ms", t_grad < 1e-3)
+    catch e
+        _mark("0b.1c gradient benchmark ran", false)
+        @error "gradient benchmark failed" exception=(e, catch_backtrace())
+    end
+
     global probe_ch = sample(tm, NUTS(200, 0.65; max_depth = 8,
                                       adtype = AutoReverseDiff(compile = true)), 200)
     lp = vec(Array(probe_ch[:lp]))
@@ -191,7 +258,11 @@ for (name, model) in specs
             warmup          = 600,
             chains          = 4,
             use_queue       = true,
-            max_depth       = 10,
+            # depth 8 caps a leapfrog at 255 steps. The first attempt at depth 10 with the
+            # old parameterisation crushed ε to ~4e-4, every iteration maxed the tree, and
+            # 0/20 chains finished in 4.5 h. The shot_scale offset fixes the init; the cap
+            # bounds the worst case (smile-stream lesson: caps are safe when σ is sampled).
+            max_depth       = 8,
         )
         res = Experiments.run_experiment(task)
         Experiments.save_experiment(res)

@@ -187,9 +187,13 @@ Base.@kwdef struct TeamFunnelDPGoalsModel{
     T<:PreGame.AbstractDynamicsConfig,
     H<:PreGame.AbstractHomeAdvantageConfig
     } <: PreGame.AbstractTimeDecayTeamModel
-      # μ_base now lives on the SHOT scale: log(10.2) ≈ 2.32 (kwarg, no src change needed)
+      # μ_base is an OFFSET from shot_scale, so it is O(0) and the sampler's default
+      # UniformInit(-2, 2) (src/experiments/presets.jl) starts on the right scale. Putting the
+      # shot level in the prior instead (Normal(2.3, 0.3)) makes init start at λ_s ≈ 1 against
+      # data of ~10 shots — huge gradients and a crushed initial step size (ε ~ 4e-4 observed).
+      shot_scale::Float64     = log(10.0)
       interception_config::I  = PreGame.HierarchicalMonthlyInterception(
-                                    prior_μ_base = Normal(2.3, 0.3))
+                                    prior_μ_base = Normal(0.0, 0.3))
       dynamics_config::T      = PreGame.TimeDecayDynamics()
       homeadvantage_config::H = PreGame.HierarchicalTeamHomeAdvantage()
       p1_prior::Distribution  = Normal(logit(0.44), 0.5)   # SoT | shot   (EDA: 0.44)
@@ -201,11 +205,29 @@ Base.@kwdef struct TeamFunnelDPGoalsModel{
 end
 
 """
-_unpack_core + the funnel counts, with ALL masking resolved to SAFE DUMMIES here.
+_unpack_core + the funnel counts, with ALL masking AND the likelihood's SUFFICIENT STATISTICS
+resolved here (docs/turing_ad_performance_guide.md §6: the builder does the work).
 
-Why dummies and not post-hoc masking: `-Inf * 0.0 == NaN` in Julia, which would poison the
-whole gradient. Every masked-out slot is therefore evaluated on inputs that are *valid*
-(0 successes out of 0 trials, Poisson at 0) and contributes exactly 0 after the mask.
+Two things are going on:
+
+1. SAFE DUMMIES. `-Inf * 0.0 == NaN` in Julia, so post-hoc masking of an invalid distribution
+   would poison the gradient. Every masked-out slot is instead evaluated on *valid* inputs
+   (0 successes out of 0 trials) and contributes exactly 0.
+
+2. SUFFICIENT STATISTICS. Counts, masks and decay weights are all DATA, so the weighted
+   log-likelihood collapses onto a handful of constants — computed once here instead of
+   re-broadcast on every leapfrog step:
+
+     Σ w·m·logPoisson(shots | λ_s) = Σ(w·m·shots)·log λ_s − Σ(w·m)·λ_s        [+ const]
+     Σ w·m·logBinom(sot | shots, p₁) = S_sot·log p₁ + S_miss·log(1−p₁)        [+ const]
+     Σ w·c·logBinom(goals | sot, p₂) = S_goal·log p₂ + S_save·log(1−p₂)       [+ const]
+
+   The dropped constants (log y!, the binomial coefficients) are parameter-free and the
+   cascade/marginal routing is fixed by data, so the posterior is EXACTLY unchanged — only
+   the reported `lp` is shifted by a fixed amount (don't compare it across engines).
+   `c_*_lin` weight log λ_s, `c_*_rate` weight λ_s; the `S_*` scalars weight the conversion
+   log-odds. Stage 2 (l04) keeps the same vectors — per-team p just turns the scalar S_* terms
+   into one more dot product against the very same constants.
 """
 function _unpack_funnel(data, config)
     d = _unpack_core(data, config)
@@ -222,28 +244,48 @@ function _unpack_funnel(data, config)
     zh, za = Int.(sm_h .> 0.5), Int.(sm_a .> 0.5)     # stats gate as 0/1 Int
     ch, ca = Int.(cm_h .> 0.5), Int.(cm_a .> 0.5)     # cascade gate as 0/1 Int
 
+    # safe dummies (0 successes out of 0 trials wherever a route is masked out)
+    shots_h_s, shots_a_s = zh .* shots_h, za .* shots_a
+    sot_h_s,   sot_a_s   = zh .* sot_h,   za .* sot_a
+    sot_h_c,   sot_a_c   = ch .* sot_h,   ca .* sot_a
+    goals_h_c, goals_a_c = ch .* d.home_goals, ca .* d.away_goals
+
+    w = d.match_weights
+    # Per-side sufficient statistics (see the docstring). The v_* are the per-match weight
+    # VECTORS; the S_* are their sums. Stage 1 (global p) contracts with the scalars; Stage 2
+    # (l04, per-match p) dots the very same vectors against the per-match log-odds.
+    function suff(sm, cm, shots_s, sot_s, sot_c, goals_c, goals)
+        v_sot  = w .* sm .* sot_s                  # weights log p₁    (Binomial SoT)
+        v_miss = w .* sm .* (shots_s .- sot_s)     # weights log(1−p₁)
+        v_goal = w .* cm .* goals_c                # weights log p₂    (Binomial goals)
+        v_save = w .* cm .* (sot_c .- goals_c)     # weights log(1−p₂)
+        c_marg_lin = w .* (1 .- cm) .* goals       # weights log λ_s   (marginal route)
+        return (
+            c_shots_lin  = w .* sm .* shots_s,     # weights log λ_s   (Poisson shots)
+            c_shots_rate = w .* sm,                # weights λ_s
+            v_sot, v_miss, v_goal, v_save,
+            S_sot = sum(v_sot), S_miss = sum(v_miss),
+            S_goal = sum(v_goal), S_save = sum(v_save),
+            c_marg_lin,
+            c_marg_rate  = w .* (1 .- cm),         # weights λ_s·p₁·p₂
+            S_marg_goals = sum(c_marg_lin),        # weights log p₁ + log p₂
+        )
+    end
+
     return (; d...,
-        shots_h_s = zh .* shots_h, shots_a_s = za .* shots_a,
-        sot_h_s   = zh .* sot_h,   sot_a_s   = za .* sot_a,
-        stats_mask_h = sm_h,       stats_mask_a = sm_a,
-        sot_h_c   = ch .* sot_h,   sot_a_c   = ca .* sot_a,
-        goals_h_c = ch .* d.home_goals, goals_a_c = ca .* d.away_goals,
-        casc_mask_h = cm_h,        casc_mask_a = cm_a,
+        shots_h_s, shots_a_s, sot_h_s, sot_a_s, sot_h_c, sot_a_c, goals_h_c, goals_a_c,
+        stats_mask_h = sm_h, stats_mask_a = sm_a,
+        casc_mask_h  = cm_h, casc_mask_a  = cm_a,
+        suff_h = suff(sm_h, cm_h, shots_h_s, sot_h_s, sot_h_c, goals_h_c, d.home_goals),
+        suff_a = suff(sm_a, cm_a, shots_a_s, sot_a_s, sot_a_c, goals_a_c, d.away_goals),
     )
 end
 
 @model function build_team_funnel_dp_goals_engine(
     home_ids::Vector{Int}, away_ids::Vector{Int},
     season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
-    home_goals::Vector{Int}, away_goals::Vector{Int},
-    match_weights::Vector{Float64},
-    shots_h_s::Vector{Int}, shots_a_s::Vector{Int},
-    sot_h_s::Vector{Int}, sot_a_s::Vector{Int},
-    stats_mask_h::Vector{Float64}, stats_mask_a::Vector{Float64},
-    sot_h_c::Vector{Int}, sot_a_c::Vector{Int},
-    goals_h_c::Vector{Int}, goals_a_c::Vector{Int},
-    casc_mask_h::Vector{Float64}, casc_mask_a::Vector{Float64},
-    funnel_weight::Float64,
+    suff_h, suff_a,
+    funnel_weight::Float64, shot_scale::Float64,
     n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
     league_ha_active::Float64,
     config
@@ -259,7 +301,7 @@ end
     δ_league = δ_league_raw .- mean(δ_league_raw)
     γ_league = league_ha_active .* (γ_league_raw .- mean(γ_league_raw))
 
-    int_m = view(inter.μ_base, season_idx) .+ view(inter.δ_month, month_idx)
+    int_m = shot_scale .+ view(inter.μ_base, season_idx) .+ view(inter.δ_month, month_idx)
     lg    = view(δ_league, league_idx)
     γ_lg  = view(γ_league, league_idx)
 
@@ -267,8 +309,10 @@ end
                        view(dyn.α, home_ids) .+ view(dyn.β, away_ids), -10.0, 10.0)
     log_λ_s_a = clamp.(int_m .+ lg .+
                        view(dyn.α, away_ids) .+ view(dyn.β, home_ids), -10.0, 10.0)
-    λ_s_h = exp.(log_λ_s_h) .+ 1e-6
-    λ_s_a = exp.(log_λ_s_a) .+ 1e-6
+    # no 1e-6 floor: the clamp bounds λ_s to [4.5e-5, 2.2e4] and log_λ_s is used directly as
+    # the log-rate, so rate and log-rate stay exactly consistent.
+    λ_s_h = exp.(log_λ_s_h)
+    λ_s_a = exp.(log_λ_s_a)
 
     # --- conversion (global; logit scale) ---
     p1_raw ~ config.p1_prior
@@ -276,38 +320,40 @@ end
     # numerically-stable log p / log(1-p) straight off the logit (log1pexp, no logistic round-trip)
     log_p1, log_q1 = -log1pexp(-p1_raw), -log1pexp(p1_raw)
     log_p2, log_q2 = -log1pexp(-p2_raw), -log1pexp(p2_raw)
-    p1, p2 = exp(log_p1), exp(log_p2)
 
     # AD-safe rejection (same idiom as l01)
     is_bad = any(isnan, λ_s_h) || any(isnan, λ_s_a) || any(isinf, λ_s_h) || any(isinf, λ_s_a) ||
-             isnan(p1) || isnan(p2)
+             isnan(log_p1) || isnan(log_p2)
     λ_s_h = ifelse.(isnan.(λ_s_h) .| isinf.(λ_s_h), one.(λ_s_h), λ_s_h)
     λ_s_a = ifelse.(isnan.(λ_s_a) .| isinf.(λ_s_a), one.(λ_s_a), λ_s_a)
     Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
 
-    # --- LIKELIHOOD (branch-free, decay-weighted, per side) ---
-    # Binomial terms are written as the parameter-dependent part of the log-pmf only; the
-    # binomial coefficient does not involve p₁/p₂ and the cascade/marginal routing is fixed by
-    # DATA, so dropping it shifts the log-posterior by a constant. This also keeps the compiled
-    # ReverseDiff tape clean (AutoReverseDiff(compile=true), src/samplers/types.jl).
-    ll_shots_h = logpdf.(Poisson.(λ_s_h), shots_h_s) .* stats_mask_h
-    ll_shots_a = logpdf.(Poisson.(λ_s_a), shots_a_s) .* stats_mask_a
+    # --- LIKELIHOOD via sufficient statistics (see _unpack_funnel) ---
+    # Everything data-side (counts, masks, decay weights, log y!, binomial coefficients) was
+    # folded into constants by the builder, so a leapfrog step costs 4 weighted sums + a few
+    # scalar multiplies per side instead of ~10 broadcast logpdf kernels.
+    conv = exp(log_p1 + log_p2)                     # p₁·p₂, the thinning factor
+    lp12 = log_p1 + log_p2
 
-    ll_sot_h = (sot_h_s .* log_p1 .+ (shots_h_s .- sot_h_s) .* log_q1) .* stats_mask_h
-    ll_sot_a = (sot_a_s .* log_p1 .+ (shots_a_s .- sot_a_s) .* log_q1) .* stats_mask_a
+    # Poisson shots
+    ll_shots_h = sum(suff_h.c_shots_lin .* log_λ_s_h) - sum(suff_h.c_shots_rate .* λ_s_h)
+    ll_shots_a = sum(suff_a.c_shots_lin .* log_λ_s_a) - sum(suff_a.c_shots_rate .* λ_s_a)
+    # Binomial SoT | shots
+    ll_sot_h = suff_h.S_sot * log_p1 + suff_h.S_miss * log_q1
+    ll_sot_a = suff_a.S_sot * log_p1 + suff_a.S_miss * log_q1
+    # Binomial goals | SoT (cascade route)
+    ll_casc_h = suff_h.S_goal * log_p2 + suff_h.S_save * log_q2
+    ll_casc_a = suff_a.S_goal * log_p2 + suff_a.S_save * log_q2
+    # marginal Poisson(λ_s·p₁·p₂) route — own-goal violations and missing-stats matches still
+    # inform the goal rate instead of dropping out
+    ll_marg_h = sum(suff_h.c_marg_lin .* log_λ_s_h) + suff_h.S_marg_goals * lp12 -
+                conv * sum(suff_h.c_marg_rate .* λ_s_h)
+    ll_marg_a = sum(suff_a.c_marg_lin .* log_λ_s_a) + suff_a.S_marg_goals * lp12 -
+                conv * sum(suff_a.c_marg_rate .* λ_s_a)
 
-    # goals: cascade route where the counts are consistent, marginal Poisson(λ_s·p₁·p₂)
-    # otherwise — so own-goal violations AND missing-stats matches still inform the goal rate.
-    λ_g_h = λ_s_h .* (p1 * p2) .+ 1e-6
-    λ_g_a = λ_s_a .* (p1 * p2) .+ 1e-6
-    ll_goals_h = casc_mask_h .* (goals_h_c .* log_p2 .+ (sot_h_c .- goals_h_c) .* log_q2) .+
-                 (1 .- casc_mask_h) .* logpdf.(Poisson.(λ_g_h), home_goals)
-    ll_goals_a = casc_mask_a .* (goals_a_c .* log_p2 .+ (sot_a_c .- goals_a_c) .* log_q2) .+
-                 (1 .- casc_mask_a) .* logpdf.(Poisson.(λ_g_a), away_goals)
-
-    Turing.@addlogprob! sum(
-        (funnel_weight .* (ll_shots_h .+ ll_shots_a .+ ll_sot_h .+ ll_sot_a) .+
-         ll_goals_h .+ ll_goals_a) .* match_weights)
+    Turing.@addlogprob!(
+        funnel_weight * (ll_shots_h + ll_shots_a + ll_sot_h + ll_sot_a) +
+        ll_casc_h + ll_casc_a + ll_marg_h + ll_marg_a)
 end
 
 function Features.required_features(model::TeamFunnelDPGoalsModel)
@@ -322,10 +368,8 @@ function PreGame.build_turing_model(config::TeamFunnelDPGoalsModel, feature_set)
     d = _unpack_funnel(feature_set.data, config)
     return build_team_funnel_dp_goals_engine(
         d.home_ids, d.away_ids, d.season_idx, d.month_idx, d.league_idx,
-        d.home_goals, d.away_goals, d.match_weights,
-        d.shots_h_s, d.shots_a_s, d.sot_h_s, d.sot_a_s, d.stats_mask_h, d.stats_mask_a,
-        d.sot_h_c, d.sot_a_c, d.goals_h_c, d.goals_a_c, d.casc_mask_h, d.casc_mask_a,
-        config.funnel_weight,
+        d.suff_h, d.suff_a,
+        config.funnel_weight, config.shot_scale,
         d.n_teams, d.n_seasons, d.n_months, d.n_leagues,
         config.league_ha_on ? 1.0 : 0.0, config)
 end
@@ -368,14 +412,13 @@ function _extract_funnel_core(model, df, feature_set, chain)
 
         s_idx = hasproperty(row, :season_idx) ? Int(row.season_idx) : n_seasons
         m_idx = month(row.match_date)
-        int_v = inter_nt.μ_base[:, s_idx] .+ inter_nt.δ_month[:, m_idx]
+        # shot_scale offset must mirror the @model exactly (μ_base is an offset from it)
+        int_v = model.shot_scale .+ inter_nt.μ_base[:, s_idx] .+ inter_nt.δ_month[:, m_idx]
 
         log_λ_s_h = clamp.(int_v .+ lg .+ γ_h .+ γlg .+ α_h .+ β_a, -10.0, 10.0)
         log_λ_s_a = clamp.(int_v .+ lg .+                α_a .+ β_h, -10.0, 10.0)
 
-        core[mid] = (; λ_s_h = exp.(log_λ_s_h) .+ 1e-6,
-                       λ_s_a = exp.(log_λ_s_a) .+ 1e-6,
-                       h_idx, a_idx)
+        core[mid] = (; λ_s_h = exp.(log_λ_s_h), λ_s_a = exp.(log_λ_s_a), h_idx, a_idx)
     end
     return core, n_samples
 end
