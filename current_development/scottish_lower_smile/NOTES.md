@@ -243,3 +243,23 @@ User picked §3.7 option A. r07: iso mw{25,40,70}@3ch + mw100_c4@4ch, depth 10, 
 (none ctl, old iso_mw100 for reproduction check, sup100_sw0 for BTTS), money lens via globals
 (R08_TEARSHEET — r05 try-scope lesson). Decision family = TOTALS. Then Stage 4: graduate
 TeamIsoDPGoalsModel → src with winning mw default.
+
+### 2026-07-18 — r07/r08 DONE (21.3h + 22m): **production mw = 0.40** (evidence RESULTS §3.8)
+
+- Gate: ONLY mw40 clears hard (95.0%); mw25 92.5%, mw70 65%, mw100_c4 67.5%. Offenders are
+  always `dyn.raw_a`/`raw_d` (team ratings), NEVER the market σ — heavier anchoring stiffens
+  the rating geometry ("mw backfires" showing up in the SAMPLER). 4 chains did not rescue mw100
+  (67.5 vs 60 @3ch — more chains = stricter R-hat, so the miss is real). All worst ≤1.021 (mild).
+- **Reproduction check ✅**: mw100_c4 ≡ Grid-B mw100 (totals −0.0058, ROI 7.56 vs 7.55, bets
+  908/904) — pipeline trustworthy.
+- **mw axis is FLAT on scoring**: totals −0.0057…−0.0058 across a 4× mw range (Δ = 0.0001).
+  **Ireland's interior mw-optimum does NOT transfer to 56/57** — contradicts the prior in
+  [[totals-compression-is-denoising]] for this segment; record as segment-specific.
+- Money (whole O/U ladder, 710 matches): every iso cell +6…+8% ROI (mw70 7.69, mw100 7.56,
+  mw40 7.19, mw25 6.07); BOTH controls LOSE (none −2.93%, sup0 −5.30%). Spread within iso is
+  noise (~850 bets, 26 units turnover); turnover rises with mw (23→32).
+- **Decision: mw40** — scoring can't separate, money is noise, so tiebreak on the only axis that
+  separates: sampler health (sole hard-gate pass, mid-range so not a boundary artefact). Matters
+  operationally: this retrains weekly in-season.
+- NEXT (Stage 4): graduate TeamIsoDPGoalsModel → src as the ScottishLower production engine
+  (market_weight=0.4, hl=365, hs=2), route TOTALS ONLY; 1X2 abstain; BTTS optional/marginal.

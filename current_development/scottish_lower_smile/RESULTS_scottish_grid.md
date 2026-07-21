@@ -173,7 +173,68 @@ is not extractable, and it wrecks totals when unaccompanied); the smile pillar p
 only on totals. The market pillar's entire value here is level denoising (the r09
 totals-compression lesson, again).
 
-### 3.7 OPEN — endgame decision (pending user)
+### 3.8 ENDGAME — iso mw sweep (r07/r08, 2026-07-17/18) → **mw = 0.40**
+
+Option A run: `iso_pois_mw{25,40,70}` @3ch + `iso_pois_mw100_c4` @4ch, depth 10, Grid-B spec
+(24/25→25/26, 40 folds, 1200/300, hl365/hs2). Wall **21.3 h** (3h16 / 4h22 / 5h15 / 8h22).
+
+**Gate (`r07_convergence.txt`, HARD ≥95% folds ≤1.01):**
+
+| cell | ≤1.01 | worst | offending params (occurrences) |
+|---|---|---|---|
+| iso_mw25 (3ch) | 92.5% ⚠ | 1.0112 | dyn.σ_d ×2, dyn.raw_d ×1 (3 bad folds) |
+| **iso_mw40 (3ch)** | **95.0% ✅** | 1.0132 | dyn.raw_d ×5, dyn.σ_d ×1 (2 bad folds) |
+| iso_mw70 (3ch) | 65.0% ⚠ | 1.0214 | dyn.raw_a ×84, dyn.raw_d ×46 (14 bad folds) |
+| iso_mw100_c4 (4ch) | 67.5% ⚠ | 1.0178 | dyn.raw_d ×87, dyn.raw_a ×68 (13 bad folds) |
+
+Two structural reads: (a) **offenders are the team ratings, never the market pillar σ** — heavier
+anchoring stiffens the latent-rating geometry, the "raising mw backfires" lesson appearing in the
+SAMPLER; (b) 4 chains did NOT rescue mw100 (67.5% vs 60% @3ch) — R-hat with more chains is a
+stricter test, so the marginal miss is real, not noise. All worst values ≤1.021 (mild; contrast
+the depth-6 smile cells at 1.27–1.31).
+
+**Reproduction check ✅** — `mw100_c4` vs Grid-B `mw100`: totals −0.0058 both, tails −0.0062 both,
+ladder ROI 7.56% vs 7.55%, bets 908 vs 904. The pipeline reproduces; tables are trustworthy.
+
+**Family-pooled LogLoss — the mw axis is FLAT:**
+
+| model | x12 | btts | totals | totals_tails |
+|---|---|---|---|---|
+| iso_mw25 | 0.0029 | **0.0017** | −0.0057 | −0.0061 |
+| iso_mw40 | 0.0029 | 0.0020 | −0.0058 | −0.0061 |
+| iso_mw70 | 0.0030 | 0.0021 | −0.0058 | −0.0062 |
+| iso_mw100_c4 | 0.0030 | 0.0022 | −0.0058 | −0.0062 |
+| none_ctl | 0.0059 | 0.0009 | −0.0029 | −0.0037 |
+| sup100_sw0 | 0.0037 | −0.0001 | +0.0076 | +0.0099 |
+
+Totals spread across a 4× range of mw = **0.0001** (noise). **The Ireland interior optimum
+(mw 0.25–0.4, "raising it backfires") does NOT transfer to 56/57** — mw is a no-op on scoring.
+
+**Money lens — whole O/U ladder aggregated (12 selections, 710 matches):**
+
+| model | bets | turnover | profit | ROI % |
+|---|---|---|---|---|
+| iso_mw70 | 894 | 30.0 | 2.3 | **7.69** |
+| iso_mw100_c4 | 908 | 32.4 | 2.4 | 7.56 |
+| iso_mw100 | 904 | 32.4 | 2.4 | 7.55 |
+| iso_mw40 | 854 | 26.0 | 1.9 | 7.19 |
+| iso_mw25 | 842 | 23.2 | 1.4 | 6.07 |
+| none_ctl | 1440 | 48.2 | −1.4 | −2.93 |
+| sup100_sw0 | 2353 | 25.6 | −1.4 | −5.30 |
+
+Every iso cell earns +6…+8% on the ladder; both non-pillar controls LOSE money. Within iso the
+ROI spread (6.07–7.69) is mildly increasing in mw but is noise at ~850 bets / ~26 units of
+turnover. Turnover rises with mw (23→32) — heavier anchoring ⇒ larger deviations ⇒ bigger stakes.
+hurdle_G agrees and is equally flat (under_25 +0.002…+0.003, under_45 +0.002…+0.005 across mw).
+
+**DECISION — production mw = 0.40.** Justification: scoring cannot separate the mw cells
+(Δtotals = 0.0001) and the money difference is inside noise, so the tiebreaker is the only
+axis that DOES separate them — sampler health. mw40 is the sole cell clearing the hard
+convergence gate, and it sits mid-range so it is not a boundary artefact. Choosing mw70/mw100
+would buy ≤0.5pp of unreliable ROI in exchange for 13–14 badly-mixed folds per run, which
+matters operationally since this model retrains weekly in-season.
+
+### 3.7 Endgame options as offered (resolved 2026-07-17 → option A; see §3.8)
 
 Options on the table (2026-07-17):
 - **A (recommended): iso mw sweep + confirm** — iso mw{25,40,70} @3ch + mw100 @4ch hard-gate
