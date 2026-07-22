@@ -269,6 +269,12 @@ function _unpack_funnel(data, config)
             c_marg_lin,
             c_marg_rate  = w .* (1 .- cm),         # weights λ_s·p₁·p₂
             S_marg_goals = sum(c_marg_lin),        # weights log p₁ + log p₂
+            # SECOND marginal set, weighted by cm instead of (1−cm). l05 blends the goals
+            # routing: cascade gets weight cw·cm, marginal gets 1 − cw·cm = (1−cm) + (1−cw)·cm,
+            # so the (1−cw)·cm part reuses these. l03 ignores them.
+            c_marg2_lin  = w .* cm .* goals,
+            c_marg2_rate = w .* cm,
+            S_marg2_goals = sum(w .* cm .* goals),
         )
     end
 
