@@ -129,7 +129,7 @@ end
 # 2. LOAD the Stage-1 comparators (identical folds)
 # ==========================================
 println("\n", "="^70, "\nLOAD — Stage-1 funnel + none_pois\n", "="^70)
-all_results = Any[]
+all_results = Experiments.ExperimentResults[]   # NOT Any[] — evaluate_experiments is typed
 res_hier === nothing || push!(all_results, res_hier)
 try
     folders = Experiments.list_experiments("funnel_smoke"; data_dir = joinpath(ROOT, "data"))

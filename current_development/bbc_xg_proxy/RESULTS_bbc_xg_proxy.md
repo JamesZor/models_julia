@@ -153,3 +153,79 @@ The likelihood was rewritten onto sufficient statistics computed in the builder
 Fixing the intercept parameterisation (`shot_scale` offset, so `UniformInit`
 starts on the right scale) moved ε from 4e-4 to 0.22; the first attempt had not
 finished 1 of 20 chains in 4.5 h.
+
+---
+
+# WP3 — Funnel cascade, Stage 2: hierarchical per-team conversion (2026-07-21)
+
+    logit p₁_ij = p1_μ + a₁_i + d₁_j      logit p₂_ij = p2_μ + a₂_i + d₂_j
+
+Non-centred, zero-sum, shared σ per layer, half-Normal(0, 0.3) priors
+(prior mean 0.239). Same folds/config as Stage 1; comparators loaded from disk.
+8/10 checks (the two failures are mine, not the model's — see Caveats).
+
+## VERDICT: NULL. Conversion is a league constant.
+
+| | posterior mean | 90% CI | prior mean |
+|---|---|---|---|
+| σ_p1 (SoT per shot) | **0.0344** | [0.0035, 0.0743] | 0.2394 |
+| σ_p2 (goal per SoT) | **0.0581** | [0.0061, 0.1253] | 0.2394 |
+
+Both σ are pulled to **1/7 and 1/4 of their prior** — the data actively argues
+against per-team conversion. In football terms, ±1sd of team finishing spans
+p₂ ∈ [0.320, 0.346] around a pooled 0.333, i.e. a **±4% relative** spread.
+
+This reproduces the Ireland hierarchical-σ null (smile l08/r17 and iso l09/r18:
+τ pulled below prior, ±4% team spread, global scalar σ wins) on a completely
+different quantity. Same conclusion, third time of asking.
+
+Corroboration — team-strength spread barely moves, so the extra flexibility is
+not being used:
+
+| model | across-team sd log λ_goals(home) |
+|---|---|
+| funnel_hier | 0.1041 |
+| funnel_pois (Stage 1) | 0.1072 |
+| none_pois | 0.0595 |
+
+Convergence is clean (max R-hat 1.0117; p1_μ 1.0021, p2_μ 1.0009, σ_p1 1.0015,
+σ_p2 1.0056), and p1_μ/p2_μ still sit on the pooled MLE (0.4414/0.3363 vs
+0.4416/0.3302) — so the null is a real posterior, not a fitting failure.
+
+## LogLoss vs the Bet365 fair close (negative = beats the close)
+
+| model | x12 | btts | totals | wall |
+|---|---|---|---|---|
+| funnel_hier | 0.0140 | −0.0081 | −0.0151 | 3h 40m |
+| funnel_pois | 0.0153 | −0.0078 | −0.0139 | 27.9 min |
+| none_pois | 0.0224 | −0.0082 | −0.0217 | 14.4 min |
+
+hier − Stage-1 funnel: x12 −0.0013, btts −0.0003, totals −0.0012. Better on all
+three, but by ~0.001 on n = 66 — indistinguishable from noise, for **7.9× the
+compute**.
+
+Crucially, hier recovers only ~15% of the totals gap to none_pois (deficit
+0.0078 → 0.0066). **Per-team conversion is not the explanation for the totals
+loss.**
+
+## What this means
+
+Teams in Scottish L1/L2 differ in shot VOLUME, not in shot quality or
+finishing — at least not measurably at this sample size. That is a real
+football finding and it validates Stage 1's global p₁/p₂ as the right model.
+It also removes the leading hypothesis for the totals deficit, leaving
+`cascade_weight` (routing a fraction of the goals likelihood through the
+marginal Poisson, so goals inform λ_s directly) as the remaining lever.
+
+## Caveats
+
+- n = 66 OOS matches, 5 folds, one target season. Still a smell test.
+- Two failed checks were harness bugs, both fixed: `all_results` typed `Any[]`
+  broke `evaluate_experiments` (eval re-run standalone; numbers above are real),
+  and the gradient gate was set at < 2 ms while the hierarchical engine needs
+  2.89 ms over 189 params (vs 0.83 ms over 95) — a threshold miscalibration,
+  not a defect.
+- The 3h 40m wall is 7.9× Stage 1 for 2× the parameters: the 80 team-effect
+  coordinates are poorly conditioned when their σ collapses (the funnel of a
+  near-zero scale is exactly the geometry non-centred parameterisation struggles
+  with). If per-team conversion is ever revisited, that needs addressing first.

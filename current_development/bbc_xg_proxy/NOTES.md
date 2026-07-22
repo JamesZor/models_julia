@@ -243,3 +243,25 @@ close on totals). **n=66 OOS — a smell test, not a verdict.**
 
 - 2026-07-21: WP3 Stage 1 built + run. 27/27 checks. Sufficient-statistic
   refactor + shot_scale/warmup fixes after the first attempt stalled.
+
+## Stage 2 VERDICT (r04, 2026-07-21) — NULL
+
+Hierarchical per-team p₁/p₂: σ_p1 = 0.034, σ_p2 = 0.058 against a
+half-Normal(0, 0.3) prior (mean 0.239) — pulled to 1/7 and 1/4 of prior.
+±1sd team finishing spans p₂ ∈ [0.320, 0.346] (pooled 0.333), a ±4% relative
+spread. Team-strength spread unchanged (0.1041 vs Stage-1 0.1072). Convergence
+clean (max R-hat 1.0117), p1_μ/p2_μ still on the pooled MLE — a real null, not
+a fitting failure. Reproduces the Ireland hierarchical-σ null a third time.
+
+LogLoss (x12 / btts / totals): hier 0.0140 / −0.0081 / −0.0151 vs Stage-1
+0.0153 / −0.0078 / −0.0139 vs none 0.0224 / −0.0082 / −0.0217. Better on all
+three by ~0.001 on n=66 — noise, for 7.9× the compute (3h 40m vs 27.9 min).
+Recovers only ~15% of the totals gap to none_pois.
+
+**Conclusion: teams differ in shot VOLUME, not conversion. Keep global p₁/p₂
+(Stage 1). Per-team conversion is not the totals explanation ⇒ next lever is
+`cascade_weight`.**
+
+Cost note: 189 params ⇒ 2.89 ms/gradient (vs 0.83 ms / 95), and the 80 team
+effects are badly conditioned when σ collapses toward 0 — the classic
+non-centred funnel geometry. Fix that before ever revisiting per-team p.
