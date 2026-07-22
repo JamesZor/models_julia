@@ -21,11 +21,13 @@ about comparability.
 
     samples = 600, warmup = 1000, chains = 4, max_depth = 8
 
-COST: the 5-fold smoke was 27.9 min; ~60 folds ⇒ ≈ 5–6 h per cell. Run overnight.
+COST: the 5-fold smoke was 27.9 min; ~60 folds ⇒ ≈ 5–6 h per cell, 3 cells ≈ 15–18 h overnight.
 
-CELLS: `funnel_pois` at the Grid-A winner config, plus (optionally, set FLEX_CW) the best
-cascade_weight variant from r05. References are LOADED from disk, never retrained:
-none_pois_hl365_hs2 (Grid A winner) and the iso winner (Grid B / r07).
+CELLS (see the specs block): funnel_pois, then cw=0 with SoT, then cw=0 without SoT. The last
+two exist because the 5-fold smoke (r05, 66 OOS matches) CANNOT rank variants — the routing
+question and the "is SoT worth anything" question both need the full sample to be answerable.
+References are LOADED from disk, never retrained: none_pois_hl365_hs2 (Grid A winner) and the
+iso winner (Grid B / r07).
 
 Run on the server (kaimon REPL) after git pull:
     include(joinpath(pkgdir(BayesianFootball), "current_development/bbc_xg_proxy/r06_funnel_full_spec.jl"))
@@ -38,6 +40,7 @@ using Distributions
 using Statistics
 using MCMCChains
 using ThreadPinning
+using StatsFuns: logit          # explicit: the no-SoT cell needs logit(0.145)
 
 pinthreads(:cores)
 
@@ -67,18 +70,28 @@ SAMPLES, WARMUP, CHAINS, DEPTH = 600, 1000, 4, 8
 
 dyn_cfg = PreGame.TimeDecayDynamics(days_half_life = HL)
 
-# Set FLEX_CW to a cascade_weight (e.g. 0.0) to add the r05-winning variant as a second cell;
-# leave as `nothing` to run the plain funnel only.
-FLEX_CW = isdefined(Main, :R06_FLEX_CW) ? R06_FLEX_CW : nothing
-
+# THREE cells, ordered by priority — each is saved the moment it finishes, so if the night runs
+# short the most important results are already on disk.
+#
+#   1. funnel_pois          — the headline: full-spec funnel vs the stored none_pois_hl365_hs2.
+#   2. flex_cw0_sot         — routing: goals onto λ_s. (2 vs 1) = does joining goals to team
+#                             strength fix the totals deficit?
+#   3. flex_cw0_nosot       — two-layer shots→goals, p₁ ≡ 1 so p₂ is goals per SHOT (≈0.145).
+#                             (3 vs 2) = is the SoT layer worth anything, at ~1000 OOS matches
+#                             instead of the 66 where it cannot be answered.
+#
+# Contrast 2-vs-1 needs cell 2; contrast 3-vs-2 needs both — hence this order.
 specs = Tuple{String, Any}[
-    ("funnel_pois_hl365_hs2", TeamFunnelDPGoalsModel(dynamics_config = dyn_cfg)),
+    ("funnel_pois_hl365_hs2",
+     TeamFunnelDPGoalsModel(dynamics_config = dyn_cfg)),
+    ("funnel_flex_cw0_sot_hl365_hs2",
+     TeamFunnelFlexDPGoalsModel(dynamics_config = dyn_cfg,
+                                cascade_weight = 0.0, sot_on = true)),
+    ("funnel_flex_cw0_nosot_hl365_hs2",
+     TeamFunnelFlexDPGoalsModel(dynamics_config = dyn_cfg,
+                                cascade_weight = 0.0, sot_on = false,
+                                p2_prior = Normal(logit(0.145), 0.5))),
 ]
-if FLEX_CW !== nothing
-    push!(specs, ("funnel_flex_cw$(Int(round(FLEX_CW*100)))_hl365_hs2",
-                  TeamFunnelFlexDPGoalsModel(dynamics_config = dyn_cfg,
-                                             cascade_weight = FLEX_CW, sot_on = true)))
-end
 println("[INFO] cells: ", join(first.(specs), ", "))
 
 # per-fold convergence gate, same definition as scottish_lower_smile/r02
