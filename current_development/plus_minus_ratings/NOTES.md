@@ -133,6 +133,67 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
 
+- 2026-07-23 — **WP7b (r07_best_players.jl): the top-N test is the STRONGEST result so far —
+  the two systems disagree in the middle but agree hard at the top.** Per-season ratings
+  (2-year trailing window, 365-day half-life anchored at season end), ≥900 minutes, outfield
+  only, ~325 players per season.
+
+  `y_xg`, `w_SIM = 0` (the least team-loaded cell):
+
+  | season | our top-20 sits at SofaScore pct | SofaScore top-20 sits at our pct | overlap /20 | chance | within-club pct | within-club overlap |
+  |---|---|---|---|---|---|---|
+  | 23/24 | **88.2** | 77.8 | **9** | 1.2 | 59.8 | 3 |
+  | 24/25 | **84.5** | 81.7 | **10** | 1.2 | 60.6 | 3 |
+  | 25/26 | 70.0 | 68.3 | 6 | 1.3 | 62.3 | 4 |
+
+  1. **Our top-20 land at the 84th–88th percentile of SofaScore** in the two complete seasons,
+     and the two top-20 lists share **9–10 of 20 players against a chance expectation of 1.2** —
+     a **7–8× enrichment**. The relationship is symmetric: SofaScore's top-20 sit at the 78th–82nd
+     percentile of ours.
+  2. **This resolves the ambiguity r06 left open.** An overall Spearman of 0.29–0.45 is
+     compatible with either loose agreement everywhere or disagreement in the middle plus strong
+     agreement at the extremes. It is decisively the latter — which is the version that actually
+     matters, because a top-N list is what a rating is *for*.
+  3. **It partially survives the team control.** Ranking players *within their own club*, our
+     top-20 still sit at the **~60th percentile** of within-club SofaScore (chance = 50) with
+     **3–4 of 20 overlap against 1.2 expected (≈3×)**. Weaker than the raw figure, as expected,
+     but real — we are not purely picking the best clubs.
+  4. **Face validity is strong.** 23/24 top-15 is Carter-Vickers, O'Riley, Taylor, Goldson,
+     Kyogo, Maeda, Tavernier, Johnston, Scales, Lundstram, McGregor, Cantwell — the Celtic and
+     Rangers spine in the season Celtic won the league — plus Moult and Sibbald at Dundee United.
+  5. **The forward anomaly from r06 shows up in the names.** The two lowest SofaScore percentiles
+     in that top-15 are **Kyogo (57th)** and **Maeda (61st)** — both forwards. Every defender and
+     midfielder in the list is at the 81st–100th. Consistent with r06's finding that forwards are
+     our weakest positional agreement, and it now has a concrete face.
+  6. **25/26 is materially weaker across the board** (70.0 vs 88.2/84.5, overlap 6 vs 9–10). It
+     is an in-progress season with fewer matches — treat it as underpowered, not as a decline.
+  7. The `y_shots`/`w_SIM=0.9` cell is comparable at the top (86.1 / 87.1 / 67.5) and slightly
+     better within-club (overlap 6/4/5), but it carries the 0.755 club-R² loading, so `y_xg` at
+     `w_SIM=0` remains the honest choice.
+
+  - **CORRECTION to the r06 entry below — `team_id` is NOT a club identifier.**
+    `match_player_lineups.team_id` has **626 distinct values across tiers 54–57 for ~44 actual
+    clubs**, and a single id (2351, mostly Rangers) carries dozens of different club names.
+    Grouping ~880 players by their modal `team_id` produced **451 groups** — average group size
+    under two — which inflates any "share of variance explained by team" statistic through
+    degrees of freedom alone. Fixed with a name-derived label (`pm_club_map`, 44 clubs).
+    **Corrected figures:**
+
+    | cell | raw ρ | club R² (was) | club R² (correct) | within-club ρ (was) | (correct) |
+    |---|---|---|---|---|---|
+    | `y_xg` w0 | 0.343 | 0.383 | **0.212** | ~0.172 | **0.240** |
+    | `y_shots` w0 | 0.382 | 0.540 | **0.389** | ~0.20 | **0.259** |
+    | `y_xg` w0.75 | 0.466 | 0.576 | 0.475 | 0.203 | 0.274 |
+    | `y_shots` w0.9 | 0.513 | 0.774 | 0.755 | 0.214 | 0.309 |
+
+    The qualitative conclusion **stands** — raising `w_SIM` inflates raw correlation mostly via
+    team — but **the rating is materially less team-loaded than first reported** (21% not 38% at
+    the cleanest setting) and player-level agreement is **higher** (0.24–0.31, not 0.17–0.22).
+  - Also settled by diagnostics this session: **sample size is NOT the binding constraint**
+    (goals on 22,785 segments vs 11,886 gives ρ 0.351 vs 0.348 — doubling the data changes
+    nothing), and `dur_pow` — a knob l01 flagged as "settle empirically" and WP5 never swept —
+    trades correlation against team-loading like every other knob rather than unlocking signal.
+
 - 2026-07-23 — **WP7 first pass (r06_vs_sofascore.jl): agreement with the SofaScore rating is
   BELOW the expected band, and what agreement exists is largely TEAM strength, not player
   contribution.** 877 players ≥540 minutes in tiers 54/55, 23/24–25/26.
