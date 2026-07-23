@@ -114,8 +114,8 @@ standard errors and effective degrees of freedom.
 | `r00_data_qa.jl` | WP1 coverage / integrity gate | **done — PASSED** |
 | `l01_segments.jl` | Segment builder → sparse `X`, weights, dismissal + league dummies | **done** |
 | `r01_segment_qa.jl` | WP2 segment QA + identifiability gate | **done — PASSED** |
-| `l02_shot_parser.jl` | BBC commentary → shot descriptors | pending |
-| `r02_shot_xg.jl` | WP3 shot xG model + calibration vs SofaScore player xG | pending |
+| `l02_shot_parser.jl` | BBC commentary → shot descriptors | **done** |
+| `r02_shot_xg.jl` | WP3 shot xG model + calibration vs SofaScore player xG | **done — PASSED** |
 | `l03_targets.jl` | The four segment targets | pending |
 | `r03_targets_qa.jl` | WP4 target sparsity comparison | pending |
 | `l04_ridge_apm.jl` | Sparse ridge RAPM + CV over (λ, ζ) | pending |
@@ -132,6 +132,56 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
+
+- 2026-07-23 — **WP3 (r02_shot_xg.jl): ALL SEVEN GATES PASSED.** A zonal xG model from BBC
+  commentary is real and usable. 45,201 shots over 2,199 matches, 13.28% converted.
+  1. **X1 parse coverage: 98.4–99.8%** on every tier × season (zone phrase 97.2–98.5%, body part
+     99.1–99.7%). The closed vocabulary holds. Gate was ≥95%.
+  2. **X2 face validity: clean football ordering.** Zones: six-yard centre **51.0%** → six-yard
+     side 21.4% → box centre 15.3% → difficult angle 8.9% → box side 8.2% → outside box 4.3% →
+     very long range 3.5%. Contexts: fast break 34.9% > corner 26.8% > set piece 24.9% > direct
+     free kick 15.8% > open play 10.0%. Penalties 76.7% (→ the single constant xG).
+  3. **X3 ladder** (leave-one-season-out): Brier 0.10952 (base rate) → 0.10032 (zone) → 0.09920
+     (+body) → **0.09735** (+context) = **11.1%** improvement. The base paper's *coordinate*-based
+     open-play model improved 14.7% on its baseline, so we retain **~76% of the coordinate-model
+     gain with no coordinates at all** — squarely in line with the "real but bounded loss"
+     RESEARCH_rapm.md §5.1 predicted. Total xG 5,715 vs 6,004 goals (ratio 0.952; own goals are
+     not shot events, which accounts for most of the gap).
+  4. **X5 team-level vs SofaScore (the primary calibration gate, needs no name matching):**
+     pooled **cor 0.698**, MAE 0.454, bias +0.061 over 1,349 team-innings / 728 matches. For
+     reference `bbc_xg_proxy`'s frozen team GLM reached Spearman 0.715 / R² 0.442 against the
+     same target — so this is **comparable to the existing frozen proxy, but per-shot**, which
+     is the whole point: an aggregate match-level GLM cannot be assigned to a segment, and this
+     can. Caveat: t54 25/26 over-predicts (bias **+0.39**, mean 1.81 vs 1.42) while t55 is within
+     ±0.13 — Premiership shot volume is higher and the shared cell rates over-serve it.
+  5. **X6 player-level: cor 0.766, MAE 0.113, bias 0.004** over 8,308 player-matches — *better*
+     than team level.
+  6. **X7 tier transfer: essentially free.** Upper→L1 Brier 0.11256 vs **in-sample L1 0.10981**
+     (gap 0.0028); Prem→Champ 0.10291 vs in-sample Champ 0.09908 (gap 0.0038). Upper→L2 0.10481.
+     This is exactly the production operation and it costs almost nothing. (Champ→Prem's 0.08569
+     is not comparable — different test set, different base rate.)
+  - **LEAKAGE FOUND AND FIXED, caught by the X2 face-validity gate:** 141 shots described as
+    "from a free kick with a right footed shot" converted at **100.0%** — BBC uses that phrasing
+    *only* in goal descriptions, so a cell keyed on it predicts xG ≈ 1.0. The model was reading
+    the outcome off the wording rather than the chance quality. It was worth **2.1 Brier points
+    of spurious gain** (the ladder read 13.2% improvement before the fix, 11.1% after) and would
+    have injected 141 phantom xG=1.0 events straight into the WP4 xGPM target. Now remapped to
+    (direct-free-kick context, modal outside-box location), which is what the phrasing genuinely
+    tells us. **This is why the face-validity gate exists** — no aggregate metric would have
+    flagged it.
+  - **Two carried caveats.** (a) **2.44% of shots (1,105) cannot be attributed to a side** — the
+    BBC team slug matches neither home nor away — and are dropped; the same rows will be unusable
+    for the WP4 segment targets. (b) **Calibration wobbles in the middle**: deciles 1–6, 8 and 10
+    are within ±0.01, but decile 7 under-predicts by 0.052 and decile 9 over-predicts by 0.032.
+    Tie-driven (a cell model emits few distinct values), tolerable for a segment-sum target, but
+    it should be revisited if xGPM ends up the winning target.
+  - **DECISION — do NOT wire the tier-56 live_text substitution hole-fill.** X6 measured the
+    number WP1 could not: BBC shooter names resolve to a `player_id` only **93.2%** of the time
+    (t56 **91.2%**, t57 92.5%, t55 95.2%, t54 93.8%). The hole-fill would reconstruct lineups
+    through exactly this mechanism, so ~9% of tier-56 substitutions would attach to the wrong
+    player — and a substitution error corrupts *both* players' on-pitch intervals for the rest of
+    the match. Recovering 268 matches (≈7% more sample) is not worth silently poisoning the
+    segments. The 281 `no_incidents` matches stay excluded.
 
 - 2026-07-23 — **WP2 (r01_segment_qa.jl): GATE PASSED — and the collinearity fear did not
   materialise.** 22,785 segments over 3,711 matches; 416 matches rejected.
