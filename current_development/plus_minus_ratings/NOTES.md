@@ -75,14 +75,43 @@ goalkeepers become a comparison against their backup) bite harder here. The dens
 (SoT, xG) and cross-tier pooling are the two levers; **WP2's ≥5:1 gate** is where we find out
 whether they are enough.
 
+## Spec changes adopted from WP0 (see `RESEARCH_rapm.md` §6)
+
+The deep-research pass found Hvattum, Arntzen & Pantuso (2020) — a more developed formulation
+than the base paper — and it changes the build in five places:
+
+1. **Segment weight is a product of three factors**, not just time decay:
+   `w = w^TIME · w^DURATION · w^GOALS`, where `w^DURATION = (d + ρ₂)/ρ₃` downweights short
+   segments and `w^GOALS = ρ₄` when the segment both starts and ends ≥2 goals apart
+   (garbage-time discount).
+2. **Teammate-similarity shrinkage** replaces the box-score prior as the headline low-minutes
+   treatment: penalise a player's rating toward the ratings of the players he has shared the
+   most minutes with, dial `w^SIM`. Needs no data we don't already have, and it is the
+   published *football* method. Always report `w^SIM = 0` (plain ridge) beside the tuned value.
+3. **League adjustment** becomes Hvattum's per-player competition average
+   `(1/|C_p|) Σ_{c∈C_p} β_c^COMP` — simpler than the base paper's `m_il` rule and a better fit
+   for our four-tier pool.
+4. **Unreplaceable injured players** (substitutions exhausted) are modelled as dismissals — free.
+5. **Penalties get one constant xG.** Even with coordinates, no model in the base paper beat the
+   penalty base rate (Brier 0.1848 flat).
+
+And it **inverts the reading of WP7.1**: Gelade & Hvattum (2020) measure bottom-up event stats
+explaining only **22–38%** of plus-minus variance (GK lowest, forwards highest) ⇒ expect
+ρ ≈ **0.47–0.62** against SofaScore. Near-zero means we are broken; **near-1 would mean we had
+merely rebuilt the box score**. Low-ish correlation is the success criterion here, so the
+decisive evidence must come from reliability (WP7.2) and validity (WP7.4). Minutes floor is
+**540** for analysis, **900** for top-N tables. The ≥5:1 segments-per-player gate is our own
+engineering judgement, **not** a literature standard — the real evidence is the measured
+standard errors and effective degrees of freedom.
+
 ## Files
 
 | File | Role | Status |
 |---|---|---|
 | `NOTES.md` | This — goals, gates, findings log | live |
-| `RESEARCH_rapm.md` | WP0 deep-research output | pending |
-| `l00_pm_data.jl` | Own SQL loaders + `.jls` caches | pending |
-| `r00_data_qa.jl` | WP1 coverage / integrity gate | pending |
+| `RESEARCH_rapm.md` | WP0 deep-research output (verified; 6 bad citations caught) | **done** |
+| `l00_pm_data.jl` | Own SQL loaders + `.jls` caches | **done** |
+| `r00_data_qa.jl` | WP1 coverage / integrity gate | **done — PASSED** |
 | `l01_segments.jl` | Segment builder → sparse `X`, weights, dismissal + league dummies | pending |
 | `r01_segment_qa.jl` | WP2 segment QA + identifiability gate | pending |
 | `l02_shot_parser.jl` | BBC commentary → shot descriptors | pending |
@@ -104,5 +133,37 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
 
+- 2026-07-23 — **WP1 (r00_data_qa.jl): GATE PASSED.** The incident route is validated; the
+  segment builder can be written against it.
+  1. **G3 (decisive) — incident-reconstructed minutes vs `minutes_played`, 23/24+24/25.**
+     Starters: t54 MAE **0.07** min / **99.9%** within ±1; t57 **0.07** / **99.9%**;
+     t56 **0.80** / **99.0%**; t55 **0.93** / **87.8%** (96.9% within ±3). Three of four tiers
+     essentially exact ⇒ **the incident reconstruction is correct**; tier 55's spread is a
+     SofaScore-column artefact, not an incident-route failure (its *substitutes* are far worse,
+     MAE 3.47, 37% within ±1, which is SofaScore rounding the entry minute).
+  2. **G2 — substitution id resolution**: 100.0% (54), 99.7% (55), 96.1% (56), 97.0% (57);
+     46 NULL-id rows dropped. The 3–4% lower-tier misses are **diagnosed, not mysterious**:
+     unresolved rows sit on teamsheets averaging **9.2 players (min 0)** vs **36.9** for
+     resolved ones ⇒ **incomplete bench scrape**, not id drift. Those matches have unusable
+     lineups anyway — **drop the match**, don't patch the player.
+  3. **G1 — coverage**: as tabulated above. Tier-56 incident holes total **281 matches**
+     (22/23: 13, 23/24: 109, 25/26: 159).
+  4. **G4 — hole fill**: **all 268** holed matches in 23/24 + 25/26 have live_text, and the BBC
+     substitution phrasing parses at **100.0%** (3,790/3,790 rows, tier 56). 22/23's 13 holed
+     matches have **no** live_text → drop them. Caveat carried forward: a clean parse yields
+     **names, not ids**; name→player_id matching against the teamsheet is a separate,
+     unmeasured risk that WP2 must quantify before this fallback is trusted.
+  5. **G5 — goal reconciliation vs final score**: 95.2–100% per tier×season (t54 100% across
+     all six). Mismatches to be listed and excluded, not tolerated.
+  6. **G6 — positions**: unknown (`U`) share is small — t54 0, t55 69, t56 410, t57 360 rows out
+     of ~35k each (~1%). Recorded rather than silently folded into midfield, unlike
+     `src/features/extractors/player_extractors.jl`.
+- 2026-07-23 — **WP0 deep-research done** → `RESEARCH_rapm.md`. Five spec changes adopted (see
+  the section above). The fanout produced **six wrong or fabricated citations** (a Hvattum paper
+  attributed to the journal *Water*; a 404 GitHub repo; a wrong arXiv id; three bare domains),
+  all logged in `RESEARCH_rapm.md` §7 — the *verified* primary sources are what the spec changes
+  rest on. Two worker claims were checked and **overturned**: "split-half reliability is
+  unsuitable for RAPM" (it is literally Hvattum & Gelade's reliability axis) and "RAPM does not
+  correlate with commercial ratings" (it correlates at ρ ≈ 0.47–0.62).
 - 2026-07-23 — stream opened; data facts above verified directly against betdb via the server
-  REPL (the betdb MCP is unreachable off the home network). WP0 deep-research next.
+  REPL (the betdb MCP is unreachable off the home network).
