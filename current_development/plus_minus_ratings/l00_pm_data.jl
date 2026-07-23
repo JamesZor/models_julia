@@ -181,10 +181,26 @@ function fetch_pm_livetext(conn; tournaments::Vector{Int} = PM_TIERS,
            lt.event_type,
            lt.team,
            lt.team_bbc,
-           -- Deterministic side mapping: `live_text.team` is the BBC slug and joins exactly
-           -- to match_meta's home/away slugs. Do NOT try to infer the side from the running
-           -- score — that fails on matches without goals and on own goals.
-           (lt.team = mm.bbc_home_slug) AS is_home_event,
+           -- Deterministic side mapping. Do NOT infer the side from the running score — that
+           -- fails on goalless matches and on own goals.
+           --
+           -- THREE-WAY, NOT BOOLEAN. The obvious `(lt.team = mm.bbc_home_slug)` is WRONG: SQL
+           -- returns FALSE (not NULL) whenever the slug matches neither side, so every
+           -- unmatched slug is silently attributed to AWAY. That hit **7,073 of 45,201 shot
+           -- rows (15.6%)** and reversed the measured home shot advantage — our home mean came
+           -- out 9.21 vs BBC's ground-truth 11.16, which surfaced as a NEGATIVE home-advantage
+           -- coefficient in the first WP5 run.
+           --
+           -- The cause is a slug variant: `dundee-fc` vs `dundee`, `clyde-fc` vs `clyde`,
+           -- `queens-park-fc` vs `queens-park`. Normalising the trailing `-fc` resolves ALL
+           -- 7,073 (zero left unmatched), so these are recovered rather than dropped.
+           CASE
+             WHEN regexp_replace(lt.team, '-fc\$', '') =
+                  regexp_replace(mm.bbc_home_slug, '-fc\$', '') THEN true
+             WHEN regexp_replace(lt.team, '-fc\$', '') =
+                  regexp_replace(mm.bbc_away_slug, '-fc\$', '') THEN false
+             ELSE NULL
+           END AS is_home_event,
            lt.player,
            lt.area,
            lt.home_score,

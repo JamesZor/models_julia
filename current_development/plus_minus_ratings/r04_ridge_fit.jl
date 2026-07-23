@@ -86,19 +86,20 @@ end
 # R1 — λ × HALF-LIFE GRID
 # ==========================================
 _hdr("R1 — λ × half-life grid at w_SIM = 0")
-LAMBDAS = [0.1, 0.5, 1.0, 5.0, 20.0]
+# The first run put the optimum at λ = 20, the edge of the grid, so the grid is extended
+# upward. An optimum pinned to a boundary is not an optimum, it is a truncation.
+LAMBDAS = [1.0, 5.0, 20.0, 50.0, 200.0, 1000.0]
 HALFLIVES = [180.0, 365.0, 730.0]
 @time G1 = sweep(SEG, EVAL_SEASONS; targets = [:y_goals, :y_sot, :y_shots, :y_xg, :y_xp],
                  lambdas = LAMBDAS, half_lives = HALFLIVES, comp_sets = CS)
-G1.d_brier = round.(G1.brier .- FLOOR_BRIER, digits = 5)
-for c in (:brier, :logloss); G1[!, c] = round.(G1[!, c], digits = 5); end
-for c in (:ha, :red1, :sd_players); G1[!, c] = round.(G1[!, c], digits = 4); end
-sort!(G1, :brier)
+for c in (:brier, :logloss, :d_brier, :d_logloss); G1[!, c] = round.(G1[!, c], digits = 5); end
+for c in (:ha, :red1, :sd_players, :beta_strength); G1[!, c] = round.(G1[!, c], digits = 4); end
+sort!(G1, :d_brier)
 println(first(G1, 20))
 
-println("\nBest cell per target (negative d_brier = beats the no-rating floor):")
-best = combine(groupby(G1, :target), sdf -> first(sort(sdf, :brier), 1))
-println(sort(best, :brier))
+println("\nBest cell per target (negative d_brier = the ratings beat the no-rating floor):")
+best = combine(groupby(G1, :target), sdf -> first(sort(sdf, :d_brier), 1))
+println(sort(best, :d_brier))
 
 # ==========================================
 # R2 — FAIRNESS: goals refit on the covered subset
@@ -107,9 +108,8 @@ _hdr("R2 — goals on the SAME 52.2% subset the shot targets live on")
 @time G2 = sweep(SEG, EVAL_SEASONS; targets = [:y_goals], lambdas = LAMBDAS,
                  half_lives = HALFLIVES, comp_sets = CS, covered_only = true,
                  label = "_cov")
-G2.d_brier = round.(G2.brier .- FLOOR_BRIER, digits = 5)
-for c in (:brier, :logloss); G2[!, c] = round.(G2[!, c], digits = 5); end
-println(first(sort(G2, :brier), 5))
+for c in (:brier, :logloss, :d_brier, :d_logloss); G2[!, c] = round.(G2[!, c], digits = 5); end
+println(first(sort(G2, :d_brier), 5))
 println("\nCompare this row against y_xg / y_sot / y_shots above — THAT is the honest test of")
 println("whether a denser target beats goals, with sample size held constant.")
 
@@ -118,17 +118,20 @@ println("whether a denser target beats goals, with sample size held constant.")
 # ==========================================
 _hdr("R3 — w_SIM sweep at each target's best (λ, half-life)")
 W_SIMS = [0.0, 0.25, 0.5, 0.75, 0.9]
-rows3 = DataFrame()
-for r in eachrow(best)
-    tgt = Symbol(r.target)
-    g = sweep(SEG, EVAL_SEASONS; targets = [tgt], lambdas = [r.lambda],
-              half_lives = [r.half_life], w_sims = W_SIMS, comp_sets = CS)
-    rows3 = vcat(rows3, g)
+# `let`-bound accumulator: a bare top-level `for` inside an included script gets SOFT scope,
+# so `rows3 = vcat(...)` would create a new local and the reads afterwards fail.
+G3 = let acc = DataFrame()
+    for r in eachrow(best)
+        tgt = Symbol(replace(String(r.target), "_cov" => ""))
+        g = sweep(SEG, EVAL_SEASONS; targets = [tgt], lambdas = [r.lambda],
+                  half_lives = [r.half_life], w_sims = W_SIMS, comp_sets = CS)
+        acc = vcat(acc, g)
+    end
+    acc
 end
-rows3.d_brier = round.(rows3.brier .- FLOOR_BRIER, digits = 5)
-for c in (:brier, :logloss); rows3[!, c] = round.(rows3[!, c], digits = 5); end
-for c in (:ha, :red1, :sd_players); rows3[!, c] = round.(rows3[!, c], digits = 4); end
-println(sort(rows3, [:target, :w_sim]))
+for c in (:brier, :logloss, :d_brier, :d_logloss); G3[!, c] = round.(G3[!, c], digits = 5); end
+for c in (:ha, :red1, :sd_players, :beta_strength); G3[!, c] = round.(G3[!, c], digits = 4); end
+println(sort(G3, [:target, :w_sim]))
 println("\nw_SIM = 0 is plain ridge. If the tuned value does not beat it, the teammate prior is")
 println("not earning its place on THIS data and we say so — RESEARCH_rapm.md §2.1 already warns")
 println("that informed priors buy less in football than the basketball literature claims.")
@@ -137,9 +140,14 @@ println("that informed priors buy less in football than the basketball literatur
 # R4 — FINAL FIT AND SPECIFICATION CHECK
 # ==========================================
 _hdr("R4 — final fit on all data")
-WIN = first(sort(rows3, :brier), 1)[1, :]
-@printf("winner: target=%s λ=%.2f half_life=%.0f w_SIM=%.2f (Brier %.5f, floor %.5f)\n",
-        WIN.target, WIN.lambda, WIN.half_life, WIN.w_sim, WIN.brier, FLOOR_BRIER)
+WIN = first(sort(G3, :d_brier), 1)[1, :]
+@printf("winner: target=%s λ=%.2f half_life=%.0f w_SIM=%.2f (Brier %.5f, Δ vs floor %+.5f)\n",
+        WIN.target, WIN.lambda, WIN.half_life, WIN.w_sim, WIN.brier, WIN.d_brier)
+if WIN.d_brier >= 0
+    println("\n*** WARNING: the best cell does NOT beat the no-information floor. The ratings")
+    println("*** carry no usable signal about match outcomes under this protocol. Everything")
+    println("*** below is reported for diagnosis, NOT as a usable rating.")
+end
 
 wt = Symbol(replace(String(WIN.target), "_cov" => ""))
 # The winner is fit on the covered subset if it is a shot-based target, or if it is the
@@ -187,6 +195,6 @@ println(first(sort(R900, :rating, rev = true), 15)[:, [:name, :rating, :minutes,
 println("\nBottom 10 (≥900 minutes):")
 println(first(sort(R900, :rating), 10)[:, [:name, :rating, :minutes, :n_matches, :n_tiers]])
 
-const RQA = (grid = G1, grid_cov = G2, wsim = rows3, winner = WIN, beta = BETA,
+const RQA = (grid = G1, grid_cov = G2, wsim = G3, winner = WIN, beta = BETA,
              cols = COLS, ratings = R, floor_brier = FLOOR_BRIER)
 _hdr("WP5 done — inspect `RQA`, then write the verdict into NOTES.md")

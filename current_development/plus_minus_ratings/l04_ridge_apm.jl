@@ -231,16 +231,26 @@ end
 """
     evaluate_season(segments, eval_season; target, λ, half_life, w_sim, ...) -> NamedTuple
 
-Honest forward-chained protocol:
+Protocol:
   1. fit RAPM on every segment from matches STRICTLY BEFORE the evaluation season begins, with
      the time decay anchored at that boundary;
-  2. build the team-strength covariate for every match from that single rating vector;
-  3. fit the ordered logit on the TRAINING matches;
-  4. score the held-out season.
+  2. build the team-strength covariate for the EVALUATION matches from that rating vector;
+  3. fit the ordered-logit link ON THE EVALUATION SEASON, and fit the no-information floor
+     (strength pinned to 0) on those same matches;
+  4. report both, and their difference.
 
-The ratings are therefore never fit on the evaluation matches. The logit link (three numbers) is
-fit on training matches whose ratings did see them — a small, shared optimism that cannot favour
-one grid cell over another, since every arm uses the identical protocol.
+WHY THE LINK IS FIT IN-SAMPLE — this was a bug in the first WP5 run. Fitting the link on the
+TRAINING matches looks more rigorous but is badly wrong: those matches' ratings were fit on
+them, so the strength covariate is far more predictive there than it will ever be
+out-of-sample. The logit learns a large slope from that inflated signal, applies it to genuinely
+out-of-sample eval ratings, and is overconfident — which is why the first run scored the goals
+arm 0.064 Brier WORSE than the no-information floor, an impossible result for a model that can
+at worst ignore its covariate.
+
+The RATINGS remain strictly out-of-sample, which is what we are actually measuring. The link is
+three parameters fit on ~640 matches, so its in-sample optimism is ~1/640 — and the floor is fit
+the same way on the same matches, so the *difference* between them is an honest read on whether
+the ratings carry information about outcomes.
 """
 const SHOT_TARGETS = (:y_shots, :y_sot, :y_xg)
 
@@ -274,14 +284,16 @@ function evaluate_season(segments_all::DataFrame, eval_season::String;
     β = ridge_solve(A, b, penalty_matrix(cols, S, w_sim), λ)
 
     ms = match_strength(segments, β, cols)
-    ms_tr = ms[DateTime.(ms.start_timestamp) .<  t_cut, :]
     ms_ev = ms[ms.season .== eval_season, :]
-    (nrow(ms_tr) < 200 || nrow(ms_ev) < 50) && return nothing
+    nrow(ms_ev) < 50 && return nothing
 
-    θ = fit_ordered_logit(ms_tr.strength, ms_tr.y)
-    return (season = eval_season, n_train = nrow(ms_tr), n_eval = nrow(ms_ev),
+    θ  = fit_ordered_logit(ms_ev.strength, ms_ev.y)                    # link, in-sample
+    θ0 = fit_ordered_logit(zeros(nrow(ms_ev)), ms_ev.y)                # floor, same matches
+    return (season = eval_season, n_train = sum(tr_rows), n_eval = nrow(ms_ev),
             brier = multiclass_brier(θ, ms_ev.strength, ms_ev.y),
             logloss = multiclass_logloss(θ, ms_ev.strength, ms_ev.y),
+            floor_brier   = multiclass_brier(θ0, zeros(nrow(ms_ev)), ms_ev.y),
+            floor_logloss = multiclass_logloss(θ0, zeros(nrow(ms_ev)), ms_ev.y),
             beta_strength = θ[1],
             ha = β[cols.ha], red1 = β[cols.reds[1]],
             red2 = β[cols.reds[2]], red3 = β[cols.reds[3]],
@@ -305,10 +317,16 @@ function sweep(segments::DataFrame, eval_seasons::Vector{String};
                                       covered_only = covered_only) for s in eval_seasons])
         isempty(per) && continue
         n = sum(p.n_eval for p in per)
+        br = sum(p.brier * p.n_eval for p in per) / n
+        fl = sum(p.floor_brier * p.n_eval for p in per) / n
         push!(rows, (target = String(tgt) * label, lambda = λ, half_life = hl, w_sim = ws,
                      seasons = length(per), n_eval = n,
-                     brier   = sum(p.brier   * p.n_eval for p in per) / n,
+                     brier   = br,
                      logloss = sum(p.logloss * p.n_eval for p in per) / n,
+                     # Δ vs the floor fit on the SAME matches. Negative = the ratings help.
+                     d_brier = br - fl,
+                     d_logloss = sum((p.logloss - p.floor_logloss) * p.n_eval for p in per) / n,
+                     beta_strength = mean(p.beta_strength for p in per),
                      ha    = mean(p.ha    for p in per),
                      red1  = mean(p.red1  for p in per),
                      sd_players = mean(p.sd_players for p in per)))
