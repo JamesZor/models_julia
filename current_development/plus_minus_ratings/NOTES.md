@@ -133,6 +133,49 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
 
+- 2026-07-23 — **The MARKET-based "change in probability" target: scoped away, and now shown to
+  be unbuildable as a validated arm. Recording the decision properly because it was originally
+  requested and I silently substituted for it.**
+
+  The opening brief asked for a target based on *"the change in the odds / change in the match
+  probability depending on goal"*. When the four targets were locked I mapped that onto the base
+  paper's **xPPM**, which uses a *model-derived* in-play W/D/L probability, and did not flag the
+  substitution. `y_xp` as built is therefore the paper's expected-points target driven by the
+  local Poisson hazard model in `l03_targets.jl` — **not** market prices.
+
+  **Why the market version cannot be validated in this stream (decisive):**
+
+  | tier | matches | betfair odds_history | MATCH_ODDS | SofaScore rating |
+  |---|---|---|---|---|
+  | 54 Prem | 1188 | **0** | **0** | ✔ all seasons |
+  | 55 Champ | 1030 | **0** | **0** | ✔ 23/24+ |
+  | 56 L1 | 985 | 891 | 886 | ✘ none |
+  | 57 L2 | 985 | 750 | 739 | ✘ none |
+
+  **Betfair covers 56/57 only; SofaScore ratings cover 54/55 only. The overlap is empty.** The
+  whole validation design rests on building a rating from lower-league-available features and
+  checking it where a rating yardstick exists — a market-priced target breaks that, because it
+  can only be computed exactly where no yardstick exists.
+
+  **And it would make the stream's main weakness worse.** The base paper (§4.2) is explicit that
+  the in-play model must be **team-strength-blind**, since conditioning on team strength
+  double-counts the thing plus-minus is estimating. Market odds are the opposite of blind — they
+  price Celtic vs Ross County very differently by construction. So a market-based xPPM would
+  *bake in* team strength, and WP7 has already shown team-loading is this rating's central
+  problem (21–39% of variance at `w_SIM = 0`, rising to 76% when shrunk).
+
+  **Supporting evidence that it is not worth forcing:** the model-based `y_xp` was the **weakest
+  of the five targets** in WP5 (Δ Brier −0.00319 at `w_SIM = 0`, last place) and is **0.881
+  correlated with `y_goals`** — largely a game-state reweighting of goals rather than new
+  information. A market variant differs from it mainly by adding team strength.
+
+  ⇒ **Recorded as considered-and-rejected, not as an oversight.** If it is ever wanted, the only
+  coherent framing is: build it on 56/57 where betfair exists, validate it on match-outcome
+  Brier rather than against a player rating, and expect the team-strength confound to be worse
+  not better. Note also `../inplay_scottish/` measured in-play liquidity as thin (median ≈49
+  MATCH_ODDS prints per match on t=56, far fewer on t=57), so segment-boundary prices would have
+  real gaps.
+
 - 2026-07-23 — **WP7b (r07_best_players.jl): the top-N test is the STRONGEST result so far —
   the two systems disagree in the middle but agree hard at the top.** Per-season ratings
   (2-year trailing window, 365-day half-life anchored at season end), ≥900 minutes, outfield
