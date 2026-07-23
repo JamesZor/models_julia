@@ -47,8 +47,20 @@ const ZONE_PATTERNS = [
     "long range on the left"             => :long_range,         #    100
     "long range on the right"            => :long_range,         #     78
     "outside the box"                    => :outside_box,        # 15,904
-    "a free kick"                        => :free_kick_zone,     #    141
+    "a free kick"                        => :free_kick_zone,     #    141  → remapped, see below
 ]
+
+# THE "a free kick with a ..." TRAP. 141 shots carry the phrase "from a free kick with a right
+# footed shot" and similar. On the first WP3 run these converted at **100.0%** — the phrasing is
+# used ONLY in goal descriptions, so a cell keyed on it predicts xG ≈ 1.0 and the model has
+# effectively read the outcome off the wording rather than the chance quality. Left in, it would
+# have inflated the ladder's Brier gain and, far worse, injected ~141 spurious xG=1.0 events
+# straight into the WP4 xGPM target.
+#
+# What we actually know about these shots is that they were DIRECT FREE KICKS of unstated
+# location. So: keep the context, and give them the modal direct-free-kick location rather than
+# a cell of their own.
+const FREE_KICK_FALLBACK_ZONE = :outside_box
 
 const BODY_PATTERNS = [
     "header"       => :header,
@@ -101,9 +113,12 @@ function parse_shot(event_type::AbstractString, text)
     body = _first_match(t, BODY_PATTERNS, :unknown)
     ctx  = _first_match(t, CONTEXT_PATTERNS, :open_play)
 
-    # A direct free kick is described as such, and its zone phrase is often the free-kick
-    # boilerplate rather than a pitch location — normalise so the zone factor stays meaningful.
-    zone === :free_kick_zone && (ctx = :direct_free_kick)
+    # See FREE_KICK_FALLBACK_ZONE above: this phrasing is outcome-confounded, so keep the
+    # context it genuinely tells us and fall back to the modal free-kick location.
+    if zone === :free_kick_zone
+        ctx  = :direct_free_kick
+        zone = FREE_KICK_FALLBACK_ZONE
+    end
 
     return (zone = zone, body_part = body, context = ctx, is_penalty = is_pen,
             parsed = zone !== :unknown || is_pen)

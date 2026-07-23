@@ -140,9 +140,17 @@ println(sort(c4, :dec))
 # ==========================================
 _hdr("X5 — team xG vs SofaScore team xG (54/55)")
 lu = PM_LINEUPS[]
+# A handful of live_text rows carry a team slug that matches neither side (or none at all), so
+# `is_home_event` is missing — those shots cannot be attributed and are excluded here. Reported
+# below, because the same rows will be unusable for the WP4 segment targets.
+@printf("shots with an unattributable side: %d (%.2f%%)\n",
+        sum(ismissing.(SH.is_home)), 100 * mean(ismissing.(SH.is_home)))
+SHA = SH[.!ismissing.(SH.is_home), :]
+SHA.is_home = Bool.(SHA.is_home)
+
 sofa = combine(groupby(lu[.!ismissing.(lu.expected_goals), :], [:match_id, :is_home_team]),
                :expected_goals => sum => :sofa_xg)
-ours = combine(groupby(SH, [:match_id, :is_home]), :xg => sum => :our_xg,
+ours = combine(groupby(SHA, [:match_id, :is_home]), :xg => sum => :our_xg,
                :is_goal => sum => :goals, nrow => :shots)
 rename!(sofa, :is_home_team => :side); rename!(ours, :is_home => :side)
 cmp = innerjoin(sofa, ours, on = [:match_id, :side])
