@@ -73,7 +73,7 @@ SEG.y = SEG.goals_home .- SEG.goals_away
         100 * mean(SEG.duration .< 5))
 @printf("goals in segment: mean %.3f  |  segments with y = 0: %.1f%%   [base paper: 72%%]\n",
         mean(SEG.goals_home .+ SEG.goals_away), 100 * mean(SEG.y .== 0))
-@printf("exposure: %.0f team-minutes total (%.1f matches' worth)\n",
+@printf("exposure: %.0f match-minutes total (%.1f matches' worth)\n",
         sum(SEG.duration), sum(SEG.duration) / 90)
 
 garbage = (abs.(SEG.gd_start) .>= 2) .& (abs.(SEG.gd_end) .>= 2)
@@ -159,37 +159,37 @@ d = max.(F.values, 0.0)                     # numerical negatives are zeros
 pos = d[d .> 1e-12 * maximum(d)]
 @printf("condition number over the non-null space: %.4g\n", maximum(pos) / minimum(pos))
 
+# Weights are normalised to mean 1 in `build_design`, so λ is on a scale set by the data volume
+# and these numbers are comparable across weight configurations.
 println("\neffective degrees of freedom  Σ dᵢ/(dᵢ+λ)   [ceiling = ", length(d), "]")
-lams = [0.1, 1.0, 10.0, 100.0, 1000.0]
-for λ in lams
-    @printf("  λ = %8.1f → edf %8.1f  (%.1f%% of parameters)\n",
-            λ, sum(d ./ (d .+ λ)), 100 * sum(d ./ (d .+ λ)) / length(d))
-end
-
-# Per-parameter posterior variance: diag((XᵀWX + λI)⁻¹) = Σ_k V[i,k]² / (d_k + λ).
-# Large ⇒ that player's rating is essentially the prior, not the data.
-println("\nper-player variance diag((XᵀWX+λI)⁻¹), players only:")
 V2 = F.vectors .^ 2
 npl = length(COLS.player_ids)
-for λ in (1.0, 10.0, 100.0)
-    dv = V2 * (1.0 ./ (d .+ λ))
-    pv = dv[1:npl]
-    @printf("  λ = %6.1f → median %.4g | p90 %.4g | max %.4g | %% within 5%% of the 1/λ prior: %.1f\n",
-            λ, median(pv), quantile(pv, 0.9), maximum(pv),
-            100 * mean(pv .>= 0.95 / λ))
+mins_v = let m = Dict(r.player_id => r.minutes for r in eachrow(EXP))
+    [max(get(m, p, 1.0), 1.0) for p in COLS.player_ids]
 end
-println("\nThe last column is the honest identifiability number: the share of players whose")
-println("posterior variance is ≥95% of the prior variance 1/λ — i.e. players about whom the")
-println("data says essentially NOTHING and whose rating is pure shrinkage.")
+lams = [0.01, 0.1, 0.5, 1.0, 5.0, 10.0, 50.0, 100.0]
+println(rpad("λ", 9), rpad("edf", 10), rpad("%params", 10), rpad("med postvar", 14),
+        rpad("%prior-dominated", 18), "cor(log var, log min)")
+for λ in lams
+    edf = sum(d ./ (d .+ λ))
+    pv  = (V2 * (1.0 ./ (d .+ λ)))[1:npl]
+    @printf("%-9.2f%-10.1f%-10.1f%-14.4g%-18.1f%.3f\n",
+            λ, edf, 100 * edf / length(d), median(pv),
+            100 * mean(pv .>= 0.95 / λ), cor(log.(pv), log.(mins_v)))
+end
+println("\n`%prior-dominated` is the honest identifiability number: the share of players whose")
+println("posterior variance is ≥95% of the prior variance 1/λ — players about whom the data says")
+println("essentially NOTHING, whose rating is pure shrinkage. The last column should be strongly")
+println("NEGATIVE (more minutes ⇒ better identified); if it is near zero, the variance has")
+println("saturated at the prior for most players and λ is too large to learn anything.")
 
-dv10 = (V2 * (1.0 ./ (d .+ 10.0)))[1:npl]
+λ_diag = 1.0
+dv10 = (V2 * (1.0 ./ (d .+ λ_diag)))[1:npl]
 prec = DataFrame(player_id = COLS.player_ids, post_var = dv10)
 prec = leftjoin(prec, select(EXP, :player_id, :minutes, :n_segments), on = :player_id)
 sort!(prec, :post_var)
-println("\nBest-identified players (λ=10):"); println(first(prec, 5))
-println("\nWorst-identified players (λ=10):"); println(last(prec, 5))
-println("\nCorrelation( log posterior variance , log minutes ): ",
-        round(cor(log.(dv10), log.(max.(coalesce.(prec.minutes, 1.0), 1.0))), digits = 3))
+println("\nBest-identified players (λ=$λ_diag):");  println(first(prec, 5))
+println("\nWorst-identified players (λ=$λ_diag):"); println(last(prec, 5))
 
 const SQA = (segments = SEG, rejects = REJ, exposure = EXP, X = X, y = y, w = w,
              cols = COLS, eig = (values = d,), clusters = clusters, precision = prec)

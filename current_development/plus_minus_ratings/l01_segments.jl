@@ -436,6 +436,17 @@ function build_design(segments::DataFrame;
     end
 
     X = sparse(I, J, V, n, ncol)
+
+    # NORMALISE THE WEIGHTS TO MEAN 1. Without this, λ and the half-life are confounded: a
+    # shorter half-life shrinks every weight, shrinks XᵀWX with them, and so makes the SAME λ
+    # behave like a much heavier penalty. Tuning (λ, half-life) jointly would then be partly
+    # chasing a units artefact rather than a modelling trade-off. With mean-1 weights, λ sits on
+    # a scale set by the data volume, and the two hyper-parameters move independently.
+    # (Measured on the first WP2 run: half_life=365d over six seasons gave mean(w)=0.041, i.e.
+    # a silent ×24 inflation of every λ on the grid.)
+    mw = mean(w)
+    mw > 0 && (w ./= mw)
+
     cols = DesignCols(pids, pidx, ha_col, red_cols, lg_cols, lids, penalised, ncol)
     return X, y, w, cols
 end
