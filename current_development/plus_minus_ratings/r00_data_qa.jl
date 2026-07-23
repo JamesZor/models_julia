@@ -35,6 +35,10 @@ const LT  = DAT.livetext
 
 _hdr(s) = println("\n", "="^78, "\n", s, "\n", "="^78)
 
+# Boolean masks over columns that may hold `missing` — DataFrames refuses to index with
+# `Union{Missing,Bool}`, and a missing here always means "not a match".
+_mask(v) = coalesce.(v, false)
+
 # ==========================================
 # G1 — COVERAGE
 # ==========================================
@@ -88,6 +92,23 @@ end
 println(g2)
 println("\nNULL-id substitution rows dropped: ",
         sum(IN.incident_type .== "substitution") - nrow(subs))
+
+# WHY do ~3-4% of lower-tier sub ids miss the teamsheet? The plausible cause is an incomplete
+# teamsheet (bench not fully scraped), which would be visible as a smaller teamsheet on exactly
+# those matches. If instead the failures are spread evenly over normal-sized teamsheets, the
+# cause is id drift and is far more serious.
+sheet_size = Dict(Int(r.match_id) => r.n_lineup for r in eachrow(lu_by_match))
+subs.sheet_n = [get(sheet_size, Int(r.match_id), 0) for r in eachrow(subs)]
+subs.unresolved = .!(subs.in_on_sheet .& subs.out_on_sheet)
+g2b = combine(groupby(subs[subs.tournament_id .∈ Ref([56, 57]), :], :unresolved),
+              nrow                => :n_subs,
+              :sheet_n => mean    => :mean_teamsheet_size,
+              :sheet_n => minimum => :min_teamsheet_size)
+g2b.mean_teamsheet_size = round.(g2b.mean_teamsheet_size, digits = 1)
+println("\nUnresolved-vs-teamsheet-size diagnostic (tiers 56/57):")
+println(g2b)
+println("Smaller teamsheets on the unresolved rows ⇒ incomplete bench scrape (tolerable:")
+println("treat the player as an unmodelled entrant). Equal sizes ⇒ id drift (must be fixed).")
 
 # ==========================================
 # G3 — MINUTES RECONSTRUCTION  (the decisive WP1 gate)
@@ -192,7 +213,7 @@ println(g4)
 
 # BBC substitution rows carry no player column — the names are only in `text`. Measure how
 # often the standard phrasing parses, since that determines whether the fallback is viable.
-lt_subs = LT[(LT.event_type .== "substitution") .& (LT.tournament_id .== 56), :]
+lt_subs = LT[_mask((LT.event_type .== "substitution") .& (LT.tournament_id .== 56)), :]
 const SUB_RE = r"Substitution,\s*(.+?)\.\s*(.+?)\s+replaces\s+(.+?)\."
 lt_subs.parsed = [!ismissing(t) && occursin(SUB_RE, String(t)) for t in lt_subs.text]
 @printf("\nlive_text substitution rows (tier 56): %d, parseable by the standard pattern: %.1f%%\n",
