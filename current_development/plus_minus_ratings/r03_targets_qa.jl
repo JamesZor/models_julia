@@ -115,11 +115,18 @@ emp = combine(groupby(unique(select(PM_LINEUPS[], :match_id, :home_score, :away_
 println("empirical points per match: ", emp)
 println("(base paper's EPL figures were 1.63 home / 1.11 away — a lower league should be flatter)")
 
-for (t, gd, mp, lbl) in ((0.0, 0, 0, "kickoff level"), (45.0, 1, 0, "HT, 1 up"),
-                         (45.0, 0, 1, "HT, level, opp down to 10"), (80.0, 1, 0, "80', 1 up"),
+# NB the manpower check must hold time AND score fixed. Comparing "HT level, a man up" against
+# KICKOFF conflates two opposing effects — less time remaining pushes both sides toward the draw
+# value of 1.0, which can more than cancel the manpower gain and make the model look broken when
+# it is not. The 45' pair below isolates it.
+for (t, gd, mp, lbl) in ((0.0, 0, 0, "kickoff, level, 11v11"),
+                         (45.0, 0, 0, "HT, level, 11v11"),
+                         (45.0, 0, 1, "HT, level, opp down to 10   ← vs the row above"),
+                         (45.0, 1, 0, "HT, 1 up"),
+                         (80.0, 1, 0, "80', 1 up"),
                          (80.0, -1, 0, "80', 1 down"))
     h, a = expected_points(XP, t, gd, mp)
-    @printf("  %-30s xP_home %.3f  xP_away %.3f\n", lbl, h, a)
+    @printf("  %-42s xP_home %.3f  xP_away %.3f\n", lbl, h, a)
 end
 
 # ==========================================
