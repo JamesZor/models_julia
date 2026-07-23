@@ -133,6 +133,63 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
 
+- 2026-07-23 — **WP7 first pass (r06_vs_sofascore.jl): agreement with the SofaScore rating is
+  BELOW the expected band, and what agreement exists is largely TEAM strength, not player
+  contribution.** 877 players ≥540 minutes in tiers 54/55, 23/24–25/26.
+
+  | target | w_SIM | Pearson | Spearman | **team R²** | sd(rapm) | within-team sd |
+  |---|---|---|---|---|---|---|
+  | `y_shots` | 0.0 | 0.347 | 0.274 | 0.540 | 0.099 | 0.067 |
+  | `y_shots` | 0.9 | 0.476 | 0.388 | **0.774** | 0.349 | 0.166 |
+  | `y_xg` | 0.0 | 0.320 | 0.271 | **0.383** | 0.035 | 0.027 |
+  | `y_xg` | 0.75 | 0.435 | 0.365 | 0.576 | 0.049 | 0.032 |
+  | `y_goals` | 0.0 | 0.299 | 0.265 | 0.435 | 0.017 | 0.013 |
+  | `y_goals` | 0.9 | 0.485 | 0.429 | 0.709 | 0.058 | 0.031 |
+
+  1. **Correlation 0.30–0.49 against an expected band of 0.47–0.62** (Gelade & Hvattum 2020).
+     Only the heavily team-shrunk cells reach the bottom edge. This is *not* the "healthy
+     middling correlation" the research predicted — it is below it.
+  2. **THE KEY RESULT: agreement and team R² rise in LOCKSTEP with `w_SIM`.** `y_goals` goes
+     ρ 0.299 → 0.485 while team R² goes 0.435 → 0.709; `y_shots` 0.347 → 0.476 while team R²
+     goes 0.540 → **0.774**. So the apparent improvement in SofaScore agreement is **bought by
+     making the rating more team-like**, not by measuring players better. The WP5 tension is now
+     quantified, and it is severe.
+  3. **Even at `w_SIM = 0`, 38–54% of rating variance is team identity.** Before any teammate
+     shrinkage the rating is already substantially a team-strength estimator. `y_xg` at
+     `w_SIM = 0` is the cleanest cell on this criterion (team R² 0.383) — and it is *not* the
+     cell WP5's Brier criterion selected, exactly as predicted.
+  4. **Position ordering is WRONG, in two specific ways** (`y_shots`, `w_SIM = 0`):
+     ours **D 0.486 > M 0.374 > F 0.220 > G −0.001**; expected **F 0.62 > D 0.60 ≈ M 0.59 >
+     GK 0.47**.
+     - **Goalkeepers ≈ 0.** The base paper's §6 caveat, now measured: a keeper plays nearly every
+       minute, so his plus-minus is a comparison against his backup and is barely identified. Our
+       GK ratings are worthless and should be excluded, not reported.
+     - **Forwards are our WEAKEST outfield agreement (0.22) but should be the STRONGEST.**
+       Forwards are where an event-based rating is most informative (goals, shots), so this is a
+       real mismatch, not a scale artefact. It needs explaining before the ratings are trusted.
+     - Defenders being our *best* agreement is suspicious in light of (3): SofaScore defender
+       ratings are heavily driven by team defensive performance, which is a team property — so
+       that agreement may itself be team-driven.
+  5. **The relationship is flat across the bottom 70%.** Mean RAPM by SofaScore decile:
+     −0.015, −0.031, −0.017, −0.027, −0.021, −0.013, −0.004, +0.019, +0.027, **+0.106**. It only
+     turns upward in deciles 8–10, and **within-decile sd (0.068–0.137) exceeds the entire
+     between-decile range (≈0.12)**. The two systems agree mainly that the very best SofaScore
+     players are good; below that they largely disagree player-by-player.
+  6. Disagreements are structured, not random: the players RAPM likes far more than SofaScore are
+     mostly defenders/midfielders on strong sides; the ones SofaScore likes far more are
+     attacking midfielders who accumulate events (Josh McPake z_sofa +5.2 vs z_rapm +1.7; Dom
+     Thomas, Elliot Watt, Marc Leonard). That is the classic top-down/bottom-up split — but it
+     needs the team confound removed before it can be read as evidence of anything.
+
+  - **VERDICT: not currently a viable drop-in for the SofaScore rating.** The decision rule
+    (split-half reliability ≥ SofaScore's AND team-strength retrodiction not materially worse)
+    is not yet tested, but agreement this team-loaded means the remaining WP7 work must first
+    **partial out team strength** — correlate the *within-team* residuals of both ratings — or
+    every downstream number will be measuring how good the club is.
+  - **NEXT (WP7 proper):** (a) within-team residual correlation, both systems; (b) split-half
+    reliability at several `w_SIM`, ours vs SofaScore's on the same players; (c) exclude
+    goalkeepers; (d) explain the forward anomaly; (e) only then the team-strength retrodiction.
+
 - 2026-07-23 — **WP5 (r04_ridge_fit.jl): the ratings carry REAL but SMALL signal — and the
   specification check earned its keep by catching two bugs first.**
 
