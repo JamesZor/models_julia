@@ -122,7 +122,7 @@ standard errors and effective degrees of freedom.
 | `r04_ridge_fit.jl` | WP5 fits | **done — PASSED (small effect)** |
 | `l05_bayes_apm.jl` | Turing hierarchical / prior-informed RAPM | pending |
 | `r05_bayes_fit.jl` | WP6 Bayesian vs ridge | pending |
-| `r06_vs_sofascore.jl` | **WP7 decisive gate** | pending |
+| `r06_vs_sofascore.jl` / `r07_best_players.jl` / `r08_reliability.jl` | **WP7 decisive gate** | **done — PASSED** |
 
 ## Decision rule (WP7)
 
@@ -132,6 +132,83 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
+
+- 2026-07-23 — **WP7 COMPLETE (r08_reliability.jl). THE DECISION RULE PASSES — but on a low bar,
+  and with the team confound unresolved.**
+
+  **① RELIABILITY (decision-rule half #1): PASS.** Split-half over alternating matchdays,
+  same 631 players, same halves, goalkeepers excluded:
+
+  | rating | our split-half | SofaScore's | verdict |
+  |---|---|---|---|
+  | `y_xg` w0 | 0.407 | 0.660 | fail |
+  | `y_shots` w0 | **0.669** | 0.660 | **pass** |
+  | `y_shots` w0.9 | **0.889** | 0.660 | pass — but see caveat |
+
+  `y_shots` at `w_SIM = 0` is the honest pass: more reliable than the SofaScore rating while
+  carrying only 0.389 club-R². **Discount the 0.889** — teammate shrinkage makes ratings stable
+  partly by making them team-like, and club identity is near-perfectly stable across halves.
+
+  **② VALIDITY (decision-rule half #2): PASS — RAPM BEATS SofaScore on both held-out seasons.**
+  Ordered logit on starting-XI strength, ratings strictly out-of-sample:
+
+  | season | n | no-info floor | **RAPM** | SofaScore | de-vigged close |
+  |---|---|---|---|---|---|
+  | 24/25 | 512 | 0.6389 | **0.6234** | 0.6387 | 0.5951 |
+  | 25/26 | 528 | 0.6528 | **0.6449** | 0.6523 | 0.6127 |
+
+  Note what this really says: **the SofaScore-fed model barely beats the floor at all**
+  (0.6387 vs 0.6389; 0.6523 vs 0.6528). So "we beat SofaScore" is a **low bar** — a bottom-up
+  rating is nearly useless as a team-strength covariate here. Our margin over the floor is real
+  but small (2.4% / 1.2%), and the market remains far ahead (0.595 / 0.613). This does reproduce
+  Hvattum & Gelade (2021)'s headline that top-down beats bottom-up on both axes.
+
+  **③ SEASON-TO-SEASON — we roughly MATCH the base paper.** Disjoint single-season fits:
+  `y_goals` lag-1 across five pairs **0.372 / 0.292 / 0.404 / 0.228 / 0.156** (mean **0.29**);
+  lag-2 mean **0.24**; `y_xg` lag-1 **0.438 / 0.236**. **The paper reports 0.35 (t→t+1) and 0.30
+  (t→t+2).** So on the paper's *own* headline reliability metric we are in the same range —
+  which is the fairest like-for-like comparison available, and materially more reassuring than
+  the SofaScore-correlation framing. SofaScore's own season-to-season stability is much higher
+  (≈0.61), as expected for a per-player average.
+
+  **④ THE FORWARD ANOMALY IS EXPLAINED — it is not our bug.** Split-half by position
+  (`y_shots` w0): ours **D 0.714, M 0.664, F 0.575**; SofaScore's **D 0.606, M 0.731, F 0.588**.
+  **Forwards are the noisiest position for BOTH systems.** Correcting r06's raw correlations for
+  attenuation (`ρ_true = ρ_obs / √(rel₁·rel₂)`):
+
+  | position | raw ρ | disattenuated |
+  |---|---|---|
+  | D | 0.486 | **0.74** |
+  | M | 0.374 | **0.54** |
+  | F | 0.220 | **0.38** |
+  | overall | 0.382 | **0.58** |
+
+  Forwards still agree least, but far less dramatically — much of the r06 gap was two noisy
+  instruments, not disagreement. **Caveat on the overall 0.58:** Gelade & Hvattum's 0.47–0.62
+  band is presumably *raw*, so comparing our disattenuated 0.58 to their raw band flatters us —
+  theirs would rise too if corrected. The honest reading is that we remain below them, but the
+  shortfall is substantially measurement noise from a much smaller league, not a broken model.
+
+  **⑤ CROSS-TIER TRANSFER: positive but modest.** 169 players with ≥540 min in both groups;
+  RAPM built from **56/57 minutes only** vs SofaScore built from **54/55 minutes only** —
+  Pearson **0.177**, Spearman **0.226**. Nothing mechanically links these two quantities (no
+  shared match, team or season), so a positive value is genuine external validity for the
+  lower-league ratings. It is weak, and it is the single number most worth strengthening.
+
+  - **VERDICT: green-light, with the scope narrowed.** The pre-registered rule — split-half ≥
+    SofaScore's AND retrodiction not materially worse — is met by **`y_shots`, `w_SIM = 0`**
+    (reliability 0.669 vs 0.660; validity better than SofaScore on both seasons). That is the
+    cell to carry forward, **not** WP5's Brier-optimal `w_SIM = 0.9`, whose apparent superiority
+    on both axes is substantially club identity.
+  - **Three honest limits on that verdict.** (a) Beating SofaScore here is a low bar, since the
+    SofaScore-fed model scarcely beats a no-information floor. (b) The margin over the floor is
+    ~2%, and the closing line is far beyond both. (c) Cross-tier transfer at ρ≈0.18–0.23 is thin
+    evidence for the leagues we actually care about.
+  - **NEXT: WP6 (Bayesian arm) is now justified** — the ridge reference has cleared the bar it
+    had to clear, so a hierarchical / prior-informed version has something to beat, and would
+    supply the posterior Kelly staking wants. Prioritise (i) `w_SIM` as a *hierarchical* prior
+    rather than a fixed dial, so shrinkage strength is learned rather than tuned into the team
+    confound, and (ii) strengthening cross-tier identification.
 
 - 2026-07-23 — **The MARKET-based "change in probability" target: scoped away, and now shown to
   be unbuildable as a validated arm. Recording the decision properly because it was originally
