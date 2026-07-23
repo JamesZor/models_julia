@@ -76,6 +76,7 @@ function fetch_pm_lineups(conn; tournaments::Vector{Int} = PM_TIERS)
            s.year                AS season,
            m.start_timestamp,
            m.home_score, m.away_score,
+           m.injury_time1, m.injury_time2,
            l.player_id,
            l.player_name,
            l.team_id,
@@ -254,7 +255,7 @@ every downstream file agrees on the match universe.
 """
 function pm_match_meta(lineups::DataFrame = PM_LINEUPS[])
     return unique(select(lineups, :match_id, :tournament_id, :season, :start_timestamp,
-                                  :home_score, :away_score))
+                                  :home_score, :away_score, :injury_time1, :injury_time2))
 end
 
 """
