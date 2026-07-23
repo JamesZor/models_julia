@@ -181,6 +181,10 @@ function fetch_pm_livetext(conn; tournaments::Vector{Int} = PM_TIERS,
            lt.event_type,
            lt.team,
            lt.team_bbc,
+           -- Deterministic side mapping: `live_text.team` is the BBC slug and joins exactly
+           -- to match_meta's home/away slugs. Do NOT try to infer the side from the running
+           -- score — that fails on matches without goals and on own goals.
+           (lt.team = mm.bbc_home_slug) AS is_home_event,
            lt.player,
            lt.area,
            lt.home_score,
@@ -190,6 +194,7 @@ function fetch_pm_livetext(conn; tournaments::Vector{Int} = PM_TIERS,
     JOIN sofascore.matches m ON m.match_id = lt.match_id
     JOIN sofascore.seasons s
       ON s.season_id = m.season_id AND s.tournament_id = m.tournament_id
+    JOIN bbc.match_meta mm ON mm.match_id = lt.match_id
     WHERE m.tournament_id IN ($t_in) $ev_clause
     ORDER BY lt.match_id, lt.post_index
     """
