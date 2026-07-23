@@ -219,6 +219,49 @@ function fetch_pm_livetext(conn; tournaments::Vector{Int} = PM_TIERS,
 end
 
 # ==========================================
+# 3b. CLOSING 1X2 ODDS  (the market baseline for WP7's validity test)
+# ==========================================
+"""
+    fetch_pm_odds(conn; tournaments) -> DataFrame
+
+Full-time 1X2 prices. SofaScore stores them as FRACTIONS, so decimal = num/den + 1.
+`fraction_*` is the latest (≈closing) price; `initial_fraction_*` is the open — we take the
+former, since the closing line is the benchmark a rating has to beat.
+
+Only tiers 54/55 matter here: they are the ones with both a SofaScore rating to compare against
+and odds to benchmark on.
+"""
+function fetch_pm_odds(conn; tournaments::Vector{Int} = PM_TIERS)
+    t_in = join(tournaments, ",")
+    sql = """
+    SELECT o.match_id,
+           o.choice_name,
+           (o.fraction_num::float / NULLIF(o.fraction_den, 0)) + 1.0 AS decimal_odds
+    FROM sofascore.match_odds o
+    JOIN sofascore.matches m ON m.match_id = o.match_id
+    WHERE m.tournament_id IN ($t_in)
+      AND o.market_name = 'Full time'
+      AND o.choice_name IN ('1', 'X', '2')
+      AND o.fraction_den <> 0
+    """
+    return DataFrame(LibPQ.execute(conn, sql))
+end
+
+"""
+    devig_1x2(odds) -> DataFrame(match_id, p_home, p_draw, p_away)
+
+Proportional (multiplicative) de-vig: normalise the three implied probabilities to sum to 1.
+"""
+function devig_1x2(odds::DataFrame)
+    w = unstack(odds, :match_id, :choice_name, :decimal_odds; combine = first)
+    keep = completecases(w, ["1", "X", "2"])
+    w = w[keep, :]
+    ih = 1 ./ w[!, "1"]; idr = 1 ./ w[!, "X"]; ia = 1 ./ w[!, "2"]
+    s = ih .+ idr .+ ia
+    return DataFrame(match_id = w.match_id, p_home = ih ./ s, p_draw = idr ./ s, p_away = ia ./ s)
+end
+
+# ==========================================
 # 4. CACHE + EAGER LOAD
 # ==========================================
 const PM_CACHE_DIR = @__DIR__
@@ -228,6 +271,7 @@ pm_cache_path(name::AbstractString) = joinpath(PM_CACHE_DIR, "pm_$(name).jls")
 const PM_LINEUPS   = Ref{DataFrame}()
 const PM_INCIDENTS = Ref{DataFrame}()
 const PM_LIVETEXT  = Ref{DataFrame}()
+const PM_ODDS      = Ref{DataFrame}()
 
 """
     ensure_pm_data!(; tournaments=PM_TIERS, refresh=false)
@@ -239,7 +283,8 @@ inside a per-fold code path.
 function ensure_pm_data!(; tournaments::Vector{Int} = PM_TIERS, refresh::Bool = false)
     specs = (("lineups",   PM_LINEUPS,   fetch_pm_lineups),
              ("incidents", PM_INCIDENTS, fetch_pm_incidents),
-             ("livetext",  PM_LIVETEXT,  fetch_pm_livetext))
+             ("livetext",  PM_LIVETEXT,  fetch_pm_livetext),
+             ("odds",      PM_ODDS,      fetch_pm_odds))
 
     missing_specs = [sp for sp in specs
                      if refresh || !(isassigned(sp[2]) || isfile(pm_cache_path(sp[1])))]
@@ -263,7 +308,8 @@ function ensure_pm_data!(; tournaments::Vector{Int} = PM_TIERS, refresh::Bool = 
     finally
         conn === nothing || close(conn)
     end
-    return (lineups = PM_LINEUPS[], incidents = PM_INCIDENTS[], livetext = PM_LIVETEXT[])
+    return (lineups = PM_LINEUPS[], incidents = PM_INCIDENTS[],
+            livetext = PM_LIVETEXT[], odds = PM_ODDS[])
 end
 
 # ==========================================
