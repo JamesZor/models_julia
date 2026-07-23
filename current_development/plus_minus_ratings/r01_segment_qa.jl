@@ -140,8 +140,8 @@ if !isempty(clusters)
     println("\nMinutes of the players in the 5 largest clusters (tied ⇒ identical ratings):")
     emap = Dict(r.player_id => r.minutes for r in eachrow(EXP))
     for c in first(clusters, 5)
-        mins = [get(emap, COLS.player_ids[j], 0.0) for j in c]
-        @printf("  n=%d  minutes: %s\n", length(c), string(round.(mins, digits = 0)))
+        cl_mins = [get(emap, COLS.player_ids[j], 0.0) for j in c]
+        @printf("  n=%d  minutes: %s\n", length(c), string(round.(cl_mins, digits = 0)))
     end
 end
 

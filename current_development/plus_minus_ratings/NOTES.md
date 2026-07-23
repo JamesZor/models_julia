@@ -112,8 +112,8 @@ standard errors and effective degrees of freedom.
 | `RESEARCH_rapm.md` | WP0 deep-research output (verified; 6 bad citations caught) | **done** |
 | `l00_pm_data.jl` | Own SQL loaders + `.jls` caches | **done** |
 | `r00_data_qa.jl` | WP1 coverage / integrity gate | **done — PASSED** |
-| `l01_segments.jl` | Segment builder → sparse `X`, weights, dismissal + league dummies | pending |
-| `r01_segment_qa.jl` | WP2 segment QA + identifiability gate | pending |
+| `l01_segments.jl` | Segment builder → sparse `X`, weights, dismissal + league dummies | **done** |
+| `r01_segment_qa.jl` | WP2 segment QA + identifiability gate | **done — PASSED** |
 | `l02_shot_parser.jl` | BBC commentary → shot descriptors | pending |
 | `r02_shot_xg.jl` | WP3 shot xG model + calibration vs SofaScore player xG | pending |
 | `l03_targets.jl` | The four segment targets | pending |
@@ -132,6 +132,41 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
+
+- 2026-07-23 — **WP2 (r01_segment_qa.jl): GATE PASSED — and the collinearity fear did not
+  materialise.** 22,785 segments over 3,711 matches; 416 matches rejected.
+  1. **The segment builder validates against the base paper.** **72.2%** of segments have goal
+     difference 0 — the paper reports **72%** on 20,868 European top-flight matches. Landing on
+     their number from completely different data is the strongest single check available that
+     the segment walk is correct.
+  2. **S3 ratio**: 2,692 players / 22,785 segments = **8.5 : 1** overall, but **12.2 : 1** among
+     the 1,865 players above the 540-minute floor — i.e. **equal to the base paper's ≈12:1**
+     once you exclude the players nobody could rate anyway. 30.7% of players are below 540 min.
+     32.6% appear in more than one tier, which is what identifies the league columns.
+  3. **S4 always-together clusters: a NON-ISSUE.** Only **15 players (0.6%)** sit in exactly-tied
+     clusters, largest cluster 3, and every one of them is a 1–270 minute player. The paper's
+     centre-back-pairing caveat does not bite here — six seasons of lower-league rotation breaks
+     the ties. This was the risk I flagged hardest in the plan; it is empirically dead.
+  4. **S5 identifiability** (weights normalised to mean 1): 38 of 2,700 directions rank-deficient.
+     edf and prior-dominated share across λ: λ=0.1 → edf 2223 (82%), 4.0% prior-dominated;
+     λ=1 → 1686 (62%), 8.6%; λ=10 → 951 (35%), 17.2%; λ=100 → 348 (13%), 39.4%.
+     `cor(log posterior variance, log minutes)` is **−0.87 … −0.74** throughout, so precision
+     tracks exposure exactly as it should and there is no variance saturation. **A workable λ
+     regime clearly exists** — WP5 tunes inside roughly λ ∈ [0.1, 10].
+  5. **S2 shape**: ~6.0–6.6 segments/match (I had assumed ~8, so the raw budget is ~25% thinner
+     than planned — the ratio still passes). Duration median 8 min, 28% of segments under 5 min;
+     garbage-time segments are 23.5% of segments but only 11.0% of minutes; manpower imbalance
+     9.8% of segments / 5.0% of minutes.
+  6. **S1 rejects (416)**: 281 `no_incidents` (the tier-56 holes — the cost of not yet wiring the
+     live_text fallback), 72 `sub_in_unknown` + 62 `sub_out_off` (WP1's incomplete bench scrape),
+     1 `starters_ne_11`. Note the WP1 theory refines: those matches have 11 real starters and a
+     truncated *bench*, so they fail at the substitution, not the teamsheet-size check.
+  - **BUG FOUND AND FIXED mid-gate:** weights were not normalised, so λ and the half-life were
+    confounded — `mean(w) = 0.041` at half-life 365d over six seasons silently inflated every λ
+    on the grid ×24. Un-normalised, the gate read "52.7% of players prior-dominated at λ=10"
+    (alarming) and `cor(log var, log min) = −0.15` (a saturation ceiling). Normalised, the same
+    quantities are 17.2% and −0.78. Had this survived, WP5's (λ, half-life) tuning would have
+    been partly chasing a units artefact.
 
 - 2026-07-23 — **WP1 (r00_data_qa.jl): GATE PASSED.** The incident route is validated; the
   segment builder can be written against it.
