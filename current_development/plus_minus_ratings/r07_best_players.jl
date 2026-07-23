@@ -39,17 +39,8 @@ add_targets!(SEG, SH, XP)
 CS = competition_sets()
 lu = PM_LINEUPS[]
 
-# team_id → readable name, and player_id → name
-TEAMS = let conn = pm_connect()
-    df = DataFrame(LibPQ.execute(conn, """
-        SELECT DISTINCT l.team_id,
-               CASE WHEN l.is_home_team THEN m.home_team ELSE m.away_team END AS team_name
-        FROM sofascore.match_player_lineups l
-        JOIN sofascore.matches m ON m.match_id = l.match_id
-        WHERE m.tournament_id IN (54,55,56,57)"""))
-    close(conn)
-    Dict(Int(r.team_id) => String(r.team_name) for r in eachrow(df) if !ismissing(r.team_id))
-end
+# player_id → club (see pm_club_map — team_id is NOT a stable club identifier)
+CLUBS = Dict(r.player_id => r.club for r in eachrow(pm_club_map()))
 PNAME = Dict{Int,String}()
 for r in eachrow(lu); ismissing(r.player_name) || (PNAME[Int(r.player_id)] = String(r.player_name)); end
 
@@ -91,11 +82,11 @@ function season_ratings(season::String; target = :y_xg, λ = 200.0, w_sim = 0.0,
     lr.mins = ifelse.(lr.mins .<= 0, 1.0, lr.mins)
     sofa = combine(groupby(lr, :player_id),
                    [:rating, :mins] => ((r, m) -> sum(r .* m) / sum(m)) => :sofa,
-                   :team_id  => (t -> mode(collect(skipmissing(t)))) => :team_id,
                    :position => (p -> mode(pm_clean_position.(p)))   => :pos)
     R = innerjoin(R, sofa, on = :player_id)        # ⇒ tiers 54/55 only, where a rating exists
     R.name = [get(PNAME, p, "?") for p in R.player_id]
-    R.team = [get(TEAMS, Int(t), "?") for t in R.team_id]
+    R.team = [get(CLUBS, Int(p), "?") for p in R.player_id]
+    R = R[R.team .!= "?", :]
     return R
 end
 
@@ -112,8 +103,8 @@ function agreement_at_top(R::DataFrame; k::Int = 20)
 
     R.p_rapm = _pct(R.rapm); R.p_sofa = _pct(R.sofa)
     # within-team: subtract each player's own team mean, so we compare teammates
-    tm = combine(groupby(R, :team_id), :rapm => mean => :mr, :sofa => mean => :ms)
-    R = innerjoin(R, tm, on = :team_id)
+    tm = combine(groupby(R, :team), :rapm => mean => :mr, :sofa => mean => :ms)
+    R = innerjoin(R, tm, on = :team)
     R.dr = R.rapm .- R.mr; R.ds = R.sofa .- R.ms
     R.pd_rapm = _pct(R.dr); R.pd_sofa = _pct(R.ds)
 

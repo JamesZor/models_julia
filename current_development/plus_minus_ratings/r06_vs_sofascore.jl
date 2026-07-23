@@ -58,8 +58,9 @@ SOFA = combine(groupby(lr, :player_id),
                [:rating, :mins] => ((r, m) -> sum(r .* m) / sum(m)) => :sofa_rating,
                :mins => sum => :sofa_minutes,
                nrow => :n_rated,
-               :team_id => (t -> mode(collect(skipmissing(t)))) => :team_id,
                :position => (p -> mode(pm_clean_position.(p))) => :pos)
+SOFA = leftjoin(SOFA, pm_club_map(), on = :player_id)
+SOFA = SOFA[.!ismissing.(SOFA.club), :]
 @printf("players with a SofaScore rating in the fitted window: %d\n", nrow(SOFA))
 @printf("SofaScore rating: mean %.3f sd %.3f range [%.2f, %.2f]\n",
         mean(SOFA.sofa_rating), std(SOFA.sofa_rating),
@@ -92,8 +93,9 @@ for (tgt, λ, ws) in CELLS
     key = "$(tgt)_w$(ws)"
     RATINGS[key] = R
 
-    # How much of the rating is TEAM? R² of a team fixed effect.
-    grp = groupby(R, :team_id)
+    # How much of the rating is TEAM? R² of a CLUB fixed effect (44 real clubs — see
+    # pm_club_map: grouping by team_id gave 451 groups and inflated this badly).
+    grp = groupby(R, :club)
     ss_tot = sum((R.rapm .- mean(R.rapm)) .^ 2)
     ss_res = sum(sum((g.rapm .- mean(g.rapm)) .^ 2) for g in grp)
     team_r2 = 1 - ss_res / ss_tot

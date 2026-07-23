@@ -77,6 +77,7 @@ function fetch_pm_lineups(conn; tournaments::Vector{Int} = PM_TIERS)
            m.start_timestamp,
            m.home_score, m.away_score,
            m.injury_time1, m.injury_time2,
+           m.home_team, m.away_team,
            l.player_id,
            l.player_name,
            l.team_id,
@@ -277,6 +278,34 @@ every downstream file agrees on the match universe.
 function pm_match_meta(lineups::DataFrame = PM_LINEUPS[])
     return unique(select(lineups, :match_id, :tournament_id, :season, :start_timestamp,
                                   :home_score, :away_score, :injury_time1, :injury_time2))
+end
+
+"""
+    pm_club_map(; lineups) -> DataFrame(player_id, club)
+
+Each player's club: the modal value of `is_home_team ? home_team : away_team` over his
+appearances.
+
+**DO NOT USE `match_player_lineups.team_id` FOR THIS.** It is not a stable club identifier —
+there are **626 distinct `team_id` values across tiers 54–57 for ~44 actual clubs**, and a single
+id (e.g. 2351, mostly Rangers) carries dozens of different club names across its rows. Grouping
+~880 players by their modal `team_id` produced **451 groups**, i.e. an average group size under
+two, which inflates any "share of variance explained by team" statistic almost to the ceiling
+purely through degrees of freedom. That error overstated the team-loading figure in the first
+WP7 pass (0.38–0.54 reported, 0.21–0.39 actual). The name-derived label gives the correct **44**.
+"""
+function pm_club_map(; lineups::DataFrame = PM_LINEUPS[])
+    d = Dict{Int, Dict{String, Int}}()
+    for r in eachrow(lineups)
+        ismissing(r.player_id) && continue
+        nm = r.is_home_team === true ? r.home_team : r.away_team
+        ismissing(nm) && continue
+        c = get!(d, Int(r.player_id), Dict{String, Int}())
+        s = String(nm); c[s] = get(c, s, 0) + 1
+    end
+    ids = collect(keys(d))
+    return DataFrame(player_id = ids,
+                     club = [argmax(d[i]) for i in ids])
 end
 
 """
