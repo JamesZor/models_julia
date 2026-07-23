@@ -358,6 +358,7 @@ to keep the reference arm faithful to the base paper's plain ±1 design; the dis
 already absorb the average manpower effect.
 """
 function build_design(segments::DataFrame;
+                      target::Symbol = :y_goals,
                       weights::SegmentWeights = SegmentWeights(),
                       T_rating::DateTime = DateTime(maximum(segments.start_timestamp)),
                       max_reds::Int = 3,
@@ -387,9 +388,14 @@ function build_design(segments::DataFrame;
     y = Vector{Float64}(undef, n)
     w = Vector{Float64}(undef, n)
 
+    # `target` selects which of the WP4 responses to fit (`:y_goals`, `:y_xg`, `:y_xp`, ...).
+    # Fall back to the goal difference so l01 stays usable before l03 has run.
+    yvec = hasproperty(segments, target) ? Float64.(segments[!, target]) :
+           Float64.(segments.goals_home .- segments.goals_away)
+
     for (r, seg) in enumerate(eachrow(segments))
         scale = seg.duration / 90.0
-        y[r] = seg.goals_home - seg.goals_away
+        y[r] = yvec[r]
         w[r] = segment_weight(seg, weights, T_rating)
 
         nh = length(seg.home_players); na = length(seg.away_players)
