@@ -48,12 +48,13 @@ println(nrow(bad) == 0 ? "\nGATE PASSED: every tier × season ≥95% parsed." :
         "\nGATE FAILED on:\n$(bad)")
 
 println("\nUnparsed examples (what the closed vocabulary is missing):")
-unparsed_txt = PM_LIVETEXT[][coalesce.(in.(PM_LIVETEXT[].event_type, Ref(SHOT_EVENTS)), false), :]
-shown = 0
-for t in skipmissing(unparsed_txt.text)
-    shown >= 8 && break
-    parse_shot("attempt_missed", t).parsed && continue
-    println("  · ", first(String(t), 150)); shown += 1
+let unparsed_txt = PM_LIVETEXT[][coalesce.(in.(PM_LIVETEXT[].event_type, Ref(SHOT_EVENTS)), false), :],
+    shown = 0
+    for t in skipmissing(unparsed_txt.text)
+        shown >= 8 && break
+        parse_shot("attempt_missed", t).parsed && continue
+        println("  · ", first(String(t), 150)); shown += 1
+    end
 end
 
 # ==========================================
