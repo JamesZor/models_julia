@@ -39,19 +39,31 @@ inc = PM_INCIDENTS[]
 sofa_goals = inc[coalesce.(inc.incident_type .== "goal", false), :]
 bbc_goals  = SH[SH.is_goal, :]
 
-it1m = Dict(Int(r.match_id) => _num(r.injury_time1) for r in eachrow(pm_match_meta()))
-sg = combine(groupby(sofa_goals, :match_id),
-             [:time, :added_time] => ((t, a) -> [pm_clock(t[i], a[i], 0.0) for i in eachindex(t)]) => :t)
-bg = combine(groupby(bbc_goals, :match_id),
-             [:time, :added_time] => ((t, a) -> [pm_clock(t[i], a[i], 0.0) for i in eachindex(t)]) => :t)
-j = innerjoin(rename(sg, :t => :t_sofa), rename(bg, :t => :t_bbc), on = :match_id)
+# Build the per-match time lists BY HAND. `combine` flattens a vector-valued return into one row
+# per element, which silently turns the subsequent join into a cartesian product — the first run
+# of this gate "failed" with p95 |diff| = 68 min purely from that.
+function goal_times_by_match(df)
+    d = Dict{Int, Vector{Float64}}()
+    for r in eachrow(df)
+        t = pm_clock(r.time, r.added_time, 0.0)
+        isnan(t) && continue
+        push!(get!(d, Int(r.match_id), Float64[]), t)
+    end
+    for v in values(d); sort!(v); end
+    return d
+end
+sg = goal_times_by_match(sofa_goals)
+bg = goal_times_by_match(bbc_goals)
 
-diffs = Float64[]
-for r in eachrow(j)
-    a = sort(collect(skipmissing(r.t_sofa))); b = sort(collect(skipmissing(r.t_bbc)))
-    length(a) == length(b) || continue
+diffs = Float64[]; n_pairs = 0; n_len_mismatch = 0
+for (mid, a) in sg
+    b = get(bg, mid, nothing); b === nothing && continue
+    if length(a) != length(b); n_len_mismatch += 1; continue; end
+    n_pairs += 1
     append!(diffs, a .- b)
 end
+@printf("matches with goals in both sources: %d | dropped for differing goal counts: %d\n",
+        n_pairs, n_len_mismatch)
 if isempty(diffs)
     println("NO comparable matches — investigate before trusting any shot-based target.")
 else
@@ -71,7 +83,13 @@ _hdr("Fitting the in-play hazard and building all five targets")
 @time LONG = build_state_intervals()
 @printf("state intervals: %d rows (%d match-intervals × 2 sides)\n", nrow(LONG), nrow(LONG) ÷ 2)
 @time HAZ = fit_inplay_hazard(LONG)
-println(HAZ)
+println(coeftable(HAZ))
+println("\nRead: tbin coefficients should RISE with time (more goals late); mp_c should be")
+println("clearly positive (a man up scores more); is_home positive. NOTE gd_f is a strength")
+println("PROXY as much as a game-state effect — the model is deliberately team-blind, so a team")
+println("3 goals up looks high-scoring partly because it is the better team. That is the base")
+println("paper's intended behaviour (§4.2), not a defect, but it does mean xPPM rewards players")
+println("for being ahead in a way that partly reflects their team.")
 @time XP = xp_table(HAZ)
 @time add_targets!(SEG, SH, XP)
 
