@@ -55,12 +55,16 @@ end
 sg = goal_times_by_match(sofa_goals)
 bg = goal_times_by_match(bbc_goals)
 
-diffs = Float64[]; n_pairs = 0; n_len_mismatch = 0
-for (mid, a) in sg
-    b = get(bg, mid, nothing); b === nothing && continue
-    if length(a) != length(b); n_len_mismatch += 1; continue; end
-    n_pairs += 1
-    append!(diffs, a .- b)
+# `let` block: a bare top-level `for` inside an included script gets SOFT scope, so counters
+# assigned in the loop body are treated as new locals and the reads below fail.
+diffs, n_pairs, n_len_mismatch = let d = Float64[], np = 0, nm = 0
+    for (mid, a) in sg
+        b = get(bg, mid, nothing); b === nothing && continue
+        if length(a) != length(b); nm += 1; continue; end
+        np += 1
+        append!(d, a .- b)
+    end
+    (d, np, nm)
 end
 @printf("matches with goals in both sources: %d | dropped for differing goal counts: %d\n",
         n_pairs, n_len_mismatch)
