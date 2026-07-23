@@ -116,8 +116,8 @@ standard errors and effective degrees of freedom.
 | `r01_segment_qa.jl` | WP2 segment QA + identifiability gate | **done — PASSED** |
 | `l02_shot_parser.jl` | BBC commentary → shot descriptors | **done** |
 | `r02_shot_xg.jl` | WP3 shot xG model + calibration vs SofaScore player xG | **done — PASSED** |
-| `l03_targets.jl` | The four segment targets | pending |
-| `r03_targets_qa.jl` | WP4 target sparsity comparison | pending |
+| `l03_targets.jl` | The five segment targets + in-play hazard/xP table | **done** |
+| `r03_targets_qa.jl` | WP4 target sparsity comparison | **done — PASSED** |
 | `l04_ridge_apm.jl` | Sparse ridge RAPM + CV over (λ, ζ) | pending |
 | `r04_ridge_fit.jl` | WP5 fits | pending |
 | `l05_bayes_apm.jl` | Turing hierarchical / prior-informed RAPM | pending |
@@ -132,6 +132,54 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
+
+- 2026-07-23 — **WP4 (r03_targets_qa.jl): ALL GATES PASSED.** Five targets built over the WP2
+  segments. **The sparsity ladder works exactly as the base paper argued it would.**
+
+  | target | % of segments = 0 | sd | sd of per-90 rate | cor with goals |
+  |---|---|---|---|---|
+  | `y_goals` | **72.1** | 0.690 | 7.50 | 1.000 |
+  | `y_sot`   | 51.2 | 1.493 | 14.12 | 0.437 |
+  | `y_shots` | 32.8 | 3.071 | 25.44 | 0.271 |
+  | `y_xg`    | **25.5** | 0.455 | **4.70** | 0.381 |
+  | `y_xp`    | **0.4** | 1.008 | 12.67 | 0.881 |
+
+  1. **The two candidates are xG and xP, and they trade off differently — this is the WP5
+     decision.**
+     - **`y_xg` is the densest genuinely NEW signal** (25.5% zero vs 72.1%) and has by far the
+       *lowest* per-90 variance (4.70 vs goals' 7.50) — it is a denoised goal rate, which is the
+       whole point. **But it costs 47.8% of the sample**: live_text only starts in 23/24, so the
+       shot-based targets exist on **11,886 of 22,785 segments (52.2%), 1,895 matches**.
+     - **`y_xp` is dense (0.4% zero) AND available on the FULL 22,785 segments** — it needs only
+       incidents, not live_text. Free density. **But its 0.881 correlation with goals means it
+       is substantially a game-state-weighted re-expression of the goals target rather than
+       independent information.**
+     ⇒ WP5 must run both, and the shot-based arms must be compared to a goals arm **refit on the
+     same 52.2% subset**, or xG gets credit for merely being the more recent data.
+  2. **T5 in-play model: near-exact.** Expected points at kickoff **1.520 home / 1.237 away**
+     against an empirical **1.529 / 1.210**. (Base paper's EPL: 1.63/1.11 — a lower league should
+     be flatter, and is.) Hazard coefficients all correctly signed: time bins rise monotonically
+     to **+0.341** in the last, manpower **+0.484 (z=13.0)**, home **+0.160 (z=8.1)**. Isolating
+     manpower properly (HT level 11v11 → 1.435; HT level a man up → 1.509) gives **+0.074 xP**.
+  3. **T1 clock alignment PASSED**: BBC and SofaScore agree with **no systematic offset**
+     (mean diff −0.28 min, median 0, 90% within ±1 min, 94.5% within ±2, p95 = 3 min) over 5,208
+     paired goal timings in 1,771 matches. **23.9%** of shots sit within ±2 min of a segment
+     boundary and are therefore exposed to that spread — but the spread is symmetric, so the
+     residual effect on the shot-based targets is noise, not bias.
+  4. **T2 attribution: 100.00% exact** — every shot lands in exactly one segment, mean shortfall
+     0.000.
+  - **Caveat inherited from the base paper's design (§4.2), worth stating plainly:** the in-play
+    model is deliberately **team-strength-blind**, so goal difference acts as a strength proxy as
+    much as a game-state effect — a side three goals up shows a *higher* scoring rate (+0.353)
+    partly because it is the better team. That is intended (conditioning on team strength would
+    double-count the very thing plus-minus is estimating), but it does mean **xPPM rewards
+    players for being ahead in a way that partly reflects their team**. Relevant to the WP7
+    pitfall "ratings that merely recover team strength".
+  - Two QA bugs found and fixed in this WP, both in the checks rather than the data: `combine`
+    flattening the per-match goal-time vectors turned T1's join into a cartesian product (the
+    gate "failed" at p95 = 68 min); and the T5 manpower check compared against kickoff, which
+    conflates the manpower gain with the shrinking time remaining and made a correct model look
+    broken.
 
 - 2026-07-23 — **WP3 (r02_shot_xg.jl): ALL SEVEN GATES PASSED.** A zonal xG model from BBC
   commentary is real and usable. 45,201 shots over 2,199 matches, 13.28% converted.
