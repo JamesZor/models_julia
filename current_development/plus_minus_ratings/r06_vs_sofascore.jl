@@ -25,6 +25,7 @@
 
 using DataFrames
 using Statistics
+using StatsBase: mode
 using LinearAlgebra
 using Printf
 
