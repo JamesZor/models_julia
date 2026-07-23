@@ -118,8 +118,8 @@ standard errors and effective degrees of freedom.
 | `r02_shot_xg.jl` | WP3 shot xG model + calibration vs SofaScore player xG | **done — PASSED** |
 | `l03_targets.jl` | The five segment targets + in-play hazard/xP table | **done** |
 | `r03_targets_qa.jl` | WP4 target sparsity comparison | **done — PASSED** |
-| `l04_ridge_apm.jl` | Sparse ridge RAPM + CV over (λ, ζ) | pending |
-| `r04_ridge_fit.jl` | WP5 fits | pending |
+| `l04_ridge_apm.jl` | Sparse ridge RAPM + CV over (λ, ζ, w_SIM) | **done** |
+| `r04_ridge_fit.jl` | WP5 fits | **done — PASSED (small effect)** |
 | `l05_bayes_apm.jl` | Turing hierarchical / prior-informed RAPM | pending |
 | `r05_bayes_fit.jl` | WP6 Bayesian vs ridge | pending |
 | `r06_vs_sofascore.jl` | **WP7 decisive gate** | pending |
@@ -133,15 +133,89 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
 
+- 2026-07-23 — **WP5 (r04_ridge_fit.jl): the ratings carry REAL but SMALL signal — and the
+  specification check earned its keep by catching two bugs first.**
+
+  **Two bugs, found because the first run produced an impossible result.**
+  1. **Shot side attribution (DATA — corrupted WP3 and WP4 too).** The first run returned a
+     *negative* home-advantage coefficient for shot targets but positive for goals. That split
+     pointed at attribution, not the ridge. Cause: `(lt.team = mm.bbc_home_slug)` returns
+     **FALSE, not NULL**, when the slug matches *neither* side, so every unmatched slug was
+     silently attributed to **away**. It hit **7,073 of 45,201 shot rows (15.6%)** and reversed
+     the measured home shot advantage (our home mean 9.21 vs BBC ground truth 11.16). The cause
+     is a slug variant — `dundee-fc` vs `dundee`, `clyde-fc` vs `clyde`. Normalising the trailing
+     `-fc` resolves **all 7,073**, none left over, so they are recovered rather than dropped.
+     **Effect of the fix on WP3: team-level xG correlation vs SofaScore 0.698 → 0.817**, MAE
+     0.454 → 0.372, bias +0.061 → −0.046. WP3/WP4 numbers above have been amended.
+  2. **Link calibration (HARNESS).** Every arm scored at or *below* the no-information floor,
+     goals by 0.064 Brier — impossible for a model that can at worst ignore its covariate. The
+     ordered logit was being fit on TRAINING matches, whose ratings had been fit on them, so the
+     strength covariate was far more predictive there than out-of-sample; the logit learned an
+     inflated slope and was overconfident on evaluation. I had explicitly reasoned in the
+     docstring that this was "small, shared optimism" — **that reasoning was wrong.** Link and
+     floor are now both fit on the evaluation season (3 params on ~640 matches); the ratings stay
+     strictly out-of-sample.
+
+  **Results after the fixes** (Δ Brier vs a no-information floor fit on the same matches;
+  negative = the ratings help; 1,280 evaluation matches over 24/25 + 25/26):
+
+  | target | best λ | half-life | w_SIM=0 | best w_SIM | Δ Brier @ best |
+  |---|---|---|---|---|---|
+  | `y_shots` | 1000 | 730 | −0.01010 | 0.90 | **−0.01219** |
+  | `y_xg` | 200 | 730 | −0.00895 | 0.75 | −0.00982 |
+  | `y_sot` | 1000 | 730 | −0.00649 | 0.75 | −0.00756 |
+  | `y_goals` | 1000 | 730 | −0.00447 | 0.90 | −0.00771 |
+  | `y_goals_cov` | 20 | 365 | −0.00451 | — | — |
+  | `y_xp` | 1000 | 730 | −0.00319 | 0.90 | −0.00657 |
+
+  1. **The denser-target hypothesis is CONFIRMED on the fair comparison.** WP4 required goals to
+     be refit on the same 52.2% subset the shot targets live on: `y_xg` **−0.00895** vs
+     `y_goals_cov` **−0.00451** — xG roughly **doubles** the goals arm's edge on identical data.
+     `y_shots` is better still. Denser targets genuinely buy discrimination, exactly as the base
+     paper argued.
+  2. **Teammate-similarity shrinkage helps EVERY target, monotonically** — validating the WP0
+     research find (Hvattum et al. 2020 §3.1) and **overturning the caution I recorded from
+     Gelade & Hvattum** that informed priors buy little in football. Gains: goals −0.00447 →
+     −0.00771 (+73%), xP −0.00319 → −0.00657 (+106%), shots −0.01010 → −0.01219 (+21%).
+  3. **But the effect is SMALL.** Best Brier **0.63322** against a floor of **0.64541** — a
+     **1.9% relative** improvement. And λ optimises at **1000**, the grid boundary, with
+     `sd_players` collapsing to 0.06: most per-player variation is noise, and what survives is a
+     thin consistent signal. w_SIM also optimises at **0.90**, again the boundary. Both grids
+     need extending before any of these are treated as tuned values.
+  4. **Specification check vs the base paper's Table 4 — signs PASS.** Home advantage
+     **+1.5135** (correctly positive; ≈1.5 more shots per 90, sane). Red cards **−10.66** and
+     **−11.16** (clearly negative; the magnitude is right for a shot *difference*, since a
+     dismissal both suppresses your shots and lifts the opponent's). Two defects: red-card 3 is
+     exactly 0 (no team in the sample took a third dismissal with the opponent still at eleven),
+     and reds are **not monotone** in severity as the paper's are.
+  5. **League coefficients are NOT ordered by tier** — 54 +0.283, 57 −0.027, 55 −0.099,
+     56 −0.157. The expected ordering is 54 > 55 > 56 > 57. Identified only through cross-tier
+     players, and evidently too noisy to trust. **Do not read these as league-strength estimates.**
+  6. **Face validity is strong.** Top 15 at ≥900 minutes are *entirely* Celtic and Rangers
+     players (O'Riley, Taylor, Kyogo, Johnston, Carter-Vickers, Hart; Tavernier, Butland,
+     Goldson, Lundstram, Dessers). Bottom 10 are lower-tier players. `cor(rating, log minutes)
+     = 0.097` — **the rating is not merely measuring playing time.**
+
+  - **⚠ THE TENSION TO CARRY INTO WP7, and it is structural, not incidental.** The tuning
+    criterion is match-outcome Brier, so it **rewards a rating for recovering team strength** —
+    team strength predicts results. `w_SIM` improves that criterion *precisely by making ratings
+    more team-like* (it shrinks each player toward his most frequent teammates), which is also
+    why the top 15 are one-club blocks. So WP5's winner selection is partly **at odds with**
+    WP7's requirement that the rating not just be team strength in disguise — the exact pitfall
+    Gelade & Hvattum name. WP7 must therefore (a) report split-half reliability at several
+    `w_SIM` values, not only the Brier-optimal one, and (b) explicitly measure how much of each
+    rating's variance is explained by a team fixed effect, and prefer a cell that keeps
+    within-team spread rather than the one that maximises outcome Brier.
+
 - 2026-07-23 — **WP4 (r03_targets_qa.jl): ALL GATES PASSED.** Five targets built over the WP2
   segments. **The sparsity ladder works exactly as the base paper argued it would.**
 
   | target | % of segments = 0 | sd | sd of per-90 rate | cor with goals |
   |---|---|---|---|---|
   | `y_goals` | **72.1** | 0.690 | 7.50 | 1.000 |
-  | `y_sot`   | 51.2 | 1.493 | 14.12 | 0.437 |
-  | `y_shots` | 32.8 | 3.071 | 25.44 | 0.271 |
-  | `y_xg`    | **25.5** | 0.455 | **4.70** | 0.381 |
+  | `y_sot`   | 52.2 | 1.263 | 14.12 | 0.437 |
+  | `y_shots` | 34.3 | 2.371 | 25.44 | 0.271 |
+  | `y_xg`    | **25.7** | 0.386 | **4.70** | 0.381 |
   | `y_xp`    | **0.4** | 1.008 | 12.67 | 0.881 |
 
   1. **The two candidates are xG and xP, and they trade off differently — this is the WP5
@@ -196,7 +270,9 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
      RESEARCH_rapm.md §5.1 predicted. Total xG 5,715 vs 6,004 goals (ratio 0.952; own goals are
      not shot events, which accounts for most of the gap).
   4. **X5 team-level vs SofaScore (the primary calibration gate, needs no name matching):**
-     pooled **cor 0.698**, MAE 0.454, bias +0.061 over 1,349 team-innings / 728 matches. For
+     pooled **cor 0.817**, MAE 0.372, bias −0.046 over 1,349 team-innings / 728 matches.
+     *(AMENDED 2026-07-23 after WP5 found the shot side-attribution bug; the pre-fix figures
+     were cor 0.698 / MAE 0.454 / bias +0.061.)* For
      reference `bbc_xg_proxy`'s frozen team GLM reached Spearman 0.715 / R² 0.442 against the
      same target — so this is **comparable to the existing frozen proxy, but per-shot**, which
      is the whole point: an aggregate match-level GLM cannot be assigned to a segment, and this
