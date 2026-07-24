@@ -195,6 +195,25 @@ try
     ll = DataFrame(model = present)
     for s in selections; ll[!, s] = [_c(m, "logloss_$(s)_overall_diff_ll") for m in present]; end
     show(ll; allrows=true, allcols=true, truncate=0); println()
+
+    # --- persist the whole eval to disk so the overnight run needs NO stdout capture ---
+    open(joinpath(@__DIR__, "r07_results.txt"), "w") do io
+        println(io, "r07 funnel+iso — family-pooled LogLoss diff vs Bet365 close (negative = beats it)")
+        show(io, fm; allrows=true, allcols=true, truncate=0); println(io)
+        println(io, "\nKEY CONTRASTS (Δ family-pooled; negative = first model better):")
+        for (a, b, label) in [
+            ("funnel_iso_mw40_hl365_hs2", "iso_pois_mw40_hl365_hs2", "funnel+iso vs none+iso @ mw0.40"),
+            ("funnel_iso_mw25_hl365_hs2", "iso_pois_mw25_hl365_hs2", "funnel+iso vs none+iso @ mw0.25"),
+            ("funnel_iso_mw40_hl365_hs2", "funnel_cw0_2s_hl365_hs2", "iso LIFT on funnel core"),
+            ("iso_pois_mw40_hl365_hs2",   "none_pois_2s_hl365_hs2",   "iso LIFT on none core")]
+            (a in present && b in present) || continue
+            va, vb = val(a), val(b)
+            println(io, "  $label")
+            for f in fams; println(io, "      $(rpad(string(f),7)) $(_r(va[f])) − $(_r(vb[f])) = $(_r(va[f]-vb[f]))"); end
+        end
+        println(io, "\nPer line:")
+        show(io, ll; allrows=true, allcols=true, truncate=0); println(io)
+    end
 catch e
     @error "eval failed" exception=(e, catch_backtrace())
 end
