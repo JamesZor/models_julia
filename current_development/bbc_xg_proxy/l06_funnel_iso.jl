@@ -128,12 +128,21 @@ end
         ll_casc_h + ll_casc_a + ll_marg_h + ll_marg_a)
 
     # --- ISO MARKET PILLAR — anchor the GOAL log-rate log(λ_s·conv) = log_λ_s + lp12 ---
-    log_λ_g_h = log_λ_s_h .+ lp12
-    log_λ_g_a = log_λ_s_a .+ lp12
-    ll_mkt = logpdf.(Normal.(log_λ_g_h, σ_market), market_log_h) .+
-             logpdf.(Normal.(log_λ_g_a, σ_market), market_log_a)
-    Turing.@addlogprob! market_active * config.market_weight *
-        sum(ll_mkt .* match_weights .* market_mask)
+    # Written in the SAME sufficient-statistic arithmetic form as the funnel likelihood above
+    # (plain log / sum / broadcast, NO logpdf.(Normal...) kernel). This is mathematically the
+    # identical anchor — a Normal logpdf summed, minus the parameter-free −½log(2π)·Σw constant —
+    # but the logpdf.(Normal.(·,σ_market),·) broadcast, when it shares the tape with the funnel's
+    # suff-stat goal term (both differentiate through lp12 = log p₂), makes ReverseDiff's
+    # COMPILED tape return a wrong gradient for p2_raw: p₂ collapses to ~0 and σ_market inflates
+    # past its prior. The pure funnel (r06) and the none+iso pillar each compile fine alone; only
+    # the combination breaks. Expanding to arithmetic sidesteps it (verified: p₂→0.147,
+    # σ_market→0.155, matching none+iso) and is what the production trainer's compile=true needs.
+    wm = match_weights .* market_mask
+    Σwm = sum(wm)
+    r_h = log_λ_s_h .+ lp12 .- market_log_h
+    r_a = log_λ_s_a .+ lp12 .- market_log_a
+    ll_mkt = -Σwm * log(σ_market) - (0.5 / σ_market^2) * (sum(wm .* r_h .^ 2) + sum(wm .* r_a .^ 2))
+    Turing.@addlogprob! market_active * config.market_weight * ll_mkt
 end
 
 function Features.required_features(model::TeamFunnelIsoDPGoalsModel)
