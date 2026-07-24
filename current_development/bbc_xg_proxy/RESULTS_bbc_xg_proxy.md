@@ -229,3 +229,63 @@ marginal Poisson, so goals inform λ_s directly) as the remaining lever.
   coordinates are poorly conditioned when their σ collapses (the funnel of a
   near-zero scale is exactly the geometry non-centred parameterisation struggles
   with). If per-team conversion is ever revisited, that needs addressing first.
+
+---
+
+# WP3 — Funnel cascade, FULL SPEC (r06, 2026-07-24)
+
+The r03–r05 results were all 5-fold / 66-match smokes. This is the funnel at the
+`scottish_lower_smile` Grid-A production spec: `target_seasons ["23/24","24/25",
+"25/26"]`, HS=2, HL=365, `:match_biweek`, warmup_period=0 → **60 folds/cell**,
+samples=600 / warmup=1000 / chains=4 / max_depth=8. Three cells, references
+(`none_pois_hl365_hs2`, `iso_pois_mw25/40`) loaded from disk, never retrained.
+
+## Convergence (r06_convergence.txt)
+
+| cell | folds | R-hat≤1.01 | worst |
+|---|---|---|---|
+| funnel_pois_hl365_hs2 | 60 | 44/60 (73%) | 1.0202 |
+| funnel_flex_cw0_sot_hl365_hs2 | 60 | 37/60 (62%) | 1.0203 |
+| funnel_flex_cw0_nosot_hl365_hs2 | 60 | 42/60 (70%) | 1.0173 |
+
+The strict 95%-at-1.01 rule is not met, but **worst R-hat is 1.017–1.020 across
+all 180 folds** — no fold is badly mixed; all clear the usual 1.05 practical bar.
+Read the eval.
+
+## LogLoss vs Bet365 close — family-pooled (lower = better; negative = beats close)
+
+| model | x12 | btts | totals |
+|---|---|---|---|
+| none_pois_hl365_hs2 (baseline) | 0.0143 | 0.0014 | 0.0002 |
+| funnel_pois (cascade, cw=1) | 0.0121 | 0.0030 | 0.0008 |
+| funnel cw=0, SoT on | **0.0108** | 0.0023 | **0.0000** |
+| funnel cw=0, SoT off | **0.0108** | 0.0023 | **0.0000** |
+| iso_pois_mw40 (market pillar) | 0.0029 | 0.0020 | −0.0058 |
+
+Δ vs none_pois (negative = funnel better):
+
+| variant | x12 | btts | totals |
+|---|---|---|---|
+| funnel_pois (cw=1) | −0.0022 | +0.0016 | +0.0006 |
+| funnel cw=0 (either) | **−0.0035** | +0.0009 | **−0.0002** |
+
+## The three questions, answered
+
+1. **1X2 gain survives — YES.** Smoke's −0.0071 shrinks to −0.0022/−0.0035 at full
+   sample but holds. Entirely the home/away split (home 0.0163 vs 0.0222, away
+   0.0139 vs 0.0196; draw a wash) — shots resolve *which* team is stronger.
+2. **cw=0 fixes the totals deficit — YES.** cw=1 carries +0.0006; routing goals
+   back onto λ_s (cw=0) erases it (−0.0002, even with none_pois) AND improves 1X2
+   further. Confirms empirically that the cascade's additive separability ("goals
+   give zero gradient to team strength") WAS the totals cause, and its fix.
+3. **SoT worth anything — NO.** `cw0_sot` ≡ `cw0_nosot` to 4 decimals on EVERY
+   line. Two-layer shots→goals (p₁≡1) prices identically to three-layer. Closes
+   the loop on the Stage-2 σ_p1≈0.034 null: SoT is redundant given shots + goals.
+
+## Winner and next step
+
+**Winner: funnel, cascade_weight=0, SoT off** — a two-layer shots→goals engine.
+Beats none_pois on 1X2, ties on totals, simplest and cheapest, SoT drops out. It
+is a genuine *structural* backbone improvement, orthogonal to the market pillar
+(iso still dominates totals at −0.0058). Next test: **funnel+iso vs none+iso** —
+does the sharper structural core add anything once the market anchor sits on top.
