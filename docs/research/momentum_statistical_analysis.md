@@ -7,7 +7,7 @@
 > (no missing/empty vectors; vector length 80–90 min, dense — ~2 zero-gaps/90).
 
 > **Maths/methods:** all formulas, estimators and tests are defined in
-> `docs/feature_validation_methodology.md` (§5 maps each result here to its test).
+> `docs/guides/feature_validation_methodology.md` (§5 maps each result here to its test).
 
 ## 1. Method (as implemented in `l01_momentum.jl`)
 

@@ -1,7 +1,7 @@
 # Bayesian Layer-2 Calibration — Research Notes
 
 **Status:** research / pre-prototype.
-**Author context:** companion to `docs/l3_meta_model_research.md` and the Betfair
+**Author context:** companion to `docs/archive/l3_meta_model_research.md` and the Betfair
 closing-line study (`current_development/betfair_closing_line/RESULTS_REPORT.md`).
 **Goal:** replace / augment the deterministic GLM calibrator with a *Bayesian* calibrator,
 one model per walk-forward fold, that (a) corrects systematic bias, (b) **propagates and

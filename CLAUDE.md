@@ -42,7 +42,7 @@ Each model must implement `Features.required_features(model)` returning a `Vecto
 GLM-based bias correction. Pipeline: `build_l2_training_df` → `train_calibrators` → `apply_calibrators`. Crucially shifts the **entire MCMC posterior distribution**, not just scalar probabilities, preserving uncertainty for Kelly staking.
 
 ### Layer 3: Meta Model (`current_development/MetaModels/`)
-In active development. Blends L1 predictions with market implied probabilities via a dynamic Gaussian Random Walk mixture: `Q_i = θ_t * p_L1_i + (1-θ_t) * m_i`. Two engine types: `ConvexMixtureMetaModel` and `AffineCalibrationMetaModel`. See `docs/meta_model_design.md`.
+In active development. Blends L1 predictions with market implied probabilities via a dynamic Gaussian Random Walk mixture: `Q_i = θ_t * p_L1_i + (1-θ_t) * m_i`. Two engine types: `ConvexMixtureMetaModel` and `AffineCalibrationMetaModel`. See `docs/archive/meta_model_design.md`.
 
 ### Other modules
 - **`Features`** (`src/features/`): Transforms `DataStore` into `FeatureSet`s. Uses `SplitBoundary` (Match ID pointers, not data copies) for memory-efficient temporal folds. Extractors live in `src/features/extractors/`.

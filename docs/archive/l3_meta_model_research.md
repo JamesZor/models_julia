@@ -337,7 +337,7 @@ The L3 meta-model is architecturally a **mirror** of your L1 model, just operati
 ## 9. Design Update — lessons from the L2 / staking experiments (2026-06)
 
 The staking diagnostics (`current_development/bayesian_layer_2/MIN_EDGE_STAKING_REPORT.md`,
-`docs/l2_bayesian_calibration_research.md` §8) empirically validate the **regime-gate** concept
+`docs/archive/l2_bayesian_calibration_research.md` §8) empirically validate the **regime-gate** concept
 above and sharpen it in three ways. They also settle which of the two "L3" flavours to build.
 
 ### 9.1 Two distinct L3 flavours — build the staking gate, not the prediction blend

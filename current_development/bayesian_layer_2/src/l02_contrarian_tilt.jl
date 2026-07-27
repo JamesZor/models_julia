@@ -1,6 +1,6 @@
 # current_development/bayesian_layer_2/src/l02_contrarian_tilt.jl
 #
-# Contrarian stake tilt — validated prototype (see docs/l3_meta_model_research.md §10.5).
+# Contrarian stake tilt — validated prototype (see docs/archive/l3_meta_model_research.md §10.5).
 #
 # Finding: per-market fold-to-fold realised performance is MEAN-REVERTING
 # (demeaned lag-1 autocorr ≈ −0.16). A momentum regime-gate performance-chases and LOSES;

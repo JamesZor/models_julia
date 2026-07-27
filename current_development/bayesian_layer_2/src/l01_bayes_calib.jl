@@ -1,7 +1,7 @@
 # current_development/bayesian_layer_2/src/l01_bayes_calib.jl
 #
 # Bayesian Layer-2 calibration — prototype loader.
-# Companion to docs/l2_bayesian_calibration_research.md.
+# Companion to docs/archive/l2_bayesian_calibration_research.md.
 #
 # Core object: a *Bayesian* logit-shift calibrator fit by Laplace approximation.
 #   logit(p_cal) = logit(p_L1)   +   Δ_i,        Δ_i = xᵢᵀ β,   β ~ N(β̂, Σ)
