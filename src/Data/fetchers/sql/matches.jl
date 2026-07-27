@@ -15,8 +15,15 @@ function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::MatchesData)
             m.home_score_ht,
             m.away_score_ht,
             m.winner_code,
-            m.start_timestamp, 
+            m.start_timestamp,
             m.round,
+            -- Stoppage-time minutes per half. Needed by the plus-minus segment builder: an event
+            -- at 45+2 is stored as (time=45, added_time=2), so naively adding them puts it at 47 —
+            -- AFTER the 46th minute of the second half. Half-time substitutions are common, so
+            -- that is a real ordering bug. `injury_time1` is the offset that restores monotonicity;
+            -- `injury_time1 + injury_time2` sets the playable match length.
+            m.injury_time1,
+            m.injury_time2,
             (m.raw_data ->> 'hasXg')::boolean AS has_xg,
             (m.raw_data ->> 'hasEventPlayerStatistics')::boolean AS has_stats
         FROM sofascore.matches m
