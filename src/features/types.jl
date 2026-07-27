@@ -91,3 +91,71 @@ abstract type AbstractRatingTracker end
 struct PlayerRatingsFeature{T <: AbstractRatingTracker} <: AbstractFeatureConfig
     tracker::T
 end
+
+# --- Plus-Minus (RAPM) Player Rating Features ---
+#
+# ARCHITECTURE NOTE — why this is a SIBLING of PlayerRatingsFeature, not another tracker.
+# `AbstractRatingTracker` is a per-player RECURSIVE FILTER over one player's own rating history
+# (see trackers/bayesian.jl). RAPM is a GLOBAL CROSS-MATCH RIDGE REGRESSION solved for every player
+# at once, so it cannot be an `AbstractRatingTracker`. It becomes its own feature family instead —
+# mirroring `AbstractMarketFeatureConfig` — with one concrete struct per plus-minus target and a
+# single shared `add_feature!` (extractors/plus_minus_extractors.jl) dispatching all of them.
+# Swapping the APM from shots to xG is therefore just swapping the struct.
+#
+# The estimator knobs travel WITH the struct, so a variant is fully described by its config.
+# Defaults are the research's per-target tuned cells; `w_sim = 0` everywhere on purpose — see
+# src/features/plus_minus/ridge.jl for why the Brier-optimal `w_sim = 0.9` is NOT the default.
+abstract type AbstractPlusMinusFeature <: AbstractFeatureConfig end
+
+# The GREEN-LIT cell: split-half reliability 0.669 vs the SofaScore rating's 0.660, and better
+# match-outcome retrodiction than the SofaScore-fed model on both held-out seasons.
+Base.@kwdef struct ShotsPlusMinusFeature <: AbstractPlusMinusFeature
+    w_sim::Float64          = 0.0
+    λ::Float64              = 1000.0
+    half_life_days::Float64 = 730.0
+end
+
+Base.@kwdef struct ShotsOnTargetPlusMinusFeature <: AbstractPlusMinusFeature
+    w_sim::Float64          = 0.0
+    λ::Float64              = 1000.0
+    half_life_days::Float64 = 730.0
+end
+
+Base.@kwdef struct GoalsPlusMinusFeature <: AbstractPlusMinusFeature
+    w_sim::Float64          = 0.0
+    λ::Float64              = 1000.0
+    half_life_days::Float64 = 730.0
+end
+
+# The LEAST TEAM-LOADED cell (club R² 0.212 vs 0.389 for shots), at the cost of a lower split-half
+# reliability (0.407). λ optimised lower than the other targets.
+Base.@kwdef struct XGPlusMinusFeature <: AbstractPlusMinusFeature
+    w_sim::Float64          = 0.0
+    λ::Float64              = 200.0
+    half_life_days::Float64 = 730.0
+end
+
+"""
+    pm_target(config) -> Symbol
+
+Which segment response column this variant regresses on (see features/plus_minus/targets.jl).
+"""
+pm_target(::ShotsPlusMinusFeature)         = :y_shots
+pm_target(::ShotsOnTargetPlusMinusFeature) = :y_sot
+pm_target(::GoalsPlusMinusFeature)         = :y_goals
+pm_target(::XGPlusMinusFeature)            = :y_xg
+
+# --- Rating scale accessor ---
+"""
+    rating_base(config) -> Float64
+
+The value a "neutral" player rating sits at, which engines subtract before weighting. The nine
+`outfield_*` xG engines hard-code `config.player_ratings_feature.tracker.prior_mean` for this; new
+engines should call `rating_base` so any feature family can supply the rating.
+
+RAPM is zero-centred by construction (it is a ridge coefficient shrunk toward 0), so the plus-minus
+family returns 0.0 and the centring is a no-op.
+"""
+rating_base(::AbstractFeatureConfig)      = 0.0
+rating_base(c::PlayerRatingsFeature)      = c.tracker.prior_mean
+rating_base(::AbstractPlusMinusFeature)   = 0.0

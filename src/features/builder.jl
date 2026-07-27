@@ -90,6 +90,14 @@ function create_features(
     F_data[:n_target_steps] = n_target
     F_data[:n_rounds] = n_history + n_target
 
+    # --- Stash the fold split itself ---
+    # Most extractors only need `ordered_ids`, but any feature that FITS something (rather than
+    # looking it up) must know which of those matches it is allowed to learn from. The plus-minus
+    # RAPM ridge is the first such feature: it fits on history only and applies the resulting rating
+    # vector to the whole fold. Cheap and backward-compatible — nothing else reads these keys.
+    F_data[:history_match_ids] = Set(Int.(boundary.history_match_ids))
+    F_data[:target_match_ids]  = Set(Int.(boundary.target_match_ids))
+
     # 5. DYNAMIC PIPELINE
     # The model asks for features, and we dispatch to add_feature! overloads
     for config in required_features(model)

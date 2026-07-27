@@ -15,6 +15,9 @@ using ..TypesInterfaces
 export FeatureSet, create_features, required_features, add_feature!
 export AbstractFeatureConfig, TeamIDsFeature, GoalsFeature, LeagueFeature, XGFeature, ShotsFeature, BigChanceFeature, ShotsInsideBoxFeature, FinalThirdEntriesFeature, TouchesInOppBoxFeature, ShotsFunnelFeature, MarketSmileFeature, TimeIndicesFeature, DatesFeature, MonthFeature, MidweekFeature, PlasticPitchFeature, AbstractRatingTracker, PlayerRatingsFeature
 export LastValueTracker, WindowAverageTracker, EWMATracker, BayesianTracker
+# Plus-minus (RAPM) rating family — one struct per PM target, all sharing one extractor.
+export AbstractPlusMinusFeature, ShotsPlusMinusFeature, ShotsOnTargetPlusMinusFeature,
+       GoalsPlusMinusFeature, XGPlusMinusFeature, pm_target, rating_base
 
 # Core Architecture
 include("./model_requirements.jl")
@@ -29,12 +32,14 @@ include("./trackers/window_average.jl")
 include("./trackers/ewma.jl")
 include("./trackers/bayesian.jl")
 include("./market_inverse_utils.jl")
+include("./plus_minus/plus_minus.jl")
 include("./extractors/core_extractors.jl")
 include("./extractors/time_extractors.jl")
 include("./extractors/stats_extractors.jl")
 include("./extractors/bbc_extractors.jl")
 include("./extractors/market_extractors.jl")
 include("./extractors/player_extractors.jl")
+include("./extractors/plus_minus_extractors.jl")
 include("./display.jl")
 
 end # module
