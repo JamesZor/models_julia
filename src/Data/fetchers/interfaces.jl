@@ -8,7 +8,10 @@ struct MatchesData    <: FootballDataType end
 struct StatisticsData <: FootballDataType end 
 struct OddsData       <: FootballDataType end 
 struct LineUpsData    <: FootballDataType end
-struct IncidentsData  <: FootballDataType end 
+struct IncidentsData  <: FootballDataType end
+# BBC match-page shot counts (bbc.match_stats / bbc.match_meta). Only the Scottish tiers
+# (tournaments 54-57) have coverage; every other segment resolves to an empty DataFrame.
+struct BBCData        <: FootballDataType end
 
 # ---------------------------------------------------------
 # The Pipeline Contracts (Fallbacks)

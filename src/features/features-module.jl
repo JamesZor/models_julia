@@ -13,7 +13,7 @@ using ..Data
 using ..TypesInterfaces
 
 export FeatureSet, create_features, required_features, add_feature!
-export AbstractFeatureConfig, TeamIDsFeature, GoalsFeature, LeagueFeature, XGFeature, ShotsFeature, BigChanceFeature, ShotsInsideBoxFeature, FinalThirdEntriesFeature, TouchesInOppBoxFeature, MarketSmileFeature, TimeIndicesFeature, DatesFeature, MonthFeature, MidweekFeature, PlasticPitchFeature, AbstractRatingTracker, PlayerRatingsFeature
+export AbstractFeatureConfig, TeamIDsFeature, GoalsFeature, LeagueFeature, XGFeature, ShotsFeature, BigChanceFeature, ShotsInsideBoxFeature, FinalThirdEntriesFeature, TouchesInOppBoxFeature, ShotsFunnelFeature, MarketSmileFeature, TimeIndicesFeature, DatesFeature, MonthFeature, MidweekFeature, PlasticPitchFeature, AbstractRatingTracker, PlayerRatingsFeature
 export LastValueTracker, WindowAverageTracker, EWMATracker, BayesianTracker
 
 # Core Architecture
@@ -32,6 +32,7 @@ include("./market_inverse_utils.jl")
 include("./extractors/core_extractors.jl")
 include("./extractors/time_extractors.jl")
 include("./extractors/stats_extractors.jl")
+include("./extractors/bbc_extractors.jl")
 include("./extractors/market_extractors.jl")
 include("./extractors/player_extractors.jl")
 include("./display.jl")

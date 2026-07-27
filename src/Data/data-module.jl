@@ -23,6 +23,7 @@ include("fetchers/sql/statistics.jl")
 include("fetchers/sql/lineups.jl")
 include("fetchers/sql/incidents.jl")
 include("fetchers/sql/odds.jl")
+include("fetchers/sql/bbc.jl")
 include("fetchers/betfair_odds.jl")
 include("fetchers/datastore.jl")
 

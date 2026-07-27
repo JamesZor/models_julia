@@ -23,6 +23,12 @@ struct ShotsInsideBoxFeature <: AbstractFeatureConfig end     # totalShotsInside
 struct FinalThirdEntriesFeature <: AbstractFeatureConfig end  # finalThirdEntries
 struct TouchesInOppBoxFeature <: AbstractFeatureConfig end    # touchesInOppBox
 
+# --- BBC Features ---
+# Per-side total shots from `ds.bbc` (BBC match pages), for the two-layer thinned-Poisson funnel
+# Shots ~ Poisson(λ_s), Goals ~ Poisson(λ_s·p₂). Emits Int counts with a 0 dummy plus a Float64
+# usability mask; segments with no BBC coverage get an all-zero mask, never an error.
+struct ShotsFunnelFeature <: AbstractFeatureConfig end
+
 # --- Market Features ---
 abstract type AbstractMarketFeatureConfig <: AbstractFeatureConfig end
 
