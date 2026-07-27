@@ -1,0 +1,749 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+% newtx is installed but broken on this system (inputs a missing binhex.tex); libertinus works.
+\IfFileExists{libertinus.sty}{\usepackage{libertinus}}{\usepackage{lmodern}}
+\usepackage[margin=2.3cm,bottom=2.8cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{tcolorbox}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+\tcbuselibrary{skins,breakable}
+
+% ---- palette: ochre = discrete counting channel, teal = continuous market channel
+\definecolor{ochre}{HTML}{A2700F}
+\definecolor{teal}{HTML}{0F6D6A}
+\definecolor{warn}{HTML}{9C3355}
+\definecolor{ink}{HTML}{151C21}
+\definecolor{rule}{HTML}{D3DBDE}
+
+\newtcolorbox{plain}[1][]{
+  breakable, enhanced, colback=teal!4, colframe=teal!55, boxrule=0.4pt,
+  left=8pt,right=8pt,top=6pt,bottom=6pt, arc=1pt,
+  fonttitle=\bfseries\sffamily\footnotesize, coltitle=teal,
+  title={IN PLAIN ENGLISH}, #1}
+
+\newtcolorbox{worked}[1][]{
+  breakable, enhanced, colback=ochre!5, colframe=ochre!60, boxrule=0.4pt,
+  left=8pt,right=8pt,top=6pt,bottom=6pt, arc=1pt,
+  fonttitle=\bfseries\sffamily\footnotesize, coltitle=ochre,
+  title={#1}}
+
+\newtcolorbox{point}[1][]{
+  breakable, enhanced, colback=black!3, colframe=ink!45, boxrule=0.4pt,
+  left=8pt,right=8pt,top=6pt,bottom=6pt, arc=1pt,
+  fonttitle=\bfseries\sffamily\footnotesize, coltitle=ink,
+  title={THE POINT}, #1}
+
+\newtcolorbox{warnbox}[1][]{
+  breakable, enhanced, colback=warn!4, colframe=warn!55, boxrule=0.4pt,
+  left=8pt,right=8pt,top=6pt,bottom=6pt, arc=1pt,
+  fonttitle=\bfseries\sffamily\footnotesize, coltitle=warn,
+  title={#1}}
+
+\theoremstyle{plain}
+\newtheorem{claim}{Claim}
+\newtheorem{proposition}{Proposition}
+
+\setlist[itemize]{leftmargin=1.3em, itemsep=2pt, topsep=3pt}
+\setlist[enumerate]{leftmargin=1.6em, itemsep=3pt, topsep=3pt}
+
+\title{\vspace{-1.2cm}\textbf{Filtering a Latent Intensity from Three Channels}\\[4pt]
+\large A primer, with worked examples, on what is actually wrong\\ with piecewise Gamma--Poisson in-play updating}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-1.4cm}
+
+\begin{center}\rule{\textwidth}{0.4pt}\end{center}
+\vspace{-0.2cm}
+
+\section*{How to read this}
+
+The long cross-domain report is reference material. This is the entry point. It makes
+\textbf{three claims}, gives each one a plain-English gloss, a formal statement, and a
+worked example with real arithmetic --- and then tells you the single experiment that
+decides whether any of it is worth building.
+
+Every number in the worked examples was computed, not asserted. Where a result cuts
+against the thesis, it is reported as such (see Example~3).
+
+\begin{point}[title={THE WHOLE DOCUMENT IN SIX LINES}]
+\begin{enumerate}[label=\textbf{\arabic*.}]
+\item Gamma--Poisson conjugate updating is the \emph{exact} filter --- for a $\lambda$ that
+      \emph{does not move}. That is the bug. It never forgets.
+\item Your event timestamps identify $\lambda$ under $\mathbb{P}$. Your odds identify
+      $\lambda$ under $\mathbb{Q}$. These are different numbers.
+\item The odds have \emph{already seen} your events. Fusing them double-counts.
+\end{enumerate}
+Claim~3 raises a prior question that makes most of the rest moot, and it is cheap to answer.
+Go to \S\ref{sec:experiment}.
+\end{point}
+
+\section{The setup, stripped of context}
+
+We track a system on a finite horizon $t\in[0,T]$. A latent, time-varying intensity
+$\lambda(t)>0$ governs the arrival of discrete events. We have exactly three sources of
+information, and no others:
+
+\begin{center}
+\begin{tabular}{@{}llp{7.4cm}@{}}
+\toprule
+\textbf{Channel} & \textbf{Symbol} & \textbf{What it is} \\
+\midrule
+C0 & $\lambda_0 \sim \Gamma(a_0,b_0)$ & A static prior from history. \\
+C1 & $N_t$, jumps at $\tau_1,\tau_2,\dots$ & Exact event timestamps. A counting process whose intensity \emph{is} the thing we want. \\
+C2 & $Z_t$ & A live market price on the same outcome, from which an implied $\lambda$ can be inverted. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+The object we want is the conditional law $\pi_t(\cdot) = \mathrm{Law}\big(\lambda_t \mid \mathcal{Y}_t\big)$,
+where $\mathcal{Y}_t = \sigma(N_s, Z_s : s\le t)$ --- and, for pricing, the law of the
+\textbf{remaining integrated intensity}
+\[
+  \Lambda_{t,T} \;=\; \int_t^T \lambda_s\,ds,
+  \qquad\text{because}\qquad
+  N_T - N_t \,\big|\, \Lambda_{t,T} \;\sim\; \mathrm{Poisson}\big(\Lambda_{t,T}\big).
+\]
+
+\begin{plain}
+$\Lambda_{t,T}$ is ``how many more events do we expect, integrated over the time that is
+left.'' It is the \emph{only} thing that matters for pricing. Not $\lambda$ at this instant ---
+the integral of $\lambda$ over the remaining horizon. As $t\to T$ this goes to zero no matter
+how large $\lambda$ is, which is why everything gets strange near expiry.
+\end{plain}
+
+\noindent
+This is a textbook problem with a name: \textbf{nonlinear filtering of a doubly stochastic
+(Cox) intensity under mixed observation channels}. It is not a football problem. The mature
+literature on the exact three-channel version is \emph{reduced-form credit risk}, because a
+credit default swap is precisely a live market price on a latent arrival intensity.
+
+\section{Claim 1: your filter is exactly right, for the wrong model}
+
+\begin{claim}
+Gamma--Poisson conjugate updating is the exact, finite-dimensional, closed-form optimal
+nonlinear filter --- for a \emph{static} Cox intensity. It is optimal and it is degenerate.
+\end{claim}
+
+Let $\lambda_t = \lambda_0\,\Phi(t)$ with $\Phi$ a \emph{known deterministic} modulation
+(injury-time multipliers, score-state multipliers --- anything measurable with respect to the
+observed history). By Jacod's formula the likelihood of an observed path is
+\[
+  \frac{d\mathbb{P}^\lambda}{d\mathbb{P}^1}\bigg|_{\mathcal{F}_t}
+  \;=\; \exp\!\left(\int_0^t \log\lambda_s\,dN_s - \int_0^t(\lambda_s-1)\,ds\right)
+  \;\propto\; e^{-\lambda_0\int_0^t\Phi(s)ds}\;\lambda_0^{N_t}\prod_{i}\Phi(\tau_i),
+\]
+so that, multiplying by the $\Gamma(a_0,b_0)$ prior,
+\begin{equation}
+\boxed{\;
+  \lambda_0 \,\big|\, \mathcal{Y}^N_t \;\sim\;
+  \Gamma\Big(\underbrace{a_0 + N_t}_{\text{shape}},\;
+             \underbrace{b_0 + \textstyle\int_0^t\Phi(s)\,ds}_{\text{rate}}\Big).}
+\label{eq:conj}
+\end{equation}
+
+Two things to notice. The known modulation $\Phi$ enters \emph{only} through the compensator
+$\int_0^t\Phi\,ds$ --- the accumulated \emph{exposure} --- and never through the count. And
+the rate parameter only ever \emph{grows}.
+
+\begin{plain}
+The rate parameter $b$ is an ``amount of evidence'' counter. It starts at $b_0$ (how much
+history the prior is worth) and only ever increases. So the filter's willingness to be moved
+by a new event only ever \emph{decreases}. It has no mechanism for forgetting, because it was
+derived under the assumption that there is nothing to forget --- that $\lambda$ is a fixed
+constant we are gradually learning. If $\lambda$ genuinely drifts during the match, this filter
+will lag it, and the lag gets worse as the match goes on.
+\end{plain}
+
+\subsection*{Why this is not an abstract concern}
+
+The sensitivity of the posterior mean to one additional event is
+\[
+  \frac{\partial}{\partial N_t}\,\mathbb{E}[\lambda_0\mid\mathcal{Y}_t]
+  \;=\; \frac{1}{b_0 + \int_0^t \Phi\,ds}.
+\]
+So the \emph{entire} responsiveness of the filter is set by $b_0$: the strength of the prior.
+And here is the problem.
+
+\begin{worked}[WORKED EXAMPLE 1 --- an honest prior makes in-play updating do nothing]
+Work in match-units of exposure, so a full match contributes $\int_0^1\Phi\,ds = 1$. Take a
+prior mean of $1.5$ goals. Observe a full match in which the team scores $2$.
+
+\smallskip
+\begin{center}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Prior} & $\Gamma(a_0,b_0)$ & \textbf{Prior} $\lambda$ & \textbf{Posterior} $\lambda$ & \textbf{Move/goal} \\
+\midrule
+Honest (38 matches of history) & $\Gamma(57,38)$ & $1.500\pm0.199$ & $1.513\pm0.197$ & $\mathbf{0.026}$ \\
+Weak (2 matches)               & $\Gamma(3,2)$   & $1.500\pm0.866$ & $1.667\pm0.745$ & $0.333$ \\
+Zou et al.\ ($r_1 = E_H(45)$)  & $\Gamma(0.75,0.5)$ & $1.500\pm1.732$ & $1.833\pm1.106$ & $\mathbf{0.667}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\smallskip
+With a \textbf{statistically honest} prior --- one whose variance actually reflects a season of
+data --- watching an entire match moves your estimate of the team's scoring rate by
+\textbf{0.013 goals}, and shrinks your uncertainty by \textbf{1\%}. The in-play information is
+completely swamped. The filter is not wrong; it is telling you the truth: \emph{two goals is
+almost no evidence against 38 matches of history.}
+
+\smallskip
+This is exactly why Zou et al.\ report that the variance-matched prior gives $r_1\in(30,150)$
+and ``leads to no improvement,'' and why they abandon it for $r_1 = E_H(45)\approx0.75$ --- a
+prior worth \emph{half a match}. That is not a modelling choice. It is a fudge factor, chosen
+to make the filter move.
+\end{worked}
+
+\begin{point}
+The conjugate filter's inability to respond is not a bug in the arithmetic --- it is the
+\emph{correct} answer to the wrong question. Asking ``what is this team's fixed strength?''
+correctly returns ``the same as before; you have shown me almost no data.'' The question you
+actually want to ask is \textbf{``has this team's strength \emph{changed}?''} --- and that
+requires a model in which it \emph{can} change.
+\end{point}
+
+\subsection*{The fix: discount the evidence counter}
+
+Let the state evolve by a multiplicative Beta shock (Smith's power-steady model;
+Harvey--Fernandes local-level count model). Gamma conjugacy is preserved \emph{exactly}, and
+the prediction step is a one-line discounting of the sufficient statistics:
+\begin{equation}
+\small
+\boxed{\;
+  \Gamma(a_{t-1},\,b_{t-1})
+  \;\xrightarrow{\ \text{predict}\ }\;
+  \Gamma(\delta a_{t-1},\,\delta b_{t-1})
+  \;\xrightarrow{\ \text{update}\ }\;
+  \Gamma\big(\delta a_{t-1} + \Delta N_t,\ \ \delta b_{t-1} + \Delta\!\!\int\!\Phi\big),
+  \qquad \delta\in(0,1].}
+\label{eq:discount}
+\end{equation}
+The posterior \emph{mean} is preserved by the prediction step ($\delta a/\delta b = a/b$); the
+\emph{variance} is inflated by $1/\delta$. That is precisely ``I still believe the same thing,
+but I am less sure of it than I was a minute ago.''
+
+\begin{plain}
+$\delta$ is a forgetting rate. Every minute, the filter throws away a fraction $(1-\delta)$ of
+its accumulated evidence. This stops the evidence counter $b$ from growing without bound, so
+the filter stays responsive for the whole match instead of freezing up. Setting $\delta=1$
+recovers exactly what you have now.
+\end{plain}
+
+\begin{worked}[WORKED EXAMPLE 2 --- the discount factor \emph{derives} the number they guessed]
+The evidence counter now obeys $b_t = \delta b_{t-1} + \Delta$, with $\Delta = 1/90$ per minute.
+This is a geometric series with a \emph{fixed point}:
+\[
+  b^\star \;=\; \frac{\Delta}{1-\delta}
+  \qquad\text{(the steady-state ``effective memory'' of the filter).}
+\]
+
+\smallskip
+\begin{center}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+$\delta$ (per minute) & Effective memory $b^\star$ & Half-life \\
+\midrule
+$0.9800$ & $0.556$ matches & $34.3$ min \\
+$\mathbf{0.98519}$ & $\mathbf{0.750}$ \textbf{matches} & $\mathbf{46.4}$ \textbf{min} \\
+$0.9900$ & $1.111$ matches & $69.0$ min \\
+$1.0000$ & $\infty$ (never forgets) & $\infty$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\smallskip
+Solve $b^\star = 0.75$ for $\delta$ and you get $\delta = 0.98519$ --- whose forgetting
+half-life is \textbf{46.4 minutes}, i.e.\ almost exactly one half of football.
+
+\smallskip
+So Zou et al.'s hand-picked $r_1 = E_H(45)$ is \emph{exactly} the steady state of a discount
+filter with a one-half half-life. Their fudge factor is a real parameter in disguise. The
+difference is that $\delta$ is (i) principled, (ii) applied \emph{recursively} rather than
+once at kick-off, and (iii) \textbf{estimable from data} --- you can fit it by maximising the
+one-step-ahead predictive likelihood over a historical panel, which you cannot do with a
+hyperparameter you fixed by hand.
+\end{worked}
+
+\begin{point}
+This is a \textbf{one-line change} to your existing updater, it preserves conjugacy exactly,
+it costs two multiplications, and it replaces a guessed constant with a fitted one. If you do
+nothing else from this document, do this.
+\end{point}
+
+\section{Claim 2: events and odds measure different things}
+
+\begin{claim}
+The counting channel identifies $\lambda$ under the physical measure $\mathbb{P}$. The market
+channel identifies $\lambda$ under the pricing measure $\mathbb{Q}$. These differ by a
+multiplicative premium $\gamma$, and $\gamma\ne1$.
+\end{claim}
+
+The Girsanov change of measure for a point process multiplies the intensity by a predictable,
+positive process:
+\begin{equation}
+\boxed{\;\lambda^{\mathbb{Q}}_t \;=\; \gamma_t\cdot\lambda^{\mathbb{P}}_t\;}
+\qquad
+\frac{d\mathbb{Q}}{d\mathbb{P}}\bigg|_{\mathcal{F}_t}
+= \exp\!\left(\int_0^t\!\log\gamma_s\,dN_s - \int_0^t\!(\gamma_s-1)\lambda^{\mathbb{P}}_s ds\right).
+\label{eq:girsanov}
+\end{equation}
+
+In credit risk $\gamma$ is the \textbf{jump-to-default risk premium}, and it is measured
+directly: estimate $\lambda^{\mathbb{P}}$ from realised default \emph{events}, estimate
+$\lambda^{\mathbb{Q}}$ from CDS \emph{prices}, take the ratio. It comes out around $2\times$,
+it is time-varying, and it is strongly counter-cyclical. In your setting $\gamma$ is the
+overround plus whatever systematic distortion the market carries (a favourite--longshot bias
+is exactly a $\gamma$ that varies with the level of $\lambda$).
+
+\begin{plain}
+The market price is not a noisy measurement of the true rate. It is a noisy measurement of the
+\emph{price} of the true rate --- which includes the bookmaker's margin and whatever
+risk-aversion or bias the market carries. If you average your event-based estimate with your
+odds-based estimate as though they were two thermometers reading the same room, you get a
+number that is systematically off in the same direction for the whole match. That is worse
+than noise: noise averages out, bias does not, and Kelly staking on a biased estimate loses
+money in a very specific and repeatable way.
+\end{plain}
+
+\begin{worked}[WORKED EXAMPLE 3 --- inverting a totals ladder \emph{(and a negative result)}]
+Take a totals market: \textbf{Over 2.5 @ 1.90}, \textbf{Under 2.5 @ 2.00}. Raw implied
+probabilities $1/1.90 = 0.5263$ and $1/2.00 = 0.5000$ sum to $1.0263$: an overround of
+$2.63\%$.
+
+\medskip
+\textbf{Step 1 --- de-vig.} Two methods:
+\begin{center}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Method & $\mathbb{Q}(N\ge3)$ & Implied $\Lambda$ \\
+\midrule
+Proportional (divide by the book sum) & $0.5128$ & $2.7264$ \\
+Shin (1993), insider-trading model, $z=0.0263$ & $0.5132$ & $2.7278$ \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Difference}} & $\mathbf{+0.0014}$ \textbf{goals} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{This is a negative result and I am reporting it as one.} On a \emph{tight two-way}
+book, the choice of de-vig algorithm is worth \emph{one thousandth of a goal}. It does not
+matter. Do not spend a week on it.
+
+\smallskip
+It \emph{does} matter on longshots. On a $1.25\,/\,6.00\,/\,13.00$ three-way book (overround
+$4.36\%$), Shin moves the favourite by $+1.41$ pp and the $13.0$ longshot by $-0.82$ pp --- an
+$11\%$ \emph{relative} error on the longshot. So: use Shin or a power method on 1X2 and
+correct-score, and don't agonise over totals.
+
+\medskip
+\textbf{Step 2 --- the inversion, and its sensitivity.} Invert $\mathbb{Q}(N\ge3) = 0.5128$
+under $N\sim\mathrm{Poisson}(\Lambda)$ to get $\Lambda = 2.7264$. Now note the identity
+\[
+  \frac{\partial}{\partial\Lambda}\,\mathbb{P}(N\ge k) \;=\; \mathrm{pmf}(k-1;\Lambda),
+  \qquad\text{here}\qquad
+  \frac{\partial\mathbb{Q}(N\ge3)}{\partial\Lambda} = \mathrm{pmf}(2;2.726) = 0.2433.
+\]
+This is the ``vega'' of the contract --- how much the \emph{price} moves per unit of
+\emph{parameter}. Invert it:
+\[
+  \boxed{\;\text{a \emph{one-tick} } (0.01) \text{ price error} \;\Longrightarrow\;
+  \Delta\Lambda = 0.01/0.2433 = \mathbf{0.041}\ \textbf{goals}.\;}
+\]
+\emph{That} is the number that should worry you --- not the de-vig method. A single tick of
+bid--ask noise moves your implied intensity by four hundredths of a goal. This is the
+ill-posedness of the inverse problem, made concrete.
+\end{worked}
+
+\begin{point}
+The vega gives you the observation variance \emph{for free}, and it makes the market channel
+\textbf{self-weighting}:
+\[
+  R_t \;\asymp\;
+  \left(\frac{\tfrac12\big(\text{ask}-\text{bid}\big)}{\big|\partial C/\partial\lambda\big|}\right)^{\!2}
+  + R^{\text{model}}.
+\]
+As liquidity dries up the spread widens and $R_t$ grows. As the contract becomes insensitive to
+$\lambda$ (deep in/out of the money, or $t\to T$ where $\partial C/\partial\lambda\to0$), the
+denominator collapses and $R_t$ \emph{explodes}. Either way the Kalman gain on the market
+channel automatically goes to zero. \textbf{You never hand-tune a weight for the market signal.
+The spread-over-sensitivity ratio is the weight.}
+\end{point}
+
+\subsection*{One market cannot identify two intensities}
+
+\begin{proposition}[Rank condition]
+If the latent state is $\boldsymbol\lambda = (\lambda^{(1)},\dots,\lambda^{(d)})$ and you observe
+$m$ market functionals $g_1,\dots,g_m$, local identification requires
+$\operatorname{rank}\big(\partial g_i/\partial\lambda^{(j)}\big) = d$. An \emph{aggregate}
+market is a function of $\sum_j\lambda^{(j)}$ alone; its Jacobian has rank $1$.
+\end{proposition}
+
+\begin{worked}[WORKED EXAMPLE 4 --- the totals market is blind to the split]
+Two completely different systems:
+\begin{center}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+$(\lambda^{(1)},\lambda^{(2)})$ & Sum & $\mathbb{P}(N\ge3)$ & Outcome probabilities (1/X/2) \\
+\midrule
+$(2.0,\;0.8)$ & $2.8$ & $\mathbf{0.5305}$ & $0.654$ / $0.205$ / $0.141$ \\
+$(1.4,\;1.4)$ & $2.8$ & $\mathbf{0.5305}$ & $0.374$ / $0.253$ / $0.374$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The totals price is \textbf{identical to four decimal places} --- it must be, since the sum of
+independent Poissons is Poisson in the sum. But the home-win probability differs by
+\textbf{28.1 percentage points}.
+
+\smallskip
+So: a totals market supplies \emph{exactly one} linear constraint, on the sum. It contains
+\emph{zero} information about the split. Inverting a totals ladder and claiming to have
+recovered two team intensities is not an approximation --- it is unidentified. You need a
+second, differently-weighted functional (a spread/handicap market, sensitive to
+$\lambda^{(1)}-\lambda^{(2)}$) to get rank $2$.
+\end{worked}
+
+\begin{point}
+Similarly, a \emph{single maturity} identifies only the \emph{level} $\Lambda_{t,T}=\int_t^T\lambda_s ds$,
+never the shape of $\lambda_s$ on $(t,T)$. Any ``instantaneous implied intensity'' extracted from a
+single full-match market is an artefact of your own $\Phi$. Recovering the shape needs a calendar
+spread --- a market at an interim maturity --- exactly as an instantaneous forward hazard rate
+requires a CDS \emph{term structure}, not a single quote.
+\end{point}
+
+\section{Claim 3: the odds have already seen your events}
+
+\begin{claim}
+Optimal filtering requires the observation channels to be conditionally independent given the
+state. They are not. The market price at time $t$ is a functional of an information set that
+\emph{contains} $\{N_s : s\le t\}$. A naive product-of-likelihoods fusion double-counts the
+point process.
+\end{claim}
+
+This is the formal content of Duffie--Lando (2001): when the market observes the state only
+through noisy information, the intensity \emph{perceived by the market} is not the structural
+hazard --- it is the conditional hazard given the market's filtration. \textbf{The market's
+implied intensity is itself a posterior.} It is not a sensor reading of $\lambda$; it is a
+noisy reading of \emph{another agent's filter} of $\lambda$, run on a strictly larger
+information set than yours.
+
+\begin{plain}
+You and the bookmaker are both watching the same match. When a goal goes in, you update, and
+the odds move --- because \emph{they} updated too, on the same goal. If you then treat the new
+odds as independent corroborating evidence, you have counted that goal twice. Your filter
+becomes more confident than the evidence warrants, and because Kelly stakes scale
+\emph{inversely with variance}, an over-confident filter systematically overstakes.
+\end{plain}
+
+\begin{worked}[WORKED EXAMPLE 5 --- what the double-count actually costs you]
+Suppose the event-only filter gives $\hat x^N$ with variance $P_N = 0.09$ (sd $0.30$), the
+market gives $\hat x^Z$ with variance $P_Z = 0.04$ (sd $0.20$), and their true correlation is
+$\rho = 0.9$ (high, because they are largely watching the same goals).
+
+\smallskip
+The naive Kalman fusion assumes $\rho=0$, weights by inverse variance
+($w_N = 0.308$, $w_Z = 0.692$), and \emph{reports}
+\[
+  P_{\text{naive}} = \big(P_N^{-1} + P_Z^{-1}\big)^{-1} = 0.0277 \quad (\text{sd } 0.166).
+\]
+But the \emph{actual} variance of that same weighted combination, with $\rho=0.9$, is
+\[
+  P_{\text{true}} = w_N^2 P_N + w_Z^2 P_Z + 2w_N w_Z \rho\sqrt{P_N P_Z} = 0.0507
+  \quad (\text{sd } 0.225).
+\]
+
+\smallskip
+\begin{center}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+& Variance & sd \\
+\midrule
+What the filter \emph{reports} & $0.0277$ & $0.166$ \\
+What is \emph{true} & $0.0507$ & $0.225$ \\
+\midrule
+\textbf{Variance understated by} & \multicolumn{2}{c}{$\mathbf{83\%}$} \\
+\textbf{Kelly overstakes by} & \multicolumn{2}{c}{$\mathbf{1.83\times}$} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\smallskip
+You would bet \textbf{nearly twice} the correct fraction of bankroll, on every bet, forever ---
+and you would never see it in your backtest, because the backtest would use the same broken
+variance.
+\end{worked}
+
+\subsection*{Three fixes, in increasing order of rigour}
+
+\begin{enumerate}
+\item \textbf{Innovation orthogonalisation.} Do not feed the market's \emph{level} into the
+filter. Feed its \emph{residual} against your own event-only filter:
+$\tilde Z_t = Z_t - \mathbb{E}[Z_t \mid \mathcal{Y}^N_t]$. Everything the market says that your
+events already implied is projected out; only its genuinely private information updates the
+state. Cost: run two filters.
+
+\item \textbf{Covariance intersection} (Julier--Uhlmann 1997). The robust fusion rule when the
+cross-correlation is \emph{unknown}:
+\[
+  \big(P^{\mathrm{CI}}\big)^{-1} = \omega P_N^{-1} + (1-\omega)P_Z^{-1},
+  \qquad \omega = \arg\min \det P^{\mathrm{CI}}.
+\]
+It is guaranteed \emph{non-divergent for any} correlation, at the price of conservatism. In
+Example~5 it returns $\omega^\star=0$, $P^{\mathrm{CI}} = 0.040$, sd $0.200$ --- which never
+understates the truth. Given that our correlation is not merely unknown but \emph{known to be
+high}, that conservatism is exactly what we want.
+
+\item \textbf{Model the market as an agent.} Posit that the market runs its own filter on
+$\mathcal{G}_t = \mathcal{F}^N_t \vee \sigma(U_{[0,t]})$ with $U$ its private signal, so that
+$Z_t = c_t\,\hat x^N_t + (1-c_t)\,\hat U_t + \eta_t$, and \emph{solve for} $\hat U_t$ before
+fusing. This is the most principled route, and it is what \S\ref{sec:experiment} estimates.
+\end{enumerate}
+
+\section{The unified architecture, in one page}
+
+Separate what is \emph{known} from what must be \emph{filtered}:
+\begin{equation}
+\small
+\boxed{\;
+  \lambda^{(j)}_t \;=\;
+  \underbrace{\hat\lambda^{(j)}_0}_{\text{static prior (C0)}}
+  \;\cdot\;
+  \underbrace{\Phi_j\big(t,\,S_{t^-}\big)}_{\substack{\text{KNOWN modulation:}\\
+  \text{drift}\,\times\,\text{epochs}\,\times\,\text{state}}}
+  \;\cdot\;
+  \underbrace{\exp\big(X^{(j)}_t\big)}_{\substack{\text{LATENT deviation}\\ \text{(the only filtered part)}}}}
+\label{eq:decomp}
+\end{equation}
+
+The injury-time multipliers $\rho(t)$ and the score-state multipliers $\tau_{xy}$ are
+\emph{predictable given the observed history}. They belong in $\Phi$, where they cost nothing.
+Putting them in the filter would cost dimensions for no information. Only $X$ --- the log-deviation
+of the true intensity from its prior --- is latent.
+
+\medskip\noindent\textbf{State dynamics} (Black--Karasinski / exponential-OU, so $\lambda>0$ automatically):
+\begin{equation}
+  dX^{(j)}_t \;=\;
+  \underbrace{-\kappa_j X^{(j)}_t\,dt}_{\text{mean-revert to the prior}}
+  \;+\; \underbrace{\sigma_j(t)\,dW^{(j)}_t}_{\text{true strength drifts}}
+  \;+\; \underbrace{\textstyle\sum_k \zeta_{j,k}\,dH^{(k)}_t}_{\text{structural breaks (red cards)}},
+  \qquad
+  d\beta_t = -\kappa_\beta(\beta_t - \bar\beta)dt + \sigma_\beta dW^\beta_t,
+\label{eq:sde}
+\end{equation}
+where $\beta = \log\gamma$ is the \textbf{market bias state} from Claim~2. Note
+$\kappa$ is the continuous-time forgetting rate: $\delta \approx e^{-\kappa\Delta}$. It is the
+same parameter as \eqref{eq:discount}, and it is the single most important number in the system.
+
+\medskip\noindent\textbf{The filter} (Kushner--Stratonovich with mixed channels):
+\begin{equation}
+\small
+\boxed{
+\begin{aligned}
+d\pi_t(\varphi) \;=\;& \pi_t(\mathcal{A}_t\varphi)\,dt
+&&\text{\scriptsize (i) drift toward prior}\\
+&+\; \textstyle\sum_m \Big[\pi_t(\varphi g_m) - \pi_t(\varphi)\pi_t(g_m)\Big]
+   \big(R^{(m)}_t\big)^{-1}\,\omega^{(m)}_t\,
+   \Big(dZ^{(m)}_t - \pi_t(g_m)\,dt\Big)
+&&\text{\scriptsize (ii) market innovation}\\
+&+\; \textstyle\sum_j \left[\frac{\pi_{t^-}(\varphi\lambda^{(j)})}{\pi_{t^-}(\lambda^{(j)})} - \pi_{t^-}(\varphi)\right]
+   \Big(dN^{(j)}_t - \pi_{t^-}(\lambda^{(j)})\,dt\Big)
+&&\text{\scriptsize (iii) point-process innovation}
+\end{aligned}}
+\label{eq:ks}
+\end{equation}
+
+\begin{plain}
+Read the three lines as three forces acting on your belief:
+\begin{itemize}
+\item \textbf{(i)} With no new data, your belief relaxes back toward the pre-match prior and
+grows more uncertain. The prior is not a one-shot starting value --- it is an \emph{attractor}.
+\item \textbf{(ii)} When the price moves, correct in proportion to how surprising the move was,
+scaled by how noisy the quote is ($R_t$, from the spread-over-vega) and tempered by $\omega_t$
+to avoid double-counting (Claim~3).
+\item \textbf{(iii)} When an event fires, multiply your posterior by $\lambda$ and renormalise
+(for a Gamma: $a \mapsto a+1$). When an event \emph{fails} to fire, the compensator term
+$-\pi(\lambda)\,dt$ drags your belief \emph{down}, at exactly the rate you expected events to
+arrive. \textbf{No news is news.}
+\end{itemize}
+\end{plain}
+
+\subsection*{EKF or particle filter?}
+
+\begin{worked}[WORKED EXAMPLE 6 --- why the Gaussian approximation fails \emph{here specifically}]
+Suppose it is half-time and no goals have been scored. With prior $\Gamma(3,2)$ the exact
+posterior is $\Gamma(3,\,2.5)$: mean $1.200$, sd $0.693$, \textbf{skewness $1.155$}.
+
+The EKF replaces this with $\mathcal{N}(1.200,\,0.693^2)$. That Gaussian:
+\begin{itemize}
+\item assigns $\mathbb{P}(\lambda<0) = \mathbf{4.2\%}$ --- to a rate parameter;
+\item and, far more damagingly, \emph{mis-states the upper tail}:
+\end{itemize}
+\begin{center}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+& True ($\Gamma$) & Gaussian (EKF) & Error \\
+\midrule
+$\mathbb{P}(\lambda > 2.5)$ & $0.0517$ & $0.0303$ & $\mathbf{-41\%}$ \\
+$\mathbb{P}(\lambda > 3.0)$ & $0.0203$ & $0.0047$ & $\mathbf{-77\%}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\smallskip
+And the tail is \emph{the thing you are pricing}: an over/under contract is
+$\mathbb{P}(N_T - N_t \ge k)$, a tail functional. The EKF is wrong by a factor of four exactly
+where the money is.
+\end{worked}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{3.5cm}p{5.1cm}p{5.9cm}@{}}
+\toprule
+& \textbf{Continuous-discrete EKF} & \textbf{Sequential Monte Carlo} \\
+\midrule
+Cost per step & $O(d^2)$, $d\approx2$ --- negligible & $O(Pd)$, $P\sim10^3$--$10^4$ --- \emph{also} negligible \\
+Survival term $e^{-\int\lambda}$ & Gaussian moment-matching only & Exact (a per-particle path integral) \\
+Low-count skew & \textbf{Badly wrong} (Example 6) & Exact \\
+Tail functionals & Poor --- and this is what you price & Exact \\
+Regime jumps in $\Phi$ & Needs re-linearisation & Trivial \\
+Degeneracy risk & None & Yes --- resample when $\mathrm{ESS}<P/2$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{point}
+\textbf{Use SMC.} The state dimension is 1--3, the horizon is short, the events number
+$\le10$: a $10^4$-particle bootstrap filter costs microseconds. The \emph{entire} argument for
+the EKF is computational, and it is worth nothing here --- while the argument against it (bias
+in the low-count, skewed, tail-functional regime) bites maximally. Rao-Blackwellise: conditional
+on the log-OU path, the level retains Gamma conjugacy, so sample only the dynamic component and
+integrate the level analytically.
+
+\smallskip
+Keep the closed-form discount filter \eqref{eq:discount} as the \emph{production} path
+(nanoseconds, no tuning beyond $\delta$), and SMC as the reference against which you measure its
+approximation error.
+\end{point}
+
+\section{What to actually do}
+\label{sec:experiment}
+
+\begin{warnbox}[title={THE ONE EXPERIMENT THAT DECIDES EVERYTHING}]
+Claim 3 raises a prior question: \textbf{does the market channel contain anything your event
+stream does not?} If the market's implied intensity is just a mechanical restatement of the
+scoreline, then there is no second channel --- there is one channel and a de-vigging model, and
+the entire fusion architecture is dead weight.
+
+\smallskip
+This is cheap to find out and you already have the data.
+\end{warnbox}
+
+Over your historical in-play panel, at each observation time $t$:
+
+\begin{enumerate}
+\item Run your existing conjugate filter on the \textbf{event stream alone} $\Rightarrow$
+      event-only log-intensity $\hat x^N_t$.
+\item De-vig the odds and invert the totals ladder $\Rightarrow$ market-implied log-intensity
+      $\hat x^M_t$.
+\item Regress $\hat x^M_t$ on $\hat x^N_t$ (and time-to-go). The $R^2$ measures how much of the
+      market is simply \textbf{the scoreline echoed back at you}. Keep the residual $u_t$.
+\item \textbf{The real test.} Regress the \emph{realised} remaining goals $N_T - N_t$ on
+      $\hat x^N_t$ \textbf{and} $u_t$:
+      \[
+        \big(N_T - N_t\big) \;=\; \alpha + \beta_1\,\hat x^N_t + \beta_2\, u_t + \varepsilon.
+      \]
+\end{enumerate}
+
+\begin{center}
+\begin{tabular}{@{}lp{9.6cm}@{}}
+\toprule
+\textbf{Outcome} & \textbf{What it means} \\
+\midrule
+$\beta_2 \approx 0$ &
+The market has \emph{no} incremental information beyond your events. Kill the fusion
+architecture. Implement \eqref{eq:discount}, fix the de-vig, and move on. \\
+\addlinespace
+$\beta_2 \ne 0$ &
+\textbf{That coefficient is your edge.} And it directly calibrates $\omega_t$ --- the temper in
+\eqref{eq:ks} --- which you would otherwise have had to guess. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+It is a day's work against the existing \texttt{DataStore}, and it determines whether the rest
+of this is worth building. \textbf{Run it before you write any filter code.}
+
+\subsection*{If it passes, the build order is}
+
+\begin{enumerate}
+\item \textbf{Discount filter} \eqref{eq:discount}. Fit $\delta$ by maximising one-step-ahead
+      predictive likelihood. One line; strictly dominates what you have.
+\item \textbf{Move $\Phi$ out of the filter} \eqref{eq:decomp}. Epoch and score-state multipliers
+      are predictable; they are free.
+\item \textbf{Self-weighting market channel} via spread-over-vega ($R_t$). No hand-tuned weights.
+\item \textbf{Premium state} $\beta = \log\gamma$ \eqref{eq:girsanov}. Estimate offline first;
+      if it is stable, fix it.
+\item \textbf{Temper / orthogonalise} the market channel ($\omega_t$ from step 4's $\beta_2$).
+\item \textbf{SMC} as reference; keep the closed-form filter in production.
+\end{enumerate}
+
+\vspace{0.4cm}
+\begin{center}\rule{\textwidth}{0.4pt}\end{center}
+
+\section*{Sources for the load-bearing claims}
+\footnotesize
+\sloppy
+All identifiers below were retrieved from OpenAlex/arXiv and checked to resolve.
+
+\begin{itemize}[leftmargin=1em]
+\item \textbf{Snyder (1972)}, ``Filtering and detection for doubly stochastic Poisson processes,''
+      \emph{IEEE Trans.\ Inf.\ Theory}. \texttt{10.1109/tit.1972.1054756} --- origin of the DSPP filter.
+\item \textbf{Segall \& Kailath (1975)}, ``The modeling of randomly modulated jump processes.''
+      \texttt{10.1109/tit.1975.1055359} --- the martingale-innovations form of \eqref{eq:ks}.
+\item \textbf{Harvey \& Fernandes (1989)}, ``Time series models for count or qualitative observations,''
+      \emph{JBES}. \texttt{10.1080/07350015.1989.10509750} --- \textbf{the discount filter \eqref{eq:discount}}.
+\item \textbf{Smith (1979)}, ``A generalization of the Bayesian steady forecasting model,''
+      \emph{JRSS-B}. \texttt{10.1111/j.2517-6161.1979.tb01092.x} --- the power-steady model.
+\item \textbf{Lando (1998)}, ``On Cox processes and credit risky securities.'' OpenAlex \texttt{W2084716442}.
+\item \textbf{Duffie \& Singleton (1999)}, ``Modeling term structures of defaultable bonds,''
+      \emph{RFS}. OpenAlex \texttt{W2011886674} --- intensity-as-spread.
+\item \textbf{Duffie \& Lando (2001)}, ``Term structures of credit spreads with incomplete accounting
+      information,'' \emph{Econometrica}. OpenAlex \texttt{W2118891973} --- \textbf{the market's intensity is
+      itself a posterior} (Claim 3).
+\item \textbf{Berndt et al.}, ``Measuring default risk premia from default swap rates and EDFs.''
+      \texttt{10.2139/ssrn.556080} --- direct measurement of the $\gamma$ wedge (Claim 2).
+\item \textbf{Shin (1993)}, ``Prices of state-contingent claims with insider traders, and the
+      favourite--longshot bias,'' \emph{Economic Journal}. \texttt{10.2307/2234526}.
+\item \textbf{Breeden \& Litzenberger (1978)}, ``Prices of state-contingent claims implicit in option
+      prices,'' \emph{J.\ Business}. \texttt{10.1086/296025}.
+\item \textbf{Julier \& Uhlmann (1997)}, ``A non-divergent estimation algorithm in the presence of
+      unknown correlations,'' \emph{ACC}. \texttt{10.1109/acc.1997.609105} --- covariance intersection.
+\item \textbf{Cori et al.\ (2013)}, ``A new framework and software to estimate time-varying reproduction
+      numbers during epidemics,'' \emph{Am.\ J.\ Epidemiol}. \texttt{10.1093/aje/kwt133} --- the same
+      Gamma--Poisson filter, with a forgetting window, in epidemiology.
+\item \textbf{Brown, Frank \& Eden (2004)}, ``Dynamic analysis of neural encoding by point process adaptive
+      filtering,'' \emph{Neural Computation}. \texttt{10.1162/089976604773135069}.
+\end{itemize}
+
+\fussy
+\normalsize
+\vspace{0.3cm}
+\noindent\emph{Caveat.} All derivations here are assembled from the cited frameworks; the specific
+composition is not itself a retrieved result. The worked examples were computed numerically. A
+literature search found \textbf{no} prior work fusing a historical prior, an event stream, and a
+concurrent market price of the outcome outside of finance --- so the credit-risk literature is the
+only mature guide to channels C1 and C2 \emph{together}.
+
+\end{document}

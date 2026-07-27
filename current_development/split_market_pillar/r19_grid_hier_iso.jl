@@ -64,8 +64,8 @@ warmup         = 300
 target_seasons  = ["2025", "2026"]
 dynamics_col    = :match_biweek
 chains         = 4
-warmup_period   = 21
-ISO_MW         = 0.5        # <<< better iso market weight from the dp grid — CONFIRM/ADJUST
+warmup_period   = 0
+ISO_MW         = 0.4        # <<< better iso market weight from the dp grid — CONFIRM/ADJUST
 
 _hiso(per_team, per_side) = HierIsoDoublePoissonModel(
     interception_config    = inter_cfg,

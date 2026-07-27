@@ -86,6 +86,9 @@ by the goals/xG contrast, NOT confounded with the intercept (which enters both p
   + extractor + prediction overrides + `kappa_team_summary` helper.
 - `r01_single_split_shakedown.jl` — Ireland single split, 3 modes in parallel, convergence +
   κ inspection.
+- `r03_grid_backtest.jl` — full-CV backtest grid (r15 pattern): kd_none_src control vs
+  kd_net vs kd_attdef; GLMEdge/LogLoss/LPD vs Betfair close + BayesianKelly tearsheet +
+  pooled-τ across splits. Run AFTER the r00/r02 gates.
 
 ## Related memories / streams
 
@@ -97,4 +100,46 @@ market-on context).
 
 ## Findings log
 
-(append dated entries here — none yet)
+### 2026-07-02 — r01 shakedown (Ireland, single split, 1000/500×4, depth 10): V1/V2 sample superbly, V0 control blows up; no per-team structure on 79
+
+| mode | max κ R-hat | ESS (κ params) | att_spread | def_spread | attdef_cor | κ0_conv |
+|---|---|---|---|---|---|---|
+| V0_attack_only (softplus mult.) | **1.53 ❌** | 14–54 | 1.19 (fake) | — | — | — |
+| V2_net (log-additive, centred) | **1.005 ✅** | 3000–6500 | 0.037 | 0.037 | — | 0.975 |
+| V1_attdef (log-additive, centred) | **1.002 ✅** | 2500–7500 | 0.036 | 0.037 | 0.10 | 0.974 |
+
+**Read:**
+1. **V0 (the current production κ parameterization) hit the documented base-model
+   metastability** — the whole model blew, not just κ: ha.γ_team_raw means ±5–8 (σ_γ mean
+   4.35!), ν_xg/p_dyn/κ all R-hat ≈ 1.52 with ESS ~15. The R-hat ≈ 1.52–1.53 cluster across
+   unrelated params = ONE chain stuck in a degenerate mode (κ↑ ↔ ha↓ compensation), the
+   run-to-run metastability recorded in `split_market_pillar/NOTES.md` (ESS swings 5↔268).
+   Same model family converged fine in r03-B — this is initialization luck, not a new bug.
+2. **The new log-additive centred parameterizations are simply better-behaved**: identical
+   data, same settings, ESS ~5000 and R-hat ≤ 1.005 on every κ param. κ0 identified by the
+   goals/xG contrast + tight half-Normal(0,0.1) τ + centred z = no degenerate direction.
+   This is a genuine engineering finding: **if κ survives at all, it should be reparameterized
+   log-additively in src regardless of the att/def question.**
+3. **CORRECTED READ (after inspecting τ posteriors — the first write-up wrongly said
+   "learned nothing"):** τ_net mean 0.053 [90%: 0.004–0.131], τ_att 0.064 [0.004–0.163],
+   τ_def 0.063 [0.006–0.154]; P(τ>0.05) = 0.44/0.51/0.53 vs prior 0.617. The posterior has
+   **barely moved off the prior** — this is *uninformative*, NOT the smile-σ null (where τ
+   was actively pulled toward 0 from a wider prior). One Ireland split cannot identify
+   effects of this size: the 60-day decay half-life means the goals pillar effectively sees
+   ~10–15 recent matches/team. **τ_def ≈ 0.06 remains fully consistent with the data — and
+   it is economically material** (a +1.6σ defensive team suppresses opponent λ ~10% ⇒
+   ~2–3pp on totals lines = min_edge scale). The question stays OPEN, and the power must
+   come from elsewhere: r00 (un-decayed, all seasons — sees far more data than the decayed
+   likelihood) and r02/pooling.
+4. **Global conversion κ0_conv ≈ 0.974 in both modes** (teams score ~2.6% below what xG
+   implies, stably estimated). Small but consistent; worth remembering when reading totals
+   calibration.
+
+**Decisions:**
+- V0 as *control for eval* is replaced by the src production engine
+  (`DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel`) — same model,
+  battle-tested convergence; don't burn time re-rolling the metastable softplus variant.
+- The stream's live question moves to **718 (r02)** and the **r00 persistence gate** —
+  Ireland cannot answer it (insufficient heterogeneity), 718 has the dispersion regime.
+- If r00 says defensive residuals don't persist anywhere, park after r02 regardless of
+  convergence (converging ≠ learning).

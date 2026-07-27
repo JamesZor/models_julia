@@ -134,6 +134,135 @@ for (name, model) in specs
     end
 end
 
+
+
+#=
+--- hiso_perteam : hierarchy-param convergence (R-hat / ESS) ---
+(no hierarchy rows matched — inspect conv.df raw_symbol column)
+31×5 DataFrame
+ Row │ raw_symbol            mean        std        rhat      ess     
+     │ Symbol                Float64     Float64    Float64   Float64 
+─────┼────────────────────────────────────────────────────────────────
+   1 │ ν_xg                   3.25451    0.323053   1.00509       NaN
+   2 │ ha.γ_team_raw[1]       0.226913   0.0491323  1.00127       NaN
+   3 │ ha.γ_team_raw[2]       0.182344   0.0625141  1.0055        NaN
+   4 │ ha.γ_team_raw[3]       0.226785   0.0515142  1.00022       NaN
+   5 │ ha.γ_team_raw[4]       0.204462   0.0521897  1.00248       NaN
+   6 │ ha.γ_team_raw[5]       0.215058   0.06076    1.00123       NaN
+   7 │ ha.γ_team_raw[6]       0.232881   0.0541358  1.00118       NaN
+   8 │ ha.γ_team_raw[7]       0.221905   0.0495294  1.00129       NaN
+   9 │ ha.γ_team_raw[8]       0.226283   0.0524409  0.999905      NaN
+  10 │ ha.γ_team_raw[9]       0.20657    0.048553   1.00359       NaN
+  11 │ ha.γ_team_raw[10]      0.224299   0.0514859  1.00141       NaN
+  12 │ ha.γ_team_raw[11]      0.204862   0.0507689  1.0015        NaN
+  13 │ ha.γ_base              0.214959   0.0370986  1.00323       NaN
+  14 │ ha.σ_γ                 0.0409172  0.0314973  1.00108       NaN
+  15 │ kap.κ_team_raw[1]      1.12382    0.0783044  1.00164       NaN
+  16 │ kap.κ_team_raw[2]      0.977943   0.0808267  1.00028       NaN
+  17 │ kap.κ_team_raw[3]      1.11575    0.075499   1.00367       NaN
+  18 │ kap.κ_team_raw[4]      1.03678    0.0715904  0.999742      NaN
+  19 │ kap.κ_team_raw[5]      1.07985    0.0930985  1.00125       NaN
+  20 │ kap.κ_team_raw[6]      1.07887    0.0679501  1.00106       NaN
+  21 │ kap.κ_team_raw[7]      1.14067    0.0797342  1.00117       NaN
+  22 │ kap.κ_team_raw[8]      1.12161    0.0772647  1.0004        NaN
+  23 │ kap.κ_team_raw[9]      1.04792    0.0717493  1.00249       NaN
+  24 │ kap.κ_team_raw[10]     1.11787    0.0781514  1.00035       NaN
+  25 │ kap.κ_team_raw[11]     1.04075    0.0708246  1.00198       NaN
+  26 │ kap.κ_base             0.671404   0.0865773  0.999991      NaN
+  27 │ kap.σ_κ                0.107608   0.0508521  1.00245       NaN
+  28 │ p_dyn.w_G_att         -0.0843375  0.077715   1.00019       NaN
+  29 │ p_dyn.w_G_def          0.159937   0.0688271  1.00185       NaN
+  30 │ p_dyn.w_Outfield_att   0.0853897  0.0178152  1.00457       NaN
+  31 │ p_dyn.w_Outfield_def  -0.120985   0.014048   1.00049       NaN
+  >> max R-hat over ALL params: 1.0055 (OK)
+=#
+
+
+#=
+--- hiso_perside : hierarchy-param convergence (R-hat / ESS) ---
+(no hierarchy rows matched — inspect conv.df raw_symbol column)
+31×5 DataFrame
+ Row │ raw_symbol            mean        std        rhat      ess     
+     │ Symbol                Float64     Float64    Float64   Float64 
+─────┼────────────────────────────────────────────────────────────────
+   1 │ ν_xg                   3.25202    0.334606   1.00294       NaN
+   2 │ ha.γ_team_raw[1]       0.227173   0.0516707  1.00004       NaN
+   3 │ ha.γ_team_raw[2]       0.182997   0.0630377  1.00469       NaN
+   4 │ ha.γ_team_raw[3]       0.228088   0.0530255  1.00105       NaN
+   5 │ ha.γ_team_raw[4]       0.205346   0.052632   1.00132       NaN
+   6 │ ha.γ_team_raw[5]       0.214428   0.0642587  1.00277       NaN
+   7 │ ha.γ_team_raw[6]       0.23318    0.0531083  1.00019       NaN
+   8 │ ha.γ_team_raw[7]       0.221205   0.0519484  1.00019       NaN
+   9 │ ha.γ_team_raw[8]       0.226555   0.0524686  1.0043        NaN
+  10 │ ha.γ_team_raw[9]       0.207974   0.0526463  1.00091       NaN
+  11 │ ha.γ_team_raw[10]      0.222418   0.0540796  1.00246       NaN
+  12 │ ha.γ_team_raw[11]      0.205424   0.0534065  1.00077       NaN
+  13 │ ha.γ_base              0.215687   0.038652   1.00831       NaN
+  14 │ ha.σ_γ                 0.0412895  0.0311611  1.00967       NaN
+  15 │ kap.κ_team_raw[1]      1.1289     0.077957   1.00091       NaN
+  16 │ kap.κ_team_raw[2]      0.974335   0.0831642  1.00034       NaN
+  17 │ kap.κ_team_raw[3]      1.1201     0.0746309  1.00081       NaN
+  18 │ kap.κ_team_raw[4]      1.03463    0.0734613  1.00301       NaN
+  19 │ kap.κ_team_raw[5]      1.08463    0.0971583  1.00521       NaN
+  20 │ kap.κ_team_raw[6]      1.08124    0.0701101  1.00099       NaN
+  21 │ kap.κ_team_raw[7]      1.14516    0.0799698  0.998959      NaN
+  22 │ kap.κ_team_raw[8]      1.12672    0.075973   1.00141       NaN
+  23 │ kap.κ_team_raw[9]      1.04909    0.0703804  1.0021        NaN
+  24 │ kap.κ_team_raw[10]     1.12382    0.0791408  1.00125       NaN
+  25 │ kap.κ_team_raw[11]     1.04445    0.0737229  1.00138       NaN
+  26 │ kap.κ_base             0.676226   0.0882933  0.999656      NaN
+  27 │ kap.σ_κ                0.110564   0.0498555  1.00025       NaN
+  28 │ p_dyn.w_G_att         -0.0821059  0.0759813  0.999047      NaN
+  29 │ p_dyn.w_G_def          0.150772   0.0680191  1.00489       NaN
+  30 │ p_dyn.w_Outfield_att   0.084491   0.0180225  1.00006       NaN
+  31 │ p_dyn.w_Outfield_def  -0.120717   0.0144775  1.00191       NaN
+  >> max R-hat over ALL params: 1.0097 (OK)
+=#
+
+
+
+#=
+--- hiso_both : hierarchy-param convergence (R-hat / ESS) ---
+(no hierarchy rows matched — inspect conv.df raw_symbol column)
+31×5 DataFrame
+ Row │ raw_symbol            mean        std        rhat      ess     
+     │ Symbol                Float64     Float64    Float64   Float64 
+─────┼────────────────────────────────────────────────────────────────
+   1 │ ν_xg                   3.25157    0.325232   1.00248       NaN
+   2 │ ha.γ_team_raw[1]       0.227374   0.052801   1.00366       NaN
+   3 │ ha.γ_team_raw[2]       0.18612    0.0610976  1.00082       NaN
+   4 │ ha.γ_team_raw[3]       0.227021   0.0522697  1.00397       NaN
+   5 │ ha.γ_team_raw[4]       0.206554   0.0517697  1.00475       NaN
+   6 │ ha.γ_team_raw[5]       0.215152   0.0613128  1.00284       NaN
+   7 │ ha.γ_team_raw[6]       0.232158   0.0509069  1.00359       NaN
+   8 │ ha.γ_team_raw[7]       0.221837   0.0512778  1.00229       NaN
+   9 │ ha.γ_team_raw[8]       0.227937   0.0513702  0.999261      NaN
+  10 │ ha.γ_team_raw[9]       0.206689   0.0505899  1.00072       NaN
+  11 │ ha.γ_team_raw[10]      0.222551   0.0493135  1.00126       NaN
+  12 │ ha.γ_team_raw[11]      0.205781   0.0515985  1.00481       NaN
+  13 │ ha.γ_base              0.215868   0.0383362  1.001         NaN
+  14 │ ha.σ_γ                 0.0397854  0.0302892  1.00572       NaN
+  15 │ kap.κ_team_raw[1]      1.12416    0.0785697  1.00323       NaN
+  16 │ kap.κ_team_raw[2]      0.979728   0.0839151  1.00191       NaN
+  17 │ kap.κ_team_raw[3]      1.1169     0.0731507  1.00119       NaN
+  18 │ kap.κ_team_raw[4]      1.03492    0.0736242  1.0057        NaN
+  19 │ kap.κ_team_raw[5]      1.08411    0.100222   1.00058       NaN
+  20 │ kap.κ_team_raw[6]      1.07959    0.0717075  1.00358       NaN
+  21 │ kap.κ_team_raw[7]      1.14382    0.0811301  0.999567      NaN
+  22 │ kap.κ_team_raw[8]      1.12426    0.0773876  1.00351       NaN
+  23 │ kap.κ_team_raw[9]      1.04859    0.0692477  1.00083       NaN
+  24 │ kap.κ_team_raw[10]     1.12087    0.078082   1.00041       NaN
+  25 │ kap.κ_team_raw[11]     1.04156    0.0701894  0.999539      NaN
+  26 │ kap.κ_base             0.674904   0.0898995  1.00067       NaN
+  27 │ kap.σ_κ                0.10883    0.0529991  1.00657       NaN
+  28 │ p_dyn.w_G_att         -0.0796539  0.0752559  1.00126       NaN
+  29 │ p_dyn.w_G_def          0.158243   0.0700946  1.00081       NaN
+  30 │ p_dyn.w_Outfield_att   0.085388   0.0183059  1.00158       NaN
+  31 │ p_dyn.w_Outfield_def  -0.12175    0.0145142  1.00153       NaN
+  >> max R-hat over ALL params: 1.0066 (OK)
+=#
+
+
 # ==========================================
 # 3b. ISO-σ HIERARCHY — pull the deltas straight from the raw chains
 # ==========================================
@@ -203,6 +332,38 @@ println("""
  • δ_side ≠ 0 ⇒ home & away rates are anchored to the market with different tightness.
  (Compare to the smile-σ result [[hierarchical-smile-sigma-null]]: that one collapsed to global on Ireland.)
 """)
+
+
+
+
+#=
+========================================================================
+[σ-hierarchy] hiso_perteam   (per_team=true, per_side=false)
+========================================================================
+  GLOBAL anchor  σ_base = exp(log_σ_base): mean=0.197  90%=[0.172, 0.226]   (prior centre 0.1)
+    └─ small σ = model hugs the market rates tightly (little edge budget); large = loose anchor.
+  τ_team (per-TEAM σ spread): mean=0.097 90%=[0.008,0.245]  P(τ>0.05)=0.66 
+    team σ-multiplier exp(τ_team·z̄_team) across 11 teams: min=0.969 med=1.003 max=1.039
+  δ_side: GATED OFF (drew from prior only — ignore its value).
+
+========================================================================
+[σ-hierarchy] hiso_perside   (per_team=false, per_side=true)
+========================================================================
+  GLOBAL anchor  σ_base = exp(log_σ_base): mean=0.199  90%=[0.176, 0.225]   (prior centre 0.1)
+    └─ small σ = model hugs the market rates tightly (little edge budget); large = loose anchor.
+  τ_team: GATED OFF (drew from prior only — ignore its value).
+  δ_side (home/away anchor offset): mean=0.043 90%=[-0.072,0.151]  ⇒ σ_home≈0.207 vs σ_away≈0.19
+
+========================================================================
+[σ-hierarchy] hiso_both   (per_team=true, per_side=true)
+========================================================================
+  GLOBAL anchor  σ_base = exp(log_σ_base): mean=0.198  90%=[0.172, 0.225]   (prior centre 0.1)
+    └─ small σ = model hugs the market rates tightly (little edge budget); large = loose anchor.
+  τ_team (per-TEAM σ spread): mean=0.099 90%=[0.006,0.247]  P(τ>0.05)=0.69 
+    team σ-multiplier exp(τ_team·z̄_team) across 11 teams: min=0.967 med=1.001 max=1.035
+  δ_side (home/away anchor offset): mean=0.041 90%=[-0.068,0.152]  ⇒ σ_home≈0.205 vs σ_away≈0.189
+=#
+
 
 # ==========================================
 # 4. LIGHT EDGE CHECK (secondary — confirms the prediction path works end-to-end)

@@ -139,6 +139,9 @@ if isdir(r05_dir)
 else
     @warn "r05 grid dir not found ($r05_dir) — evaluating smile grid only."
 end
+
+smile_results = Experiments.load_experiments(Experiments.list_experiments(smile_dir, data_dir=""))
+
 all_results = convert(Vector{BayesianFootball.Experiments.ExperimentResults}, vcat(smile_results, r05_results))
 
 odds = Data.summarize_betfair_market(ds, open_window=(-100000.0, -10.0), close_window=(-20.0, 0.0))
@@ -167,6 +170,27 @@ Row │ model           glmedge_intercept_coef  glmedge_spread_fair_coef  glmedg
 =#
 
 
+#=
+# ---------- added more markets ----------
+--- GLM Edge Summary ---
+11×4 DataFrame
+ Row │ model           glmedge_intercept_coef  glmedge_spread_fair_coef  glmedge_spread_fair_p_value 
+     │ String          Float64                 Float64                   Float64                     
+─────┼───────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ dp_nomarket                   -2.80561                   2.27892                  1.09987e-5
+   2 │ dp_old_mw100                  -2.79079                   2.13955                  0.000427053
+   3 │ dp_old_mw50                   -2.7914                    1.83217                  0.0011329
+   4 │ dp_split_lw0                  -2.78233                   1.2448                   0.00257321
+   5 │ dp_split_lw100                -2.78781                   2.02981                  0.00104034
+   6 │ dp_split_lw25                 -2.77846                   1.14451                  0.012016
+   7 │ dp_split_lw50                 -2.77482                   1.01688                  0.0461817
+   8 │ li_smile100                   -2.8241                    2.49466                  2.62586e-6
+   9 │ li_smile50                    -2.8271                    2.5277                   3.09443e-7
+  10 │ li_smile_only                 -2.82047                   2.27525                  1.04725e-5
+  11 │ li_sup_only                   -2.82399                   1.54823                  0.000282804
+=#
+
+
 println("\n", "="^60, "\n📉 LogLoss (Betfair) — smile vs r05\n", "="^60)
 Evaluation.display_summary_metric(Evaluation.evaluate_experiments(Evaluation.LogLoss(), all_results, ds1), :logloss)
 
@@ -188,6 +212,26 @@ Row │ model           logloss_overall_model_ll  logloss_overall_market_ll  log
 10 │ li_smile_only                   0.568782                   0.591852               -0.0230704
 11 │ li_sup_only                     0.581337                   0.591852               -0.0105151
 =#
+
+#= --- extra markets
+--- LogLoss Summary (Lower Diff is Better) ---
+11×4 DataFrame
+ Row │ model           logloss_overall_model_ll  logloss_overall_market_ll  logloss_overall_diff_ll 
+     │ String          Float64                   Float64                    Float64                 
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ dp_nomarket                     0.432667                   0.445742              -0.0130751
+   2 │ dp_old_mw100                    0.431576                   0.445742              -0.0141663
+   3 │ dp_old_mw50                     0.433876                   0.445742              -0.0118658
+   4 │ dp_split_lw0                    0.441042                   0.445742              -0.00470046
+   5 │ dp_split_lw100                  0.43136                    0.445742              -0.0143824
+   6 │ dp_split_lw25                   0.439649                   0.445742              -0.00609253
+   7 │ dp_split_lw50                   0.437482                   0.445742              -0.00826048
+   8 │ li_smile100                     0.431789                   0.445742              -0.0139527
+   9 │ li_smile50                      0.431759                   0.445742              -0.0139833
+  10 │ li_smile_only                   0.432938                   0.445742              -0.0128039
+  11 │ li_sup_only                     0.441053                   0.445742              -0.00468853
+=#
+
 
 
 

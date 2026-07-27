@@ -167,6 +167,239 @@ for (name, model) in variants
     summaries[name] = (; max_rhat, glob)
 end
 
+#=
+========================================================================                                                                                                                                                                                                                                                    
+>> MODE: V0_attack_only                                                                                                                                                                                                                                                                                                     
+======================================================================== 
+BayesianFootball.Experiments.Diagnostics.ChainDiagnostic(31×11 DataFrame                                                                                                                                                                                                                                                    
+ Row │ std         mean        ess      train_season  raw_symbol            rhat     target_season  fold   week   parameter             entity                                                                                                                                                                              
+     │ Float64     Float64     Float64  String        Symbol                Float64  String         Int64  Int64  String                String                                                                                                                                                                              
+─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────                                                                                                                                                               
+   1 │  1.21354     2.54531        NaN  2026          ν_xg                  1.52404  2026               0      0  ν_xg                  global                                                                                                                                                                              
+   2 │  5.97615    -3.23339        NaN  2026          ha.γ_team_raw[1]      1.1051   2026               0      0  home_advantage        bohemian                                                                                                                                                                            
+   3 │  9.38917     5.59598        NaN  2026          ha.γ_team_raw[2]      1.25807  2026               0      0  home_advantage        cork-city                                                                                                                                                                           
+   4 │  9.5395     -5.2941         NaN  2026          ha.γ_team_raw[3]      1.20953  2026               0      0  home_advantage        derry-city                                                                                                                                                                          
+   5 │ 14.0962     -7.9445         NaN  2026          ha.γ_team_raw[4]      1.30329  2026               0      0  home_advantage        drogheda-united                                                                                                                                                                     
+   6 │  6.58487    -3.59689        NaN  2026          ha.γ_team_raw[5]      1.07688  2026               0      0  home_advantage        dundalk-fc                                                                                                                                                                          
+   7 │  0.288685    0.0613723      NaN  2026          ha.γ_team_raw[6]      1.52873  2026               0      0  home_advantage        galway-united                                                                                                                                                                       
+   8 │  2.823      -1.42681        NaN  2026          ha.γ_team_raw[7]      1.52688  2026               0      0  home_advantage        shamrock-rovers                                                                                                                                                                     
+   9 │ 10.0072     -5.56833        NaN  2026          ha.γ_team_raw[8]      1.22844  2026               0      0  home_advantage        shelbourne                                                                                                                                                                          
+  10 │ 13.6957     -7.70182        NaN  2026          ha.γ_team_raw[9]      1.34195  2026               0      0  home_advantage        sligo-rovers                                                                                                                                                                        
+  11 │ 12.8012     -7.18176        NaN  2026          ha.γ_team_raw[10]     1.31683  2026               0      0  home_advantage        st-patricks-athletic                                                                                                                                                                
+  12 │  8.65716     5.19183        NaN  2026          ha.γ_team_raw[11]     1.19365  2026               0      0  home_advantage        waterford-fc                                                                                                                                                                        
+  13 │  0.0826077   0.184493       NaN  2026          ha.γ_base             1.08714  2026               0      0  ha.γ_base             global                                                                                                                                                                              
+  14 │  7.44533     4.3529         NaN  2026          ha.σ_γ                1.5321   2026               0      0  ha.σ_γ                global                                                                                                                                                                              
+  15 │  0.474343    0.839068       NaN  2026          kap.κ_team_raw[1]     1.19823  2026               0      0  kappa                 bohemian                                                                                                                                                                            
+  16 │  0.464091    0.827332       NaN  2026          kap.κ_team_raw[2]     1.15164  2026               0      0  kappa                 cork-city                                                                                                                                                                           
+  17 │  0.489034    0.83463        NaN  2026          kap.κ_team_raw[3]     1.47286  2026               0      0  kappa                 derry-city                                                                                                                                                                          
+  18 │  0.285928    0.938692       NaN  2026          kap.κ_team_raw[4]     1.52697  2026               0      0  kappa                 drogheda-united                                                                                                                                                                     
+  19 │  1.38477     1.8995         NaN  2026          kap.κ_team_raw[5]     1.21349  2026               0      0  kappa                 dundalk-fc                                                                                                                                                                          
+  20 │  1.07139     1.70733        NaN  2026          kap.κ_team_raw[6]     1.19008  2026               0      0  kappa                 galway-united                                                                                                                                                                       
+  21 │  1.58503     2.01536        NaN  2026          kap.κ_team_raw[7]     1.25456  2026               0      0  kappa                 shamrock-rovers                                                                                                                                                                     
+  22 │  0.952276    1.65937        NaN  2026          kap.κ_team_raw[8]     1.09429  2026               0      0  kappa                 shelbourne                                                                                                                                                                          
+  23 │  1.57466     2.00753        NaN  2026          kap.κ_team_raw[9]     1.24419  2026               0      0  kappa                 sligo-rovers                                                                                                                                                                        
+  24 │  0.166752    1.17048        NaN  2026          kap.κ_team_raw[10]    1.47417  2026               0      0  kappa                 st-patricks-athletic                                                                                                                                                                
+  25 │  1.0131      1.68225        NaN  2026          kap.κ_team_raw[11]    1.14997  2026               0      0  kappa                 waterford-fc                                                                                                                                                                        
+  26 │  0.16592     0.627615       NaN  2026          kap.κ_base            1.43986  2026               0      0  kap.κ_base            global                                                                                                                                                                              
+  27 │  1.15634     0.741707       NaN  2026          kap.σ_κ               1.53191  2026               0      0  kap.σ_κ               global                                                                                                                                                                              
+  28 │  0.432439    0.114151       NaN  2026          p_dyn.w_G_att         1.52664  2026               0      0  p_dyn.w_G_att         global                                                                                                                                                                              
+  29 │  0.38929     0.228771       NaN  2026          p_dyn.w_G_def         1.52208  2026               0      0  p_dyn.w_G_def         global                                                                                                                                                                              
+  30 │  1.25521    -0.640327       NaN  2026          p_dyn.w_Outfield_att  1.53014  2026               0      0  p_dyn.w_Outfield_att  global                                                                                                                                                                              
+  31 │  1.27042    -0.848204       NaN  2026          p_dyn.w_Outfield_def  1.52988  2026               0      0  p_dyn.w_Outfield_def  global)                                                                                                                                                                             
+                                                                                                                                                                                                                                                                                                                            
+--- RAW κ-param diagnostics (the real convergence gate) ---                                                                                                                                                                                                                                                                 
+13×3 DataFrame                                                                                                                                                                                                                                                                                                              
+ Row │ parameter           rhat     ess                                                                                                                                                                                                                                                                                     
+     │ String              Float64  Float64                                                                                                                                                                                                                                                                                 
+─────┼──────────────────────────────────────                                                                                                                                                                                                                                                                                
+   1 │ kap.κ_base           1.4399     15.7                                                                                                                                                                                                                                                                                 
+   2 │ kap.σ_κ              1.5319     14.2                                                                                                                                                                                                                                                                                 
+   3 │ kap.κ_team_raw[1]    1.1982     27.4                                                                                                                                                                                                                                                                                 
+   4 │ kap.κ_team_raw[2]    1.1516     34.7                                                                                                                                                                                                                                                                                 
+   5 │ kap.κ_team_raw[3]    1.4729     15.1                                                                                                                                                                                                                                                                                 
+   6 │ kap.κ_team_raw[4]    1.527    4344.7                                                                                                                                                                                                                                                                                 
+   7 │ kap.κ_team_raw[5]    1.2135     26.1                                                                                                                                                                                                                                                                                 
+   8 │ kap.κ_team_raw[6]    1.1901     28.2                                                                                                                                                                                                                                                                                 
+   9 │ kap.κ_team_raw[7]    1.2546     22.8                                                                                                                                                                                                                                                                                 
+  10 │ kap.κ_team_raw[8]    1.0943     53.9                                                                                                                                                                                                                                                                                 
+  11 │ kap.κ_team_raw[9]    1.2442     23.2                                                                                                                                                                                                                                                                                 
+  12 │ kap.κ_team_raw[10]   1.4742    461.9                                                                                                                                                                                                                                                                                 
+  13 │ kap.κ_team_raw[11]   1.15       34.9                                                                                                                                                                                                                                                                                 
+max κ-param R-hat: 1.5319  ❌                                                                                                                                                                                                                                                                                               
+                                                                                                                                                                                                                                                                                                                            
+--- per-team κ multipliers (goals-vs-xG conversion) ---                                                                                                                                                                                                                                                                     
+11×5 DataFrame                                                                                                                                                                                                                                                                                                              
+ Row │ team                  att_mult  att_sd   def_mult  def_sd                                                                                                                                                                                                                                                            
+     │ String                Float64   Float64  Float64   Float64                                                                                                                                                                                                                                                           
+─────┼────────────────────────────────────────────────────────────                                                                                                                                                                                                                                                          
+   1 │ shamrock-rovers         2.0154   1.585        1.0      0.0                                                                                                                                                                                                                                                           
+   2 │ sligo-rovers            2.0075   1.5747       1.0      0.0                                                                                                                                                                                                                                                           
+   3 │ dundalk-fc              1.8995   1.3848       1.0      0.0                                                                                                                                                                                                                                                           
+   4 │ galway-united           1.7073   1.0714       1.0      0.0                                                                                                                                                                                                                                                           
+   5 │ waterford-fc            1.6822   1.0131       1.0      0.0                                                                                                                                                                                                                                                           
+   6 │ shelbourne              1.6594   0.9523       1.0      0.0                                                                                                                                                                                                                                                           
+   7 │ st-patricks-athletic    1.1705   0.1668       1.0      0.0                                                                                                                                                                                                                                                           
+   8 │ drogheda-united         0.9387   0.2859       1.0      0.0                                                                                                                                                                                                                                                           
+   9 │ bohemian                0.8391   0.4743       1.0      0.0                                                                                                                                                                                                                                                           
+  10 │ derry-city              0.8346   0.489        1.0      0.0                                                                                                                                                                                                                                                           
+  11 │ cork-city               0.8273   0.4641       1.0      0.0                                                                                                                                                                                                                                                           
+globals: κ0_conv=1.0  att_spread=1.1881  def_spread=0.0  attdef_cor=NaN
+=#
+
+
+ 
+
+#=
+========================================================================
+>> MODE: V2_net                                                                
+========================================================================
+BayesianFootball.Experiments.Diagnostics.ChainDiagnostic(18×11 DataFrame
+ Row │ std        mean        ess      train_season  raw_symbol            rhat      target_season  fold   week   parameter             entity               
+     │ Float64    Float64     Float64  String        Symbol                Float64   String         Int64  Int64  String                String               
+─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ 0.32962     3.22855        NaN  2026          ν_xg                  1.00158   2026               0      0  ν_xg                  global
+   2 │ 0.102125    0.223206       NaN  2026          ha.γ_team_raw[1]      1.00069   2026               0      0  home_advantage        bohemian
+   3 │ 0.110292    0.185796       NaN  2026          ha.γ_team_raw[2]      1.001     2026               0      0  home_advantage        cork-city
+   4 │ 0.102375    0.223202       NaN  2026          ha.γ_team_raw[3]      1.00137   2026               0      0  home_advantage        derry-city
+   5 │ 0.104229    0.202414       NaN  2026          ha.γ_team_raw[4]      1.00009   2026               0      0  home_advantage        drogheda-united
+   6 │ 0.110326    0.211261       NaN  2026          ha.γ_team_raw[5]      1.00033   2026               0      0  home_advantage        dundalk-fc
+   7 │ 0.102163    0.227379       NaN  2026          ha.γ_team_raw[6]      1.00041   2026               0      0  home_advantage        galway-united
+   8 │ 0.10164     0.21308        NaN  2026          ha.γ_team_raw[7]      0.999971  2026               0      0  home_advantage        shamrock-rovers
+   9 │ 0.1019      0.218354       NaN  2026          ha.γ_team_raw[8]      1.00061   2026               0      0  home_advantage        shelbourne
+  10 │ 0.101856    0.210849       NaN  2026          ha.γ_team_raw[9]      1.00028   2026               0      0  home_advantage        sligo-rovers
+  11 │ 0.101448    0.216543       NaN  2026          ha.γ_team_raw[10]     1.00067   2026               0      0  home_advantage        st-patricks-athletic
+  12 │ 0.103078    0.204626       NaN  2026          ha.γ_team_raw[11]     0.999695  2026               0      0  home_advantage        waterford-fc
+  13 │ 0.0845773   0.212459       NaN  2026          ha.γ_base             1.0       2026               0      0  ha.γ_base             global
+  14 │ 0.0431468   0.0562354      NaN  2026          ha.σ_γ                1.00103   2026               0      0  ha.σ_γ                global
+  15 │ 0.137715   -0.118982       NaN  2026          p_dyn.w_G_att         1.00033   2026               0      0  p_dyn.w_G_att         global
+  16 │ 0.132705    0.0178605      NaN  2026          p_dyn.w_G_def         0.999795  2026               0      0  p_dyn.w_G_def         global
+  17 │ 0.0293716   0.0864726      NaN  2026          p_dyn.w_Outfield_att  1.00174   2026               0      0  p_dyn.w_Outfield_att  global
+  18 │ 0.0279376  -0.113586       NaN  2026          p_dyn.w_Outfield_def  1.00151   2026               0      0  p_dyn.w_Outfield_def  global)
+
+--- RAW κ-param diagnostics (the real convergence gate) ---                    
+13×3 DataFrame                                                                 
+ Row │ parameter  rhat     ess                                                 
+     │ String     Float64  Float64                                             
+─────┼─────────────────────────────                                            
+   1 │ κ0          1.0017   5339.1                                             
+   2 │ τ_net       1.0002   3025.3                                             
+   3 │ δ_net[1]    1.0005   5095.8                                             
+   4 │ δ_net[2]    1.0037   6488.7                                             
+   5 │ δ_net[3]    1.0015   5089.5                                             
+   6 │ δ_net[4]    1.0016   5054.3                                             
+   7 │ δ_net[5]    1.0003   5446.7                                             
+   8 │ δ_net[6]    0.9997   5703.6                                             
+   9 │ δ_net[7]    1.0045   4784.3                                             
+  10 │ δ_net[8]    1.0009   4519.4                                             
+  11 │ δ_net[9]    1.0005   4422.9                                             
+  12 │ δ_net[10]   1.0004   5850.5                                             
+  13 │ δ_net[11]   1.0019   6115.7                                             
+max κ-param R-hat: 1.0045  ✅                                                  
+
+--- per-team κ multipliers (goals-vs-xG conversion) ---                        
+11×5 DataFrame                                                                 
+ Row │ team                  att_mult  att_sd   def_mult  def_sd               
+     │ String                Float64   Float64  Float64   Float64              
+─────┼────────────────────────────────────────────────────────────             
+   1 │ shelbourne              1.0211   0.0618    1.0211   0.0618              
+   2 │ derry-city              1.0209   0.0622    1.0209   0.0622              
+   3 │ shamrock-rovers         1.0079   0.0574    1.0079   0.0574              
+   4 │ st-patricks-athletic    1.0056   0.0564    1.0056   0.0564              
+   5 │ dundalk-fc              1.0013   0.0647    1.0013   0.0647              
+   6 │ bohemian                1.0007   0.0524    1.0007   0.0524              
+   7 │ sligo-rovers            0.9991   0.0553    0.9991   0.0553              
+   8 │ galway-united           0.9936   0.0547    0.9936   0.0547              
+   9 │ drogheda-united         0.9935   0.0553    0.9935   0.0553              
+  10 │ waterford-fc            0.9911   0.055     0.9911   0.055               
+  11 │ cork-city               0.984    0.0586    0.984    0.0586              
+globals: κ0_conv=0.9746  att_spread=0.0371  def_spread=0.0371  attdef_cor=NaN
+=#
+
+
+
+
+#=
+========================================================================
+>> MODE: V1_attdef                                                             
+========================================================================
+
+BayesianFootball.Experiments.Diagnostics.ChainDiagnostic(18×11 DataFrame
+ Row │ std        mean        ess      train_season  raw_symbol            rhat      target_season  fold   week   parameter             entity               
+     │ Float64    Float64     Float64  String        Symbol                Float64   String         Int64  Int64  String                String               
+─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ 0.316448    3.2336         NaN  2026          ν_xg                  1.00087   2026               0      0  ν_xg                  global
+   2 │ 0.106183    0.220073       NaN  2026          ha.γ_team_raw[1]      1.00116   2026               0      0  home_advantage        bohemian
+   3 │ 0.109862    0.179811       NaN  2026          ha.γ_team_raw[2]      1.00136   2026               0      0  home_advantage        cork-city
+   4 │ 0.107815    0.219248       NaN  2026          ha.γ_team_raw[3]      1.00145   2026               0      0  home_advantage        derry-city
+   5 │ 0.104911    0.199024       NaN  2026          ha.γ_team_raw[4]      1.00145   2026               0      0  home_advantage        drogheda-united
+   6 │ 0.111188    0.208946       NaN  2026          ha.γ_team_raw[5]      1.002     2026               0      0  home_advantage        dundalk-fc
+   7 │ 0.106379    0.225783       NaN  2026          ha.γ_team_raw[6]      1.00186   2026               0      0  home_advantage        galway-united
+   8 │ 0.105121    0.208583       NaN  2026          ha.γ_team_raw[7]      1.0009    2026               0      0  home_advantage        shamrock-rovers
+   9 │ 0.107855    0.2145         NaN  2026          ha.γ_team_raw[8]      1.00116   2026               0      0  home_advantage        shelbourne
+  10 │ 0.105982    0.210336       NaN  2026          ha.γ_team_raw[9]      0.999854  2026               0      0  home_advantage        sligo-rovers
+  11 │ 0.108265    0.212104       NaN  2026          ha.γ_team_raw[10]     1.00022   2026               0      0  home_advantage        st-patricks-athletic
+  12 │ 0.107239    0.201894       NaN  2026          ha.γ_team_raw[11]     1.00102   2026               0      0  home_advantage        waterford-fc
+  13 │ 0.0893474   0.208806       NaN  2026          ha.γ_base             0.99999   2026               0      0  ha.γ_base             global
+  14 │ 0.043661    0.056839       NaN  2026          ha.σ_γ                1.00145   2026               0      0  ha.σ_γ                global
+  15 │ 0.134281   -0.1182         NaN  2026          p_dyn.w_G_att         1.00156   2026               0      0  p_dyn.w_G_att         global
+  16 │ 0.135179    0.0157748      NaN  2026          p_dyn.w_G_def         1.00411   2026               0      0  p_dyn.w_G_def         global
+  17 │ 0.028348    0.0861292      NaN  2026          p_dyn.w_Outfield_att  1.00085   2026               0      0  p_dyn.w_Outfield_att  global
+  18 │ 0.0279832  -0.1141         NaN  2026          p_dyn.w_Outfield_def  1.00027   2026               0      0  p_dyn.w_Outfield_def  global)
+
+--- RAW κ-param diagnostics (the real convergence gate) ---                    
+25×3 DataFrame                                                                 
+ Row │ parameter  rhat     ess                                                 
+     │ String     Float64  Float64                                             
+─────┼─────────────────────────────                                            
+   1 │ κ0          1.0019   4582.3                                             
+   2 │ τ_att       1.0      2534.3                                             
+   3 │ τ_def       1.0023   2591.6                                             
+   4 │ z_att[1]    1.0009   4870.0                                             
+   5 │ z_att[2]    1.0004   4948.6                                             
+   6 │ z_att[3]    1.0011   5231.6                                             
+   7 │ z_att[4]    1.001    5876.8                                             
+   8 │ z_att[5]    0.9997   5423.3                                             
+   9 │ z_att[6]    1.0023   5157.9                                             
+  10 │ z_att[7]    1.002    5974.8                                             
+  11 │ z_att[8]    0.9998   5582.2                                             
+  12 │ z_att[9]    0.9999   7544.3                                             
+  13 │ z_att[10]   0.9997   6491.4                                             
+  14 │ z_att[11]   1.0012   4344.2                                             
+  15 │ z_def[1]    1.0021   6340.0                                             
+  16 │ z_def[2]    1.0002   5130.5                                             
+  17 │ z_def[3]    1.0009   5095.1                                             
+  18 │ z_def[4]    1.0014   5516.9                                             
+  19 │ z_def[5]    1.0018   4875.1                                             
+  20 │ z_def[6]    1.0005   5284.2                                             
+  21 │ z_def[7]    1.0001   5725.2                                             
+  22 │ z_def[8]    1.0016   5765.5                                             
+  23 │ z_def[9]    0.9998   5618.9                                             
+  24 │ z_def[10]   0.9998   5565.2                                             
+  25 │ z_def[11]   1.0007   5547.7                                             
+max κ-param R-hat: 1.0023  ✅                                                  
+
+--- per-team κ multipliers (goals-vs-xG conversion) ---                        
+11×5 DataFrame                                                                 
+ Row │ team                  att_mult  att_sd   def_mult  def_sd               
+     │ String                Float64   Float64  Float64   Float64              
+─────┼────────────────────────────────────────────────────────────             
+   1 │ shelbourne              1.0233   0.0801    1.0156   0.0752              
+   2 │ derry-city              1.0222   0.0806    1.011    0.0726              
+   3 │ bohemian                1.0143   0.0721    0.9878   0.0683              
+   4 │ shamrock-rovers         1.0046   0.0725    1.0083   0.0698              
+   5 │ waterford-fc            1.0038   0.0709    0.9858   0.0698              
+   6 │ dundalk-fc              1.0021   0.0778    1.0034   0.0781              
+   7 │ sligo-rovers            1.0001   0.0718    1.0015   0.0698              
+   8 │ drogheda-united         0.9935   0.0694    0.9984   0.0681              
+   9 │ cork-city               0.99     0.0713    0.9897   0.065               
+  10 │ st-patricks-athletic    0.9888   0.0684    1.0224   0.0812              
+  11 │ galway-united           0.9871   0.07      1.0047   0.07                
+globals: κ0_conv=0.9735  att_spread=0.0362  def_spread=0.0366  attdef_cor=0.1
+=#
+
+
+
+
 # ==========================================
 # 5. VERDICT TABLE
 # ==========================================

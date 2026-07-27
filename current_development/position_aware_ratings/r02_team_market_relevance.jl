@@ -34,7 +34,7 @@ const Data = BayesianFootball.Data
 
 const SEGMENTS = [
     Data.Ireland(), Data.IrelandFirstDivision(), Data.SouthKorea(),
-    Data.Norway(), Data.Veikkausliiga(), Data.ScottishLower(),
+    Data.Norway(), Data.Veikkausliiga(),
 ]
 const MIN_APPS   = 5
 const OVER_LINES = [:over_15, :over_25, :over_35]   # most balanced / liquid totals
@@ -113,6 +113,96 @@ for seg in SEGMENTS
   end
 end
 
+
+#=
+####################################################################################
+# LEAGUE: Ireland
+####################################################################################
+[ Info: Loading DataStore for Ireland from local cache (Age: 0.6 hours)...
+  matches with index=645   off_total mean=2.87 (sd 1.52)   off_att_total mean=2.25
+
+  logit(over hit) ~ market_logit + signal   [coef<0 & |z|≥2 ⇒ off-position predicts UNDER beyond market]
+6×7 DataFrame
+ Row │ line     signal         n      coef     z        p        dll
+     │ Symbol   Symbol         Int64  Float64  Float64  Float64  Float64
+─────┼────────────────────────────────────────────────────────────────────
+   1 │ over_15  off_total        622  -0.0235    -0.41   0.6853  -0.00016
+   2 │ over_15  off_att_total    622  -0.0464    -0.78   0.4352  -0.00052
+   3 │ over_25  off_total        618  -0.0052    -0.1    0.9231  -0.00033
+   4 │ over_25  off_att_total    618  -0.0419    -0.75   0.4541  -0.00078
+   5 │ over_35  off_total        622  -0.007     -0.11   0.9109  -0.00185
+   6 │ over_35  off_att_total    622  -0.0499    -0.76   0.4474  -0.0023
+
+####################################################################################
+# LEAGUE: IrelandFirstDivision
+####################################################################################
+[ Info: Cache for IrelandFirstDivision is expired (28.2 hours old). Fetching fresh data...
+[ Info: Building DataStore for BayesianFootball.Data.IrelandFirstDivision...
+[ Info: Saving IrelandFirstDivision DataStore to local cache...
+  matches with index=638   off_total mean=2.29 (sd 1.50)   off_att_total mean=1.74
+  (no totals line had ≥50 matched matches)
+
+####################################################################################
+# LEAGUE: SouthKorea
+####################################################################################
+[ Info: Cache for SouthKorea is expired (28.2 hours old). Fetching fresh data...
+[ Info: Building DataStore for BayesianFootball.Data.SouthKorea...
+[ Info: Saving SouthKorea DataStore to local cache...
+  matches with index=1427   off_total mean=3.17 (sd 1.71)   off_att_total mean=2.53
+
+  logit(over hit) ~ market_logit + signal   [coef<0 & |z|≥2 ⇒ off-position predicts UNDER beyond market]
+6×7 DataFrame
+ Row │ line     signal         n      coef     z        p        dll
+     │ Symbol   Symbol         Int64  Float64  Float64  Float64  Float64
+─────┼────────────────────────────────────────────────────────────────────
+   1 │ over_15  off_total       1363  -0.0449    -1.27   0.2055  -0.00075
+   2 │ over_15  off_att_total   1363  -0.0658    -1.67   0.0943  -0.00119
+   3 │ over_25  off_total       1368  -0.0017    -0.05   0.9576  -0.00054
+   4 │ over_25  off_att_total   1368  -0.0276    -0.78   0.4368  -0.00076
+   5 │ over_35  off_total       1363  -0.0124    -0.35   0.7294  -0.00014
+   6 │ over_35  off_att_total   1363  -0.044     -1.08   0.2781  -0.00053
+
+####################################################################################
+# LEAGUE: Norway
+####################################################################################
+[ Info: Cache for Norway is expired (28.2 hours old). Fetching fresh data...
+[ Info: Building DataStore for BayesianFootball.Data.Norway...
+[ Info: Saving Norway DataStore to local cache...
+  matches with index=1543   off_total mean=2.48 (sd 1.56)   off_att_total mean=2.00
+
+  logit(over hit) ~ market_logit + signal   [coef<0 & |z|≥2 ⇒ off-position predicts UNDER beyond market]
+6×7 DataFrame
+ Row │ line     signal         n      coef     z        p        dll
+     │ Symbol   Symbol         Int64  Float64  Float64  Float64  Float64
+─────┼────────────────────────────────────────────────────────────────────
+   1 │ over_15  off_total       1527  -0.0415    -1.01   0.3137  -0.00051
+   2 │ over_15  off_att_total   1527  -0.0205    -0.45   0.653   -0.00024
+   3 │ over_25  off_total       1528  -0.0314    -0.93   0.3539  -0.00055
+   4 │ over_25  off_att_total   1528  -0.0006    -0.02   0.9877  -0.00027
+   5 │ over_35  off_total       1527  -0.0121    -0.35   0.727   -0.00033
+   6 │ over_35  off_att_total   1527   0.0203     0.53   0.5936  -0.00039
+
+####################################################################################
+# LEAGUE: Veikkausliiga
+####################################################################################
+[ Info: Cache for Veikkausliiga is expired (28.2 hours old). Fetching fresh data...
+[ Info: Building DataStore for BayesianFootball.Data.Veikkausliiga...
+[ Info: Saving Veikkausliiga DataStore to local cache...
+  matches with index=471   off_total mean=2.60 (sd 1.57)   off_att_total mean=2.17
+
+  logit(over hit) ~ market_logit + signal   [coef<0 & |z|≥2 ⇒ off-position predicts UNDER beyond market]
+6×7 DataFrame
+ Row │ line     signal         n      coef     z        p        dll
+     │ Symbol   Symbol         Int64  Float64  Float64  Float64  Float64
+─────┼────────────────────────────────────────────────────────────────────
+   1 │ over_15  off_total        461  -0.0185    -0.26   0.794   -0.00294
+   2 │ over_15  off_att_total    461   0.0084     0.11   0.9151  -0.00288
+   3 │ over_25  off_total        457  -0.0261    -0.43   0.6666  -0.0038
+   4 │ over_25  off_att_total    457   0.0232     0.34   0.7313  -0.00372
+   5 │ over_35  off_total        461   0.0176     0.27   0.7864  -0.00306
+   6 │ over_35  off_att_total    461   0.0438     0.61   0.5418  -0.00338
+=#
+
 # ============================================================================
 # CROSS-LEAGUE SUMMARY
 # ============================================================================
@@ -130,6 +220,21 @@ else
     sort!(g, :mean_z)
     show(g; allrows=true, allcols=true, truncate=0); println()
 end
+
+
+#=
+end
+6×8 DataFrame
+ Row │ line     signal         mean_coef  mean_z   n_leagues  n_neg_sig  n_pos_sig  mean_dll
+     │ Symbol   Symbol         Float64    Float64  Int64      Int64      Int64      Float64
+─────┼───────────────────────────────────────────────────────────────────────────────────────
+   1 │ over_15  off_total        -0.0321    -0.74          4          0          0  -0.00109
+   2 │ over_15  off_att_total    -0.0311    -0.7           4          0          0  -0.00121
+   3 │ over_25  off_total        -0.0161    -0.38          4          0          0  -0.0013
+   4 │ over_25  off_att_total    -0.0117    -0.3           4          0          0  -0.00138
+   5 │ over_35  off_att_total    -0.0074    -0.18          4          0          0  -0.00165
+   6 │ over_35  off_total        -0.0035    -0.13          4          0          0  -0.00134
+=#
 
 println("""
 

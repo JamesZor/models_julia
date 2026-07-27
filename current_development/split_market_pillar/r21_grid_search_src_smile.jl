@@ -157,17 +157,110 @@ all_results = convert(Vector{BayesianFootball.Experiments.ExperimentResults},
 odds = Data.summarize_betfair_market(ds, open_window=(-100000.0, -10.0), close_window=(-20.0, 0.0))
 ds1  = Data.DataStore(ds.segment, ds.matches, ds.statistics, odds, ds.lineups, ds.incidents, ds.betfair_odds)
 
+
+metrics_to_test = [
+  Evaluation.GLMEdge(), 
+  Evaluation.LogLoss(), 
+  Evaluation.LPD()
+  ]
+
+data_of_metrics = Evaluation.evaluate_experiments( metrics_to_test, all_results, ds1)
+
 println("\n", "="^60, "\n📈 GLM Edge (Betfair) — src grid vs li_*/dp_*\n", "="^60)
-Evaluation.display_summary_metric(Evaluation.evaluate_experiments(Evaluation.GLMEdge(), all_results, ds1), :glmedge)
+
+Evaluation.display_summary_metric(data_of_metrics, :glmedge)
+# Evaluation.display_summary_metric(Evaluation.evaluate_experiments(Evaluation.GLMEdge(), all_results, ds1), :glmedge)
+
+#=
+--- GLM Edge Summary ---
+17×4 DataFrame
+ Row │ model            glmedge_intercept_coef  glmedge_spread_fair_coef  glmedge_spread_fair_p_value 
+     │ String           Float64                 Float64                   Float64                     
+─────┼────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ dp_nomarket                    -2.80561                   2.27892                  1.09987e-5
+   2 │ dp_old_mw100                   -2.79079                   2.13955                  0.000427053
+   3 │ dp_old_mw50                    -2.7914                    1.83217                  0.0011329
+   4 │ dp_split_lw0                   -2.78233                   1.2448                   0.00257321
+   5 │ dp_split_lw100                 -2.78781                   2.02981                  0.00104034
+   6 │ dp_split_lw25                  -2.77846                   1.14451                  0.012016
+   7 │ dp_split_lw50                  -2.77482                   1.01688                  0.0461817
+   8 │ li_smile100                    -2.8241                    2.49466                  2.62586e-6
+   9 │ li_smile50                     -2.8271                    2.5277                   3.09443e-7
+  10 │ li_smile_only                  -2.82047                   2.27525                  1.04725e-5
+  11 │ li_sup_only                    -2.82399                   1.54823                  0.000282804
+  12 │ src_sup100_sw40                -2.81593                   2.65086                  1.05364e-5
+  13 │ src_sup100_sw50                -2.81175                   2.33829                  6.88729e-5
+  14 │ src_sup40_sw40                 -2.82221                   2.66976                  2.75651e-6
+  15 │ src_sup40_sw50                 -2.81381                   2.41684                  2.74766e-5
+  16 │ src_sup70_sw40                 -2.79466                   1.42197                  0.00572946
+  17 │ src_sup70_sw50                 -2.81599                   2.25766                  4.02589e-6
+=#
+
 
 println("\n", "="^60, "\n📉 LogLoss (Betfair) — src grid vs li_*/dp_*\n", "="^60)
-Evaluation.display_summary_metric(Evaluation.evaluate_experiments(Evaluation.LogLoss(), all_results, ds1), :logloss)
+
+Evaluation.display_summary_metric(data_of_metrics, :logloss)
+# Evaluation.display_summary_metric(Evaluation.evaluate_experiments(Evaluation.LogLoss(), all_results, ds1), :logloss)
+
+#=
+--- LogLoss Summary (Lower Diff is Better) ---
+17×4 DataFrame
+ Row │ model            logloss_overall_model_ll  logloss_overall_market_ll  logloss_overall_diff_ll 
+     │ String           Float64                   Float64                    Float64                 
+─────┼───────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ dp_nomarket                      0.432667                   0.445742              -0.0130751
+   2 │ dp_old_mw100                     0.431576                   0.445742              -0.0141663
+   3 │ dp_old_mw50                      0.433876                   0.445742              -0.0118658
+   4 │ dp_split_lw0                     0.441042                   0.445742              -0.00470046
+   5 │ dp_split_lw100                   0.43136                    0.445742              -0.0143824
+   6 │ dp_split_lw25                    0.439649                   0.445742              -0.00609253
+   7 │ dp_split_lw50                    0.437482                   0.445742              -0.00826048
+   8 │ li_smile100                      0.431789                   0.445742              -0.0139527
+   9 │ li_smile50                       0.431759                   0.445742              -0.0139833
+  10 │ li_smile_only                    0.432938                   0.445742              -0.0128039
+  11 │ li_sup_only                      0.441053                   0.445742              -0.00468853
+  12 │ src_sup100_sw40                  0.430482                   0.445742              -0.0152603
+  13 │ src_sup100_sw50                  0.431527                   0.445742              -0.0142147
+  14 │ src_sup40_sw40                   0.430595                   0.445742              -0.0151471
+  15 │ src_sup40_sw50                   0.431368                   0.445742              -0.0143744
+  16 │ src_sup70_sw40                   0.435966                   0.445742              -0.00977572
+  17 │ src_sup70_sw50                   0.432438                   0.445742              -0.0133044
+=#
+
 
 # LPD = full-PPD log predictive density (scored over the WHOLE posterior sample vector, not the
 # collapsed point prob). diff_lpd > 0 ⇒ model beats the market fair-odds baseline. Same interface as
 # r19's hier-iso grid (which ranked cells on LPD diff). Higher = better (opposite sign to LogLoss diff).
 println("\n", "="^60, "\n📊 LPD (Betfair, full-posterior) — src grid vs li_*/dp_*\n", "="^60)
 Evaluation.display_summary_metric(Evaluation.evaluate_experiments(Evaluation.LPD(), all_results, ds1), :lpd)
+
+Evaluation.display_summary_metric(data_of_metrics, :lpd)
+
+#=
+--- LPD Summary (Higher Diff is Better; Higher ELPD is Better) ---
+17×9 DataFrame
+ Row │ model            lpd_overall_model_lpd  lpd_overall_model_std  lpd_overall_model_skewness  lpd_overall_model_kurtosis  lpd_overall_market_lpd  lpd_overall_diff_lpd  lpd_overall_elpd  lpd_overall_n_obs 
+     │ String           Float64                Float64                Float64                     Float64                     Float64                 Float64               Float64           Int64             
+─────┼──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │ dp_nomarket                  -0.432667               0.551451                    -2.44966                     7.60145               -0.445742            0.0130751           -2211.36               5111
+   2 │ dp_old_mw100                 -0.431576               0.552223                    -2.51357                     8.53111               -0.445742            0.0141663           -2205.78               5111
+   3 │ dp_old_mw50                  -0.433876               0.554355                    -2.53753                     8.68097               -0.445742            0.0118658           -2217.54               5111
+   4 │ dp_split_lw0                 -0.441042               0.579687                    -2.58515                     8.89774               -0.445742            0.00470046          -2254.16               5111
+   5 │ dp_split_lw100               -0.43136                0.55063                     -2.49576                     8.38352               -0.445742            0.0143824           -2204.68               5111
+   6 │ dp_split_lw25                -0.439649               0.574247                    -2.61097                     9.33559               -0.445742            0.00609253          -2247.05               5111
+   7 │ dp_split_lw50                -0.437482               0.562194                    -2.54658                     8.92915               -0.445742            0.00826048          -2235.97               5111
+   8 │ li_smile100                  -0.431789               0.537164                    -2.40439                     7.43775               -0.445742            0.0139527           -2206.88               5111
+   9 │ li_smile50                   -0.431759               0.53932                     -2.41793                     7.56723               -0.445742            0.0139833           -2206.72               5111
+  10 │ li_smile_only                -0.432938               0.538368                    -2.41417                     7.54308               -0.445742            0.0128039           -2212.75               5111
+  11 │ li_sup_only                  -0.441053               0.543218                    -2.5872                      9.74001               -0.445742            0.00468853          -2254.22               5111
+  12 │ src_sup100_sw40              -0.430482               0.537122                    -2.39971                     7.4192                -0.445742            0.0152603           -2200.19               5111
+  13 │ src_sup100_sw50              -0.431527               0.537033                    -2.39468                     7.39043               -0.445742            0.0142147           -2205.54               5111
+  14 │ src_sup40_sw40               -0.430595               0.535854                    -2.39946                     7.44662               -0.445742            0.0151471           -2200.77               5111
+  15 │ src_sup40_sw50               -0.431368               0.5375                      -2.39844                     7.40634               -0.445742            0.0143744           -2204.72               5111
+  16 │ src_sup70_sw40               -0.435966               0.541492                    -2.39189                     7.40614               -0.445742            0.00977572          -2228.22               5111
+  17 │ src_sup70_sw50               -0.432438               0.54106                     -2.38259                     7.23468               -0.445742            0.0133044           -2210.19               5111
+=#
+
 
 println("\n", "="^60, "\n💰 Backtest (BayesianKelly) — src grid vs li_*/dp_*\n", "="^60)
 ledger = BackTesting.run_backtest(ds1, all_results, [Signals.BayesianKelly()];

@@ -289,3 +289,67 @@ Beats none_pois on 1X2, ties on totals, simplest and cheapest, SoT drops out. It
 is a genuine *structural* backbone improvement, orthogonal to the market pillar
 (iso still dominates totals at −0.0058). Next test: **funnel+iso vs none+iso** —
 does the sharper structural core add anything once the market anchor sits on top.
+
+---
+
+# WP3 — Funnel + iso market pillar (r07b PILOT, 2026-07-24) — STREAM CLOSE
+
+Does the winning two-layer funnel core add anything once the iso market pillar
+sits on top? `l06_funnel_iso.jl` = winner funnel core (cw=0, SoT off) + the
+`TeamIsoDPGoalsModel` pillar anchoring `log(λ_s·conv)` to the de-vigged Bet365
+close. The full 4-cell grid (r07) **stalled** on a *spurious sampling basin*
+(p₂→~0.03, σ_market→~1.6, ε→2e-4) that `UniformInit(-2,2)` chains fall into —
+NOT a density mode (MAP cleanly finds the true mode p₂=0.147, σ_market=0.22,
+lp=11107). Fix = **MAP initialisation** (`init_type=:map`, task built manually
+since `create_experiment_task` hardcodes UniformInit). Details + the
+`compile=true` dual-path tape sub-bug in the turing gotchas memory.
+
+## r07b PILOT — one cell, MAP-init fix validated
+
+`funnel_iso_mw40` on a **single season (25/26, ~20 folds)**, 4ch × 600 samp /
+1000 warm, depth 6 / accept 0.6, MapInit (map_iters 200). Stored `iso_pois_mw40`
+(2-season / ~40 folds) reused as the none+iso reference (delta approximate:
+different fold counts). Wall 123.9 min (this model is expensive).
+
+**Mode check — the fix held:** p₂=0.1479 (want ~0.147, collapse ~0.03),
+σ_market=0.2311 (want ~0.22, collapse ~1.6) across ALL 20 folds. Convergence
+mediocre: 9/20 folds R-hat≤1.01 (45%), worst 1.0177 (all clear 1.05).
+
+## LogLoss vs Bet365 close — family-pooled (negative = beats close)
+
+| model | x12 | btts | totals |
+|---|---|---|---|
+| funnel+iso (mw40) | 0.0085 | −0.0001 | −0.0045 |
+| none+iso (`iso_pois_mw40`) | **0.0029** | 0.002 | **−0.0058** |
+
+Per line: funnel+iso home 0.0154, away 0.0086, over_25 −0.0007, over_45 −0.0123;
+iso home 0.0044, away 0.006, over_25 −0.0042, over_45 −0.0116.
+
+## VERDICT: soft NEGATIVE — funnel and iso are best kept MODULAR, not fused
+
+With the market anchor on top, the sharper funnel core does **not** add value —
+worse on 1X2 (0.0085 vs 0.0029, driven by home), marginally worse on totals,
+better only on BTTS. This **inverts r06's standalone finding** (funnel *beat*
+none on 1X2): the market anchor regresses the funnel's structural team-strength
+edge back toward the market's softer view. The market already prices what the
+funnel adds. Combined with the model's expense (124 min / 20 folds; a clean
+4-cell grid ≈8–12h fighting 45% convergence), the pragmatic call is to **stop
+here** rather than run the full matched grid to sharpen a soft negative.
+
+## STREAM CLOSE — what graduates and what dies
+
+- **GRADUATE (standalone):** two-layer funnel `TeamFunnelFlexDPGoalsModel(cw=0,
+  sot_on=false)` — real replicated 1X2 backbone win, cheap, orthogonal to totals.
+- **GRADUATE (separate component):** the iso market pillar (`TeamIsoDPGoalsModel`,
+  already slated from the smile stream) — the totals workhorse.
+- **DO NOT fuse them** into one funnel+iso engine (this run).
+- **DEAD (do not revisit):** per-team conversion (r04 null), SoT layer (r06 null),
+  funnel+iso fusion (r07b).
+- **Framing for graduation judgement:** the model still LOSES the Bet365 close on
+  1X2 in absolute terms (+0.0108); the edge is per-match deviation + curation +
+  Kelly / CLV, not beating the vigged close with the mean — judge on backtest
+  growth, not logloss-vs-close. Re-evaluate against the sharper **Betfair** close
+  (verify 56/57 Betfair coverage first — memory is contradictory), while still
+  anchoring the market pillar to de-vigged Bet365 for this thin-exchange league.
+- **Next stages:** src graduation (funnel engine + BBCFunnelFeature + fetch loader
+  + prediction dispatch Union); in-play (funnel's λ_s is the natural NHPP bridge).
