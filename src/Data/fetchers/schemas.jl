@@ -27,4 +27,11 @@ const MATCHES_COLS_TYPES = Dict(
     :match_month => Int64
 )
 
+# BBC shot counts. Only the join keys are guaranteed non-missing; the four count columns stay
+# `Union{Missing, Float64}` on purpose (per-match usability is a feature-layer decision).
+const BBC_COLS_TYPES = Dict{Symbol, Type}(
+    :match_id => Int64,
+    :tournament_id => Int64
+)
+
 # ... (Include INCIDENTS_COLS_TYPES and ODDS_COLS_TYPES here) ...

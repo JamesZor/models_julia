@@ -1,0 +1,31 @@
+LOW-TRUST COLD START — src_sup40_sw40 · core-11 book · w0=0.3 · n=275
+Start all units at w=0.3 (distrust); EB fit then learns per-unit trust from data.
+
+============================================================================
+ match      home    draw    away over_15 over_25 over_35btts_yes
+============================================================================
+     1     0.300   0.300   0.300   0.300   0.300   0.300   0.300
+    26     0.544   0.456   0.641   0.559   0.474   0.506   0.571
+    51     0.377   0.397   0.544   0.527   0.457   0.507   0.584
+    76     0.355   0.399   0.546   0.520   0.494   0.525   0.588
+   101     0.294   0.389   0.461   0.510   0.469   0.484   0.597
+   126     0.323   0.419   0.526   0.517   0.493   0.506   0.602
+   151     0.309   0.434   0.459   0.556   0.504   0.532   0.596
+   176     0.258   0.421   0.364   0.534   0.478   0.514   0.595
+   201     0.209   0.384   0.299   0.530   0.454   0.478   0.580
+   226     0.188   0.347   0.297   0.519   0.494   0.482   0.578
+   251     0.180   0.374   0.330   0.546   0.520   0.503   0.638
+
+unit          start    final Δ (earned)
+btts_yes      0.300    0.638     +0.338 ↑ earns trust
+over_15       0.300    0.546     +0.246 ↑ earns trust
+over_25       0.300    0.520     +0.220 ↑ earns trust
+over_35       0.300    0.503     +0.203 ↑ earns trust
+draw          0.300    0.374     +0.074 ↑ earns trust
+away          0.300    0.330     +0.030 · flat
+home          0.300    0.180     -0.120 ↓ loses trust
+
+NB the EB estimate is empirical-Bayes (pooled from data), so the LEARNED w is cold-start-
+invariant — the 0.3 start only reframes the baseline (and drives matches 1-25 staking). The
+content is the RANKING: from a distrust prior, the model earns most trust on BTTS + the totals
+ladder, a little on draw, ~none on away, and is the ONLY market to lose trust on home.

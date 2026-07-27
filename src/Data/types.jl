@@ -27,4 +27,17 @@ struct DataStore
     lineups::DataFrame
     incidents::DataFrame
     betfair_odds::DataFrame
+    bbc::DataFrame
 end
+
+"""
+Backwards-compatible constructor: `bbc` defaults to an empty DataFrame.
+
+Plenty of code (research runners in `current_development/`, tests) rebuilds a store positionally
+to swap one domain out — e.g. `DataStore(ds.segment, ds.matches, ds.statistics, odds_bf, ds.lineups,
+ds.incidents, ds.betfair_odds)`. Those call sites keep working and simply carry no BBC data, which
+every downstream extractor must already tolerate (most segments have no BBC coverage at all).
+"""
+DataStore(segment::DataTournemantSegment, matches::DataFrame, statistics::DataFrame,
+          odds::DataFrame, lineups::DataFrame, incidents::DataFrame, betfair_odds::DataFrame) =
+    DataStore(segment, matches, statistics, odds, lineups, incidents, betfair_odds, DataFrame())

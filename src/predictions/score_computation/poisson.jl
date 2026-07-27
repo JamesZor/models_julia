@@ -1,13 +1,17 @@
 # src/predictions/score_computation/poisson.jl
 
 using Distributions
-using ..Models.PreGame: DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDoublePoissonBigChanceOutfieldPlayerTimeDecayModel
+using ..Models.PreGame: DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDoublePoissonBigChanceOutfieldPlayerTimeDecayModel, DynamicFunnelDoublePoissonGoalsLeagueTimeDecayModel
 
 const AbstractDoublePoissonPlayerModels = Union{
     AbstractPoissonModel,
     DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel,
     DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel,
-    DynamicDoublePoissonBigChanceOutfieldPlayerTimeDecayModel
+    DynamicDoublePoissonBigChanceOutfieldPlayerTimeDecayModel,
+    # Two-layer funnel: subtypes AbstractNegBinModel but returns plain (λ_h, λ_a) — Poisson
+    # thinning keeps the score grid exact. Without this it takes the NegBin path and errors on a
+    # missing `r` column.
+    DynamicFunnelDoublePoissonGoalsLeagueTimeDecayModel
 }
 
 # 1. Adapter: DataFrame Row -> NamedTuple

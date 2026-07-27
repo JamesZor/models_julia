@@ -1,0 +1,561 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\IfFileExists{libertinus.sty}{\usepackage{libertinus}}{\usepackage{lmodern}}
+\usepackage[margin=2.3cm,bottom=2.8cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{tcolorbox}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\tcbuselibrary{skins,breakable}
+
+\definecolor{ochre}{HTML}{A2700F}
+\definecolor{teal}{HTML}{0F6D6A}
+\definecolor{warn}{HTML}{9C3355}
+\definecolor{ink}{HTML}{151C21}
+\definecolor{good}{HTML}{2F6B3C}
+
+\newtcolorbox{have}[1][]{breakable, enhanced, colback=good!4, colframe=good!50, boxrule=0.4pt,
+  left=8pt,right=8pt,top=5pt,bottom=5pt, arc=1pt,
+  fonttitle=\bfseries\sffamily\footnotesize, coltitle=good, title={BUILT}, #1}
+
+\newtcolorbox{gapbox}[1][]{breakable, enhanced, colback=warn!4, colframe=warn!55, boxrule=0.4pt,
+  left=8pt,right=8pt,top=5pt,bottom=5pt, arc=1pt,
+  fonttitle=\bfseries\sffamily\footnotesize, coltitle=warn, title={GAP}, #1}
+
+\newtcolorbox{partialbox}[1][]{breakable, enhanced, colback=ochre!5, colframe=ochre!60, boxrule=0.4pt,
+  left=8pt,right=8pt,top=5pt,bottom=5pt, arc=1pt,
+  fonttitle=\bfseries\sffamily\footnotesize, coltitle=ochre,
+  title={PARTIAL --- NEEDS WORK}, #1}
+
+\newtcolorbox{closed}[1][]{breakable, enhanced, colback=black!4, colframe=ink!45, boxrule=0.4pt,
+  left=8pt,right=8pt,top=5pt,bottom=5pt, arc=1pt,
+  fonttitle=\bfseries\sffamily\footnotesize, coltitle=ink, title={CLOSED --- do not revisit}, #1}
+
+\newtcolorbox{exercise}[1][]{breakable, enhanced, colback=teal!4, colframe=teal!55, boxrule=0.4pt,
+  left=8pt,right=8pt,top=5pt,bottom=5pt, arc=1pt,
+  fonttitle=\bfseries\sffamily\footnotesize, coltitle=teal,
+  title={EXERCISE --- derive it, then check it against your data}, #1}
+
+\newcommand{\formula}[1]{\smallskip\noindent\textbf{\small The maths.}\ #1}
+\newcommand{\whyyou}[1]{\smallskip\noindent\textbf{\small Why \emph{you} need it.}\ \small #1\normalsize}
+\newcommand{\reads}[1]{\smallskip\noindent\textbf{\small Read.}\ \small #1\normalsize}
+
+\setlist[itemize]{leftmargin=1.3em, itemsep=2pt, topsep=3pt}
+\setlist[enumerate]{leftmargin=1.6em, itemsep=3pt, topsep=3pt}
+
+\title{\vspace{-1.2cm}\textbf{The Concept Map}\\[4pt]
+\large What the system is, where the edge lives, and the maths still missing\\
+\normalsize\itshape Second edition --- rewritten around the Scottish lower-league programme}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-1.2cm}
+\begin{center}\rule{\textwidth}{0.4pt}\end{center}
+
+\section*{The goal, stated properly}
+
+\begin{tcolorbox}[enhanced, colback=teal!5, colframe=teal!55, boxrule=0.5pt, arc=1pt,
+  fonttitle=\bfseries\sffamily\footnotesize, coltitle=teal, title={THE OBJECTIVE}]
+\textbf{Not} to extract large sums from Scottish League Two. \textbf{To demonstrate that a systematic
+pipeline} --- model $\to$ posterior $\to$ staking vector $\to$ rebalance --- \textbf{produces positive
+out-of-sample log-growth in a market soft enough to actually win in}, and which can then be ported to
+markets with size.
+
+\smallskip
+That ordering is the strategy. Prove the concept where the opposition is weak; scale it where the money is.
+Low liquidity is not a bug here --- \textbf{it is the reason the mispricing survives}. There are no sharks in
+Scottish League Two, which is precisely why the price is wrong.
+\end{tcolorbox}
+
+\medskip
+\noindent
+Each concept states \textbf{the maths}, \textbf{why your system needs it}, \textbf{where you stand}
+(built / partial / gap / closed), and \textbf{an exercise}. Do the exercises by hand. The point is not to
+produce code --- you can already produce code. The point is to be able to tell when the code is wrong.
+
+\bigskip\hrule\bigskip
+
+\part*{Part I --- The three objects everything is built from}
+
+\section{The score matrix}
+
+\textbf{What it is.} A discrete distribution $P[i,j]$ over the final score. \emph{Everything} downstream is a
+functional of it.
+
+\formula{\[
+  P[i,j] = \mathbb{P}\big(X_T = i,\ Y_T = j \mid \mathcal{F}_t\big),
+  \qquad \sum_{i,j} P[i,j] = 1 .
+\]
+It must be the \textbf{posterior predictive} --- averaged over MCMC draws --- not the matrix evaluated at the
+posterior mean. The growth objective is concave, so plugging in the mean \textbf{overstakes}.}
+
+\whyyou{It is the interface between modelling and betting. The engine \emph{produces} it; every market price
+is a linear functional \emph{of} it; the staking vector is an optimisation \emph{over} it.}
+
+\begin{have}
+\texttt{compute\_score\_matrix} $\to$ \texttt{compute\_market\_probs}; O/U priced through
+\texttt{SmileScoreMatrix}. Coherence imposed by the IPF tilt in \texttt{staking\_real}.
+\end{have}
+
+\section{Markets are linear functionals --- so your bets are correlated by construction}
+
+\formula{Contract $k$ pays on a set of cells $A_k$:
+\[
+  \pi_k = \sum_{(i,j)\in A_k} P[i,j],
+  \qquad
+  \mathrm{Cov}\big(\mathbf{1}_{A_k},\, \mathbf{1}_{A_l}\big) = \pi_{k\cap l} - \pi_k \pi_l .
+\]}
+
+\whyyou{Over 1.5 / 2.5 / 3.5, BTTS and 1X2 are \emph{nested, overlapping sets on one distribution}. They are
+not independent bets. This is why summing per-bet Kelly gave a \textbf{217\% joint stake} and a $-143\%$
+match. \textbf{The correlation never needed estimating --- it was already sitting in $P$.}}
+
+\begin{have}
+Diagnosed, and solved: the unified solver stakes the whole book jointly on the 144-state grid.
+\end{have}
+
+\section{The payoff-by-outcome vector --- the state variable you are missing}
+
+\textbf{The single most important new idea in this document.} When you rebalance over time, \emph{stakes are
+not the state variable} --- because \textbf{you cannot unwind a bet at the price you took it}. Laying off
+Over at minute 70 does not cancel your pre-game Over back; it \emph{locks in} a position, because the odds
+moved. Stakes placed at different times are not fungible.
+
+\formula{What \emph{is} additive across time is the \textbf{net payoff under each outcome}:
+\[
+  \boxed{\;
+  \pi(\omega) \;=\; \sum_{\text{past trades } t}\ \sum_k a_{t,k}\ r_k\big(\omega;\ o_{t,k}\big)
+  \;}
+\]
+a vector in $\mathbb{R}^{169}$ (one entry per score cell), where $r_k(\omega; o)$ is the net return of
+contract $k$ under outcome $\omega$ \textbf{at the odds you actually got}.}
+
+\whyyou{This is what makes in-play rebalancing tractable, convex and correct. Track $\pi(\omega)$, not a
+stake vector, and the rebalancing program (Concept 7) falls out immediately.}
+
+\begin{gapbox}
+Not built. \texttt{staking\_real} optimises a stake vector at one point in time. The moment you rebalance,
+you need $\pi(\omega)$.
+\end{gapbox}
+
+\begin{exercise}
+Back Over 2.5 at $1.90$ pre-game. A goal goes in; the price moves to $1.45$. Now lay Over 2.5 at $1.50$ for
+the same stake. \\
+\textbf{Write out $\pi(\omega)$ across all outcomes.} Confirm it is \emph{not} zero --- you have locked a
+profit, not cancelled a position. \textbf{That non-zero vector is exactly why stakes are the wrong state
+variable.}
+\end{exercise}
+
+\bigskip\hrule\bigskip
+
+\part*{Part II --- Where the edge is, and why}
+
+\section{The three-way asymmetry (the strategic core)}
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+& \textbf{The market} & \textbf{Your model} \\
+\midrule
+\textbf{Supremacy} ($\lambda_h - \lambda_a$) & \emph{Efficient} --- headline market, deep money & \emph{Weak} --- needs team strength / xG \\
+\textbf{Totals level} ($\lambda_{\text{tot}}$) & \emph{Efficient} --- easy to price & \emph{Fine} --- but no edge over them \\
+\textbf{Totals \emph{shape}} ($\varphi(K)$) & \textbf{Crude} --- one $\lambda$ through a Poisson & \textbf{Strong} --- the smile pillar \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{closed}
+\textbf{There is no 1X2 edge.} 17 cells in \texttt{split\_market\_pillar}; home ROI negative in every one; all
+$p > 0.25$. Your own verdict: \emph{``Don't chase 1X2.''} Settled.
+
+\smallskip
+Note that \texttt{CURATED05} ($w = 0$ on 1X2) winning the staking race is not a workaround --- it is the
+\emph{correct} response to a market you cannot beat.
+
+\smallskip
+\textbf{The corollary is the good news.} What xG and player ratings buy you is a better \emph{supremacy}
+estimate --- they improve the one axis where you have no edge anyway. \textbf{So losing them in Scotland
+costs you nothing that matters.}
+\end{closed}
+
+\section{The smile: your edge, and what generates it}
+
+\textbf{What it is.} The market prices the O/U ladder by pushing a \emph{single} intensity through a Poisson
+CDF. Reality is not Poisson. The per-strike deviation is your edge.
+
+\formula{
+\[
+  \mathbb{P}\big(N_{\text{tot}} \le K\big)
+  \;=\; \mathrm{cdf}\Big(\mathrm{Poisson}\big(\lambda_{\text{tot}}\cdot \varphi(K)\big),\ K\Big),
+  \qquad \varphi \equiv 1 \iff \text{Poisson}.
+\]
+$\varphi(K)$ is the \textbf{implied-volatility smile of football}. Exactly as Black--Scholes prices every
+strike with one $\sigma$ and the market's implied $\sigma$ then varies by strike, a Poisson book prices every
+line with one $\lambda$ and the implied $\lambda$ varies by strike.}
+
+\whyyou{\textbf{All of your measured edge lives here.} \texttt{li\_smile50}: BTTS GLMEdge $p = 0.01$, top
+pooled-totals coefficient. And it is \textbf{market-inverted} --- it consumes the de-vigged O/U ladder,
+\textbf{not xG}. Your own note: \emph{``the smile machinery is rate-source-agnostic.''} \textbf{This is why
+the Scottish move works, and why a richer Bet365 ladder (0.5--7.5 on $\sim$99\% of matches) is an
+\emph{upgrade} on what you had.}}
+
+\subsection*{The structural hypothesis --- and a one-parameter smile}
+
+\textbf{Connect two of your own findings.} You measured residual overdispersion $\mathrm{var}/\mathrm{mean}
+\approx 1.09$ \emph{and} a home/away remaining-goal correlation of $+0.207$. \textbf{One mechanism generates
+both}: a shared match-level frailty $\theta$ (``is this an open, end-to-end game?'') multiplying both
+intensities.
+
+\formula{With $N_{\text{tot}} \mid \theta \sim \mathrm{Poisson}(\theta\,\bar\lambda)$ and
+$\theta \sim \Gamma(a,a)$, the total is Negative Binomial and (law of total variance)
+\[
+  \frac{\mathrm{var}}{\mathrm{mean}} \;=\; 1 + \frac{\bar\lambda}{a}
+  \qquad\Longrightarrow\qquad
+  a \;=\; \frac{\bar\lambda}{\mathrm{var}/\mathrm{mean} - 1} \;\approx\; 28.9
+  \qquad (\bar\lambda = 2.6,\ \mathrm{v/m} = 1.09).
+\]}
+
+\noindent
+\textbf{Now invert that Negative Binomial through a Poisson, strike by strike --- and a smile appears for
+free:}
+
+\begin{center}
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+strike $K$ & $0.5$ & $1.5$ & $2.5$ & $3.5$ & $4.5$ & $5.5$ \\
+\midrule
+$\varphi(K)$ predicted by the frailty & $0.958$ & $0.974$ & $0.990$ & $1.006$ & $1.022$ & $\mathbf{1.038}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+It is a monotone \textbf{skew}, not a U-shape --- Poisson is bounded below at zero, so the left tail has
+nowhere to go and a Gamma mixture fattens the \emph{right} tail only. Read it as: the market's Poisson
+\emph{understates} $\mathbb{P}(N > 4.5)$ and \emph{overstates} $\mathbb{P}(N > 0.5)$, so \textbf{high Overs
+and low Unders are both underpriced by a Poisson book.}
+
+\begin{partialbox}[title={THE TEST THAT MATTERS --- one plot, and it is cheap}]
+Plot the $\varphi(K)$ your Scottish grid \emph{estimates} against the $\varphi(K)$ the frailty
+\emph{predicts}.
+
+\begin{itemize}
+\item \textbf{They match} $\Rightarrow$ your smile \emph{is} overdispersion. You can then replace a free-form
+      $\log\varphi \in \mathbb{R}^{K_{\max}+1}$ (5--6 free parameters) with \textbf{one parameter $a$}. In a
+      thin league where every free parameter costs you, that is a large win --- and it \textbf{generalises},
+      because $a$ is a property of football, not of one league's odds.
+\item \textbf{Your $\varphi$ exceeds the prediction} $\Rightarrow$ the excess is genuine market mispricing
+      \emph{beyond} the overdispersion, and \textbf{the gap
+      $\varphi^{\text{est}} - \varphi^{\text{frailty}}$ is your edge, isolated.}
+\item \textbf{Your $\varphi$ is U-shaped, not monotone} $\Rightarrow$ the frailty is \emph{not} the
+      mechanism, and something more interesting is happening. Also worth knowing.
+\end{itemize}
+Either way you have decomposed $\varphi$ into ``what a known structural effect explains'' and ``what is
+left'' --- and the residual is what you are actually being paid for.
+\end{partialbox}
+
+\begin{exercise}
+Derive $\mathrm{var}/\mathrm{mean} = 1 + \bar\lambda / a$ for the Gamma--Poisson mixture (law of total
+variance; four lines). \\
+Reproduce the $\varphi(K)$ table: for each $K$, solve
+$\mathrm{Poisson\text{-}sf}(K;\Lambda) = \mathrm{NegBin\text{-}sf}(K)$ for $\Lambda$, and set
+$\varphi = \Lambda/\bar\lambda$. \\
+\textbf{Then overlay your grid's estimated $\varphi$.} That single plot is the most informative thing you can
+produce this month.
+\end{exercise}
+
+\bigskip\hrule\bigskip
+
+\part*{Part III --- Staking: the convex core}
+
+\section{Log-optimal growth over the outcome space}
+
+\formula{
+\[
+  f^\star \;=\; \arg\max_f\ \sum_{i,j} P[i,j]\,
+  \log\!\Big(1 + \sum_k f_k\, r_k(i,j)\Big).
+\]
+\textbf{Concave} in $f$ (log of an affine map) $\Rightarrow$ unique global optimum; a small convex program.}
+
+\begin{have}
+\texttt{staking\_real}: coherent IPF grid tilt $\to$ unified solver on the 144-state grid, capped at
+$\Sigma \le 0.2$.
+\end{have}
+
+\begin{tcolorbox}[enhanced, colback=warn!5, colframe=warn!60, boxrule=0.5pt, arc=1pt,
+  fonttitle=\bfseries\sffamily\footnotesize, coltitle=warn, title={READ YOUR OWN RACE TABLE}]
+\begin{center}
+\begin{tabular}{@{}lrrrc@{}}
+\toprule
+strategy & term $W$ & $G$/match $\pm$ SE & maxDD & ruined \\
+\midrule
+\texttt{U\_cap02} (raw unified, $w{=}1$) & $\mathbf{0.01}$ & $-0.0169$ & $1.00$ & \textbf{YES} \\
+\texttt{TRUST\_EB\_U\_cap02} (learned $w$) & $2.98$ & $+0.0040$ & $0.87$ & --- \\
+\texttt{CURATED05\_U\_cap02} ($w{=}0$ on 1X2) & $\mathbf{26.86}$ & $\mathbf{+0.0120 \pm 0.0040}$ & $0.42$ & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{The optimiser is not your problem.} Feed it good probabilities and it compounds $\times 26.9$ at
+$t \approx 3$. Feed it the 1X2 probabilities and it takes you to zero --- because a joint Kelly with
+\emph{negative edge} on a line will stake it into the ground, and \textbf{no cap saves you from that}.
+Sizing was never the issue. \textbf{Per-line edge quality} is.
+\end{tcolorbox}
+
+\section{Rebalancing with transaction costs --- the in-play staking layer}
+
+\textbf{This is the piece to build.} Using $\pi(\omega)$ from Concept 3, at each state change, with the
+current model matrix $P_t$ and the current odds $o_t$:
+
+\formula{
+\[
+  \boxed{\;
+  \Delta a^\star \;=\; \arg\max_{\Delta a}\
+  \underbrace{\sum_{\omega} P_t(\omega)\,
+    \log\!\Big(W_0 + \pi(\omega) + \sum_k \Delta a_k\, r_k\big(\omega;\, o_{t,k}\big)\Big)}_{\text{growth of the \emph{total} position}}
+  \;-\;
+  \underbrace{c\sum_k \big|\Delta a_k\big|}_{\text{crossing cost}}
+  \;}
+\]}
+
+\whyyou{Three things fall out \textbf{for free}, and each replaces a hand-tuned rule you currently run:
+
+\begin{enumerate}
+\item \textbf{It stays convex.} A concave log term minus a convex $\ell_1$ term. Unique optimum, milliseconds.
+\item \textbf{The no-trade region appears automatically.} The subgradient of $|\Delta a_k|$ at $0$ is
+      $[-c,\,c]$, so the optimiser \emph{refuses to trade} unless the growth gradient exceeds the crossing
+      cost. \textbf{You never need a rule for \emph{when} to rebalance --- the cost term \emph{is} the rule.}
+      That is Davis--Norman, obtained simply by writing the objective down correctly.
+\item \textbf{Hedging happens by itself, for the right reason.} If a goal makes your Over position likely to
+      win, the optimiser lays Over --- not because you told it to, but because $\log$ is concave, so
+      \emph{equalising wealth across outcomes raises} $\mathbb{E}[\log W]$. Your grid-searched
+      $\varphi \approx 0.5$--$0.75$ hedge fraction is this optimiser's answer. It will also correctly
+      \emph{decline} to hedge when the price moved against you --- which a fixed-$\varphi$ rule cannot.
+\end{enumerate}
+
+\smallskip
+And note: \textbf{this is equally correct pre-game}, where $\Delta a$ at kickoff is the only trade. So build
+it against the Scottish pre-game book \emph{now}. In-play rebalancing is then the same function, called
+again.}
+
+\begin{gapbox}
+Not built. \texttt{basic\_hedging} has a rule-based $\varphi$ at a fixed minute; \texttt{staking\_real} has a
+single-shot solve. Neither tracks $\pi(\omega)$, and neither prices the crossing cost.
+\end{gapbox}
+
+\reads{Davis \& Norman (1990), \emph{Portfolio selection with transaction costs}, \emph{Mathematics of
+Operations Research} 15(4). Read the \emph{idea} of the no-trade region, not the viscosity solutions.}
+
+\section{Risk-constrained Kelly --- replacing your cap}
+
+\formula{
+\[
+  \max_f\ \mathbb{E}\big[\log(1 + r^\top f)\big]
+  \qquad\text{subject to}\qquad
+  \mathbb{P}\big(\text{drawdown beyond } \alpha\big)\ \le\ \beta .
+\]
+Busseti--Ryu--Boyd derive a \textbf{convex bound} on the drawdown probability, so the constrained problem
+stays solvable, controlled by a single interpretable risk-aversion parameter.}
+
+\whyyou{Your winner runs a \textbf{maxDD of 0.42}. You are currently stacking \emph{two} ad-hoc risk controls
+--- fractional Kelly \emph{and} a $\Sigma \le 0.2$ cap. This replaces both with one derived constraint, and
+their headline result is that it \textbf{beats fractional Kelly at the same drawdown risk}.}
+
+\begin{gapbox}
+Not built. The cheapest real improvement available to you.
+\end{gapbox}
+
+\reads{\textbf{Busseti, Ryu \& Boyd (2016)}, \emph{Risk-Constrained Kelly Gambling},
+\href{https://arxiv.org/abs/1603.06183}{arXiv:1603.06183}. \textbf{If you read one paper, read this one.}}
+
+\section{Parameter uncertainty --- and why it matters MOST in a thin league}
+
+\formula{
+\[
+  f^\star = \arg\max_f\
+  \mathbb{E}_{\theta \sim \text{post}}\Big[\ \mathbb{E}_{\omega \mid \theta}\big[\log(1 + f^\top r)\big]\Big]
+  \;\;\ne\;\;
+  \arg\max_f\ \mathbb{E}_{\omega \mid \bar\theta}\big[\log(1 + f^\top r)\big].
+\]
+\textbf{Average over the posterior \emph{inside} the log.}}
+
+\whyyou{\textbf{This is your strongest argument for a full Bayesian engine --- stronger than you have been
+pitching it.} In Scottish L2 (goals only, no xG, five seasons) your posterior on $\lambda$ is \textbf{wide}.
+A point-estimate Kelly would \emph{massively} overstake, because the growth objective is concave and Jensen
+punishes you for ignoring parameter uncertainty. \textbf{The posterior is worth most precisely where the data
+is thinnest.} It is not a nice-to-have in a lower league --- it is the thing that stops your own parameter
+noise from ruining you, and it is where nearly everyone else blows up.}
+
+\begin{have}
+\texttt{BayesianKelly} (Baker--McHale); the L2 calibrator shifts the whole MCMC posterior, not a scalar.
+\end{have}
+\begin{partialbox}[title={CARRY IT THROUGH}]
+When you move to the rebalancing problem, the optimisation must average over posterior \textbf{draws} of the
+score matrix, not use the mean matrix. It would be very easy to silently lose the uncertainty here.
+\end{partialbox}
+
+\bigskip\hrule\bigskip
+
+\part*{Part IV --- In-play}
+
+\section{Transient versus structural mispricing}
+
+\begin{center}
+\begin{tabular}{@{}p{4.0cm}p{5.2cm}p{5.4cm}@{}}
+\toprule
+& \textbf{Transient} & \textbf{Structural} \\
+\midrule
+Why the price is wrong & Mid-adjustment; stale quotes; post-goal turmoil & The market's \emph{model} is wrong \\
+How long it stays wrong & Seconds to minutes & \textbf{The rest of the match} \\
+What it takes to capture & \textbf{Speed} --- low latency, colocation & \textbf{A better model} \\
+Competing against & Bots & A crude repricing rule \\
+Is it yours? & \textbf{No} & \textbf{Yes} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+Your $+29\%$ ROI on stale fills \emph{was} the transient mispricing, and you correctly called it fake
+(\emph{``the model knows a goal the stale quote hasn't yet absorbed''}). With realistic fills it collapsed to
+$+0.8\%$. \textbf{The mispricing was real and you could not have it.}
+
+\subsection*{Your thesis is correct, and you have the evidence}
+
+The market must reprice a \emph{high-dimensional} object --- $\lambda$ as a function of (score, minutes left,
+man advantage) --- under time pressure, roughly 500 times a season. The pre-game price gets \emph{days} of
+arbitrage. So the market's \emph{settled} in-play price should be systematically worse. Two independent
+pieces of evidence say it is:
+
+\begin{center}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+& Team that just scored & Team that conceded \\
+\midrule
+Market-implied, $\mathbb{Q}$ (Vecer et al.) & $0.61$ & $\mathbf{1.01}$ --- \emph{no response} \\
+Your realised fit, $\mathbb{P}$ & $e^{-0.24} = 0.79$ & $\mathbf{e^{+0.25} = 1.28}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+The market prices \textbf{no response at all} for the trailing team. Your data --- paired CV, $t = 3.15$ ---
+says they score \textbf{28\% more}. That is not turmoil; it is a \emph{crude repricing rule}, and it stays
+wrong for the remaining hour. \textbf{Nobody has to be beaten to the punch.}
+
+\smallskip
+And independently: your in-play model \textbf{beats the market's own inverted} $\lambda_{\text{rem}}$
+out-of-sample ($-1.0245$ vs $-1.0352$). That is a \emph{measurement} of structural in-play mispricing, not a
+hypothesis.
+
+\section{The one number that settles in-play}
+
+\begin{gapbox}[title={YOU CANNOT CURRENTLY COMPUTE IT}]
+There is \textbf{no matched-volume, size, bid or ask column anywhere in your historical Betfair data --- for
+any league.} LTP is a \emph{print}, not a \emph{quote}. So your $+0.8\%$ is not a number; it is a guess whose
+error bars you cannot compute. \textbf{Every in-play backtest you own is unfalsifiable for execution.}
+\end{gapbox}
+
+\formula{The whole in-play question reduces to one comparison, per bin:
+\[
+  \boxed{\;
+  \underbrace{\mathrm{edge}_t \;=\; p^{\text{model}}_t \times o^{\text{available back}}_t \;-\; 1}_{\text{at the REAL price, not LTP}}
+  \qquad\text{versus}\qquad
+  \underbrace{\text{size available at } o_t}_{\text{can you fill a real stake?}}
+  \;}
+\]
+Is $\mathbb{E}[\mathrm{edge}_t] > 0$ \textbf{at sizes above your minimum stake}?}
+
+\whyyou{Your structural edge might be $2\%$ and the in-play spread $3\%$ --- in which case the edge is real,
+correctly measured, and \textbf{unprofitable}. That gap \emph{is} the difference between your $+29\%$ and your
+$+0.8\%$, and neither number is trustworthy.
+
+\smallskip
+\textbf{The experiment is already running.} \texttt{betfair\_live.order\_book\_1m} carries bid/ask prices
+\emph{and} volumes and is collecting on Ireland. Let it accumulate. In four weeks you can compute the box
+above, and in-play is settled permanently in one direction or the other. \textbf{Cost: zero.}}
+
+\begin{closed}
+\textbf{Scottish in-play is dead.} From the liquidity audit: half of Ireland's tick rate; p90 gap 4--4.7 min
+(Ireland: 2 min); p99 up to 14 minutes of dead air; \textbf{a full 1X2 in only 44\% / 38\% of in-play bins}
+(Ireland: 83\%) --- below your own 50\% threshold, so the inversion is \emph{unidentified} most of the time;
+and 20\% of L2 matches carry no market at all. \textbf{Do not trade Scottish in-play, and do not buy data to
+try.} Scotland is a \emph{pre-game} market.
+\end{closed}
+
+\bigskip\hrule\bigskip
+
+\part*{Part V --- The closed file}
+
+\begin{closed}[title={SETTLED. DO NOT RE-OPEN. (I have proposed each of these to you at least once.)}]
+\begin{enumerate}
+\item \textbf{No 1X2 / supremacy edge.} 17 cells; home ROI negative in all; $p > 0.25$ throughout.
+
+\item \textbf{No latent in-play state to learn.} A match has $\approx 2.7$ goals. With the largest latent
+      effect your data supports (sd $26\%$), watching an \emph{entire half} of football reduces the posterior
+      sd by \textbf{1\%}; halving it would need $\approx 33$ matches of exposure. \textbf{Therefore: no
+      filtering, no SDEs, no particle filters, no Kushner--Stratonovich.} Your observable-covariate
+      regression is the correct design, and this is the reason why.
+
+      \emph{Corollary --- on Zou et al.:} their scheme ``works'' only by faking a weak prior. Setting
+      $r_1 = E_H(45)$ means a goalless first half \textbf{halves} a team's scoring rate --- exactly $0.500$,
+      by construction, for every team, in every match. The honest update is $-5\%$. \textbf{They over-react by
+      a factor of ten}, and their own RPS table shows the advantage \emph{reversing} by half-time. Read their
+      returns as an Under-bias harvested from a soft Asian book, not as evidence that in-play Bayesian
+      updating works.
+
+\item \textbf{No transient in-play edge.} Execution latency is binding; the exchange reprices faster than you
+      can act.
+
+\item \textbf{Books you do not need:} Shreve; Brigo--Mercurio; Wu; Lando; S\"arkk\"a; West \& Harrison;
+      Br\'emaud; the SMC/\texttt{Turing.jl} paper. All were on my earlier lists. All are ruled out by (2).
+\end{enumerate}
+\end{closed}
+
+\bigskip\hrule\bigskip
+
+\section*{Reading list}
+
+\subsection*{Tier 0 --- this week ($\approx$ 80 pages total)}
+\begin{enumerate}
+\item \textbf{Busseti, Ryu \& Boyd (2016)}, \emph{Risk-Constrained Kelly Gambling},
+      \href{https://arxiv.org/abs/1603.06183}{arXiv:1603.06183}. \textbf{Read first} --- it is your staking
+      problem, exactly.
+\item \textbf{Cover \& Thomas}, \emph{Elements of Information Theory}, \textbf{Ch.\ 6 only}. Multi-outcome
+      Kelly --- and the theorem that your growth-rate edge \emph{equals the mutual information} between your
+      model and the outcome. \textbf{Your edge, measured in bits} --- a far better headline metric than
+      backtest ROI, which your own work showed is contaminated.
+\item \textbf{Vecer, Ichiba \& Laudanovic (2006)}, \S2.1--2.2 only. The goal and red-card multipliers.
+\item \textbf{Davis \& Norman (1990)}. Skim for the no-trade region.
+\end{enumerate}
+
+\subsection*{Tier 1 --- the core, over a couple of months}
+\begin{enumerate}\setcounter{enumi}{4}
+\item \textbf{Boyd \& Vandenberghe}, \emph{Convex Optimization} (free PDF). Ch.\ 2--4 plus the log-optimal
+      investment examples. You need to \emph{recognise} convexity, not prove theorems.
+\item \textbf{MacLean, Thorp \& Ziemba}, \emph{The Kelly Capital Growth Investment Criterion}. Editors'
+      introduction + Thorp's survey.
+\item \textbf{McElreath}, \emph{Statistical Rethinking} (2nd ed). \textbf{The antidote to LLM-built code} ---
+      it teaches you to \emph{build} a model rather than recognise one. You said you were worried you are not
+      learning; this is the book that fixes that.
+\item \textbf{Baker \& McHale (2013)}, \emph{Optimal betting under parameter uncertainty}. You already use it
+      --- now read \emph{why} it works.
+\end{enumerate}
+
+\vfill
+\begin{center}\rule{0.45\textwidth}{0.4pt}\end{center}
+\begin{center}\small\itshape
+\textbf{Order of work.}\\
+(1) Finish the Scottish grid --- it is live, and it is the only thing earning.\\
+(2) Plot your estimated $\varphi(K)$ against the frailty prediction (Concept 5). One plot, decisive.\\
+(3) Build the payoff-vector rebalancer (Concepts 3 + 7) --- correct pre-game \emph{and} in-play.\\
+(4) Risk-constrained Kelly (Concept 8), to kill the $0.42$ drawdown.\\
+(5) Let the Ireland order book accumulate; then compute edge-versus-spread (Concept 11).\\
+Everything else is closed.
+\end{center}
+
+\end{document}

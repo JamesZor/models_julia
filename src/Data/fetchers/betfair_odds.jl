@@ -20,6 +20,13 @@ function map_market_info(m_type::String)
         return "BTTS", 0.0
     elseif m_type == "CORRECT_SCORE"
         return "CorrectScore", 0.0
+    elseif m_type == "DOUBLE_CHANCE"
+        return "DoubleChance", 0.0
+    elseif m_type == "DRAW_NO_BET"
+        return "DrawNoBet", 0.0
+    elseif m_type == "ASIAN_HANDICAP"
+        # Per-selection line is derived later (each key carries its own handicap).
+        return "AsianHandicap", 0.0
     end
     return m_type, 0.0
 end
@@ -42,8 +49,16 @@ function map_selection_symbol(sel::Symbol)
     # 3. Handle Any Other: "any_other_home" -> :cs_any_other_home
     elseif startswith(s, "any_other")
         return Symbol("cs_", s)
-    
-    # 4. Standard lines remain as is
+
+    # 4. Double Chance: align Betfair keys with the MarketDC taxonomy
+    elseif s == "dc_home_draw"
+        return :DC_1X
+    elseif s == "dc_away_draw"
+        return :DC_X2
+    elseif s == "dc_home_away"
+        return :DC_12
+
+    # 5. Standard selections (dnb_home, ah_home_0_5, ...) remain as is
     else
         return sel
     end
@@ -72,7 +87,12 @@ function unpack_betfair_odds(raw_df::DataFrame)
             
             # Map the selection symbol
             clean_selection = map_selection_symbol(selection_key)
-            
+
+            # Asian Handicap encodes a distinct line per selection key; derive the
+            # canonical (home-perspective) line so paired sides share a de-vig group.
+            sel_line = market_name == "AsianHandicap" ?
+                Markets.ah_home_line(clean_selection) : market_line
+
             for (i, price) in enumerate(odds_array)
                 price === nothing && continue
                 
@@ -82,7 +102,7 @@ function unpack_betfair_odds(raw_df::DataFrame)
                 push!(long_data, (
                     match_id = row.match_id,
                     market_name = market_name,
-                    market_line = market_line,
+                    market_line = sel_line,
                     selection = clean_selection,
                     timestamp = unix2datetime(ts_ms / 1000.0),
                     minutes_to_kickoff = mins_to_ko,

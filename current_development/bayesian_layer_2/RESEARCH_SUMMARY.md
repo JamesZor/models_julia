@@ -6,8 +6,8 @@
 *market selection*, a fixed `min_edge`, and a *contrarian stake tilt* — not L2 calibration, not a
 prediction blend, not a regime gate. The L1 model is genuinely good on a specific market set.
 
-Detailed companions: `docs/l2_bayesian_calibration_research.md`,
-`docs/l3_meta_model_research.md` (§9–10), `MIN_EDGE_STAKING_REPORT.md`,
+Detailed companions: `docs/archive/l2_bayesian_calibration_research.md`,
+`docs/archive/l3_meta_model_research.md` (§9–10), `MIN_EDGE_STAKING_REPORT.md`,
 `current_development/betfair_closing_line/RESULTS_REPORT.md`.
 
 ---

@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAPM vs SofaScore — Scottish player ratings</title>
+<style>
+  :root{
+    --paper:#F5F7F9; --card:#FFFFFF; --ink:#111820; --muted:#5B6773;
+    --rule:#DCE2E8; --rule-soft:#EAEEF2;
+    --rapm:#146A87; --sofa:#A06B26; --neg:#9C3F37;
+    --tint-pos:20,106,135; --tint-neg:156,63,55;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#0D1116; --card:#141A21; --ink:#E6EBF0; --muted:#8C98A5;
+      --rule:#232C36; --rule-soft:#1A222A;
+      --rapm:#4FA8C7; --sofa:#D4A05A; --neg:#D2726A;
+      --tint-pos:79,168,199; --tint-neg:210,114,106;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0D1116; --card:#141A21; --ink:#E6EBF0; --muted:#8C98A5;
+    --rule:#232C36; --rule-soft:#1A222A;
+    --rapm:#4FA8C7; --sofa:#D4A05A; --neg:#D2726A;
+    --tint-pos:79,168,199; --tint-neg:210,114,106;
+  }
+  :root[data-theme="light"]{
+    --paper:#F5F7F9; --card:#FFFFFF; --ink:#111820; --muted:#5B6773;
+    --rule:#DCE2E8; --rule-soft:#EAEEF2;
+    --rapm:#146A87; --sofa:#A06B26; --neg:#9C3F37;
+    --tint-pos:20,106,135; --tint-neg:156,63,55;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--paper); color:var(--ink); margin:0;
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;
+    font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1140px; margin:0 auto; padding:40px 24px 72px; display:flex; flex-direction:column; gap:34px}
+
+  header{display:flex; flex-direction:column; gap:10px; border-bottom:2px solid var(--ink); padding-bottom:18px}
+  .eyebrow{font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); font-weight:600}
+  h1{margin:0; font-size:clamp(26px,4vw,38px); line-height:1.1; letter-spacing:-.02em; font-weight:640; text-wrap:balance}
+  .sub{margin:0; color:var(--muted); max-width:66ch}
+
+  .stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1px; background:var(--rule); border:1px solid var(--rule)}
+  .stat{background:var(--card); padding:14px 16px; display:flex; flex-direction:column; gap:3px}
+  .stat b{font-size:22px; font-weight:640; letter-spacing:-.02em; font-variant-numeric:tabular-nums}
+  .stat span{font-size:11.5px; color:var(--muted); letter-spacing:.03em}
+
+  .key{background:var(--card); border:1px solid var(--rule); padding:16px 18px; display:flex; flex-direction:column; gap:10px}
+  .key h3{margin:0; font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:650}
+  .key p{margin:0; font-size:13.5px; color:var(--muted); max-width:78ch}
+  .key p b{color:var(--ink); font-weight:600}
+  .swatches{display:flex; gap:18px; flex-wrap:wrap; font-size:12.5px; align-items:center}
+  .sw{display:flex; align-items:center; gap:7px; color:var(--muted)}
+  .chip{width:26px; height:12px; border:1px solid var(--rule)}
+
+  section h2{margin:0 0 2px; font-size:15px; letter-spacing:.06em; text-transform:uppercase; font-weight:650}
+  section h2 em{font-style:normal; color:var(--muted); font-weight:500; letter-spacing:0; text-transform:none; font-size:13.5px}
+  .scroll{overflow-x:auto; border:1px solid var(--rule); background:var(--card); margin-top:12px}
+  table{border-collapse:collapse; width:100%; min-width:940px; font-size:13.5px}
+  thead th{
+    position:sticky; top:0; background:var(--card); text-align:right; font-weight:600;
+    font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--muted);
+    padding:11px 9px; border-bottom:1px solid var(--rule); white-space:nowrap;
+  }
+  thead th.l{text-align:left}
+  thead th.grp-r{color:var(--rapm)}
+  thead th.grp-s{color:var(--sofa)}
+  tbody td{padding:8px 9px; border-bottom:1px solid var(--rule-soft); text-align:right; font-variant-numeric:tabular-nums}
+  tbody tr:last-child td{border-bottom:none}
+  td.l{text-align:left}
+  .rk{color:var(--muted); font-size:12px; width:34px}
+  .nm{font-weight:600; white-space:nowrap}
+  .meta{color:var(--muted); font-size:12px; white-space:nowrap}
+  .num{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:12.5px}
+  .sofa-raw{font-weight:600; color:var(--sofa)}
+  .divide{border-left:1px solid var(--rule)}
+
+  .gap{display:flex; align-items:center; gap:8px; justify-content:flex-end}
+  .gapbar{position:relative; width:74px; height:9px; background:var(--rule-soft); flex:none}
+  .gapbar i{position:absolute; top:0; bottom:0; display:block}
+  .gapbar::after{content:""; position:absolute; left:50%; top:-2px; bottom:-2px; width:1px; background:var(--rule)}
+  .gapnum{width:38px; font-family:ui-monospace,Menlo,monospace; font-size:12px}
+
+  footer{border-top:1px solid var(--rule); padding-top:18px; color:var(--muted); font-size:13px; display:flex; flex-direction:column; gap:9px}
+  footer b{color:var(--ink); font-weight:600}
+  code{font-family:ui-monospace,Menlo,monospace; font-size:12.5px; background:var(--rule-soft); padding:1px 5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Scottish tiers 54–57 · seasons 23/24–25/26 · 693 outfield players ≥900 min</div>
+    <h1>Where our plus-minus ratings agree with SofaScore — and where they don't</h1>
+    <p class="sub">Two ratings built from completely different evidence. SofaScore counts what a player
+    does on the ball; RAPM only asks what happened to the scoreline while he was on the pitch. They should
+    agree loosely, not exactly.</p>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><b>0.37</b><span>Correlation, composite RAPM vs SofaScore (n=693)</span></div>
+    <div class="stat"><b>+1.51</b><span>Mean SofaScore z of our top 20</span></div>
+    <div class="stat"><b>−0.24</b><span>Mean SofaScore z of our bottom 20</span></div>
+    <div class="stat"><b>9–10<span style="font-size:14px;color:var(--muted)">/20</span></b><span>Shared top-20 names per season — 1.2 expected by chance</span></div>
+  </div>
+
+  <div class="key">
+    <h3>How to read the numbers</h3>
+    <p>Every column except the raw SofaScore rating is a <b>z-score</b> across the 693-player pool: <code>0.0</code>
+    is an average player, <code>+2.0</code> is two standard deviations above. That puts the two rating systems on
+    one scale. <b>Composite</b> averages the four RAPM targets, following the base paper's practice of blending
+    its plus-minus variants. <b>Gap</b> is composite minus SofaScore — it isolates disagreement.</p>
+    <div class="swatches">
+      <span class="sw"><i class="chip" style="background:rgba(20,106,135,.34)"></i> RAPM rates higher</span>
+      <span class="sw"><i class="chip" style="background:rgba(156,63,55,.34)"></i> RAPM rates lower</span>
+      <span class="sw"><i class="chip" style="background:var(--card)"></i> agreement</span>
+    </div>
+  </div>
+
+  <section>
+    <h2>Top 20 <em>— ranked by composite RAPM</em></h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th class="l">#</th><th class="l">Player</th><th class="l">Club</th><th>Min</th>
+            <th class="grp-s divide">SofaScore</th><th class="grp-s">z</th>
+            <th class="grp-r divide">Goals</th><th class="grp-r">xG</th><th class="grp-r">Shots</th><th class="grp-r">xP</th>
+            <th class="grp-r">Composite</th>
+            <th class="divide">Gap</th>
+          </tr>
+        </thead>
+        <tbody id="top"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Bottom 20 <em>— ranked by composite RAPM</em></h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th class="l">#</th><th class="l">Player</th><th class="l">Club</th><th>Min</th>
+            <th class="grp-s divide">SofaScore</th><th class="grp-s">z</th>
+            <th class="grp-r divide">Goals</th><th class="grp-r">xG</th><th class="grp-r">Shots</th><th class="grp-r">xP</th>
+            <th class="grp-r">Composite</th>
+            <th class="divide">Gap</th>
+          </tr>
+        </thead>
+        <tbody id="bot"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <p><b>What the disagreements look like.</b> RAPM is far higher than SofaScore on Falkirk's squad
+    (Yeats, McCann, Adams, Tait) — a side that dominated the lower tiers, where a top-down rating credits
+    everyone on the pitch. SofaScore is far higher on Ross County's midfield (Dhanda, White, Randall) and on
+    Dan Casey — players who accumulate on-ball events for sides that concede.</p>
+    <p><b>Known weakness.</b> Forwards are our least reliable position. Kyogo and Maeda make the RAPM top 20
+    on SofaScore z-scores of just +0.46 and +0.48, against a top-20 average of +1.51 — every defender and
+    midfielder around them scores far higher. Goalkeepers are excluded entirely: a keeper plays almost every
+    minute, so his plus-minus is really a comparison against his backup.</p>
+    <p><b>Caveat.</b> Roughly a fifth of RAPM variance is club identity rather than the individual. Ranked
+    within their own squads the agreement weakens but survives, at about the 60th percentile against a 50th
+    for chance.</p>
+  </footer>
+</div>
+
+<script>
+const TOP = `Callum McGregor|M|celtic|8318|7.33|1.84|4.00|3.63|4.33|3.40|3.84
+Cameron Carter-Vickers|D|celtic|4947|7.34|1.87|3.77|4.37|3.98|2.79|3.73
+Alistair Johnston|D|celtic|5232|7.53|2.70|4.14|2.62|3.43|3.27|3.36
+James Tavernier|D|rangers|8111|7.77|3.67|2.01|4.05|4.74|2.40|3.30
+Greg Taylor|D|celtic|4541|7.44|2.29|3.49|2.90|3.14|3.02|3.14
+Brad Spencer|M|falkirk|7430|7.28|1.63|3.77|2.05|3.47|3.08|3.09
+Dylan Tait|M|falkirk|5933|6.99|0.42|3.88|1.72|2.99|3.63|3.06
+Daizen Maeda|F|celtic|6888|7.00|0.48|4.14|1.97|2.40|3.55|3.01
+Calvin Miller|M|falkirk|6142|7.34|1.89|3.58|2.40|3.11|2.81|2.98
+Nicolas Raskin|M|rangers|6143|7.40|2.13|2.59|2.37|3.59|3.06|2.90
+Liam Henderson|D|falkirk|6671|7.02|0.56|3.26|2.13|3.18|2.90|2.87
+Liam Scales|D|celtic|7458|7.45|2.35|2.32|2.15|4.04|2.21|2.68
+Leon McCann|D|falkirk|4178|6.85|-0.14|2.40|3.99|2.55|1.71|2.66
+Harry Milne|D|partick thistle|6936|7.19|1.28|2.31|2.92|2.49|2.29|2.50
+Jamie Gullan|M|raith rovers|4053|7.41|2.17|2.38|2.34|2.48|2.48|2.42
+Kyogo Furuhashi|F|celtic|3730|7.00|0.46|1.90|2.45|3.14|2.05|2.39
+Matt O'Riley|M|celtic|3207|7.87|4.10|2.11|2.60|2.75|1.94|2.35
+Keelan Adams|D|falkirk|5276|6.84|-0.19|2.54|1.39|2.51|2.59|2.26
+Finn Yeats|M|falkirk|2388|6.61|-1.14|2.44|2.47|1.93|1.95|2.20
+John Souttar|D|rangers|6074|7.31|1.74|2.50|1.12|2.60|2.55|2.19`;
+
+const BOT = `Jordan White|F|ross county|6183|6.93|0.18|-2.77|-2.19|-1.73|-2.57|-2.31
+Yan Dhanda|M|ross county|4947|6.90|0.05|-1.68|-3.46|-2.29|-1.64|-2.27
+Connor Randall|M|ross county|7595|6.81|-0.32|-2.76|-1.13|-2.01|-2.93|-2.21
+James Brown|M|ross county|5270|6.81|-0.31|-2.38|-1.81|-2.03|-2.41|-2.16
+Zak Delaney|D|greenock morton|6729|6.65|-0.99|-1.82|-2.74|-2.56|-1.29|-2.11
+Simon Murray|F|dundee|7336|6.90|0.06|-1.89|-2.01|-2.65|-1.65|-2.05
+Drey Wright|D|st johnstone|6028|6.83|-0.25|-2.21|-0.93|-2.30|-2.64|-2.02
+Topi Keskinen|M|aberdeen|3694|6.76|-0.54|-1.72|-2.40|-1.76|-1.71|-1.90
+Paul Smith|M|ayr united|4035|6.81|-0.30|-2.18|-1.28|-1.52|-2.53|-1.88
+Ryan Astley|D|dundee|4738|6.89|0.01|-1.75|-1.31|-2.32|-1.76|-1.79
+Akil Wright|D|ross county|5409|7.08|0.79|-1.93|-0.85|-1.92|-2.18|-1.72
+Arron Lyall|M|greenock morton|4357|6.88|-0.02|-1.78|-2.41|-1.70|-0.91|-1.70
+Ethan Hamilton|M|dundee|2797|6.81|-0.33|-1.76|-1.49|-1.56|-1.90|-1.68
+Owen Moffat|M|greenock morton|5626|6.82|-0.27|-2.00|-1.26|-1.41|-1.76|-1.61
+Sean McGinty|D|ayr united|7927|6.97|0.34|-1.62|-2.13|-1.42|-1.24|-1.60
+Dan Casey|D|motherwell|4938|7.09|0.86|-1.35|-2.00|-1.63|-1.37|-1.59
+Imari Samuels|D|dundee|2046|6.41|-1.97|-1.67|-1.62|-1.41|-1.64|-1.58
+MacKenzie Carse|M|stirling albion|3548|6.43|-1.92|-1.29|-1.59|-1.90|-1.55|-1.58
+Panutche Camará|M|dundee united|1601|6.93|0.18|-0.98|-2.82|-1.49|-0.97|-1.56
+Joshua Nisbet|M|ross county|2022|6.87|-0.07|-1.55|-1.49|-1.54|-1.49|-1.52`;
+
+// Reference the token rather than resolving it once, so the tints follow the theme toggle.
+const tint = v =>
+  `rgba(var(${v >= 0 ? "--tint-pos" : "--tint-neg"}), ${(Math.min(Math.abs(v) / 4.4, 1) * 0.40).toFixed(3)})`;
+
+function render(txt, tbodyId, startRank){
+  const rows = txt.trim().split("\n").map(l => l.split("|"));
+  const html = rows.map((r,i) => {
+    const [name,pos,club,min,sofa,zs,g,xg,sh,xp,comp] = r;
+    const nums = [g,xg,sh,xp,comp].map(Number);
+    const gap = Number(comp) - Number(zs);
+    const w = Math.min(Math.abs(gap)/3.5,1)*50;
+    const bar = gap >= 0
+      ? `<i style="left:50%;width:${w}%;background:var(--rapm)"></i>`
+      : `<i style="right:50%;width:${w}%;background:var(--neg)"></i>`;
+    const cells = nums.map((v,k) =>
+      `<td class="num${k===0?" divide":""}" style="background:${tint(v)}${k===4?";font-weight:650":""}">${v.toFixed(2)}</td>`
+    ).join("");
+    return `<tr>
+      <td class="l rk">${startRank+i}</td>
+      <td class="l"><span class="nm">${name}</span> <span class="meta">${pos}</span></td>
+      <td class="l meta">${club}</td>
+      <td class="num">${Number(min).toLocaleString()}</td>
+      <td class="num sofa-raw divide">${Number(sofa).toFixed(2)}</td>
+      <td class="num" style="background:${tint(Number(zs))}">${Number(zs).toFixed(2)}</td>
+      ${cells}
+      <td class="divide"><span class="gap"><span class="gapbar">${bar}</span><span class="gapnum">${gap>=0?"+":""}${gap.toFixed(1)}</span></span></td>
+    </tr>`;
+  }).join("");
+  document.getElementById(tbodyId).innerHTML = html;
+}
+render(TOP,"top",1);
+render(BOT,"bot",674);
+</script>
+</body>
+</html>

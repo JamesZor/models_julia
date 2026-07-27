@@ -23,6 +23,7 @@ include("fetchers/sql/statistics.jl")
 include("fetchers/sql/lineups.jl")
 include("fetchers/sql/incidents.jl")
 include("fetchers/sql/odds.jl")
+include("fetchers/sql/bbc.jl")
 include("fetchers/betfair_odds.jl")
 include("fetchers/datastore.jl")
 
@@ -45,8 +46,9 @@ export
     load_datastore_sql, load_datastore_cached,
     
     # Re-export Markets
-    MarketConfig, Market1X2, MarketOverUnder, MarketBTTS
-    
+    MarketConfig, Market1X2, MarketOverUnder, MarketBTTS, MarketDC,
+    MarketCorrectScore, MarketDrawNoBet, MarketAsianHandicap, standard_asian_handicaps
+
     # (Plus whatever preprocessing/splitting exports you need)
 
 end

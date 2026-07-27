@@ -35,6 +35,8 @@ include("./engines/team_level/standard/xg_market.jl")
 include("./engines/team_level/time_decay/goals.jl")
 include("./engines/team_level/time_decay/copula_goals.jl")
 include("./engines/team_level/time_decay/goals_market.jl")
+include("./engines/team_level/time_decay/goals_smile_league.jl")
+include("./engines/team_level/time_decay/goals_funnel_league.jl")
 include("./engines/team_level/time_decay/xg.jl")
 include("./engines/team_level/time_decay/xg_market.jl")
 
@@ -49,12 +51,13 @@ include("./engines/player_level/time_decay/outfield_xg.jl")
 include("./engines/player_level/time_decay/outfield_xg_dixon_coles.jl")
 include("./engines/player_level/time_decay/fullposition_xg_dixon_coles.jl")
 include("./engines/player_level/time_decay/outfield_xg_double_poisson.jl")
+include("./engines/player_level/time_decay/outfield_xg_smile_double_poisson.jl")
 include("./engines/player_level/time_decay/outfield_xg_double_negbin.jl")
 include("./engines/player_level/time_decay/outfield_xg_double_poisson_no_market.jl")
 include("./engines/player_level/time_decay/outfield_xg_dixon_coles_no_market.jl")
 include("./engines/player_level/time_decay/outfield_bigchance_double_poisson.jl")
 
-export DynamicGoalsModel, DynamicGoalsTimeDecayModel, DynamicMarketGoalsTimeDecayModel, DynamicXGModel, DynamicXGTimeDecayModel, DynamicMarketGoalsModel, DynamicMarketXGModel, DynamicMarketXGTimeDecayModel, DynamicMarketXGPlayerModel, DynamicMarketXGPlayerTimeDecayModel, DynamicMarketXGHierarchicalPlayerTimeDecayModel, DynamicMarketXGOutfieldPlayerTimeDecayModel, DynamicXGOutfieldPlayerTimeDecayModel, DynamicCopulaGoalsTimeDecayModel, DynamicDixonColesXGOutfieldPlayerTimeDecayModel, DynamicDixonColesXGFullPositionPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicDoubleNegBinXGOutfieldPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDixonColesXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDoublePoissonBigChanceOutfieldPlayerTimeDecayModel
+export DynamicGoalsModel, DynamicGoalsTimeDecayModel, DynamicMarketGoalsTimeDecayModel, DynamicXGModel, DynamicXGTimeDecayModel, DynamicMarketGoalsModel, DynamicMarketXGModel, DynamicMarketXGTimeDecayModel, DynamicMarketXGPlayerModel, DynamicMarketXGPlayerTimeDecayModel, DynamicMarketXGHierarchicalPlayerTimeDecayModel, DynamicMarketXGOutfieldPlayerTimeDecayModel, DynamicXGOutfieldPlayerTimeDecayModel, DynamicCopulaGoalsTimeDecayModel, DynamicDixonColesXGOutfieldPlayerTimeDecayModel, DynamicDixonColesXGFullPositionPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicSmileDoublePoissonGoalsLeagueTimeDecayModel, DynamicFunnelDoublePoissonGoalsLeagueTimeDecayModel, DynamicDoubleNegBinXGOutfieldPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDixonColesXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDoublePoissonBigChanceOutfieldPlayerTimeDecayModel
 export TimeDecayDynamics, PositionalPlayerDynamics, HierarchicalPlayerDynamicsConfig, OutfieldPlayerDynamicsConfig, HierarchicalFrankCopulaConfig, GlobalFrankCopulaConfig
 
 ##

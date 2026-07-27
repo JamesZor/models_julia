@@ -13,7 +13,7 @@ end
 Executes all data pipelines concurrently and aggregates them into the DataStore struct.
 """
 function get_datastore(conn::LibPQ.Connection, segment::DataTournemantSegment; custom_config = Markets.DEFAULT_MARKET_CONFIG)::DataStore
-    local matches, statistics, incidents, lineups, odds, betfair_odds
+    local matches, statistics, incidents, lineups, odds, betfair_odds, bbc
 
     @info "Building DataStore for $(typeof(segment))..."
 
@@ -25,9 +25,11 @@ function get_datastore(conn::LibPQ.Connection, segment::DataTournemantSegment; c
         @async incidents    = load_data(conn, segment, IncidentsData())
         @async odds         = load_data(conn, segment, OddsData(); config = custom_config)
         @async betfair_odds = load_data(conn, segment, BetfairData())
+        # Empty for every segment outside the Scottish tiers — that is expected, not a failure.
+        @async bbc          = load_data(conn, segment, BBCData())
     end
 
-    return DataStore(segment, matches, statistics, odds, lineups, incidents, betfair_odds)
+    return DataStore(segment, matches, statistics, odds, lineups, incidents, betfair_odds, bbc)
 end
 
 
@@ -86,7 +88,13 @@ function load_datastore_cached(segment::DataTournemantSegment; force::Bool=false
 
         if file_age_hours <= max_age_hours
             @info "Loading DataStore for $(seg_name_clean) from local cache (Age: $(round(file_age_hours, digits=1)) hours)..."
-            return deserialize(cache_file)
+            # A cache written before a `DataStore` field was added/removed cannot be deserialized.
+            # Fall through to a fresh SQL fetch instead of crashing the caller.
+            try
+                return deserialize(cache_file)
+            catch e
+                @warn "Cache for $(seg_name_clean) is stale/incompatible ($(e)). Fetching fresh data..."
+            end
         else
             @info "Cache for $(seg_name_clean) is expired ($(round(file_age_hours, digits=1)) hours old). Fetching fresh data..."
         end

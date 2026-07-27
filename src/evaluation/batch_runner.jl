@@ -29,7 +29,7 @@ function evaluate_experiments(metrics::Vector{<:AbstractScoringRule}, experiment
         for metric in metrics
             try
                 result = compute_metric(metric, exp, ds, latents)
-                flat_row = to_dataframe_row(exp, result)
+                flat_row = to_dataframe_row(exp, metric, result)
                 
                 # Remove the duplicate 'model' key from the flat_row before merging
                 # because we already initialized it in combined_row
@@ -74,6 +74,9 @@ function display_summary_metric(df::DataFrame, metric_family::Symbol)
         println("\n--- RQR Summary ---")
     elseif metric_family == :logloss
         cols = [:model, :logloss_overall_model_ll, :logloss_overall_market_ll, :logloss_overall_diff_ll]
+        # Also surface any per-selection logloss diff columns (e.g. logloss_over_25_overall_diff_ll)
+        per_line = filter(n -> occursin(r"^logloss_.+_overall_diff_ll$", n) && n != "logloss_overall_diff_ll", names(df))
+        append!(cols, Symbol.(per_line))
         println("\n--- LogLoss Summary (Lower Diff is Better) ---")
     elseif metric_family == :glmedge
         # Depending on if they passed GLMEdge() or GLMEdge(:home) it might be glmedge_all_...
@@ -86,6 +89,12 @@ function display_summary_metric(df::DataFrame, metric_family::Symbol)
     elseif metric_family == :crps
         cols = [:model, :crps_home_mean, :crps_away_mean, :crps_all_mean]
         println("\n--- CRPS Summary (Lower is Better) ---")
+    elseif metric_family == :lpd
+        cols = [:model, :lpd_overall_model_lpd, :lpd_overall_model_std, :lpd_overall_model_skewness, :lpd_overall_model_kurtosis, :lpd_overall_market_lpd, :lpd_overall_diff_lpd, :lpd_overall_elpd, :lpd_overall_n_obs]
+        # Also surface per-selection diff columns (e.g. lpd_under_25_overall_diff_lpd)
+        per_line = filter(n -> occursin(r"^lpd_.+_overall_diff_lpd$", n) && n != "lpd_overall_diff_lpd", names(df))
+        append!(cols, Symbol.(per_line))
+        println("\n--- LPD Summary (Higher Diff is Better; Higher ELPD is Better) ---")
     else
         println("Unknown metric family: \$metric_family")
         return

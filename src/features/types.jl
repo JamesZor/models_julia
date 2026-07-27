@@ -10,6 +10,10 @@ abstract type AbstractFeatureConfig end
 # --- Core Features ---
 struct TeamIDsFeature <: AbstractFeatureConfig end
 struct GoalsFeature <: AbstractFeatureConfig end
+# Per-match league/tournament index for pooled multi-division segments (e.g. ScottishLower
+# [56, 57]). Indices are keyed off the FULL DataStore (stable across splits) and a
+# match_id -> league_idx lookup is stashed for prediction-time reconstruction.
+struct LeagueFeature <: AbstractFeatureConfig end
 
 # --- Stats Features ---
 struct XGFeature <: AbstractFeatureConfig end
@@ -18,6 +22,12 @@ struct BigChanceFeature <: AbstractFeatureConfig end          # bigChanceCreated
 struct ShotsInsideBoxFeature <: AbstractFeatureConfig end     # totalShotsInsideBox
 struct FinalThirdEntriesFeature <: AbstractFeatureConfig end  # finalThirdEntries
 struct TouchesInOppBoxFeature <: AbstractFeatureConfig end    # touchesInOppBox
+
+# --- BBC Features ---
+# Per-side total shots from `ds.bbc` (BBC match pages), for the two-layer thinned-Poisson funnel
+# Shots ~ Poisson(λ_s), Goals ~ Poisson(λ_s·p₂). Emits Int counts with a 0 dummy plus a Float64
+# usability mask; segments with no BBC coverage get an all-zero mask, never an error.
+struct ShotsFunnelFeature <: AbstractFeatureConfig end
 
 # --- Market Features ---
 abstract type AbstractMarketFeatureConfig <: AbstractFeatureConfig end
@@ -52,6 +62,15 @@ Base.@kwdef struct RegularizedDixonColesNegativeBinomialMarketFeature <: Abstrac
     lines::Tuple{Vararg{Symbol}} = LINES
     prior_r::Float64 = 15.0
     penalty_weight::Float64 = 0.05
+end
+
+# 6. Local-Intensity SMILE target (per-strike market-implied Poisson rate Λ^mkt(K)).
+# NB: a plain AbstractFeatureConfig (NOT AbstractMarketFeatureConfig) — it ships its own
+# dedicated `add_feature!` (Poisson-CDF inversion of de-vigged O/U) in market_extractors.jl,
+# and must NOT be caught by the generic market-fit extractor. Kmax=4 is the keeper default
+# (strikes 5,6 are thin/selection-biased). See docs: local-intensity / smile pillar.
+Base.@kwdef struct MarketSmileFeature <: AbstractFeatureConfig
+    Kmax::Int = 4
 end
 
 # --- Time Features ---

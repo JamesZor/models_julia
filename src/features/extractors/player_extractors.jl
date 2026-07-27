@@ -78,5 +78,4 @@ function add_feature!(F_data::Dict, config::PlayerRatingsFeature, ordered_ids, t
     # Store the lookup map for ALL matches (supports OOS prediction)
     F_data[:player_ratings_map] = ratings_map
     
-    println("[INFO] Player Ratings Feature extraction complete.")
 end

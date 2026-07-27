@@ -21,5 +21,6 @@ include("src/lineups.jl")
 include("src/ratings.jl")
 include("src/inference.jl")
 include("src/live_betting.jl")
+include("src/unified_staking.jl")
 
 println("🚀 Match Day Inference mini-module loaded successfully!")

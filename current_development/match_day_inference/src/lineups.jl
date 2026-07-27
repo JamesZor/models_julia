@@ -56,7 +56,7 @@ function get_most_recent_lineup(ds::Data.DataStore, team_name::String)
     
     # Sort chronologically to get the latest match
     sort!(team_matches, :match_date, rev=true)
-    latest_match = first(team_matches)
+    latest_match = Base.first(team_matches)  # qualify: a Main-scope `first` global would shadow this
     latest_mid = latest_match.match_id
     
     # Identify which side the team was playing on in that latest match

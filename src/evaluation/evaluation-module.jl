@@ -22,6 +22,7 @@ include("./metrics_methods/rqr.jl")
 include("./metrics_methods/crps.jl")
 include("./metrics_methods/glm_edge.jl")
 include("./metrics_methods/logloss.jl")
+include("./metrics_methods/lpd.jl")
 include("./metrics_methods/miq.jl")
 
 include("./batch_runner.jl")
