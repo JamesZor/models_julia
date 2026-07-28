@@ -70,28 +70,35 @@ MODELS = [
 # ==========================================
 # 2. RUN
 # ==========================================
-results = Dict{String, Any}()
+results = Dict{String, E.ExperimentResults}()
+failed  = String[]
 for (name, model) in MODELS
     @info "=== $name ==="
-    task = E.create_experiment_task(
-        ds, model, name, SAVE_DIR;
-        target_seasons  = TARGET_SEASONS,
-        history_seasons = HISTORY_SEASONS,
-        dynamics_col    = DYNAMICS_COL,
-        samples         = SAMPLES,
-        warmup          = WARMUP,
-        chains          = CHAINS,
-    )
-    r = E.run_experiment(task)
-    E.save_experiment(r)
-    results[name] = r
+    try
+        task = E.create_experiment_task(
+            ds, model, name, SAVE_DIR;
+            target_seasons  = TARGET_SEASONS,
+            history_seasons = HISTORY_SEASONS,
+            dynamics_col    = DYNAMICS_COL,
+            samples         = SAMPLES,
+            warmup          = WARMUP,
+            chains          = CHAINS,
+        )
+        r = E.run_experiment(task)
+        E.save_experiment(r)
+        results[name] = r
+    catch err
+        @error "model $name FAILED" exception = (err, catch_backtrace())
+        push!(failed, name)
+    end
 end
+isempty(failed) || @warn "these models did not complete: $failed"
 
 # ==========================================
 # 3. HEAD-TO-HEAD — proper scoring (the primary gate)
 # ==========================================
-order = first.(MODELS)
-exps  = [results[n] for n in order]
+order = [n for n in first.(MODELS) if haskey(results, n)]
+exps  = E.ExperimentResults[results[n] for n in order]
 
 scores = EV.evaluate_experiments(
     EV.AbstractScoringRule[EV.LogLoss(), EV.LPD(), EV.CRPS()], exps, ds)

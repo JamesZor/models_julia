@@ -123,6 +123,25 @@ standard errors and effective degrees of freedom.
 | `l05_bayes_apm.jl` | Turing hierarchical / prior-informed RAPM | pending |
 | `r05_bayes_fit.jl` | WP6 Bayesian vs ridge | pending |
 | `r06_vs_sofascore.jl` / `r07_best_players.jl` / `r08_reliability.jl` | **WP7 decisive gate** | **done — PASSED** |
+| `r10_src_experiment.jl` | **WP-D** — the src L1 engine sweep vs the two baselines | see log |
+
+## src graduation (branch `feat/apm-player-rating-l1`)
+
+The rating stopped being a table and became an L1 feature + engine. What moved where:
+
+| src path | what it is |
+|---|---|
+| `src/Data/fetchers/sql/bbc_events.jl` | 9th DataStore domain `ds.bbc_events` — raw BBC shot commentary (`ds.bbc` stays per-match totals for the funnel) |
+| `src/Data/fetchers/sql/incidents.jl` | now also extracts the jsonb **player ids** (was slugs only) |
+| `src/Data/fetchers/sql/matches.jl` | now also carries `injury_time1/2` (the monotone match clock needs it) |
+| `src/features/plus_minus/` | `l01`–`l04` ported: segments, weights, competition sets, design, shot parser + zonal xG, the four targets, ridge |
+| `src/features/types.jl` | `AbstractPlusMinusFeature` + one struct per target + `pm_target` + `rating_base` |
+| `src/features/extractors/plus_minus_extractors.jl` | one shared `add_feature!` emitting the standard 8-vector rating contract |
+| `.../player_level/time_decay/goals_plus_minus_league.jl` | `DynamicGoalsPlusMinusLeagueTimeDecayModel` |
+
+`y_xp` was **not** ported: it was last of five in WP5 (Δ Brier −0.00319), 0.881 correlated with
+`y_goals`, and it alone would have dragged an in-play hazard GLM plus a backward-induction table
+into `src/`.
 
 ## Decision rule (WP7)
 
@@ -132,6 +151,70 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
+
+- 2026-07-28 — **src graduation WP-A/WP-B/WP-C: the port is BIT-FAITHFUL to the prototype.**
+  Verified on the server against `ScottishLower` (56/57 only, so the numbers below are the
+  lower-tier slice of the pooled 54–57 figures in the entries further down).
+
+  **① The ridge reproduces `r08_reliability.jl::fit_ratings` EXACTLY.** Same segment subset
+  (`covered`, `y_shots`, λ=1000, `w_SIM`=0, half-life 730d), src vs prototype:
+
+  | check | value |
+  |---|---|
+  | players fitted | 904 vs 904 |
+  | Pearson / Spearman | **1.000000 / 1.000000** |
+  | max abs difference | **1.2e-5** |
+  | rms difference | 2.0e-6 |
+  | sd(rapm) | 0.05085 vs 0.05085 |
+
+  The residual 1e-5 is the only intentional divergence: src anchors the time decay on
+  `matches.match_date` (a `Date`) where the prototype used a `DateTime` `start_timestamp`. At a
+  730-day half-life that is a sub-part-per-million reweighting.
+
+  **② The segment builder reproduces the prototype exactly** — 8,994 segments over 1,523 matches,
+  386 rejects (281 `no_incidents` = the known tier-56 incident holes, 56 `sub_in_unknown`, 49
+  `sub_out_off`), 50.5% live-text covered, 5.91 segments/match. Identical on both code paths.
+
+  **③ Target sparsity reproduces WP4** (56/57 only vs the pooled figures in brackets):
+  `y_goals` 70.9% zero [72.1], `y_shots` 36.8% [34.3], `y_sot` 51.6% [52.2], `y_xg` 27.2% [25.7];
+  garbage-time share 23.7% [23.5].
+
+  **④ Specification check on 56/57 alone is CLEANER than the pooled fit was.** Home advantage
+  **+0.804** shots/90 (correctly positive; pooled 54–57 gave +1.51, and a lower league having a
+  smaller shot advantage is what you would expect). Red cards **−9.12 / −18.3 / 0.0** — correctly
+  negative AND **monotone in severity**, which the pooled fit was not; the exact 0 on the third
+  dismissal is the same "no team took a third red with the opponent at eleven" as before. League
+  offsets **56 +0.035 > 57 −0.035**, i.e. correctly ordered by tier — the pooled four-tier fit was
+  *not* ordered and WP5 warned against reading it. With two adjacent tiers and 33% cross-tier
+  players it now behaves.
+
+  - **⚠ THE BRIEF'S "HISTORY-ONLY FIT" RULE WAS WRONG, and following it would have manufactured a
+    false negative.** The kickoff brief required the ridge to be fit on
+    `SplitBoundary.history_match_ids` only, on the assumption that `target_match_ids` is the
+    prediction set. It is not: `create_features` builds `ordered_ids = [history; target]` and the
+    engine's likelihood runs over **all** of them, while the out-of-sample matches are fetched
+    separately at `dynamics_col == time_step + 1` (`Data.get_next_matches`) and never enter the
+    fold. Verified directly: 0 of the 33 OOS matches for fold 6 appear in that fold's id set.
+    So fitting on history ∪ target is leak-free *by construction* — it is exactly the information
+    set the Turing model is trained on — whereas history-only freezes the rating at the start of
+    the target season, leaving it up to nine months stale on the last fold. Measured on fold 6:
+    `:training` rates **663** players vs `:history` **496**, and the two rating vectors correlate
+    only **0.807**. `fit_on` is a config field (`:training` default) so this is measurable rather
+    than asserted.
+  - **⚠ SECOND TRAP, caught before it silently nulled the experiment.** `extract_parameters` reads
+    `:player_ratings_map` for the OOS matches, which are by construction *not* in `ordered_ids`.
+    Building that map over the fold only handed every prediction a zero pillar, collapsing the APM
+    engine onto its no-APM twin. The map is now built over the whole store, as
+    `player_extractors.jl` already does for the SofaScore rating. Only the rating VECTOR is
+    leak-controlled; applying it to a future teamsheet is the pre-match rating under test.
+  - Two deliberate deviations from the prototype, both documented in the src files: the zonal
+    shot-xG cell table is fitted **globally** (it is how the validated `y_xg` was built, it carries
+    no team or player identity, and refitting per fold would break reproduction of the WP7
+    numbers); and the positional aggregation weights the **starting XI at 1.0** rather than by
+    `minutes_played`, which is identically 0 before 23/24 and NULL for much of 25/26 on these
+    tiers. The latter matches `l04_ridge_apm.jl::match_strength`, the research's own covariate.
+  - Cost after the fold-independent segment/target cache: **0.16 s per fold** to refit the ridge
+    and re-emit the eight vectors.
 
 - 2026-07-23 — **WP7 COMPLETE (r08_reliability.jl). THE DECISION RULE PASSES — but on a low bar,
   and with the team confound unresolved.**
