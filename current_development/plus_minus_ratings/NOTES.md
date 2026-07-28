@@ -152,6 +152,70 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
 
+- 2026-07-28 — **THE MONEY LENS IS THE ONE THAT SEPARATES THESE MODELS — AND IT MUST BE PRICED ON
+  BETFAIR, NOT THE SOFASCORE/BET365 CLOSE. Log-loss called the top four arms a statistical tie;
+  growth does not.** `BayesianKelly`, curated to O/U + BTTS (1X2 and CorrectScore dropped, see
+  below), 710 OOS matches.
+
+  | model | bets | turnover | ROI % | **G** | ROI @5% comm | ROI on Bet365 |
+  |---|---|---|---|---|---|---|
+  | **funnel_apm_xg** | 1126 | 57.1 | **+6.75** | **+0.0396** | +6.41 | −9.51 |
+  | funnel_winner | 1133 | 58.8 | +6.45 | +0.0390 | +6.12 | −9.41 |
+  | apm_pillar_only | 1105 | 61.0 | +3.74 | +0.0284 | +3.55 | −13.28 |
+  | apm_shots | 1085 | 42.7 | +1.66 | +0.0253 | +1.58 | −14.01 |
+  | apm_xg | 1091 | 42.1 | +1.07 | +0.0202 | +1.02 | −12.05 |
+  | goals_baseline | 1017 | 17.0 | +0.82 | **−0.0062** | +0.78 | −18.76 |
+
+  **① EXECUTION VENUE IS THE WHOLE GAME.** The identical curated book is **−9.5% ROI / G −0.054**
+  priced at the SofaScore ("Bet365") close and **+6.8% / G +0.040** priced on Betfair. Nothing
+  about the models changed — the sign flip is entirely the overround:
+
+  | market | Betfair | SofaScore/Bet365 |
+  |---|---|---|
+  | 1X2 | 1.0001 | 1.100 |
+  | O/U | 0.9974 | 1.065 |
+  | BTTS | 1.0061 | 1.079 |
+
+  Reproduces `staking-real-mvp`'s design (Ireland results were Betfair-close) and
+  `betfair-vs-bet365-market-anchor`: **anchor the model to the de-vigged Bet365 line, execute on
+  Betfair.** Any economic verdict quoted off `ds.odds` for this segment is measuring the bookmaker's
+  margin, not the model.
+
+  **② The APM pillar and the funnel BOTH earn their keep, and `goals_baseline` is the only arm with
+  negative growth.** Funnel family G ≈ 0.039 ≫ APM-only 0.020–0.025 > baseline −0.006.
+
+  **③ Totals is where the edge is, on every lens.** log-loss (O/U −0.0019 to −0.0045 vs market),
+  GLMEdge (funnel arms z ≈ 4.0 on O/U, APM-only z ≈ 1.3) and growth all agree. Consistent with
+  `totals-compression-is-denoising`: the edge is fading market over-dispersion, not out-predicting
+  the market's mean.
+
+  **④ `funnel_apm_xg` vs `funnel_winner` is a TIE** — ROI 6.75 vs 6.45, G 0.0396 vs 0.0390. Do not
+  read the fusion as a winner on a 1.5% relative G difference; it is not significance-tested.
+
+  - **⚠ 1X2 ON BETFAIR IS A TRAP: +17.8% to +22.5% ROI with G ≈ 0 or NEGATIVE**
+    (`funnel_winner` +17.8% ROI, G **−0.0023**). Positive return, negative growth = a handful of
+    large-priced winners carrying the sample. Not a real edge; do not bet it. This is the classic
+    per-line curation result (`unified-staking-r01-findings`: weight 0 on 1X2) arriving again.
+  - **⚠ CorrectScore is pure longshot noise here** — ~180 bets on turnover ≈ 2.0 producing G
+    0.08–0.16, the largest of any family. `staking-real-mvp` measured it as a −20% ROI DRAG on
+    Ireland; an estimate that flips sign between samples is variance. Curate out.
+  - **⚠ THE BIGGEST UNRESOLVED RISK IS FILLABILITY, not the model.** These are 20-minute TWA prices
+    on tournaments 56/57, and `inplay-scottish` measured that exchange as thin (median ≈49
+    MATCH_ODDS prints per match on t=56, fewer on t=57). A recorded price is not a fillable one at
+    size. The 1X2 anomaly in the previous bullet is what unfillable longshot quotes look like.
+    **Verify pre-off depth before believing the LEVEL of these returns** — the ORDERING looks
+    robust across all three lenses.
+  - Commission is modelled crudely as 5% of gross profit; real Betfair commission is on net market
+    winnings, so treat the `@5% comm` column as indicative.
+  - ⚠ **Rebuild the DataStore with ALL NINE fields when swapping odds.** The idiom in the existing
+    runners — `DataStore(ds.segment, ds.matches, ds.statistics, odds, ds.lineups, ds.incidents,
+    ds.betfair_odds)` — silently drops `bbc` AND `bbc_events` (verified: both → 0 rows). Because
+    `run_backtest` → `extract_oos_predictions` → `create_features` REBUILDS features from the store
+    you pass, that would degrade the funnel arms to goals-only and zero the ratings on
+    `apm_shots`/`apm_xg`/the fusion (only `apm_goals` survives, since its target needs no live
+    text) — six models silently collapsing to near-identical goals-only models, with nothing
+    raising an error. Harmless for Ireland (no BBC coverage), lethal on ScottishLower.
+
 - 2026-07-28 — **⚠ SIGNIFICANCE TESTING OVERTURNS HALF OF THE ENTRY BELOW. READ THIS FIRST.**
   The WP-D entry that follows ranks arms on point estimates alone. Paired per-observation log-loss
   differences, **clustered by match** (selections within a match are heavily dependent, so the
