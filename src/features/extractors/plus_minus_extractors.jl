@@ -38,7 +38,8 @@ using DataFrames
 """
     add_feature!(F_data, config::AbstractPlusMinusFeature, ordered_ids, team_map, ds)
 
-Fit RAPM on the fold's history matches and emit the 8 positional rating vectors.
+Fit RAPM on the matches this fold is allowed to learn from (see `config.fit_on`) and emit the 8
+positional rating vectors aligned to `ordered_ids`, plus a whole-store `:player_ratings_map`.
 
 Degrades to all-zero ratings (never an error) when the segment table is empty — i.e. on any segment
 without BBC/incident coverage, which is every non-Scottish league.
@@ -93,13 +94,17 @@ function add_feature!(F_data::Dict, config::AbstractPlusMinusFeature, ordered_id
     rating_of = Dict{Int, Float64}(Int(r.player_id) => Float64(r.rapm) for r in eachrow(fit))
 
     # --- 3. positional aggregation over the STARTING XI --------------------------------------
-    id_set = Set(Int.(ordered_ids))
+    # Built over EVERY match in the store, not just this fold's. `extract_parameters` reads this map
+    # for the OUT-OF-SAMPLE matches (`dynamics_col == time_step + 1`), which are by construction not
+    # in `ordered_ids` — restricting the map to the fold would hand every prediction a zero pillar
+    # and silently collapse the engine onto its no-APM twin. `player_extractors.jl` does the same
+    # for the same reason. Only the RATING VECTOR is leak-controlled; applying it to a future
+    # teamsheet is precisely the pre-match rating being tested.
     ratings_map = Dict{Int, Dict{Tuple{String, String}, Float64}}()
     lineups = ds.lineups
     if nrow(lineups) > 0
         for r in eachrow(lineups)
             mid = Int(r.match_id)
-            mid in id_set || continue
             coalesce(r.is_substitute, false) && continue      # starters only; see the header
             ismissing(r.player_id) && continue
             rt = get(rating_of, Int(r.player_id), 0.0)
