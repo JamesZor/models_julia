@@ -11,10 +11,20 @@
 #
 # Two design points that are load-bearing:
 #
-# 1. LEAK-SAFE FIT. The ridge is fitted on `F_data[:history_match_ids]` ONLY, and the single
-#    resulting rating vector is applied to every match in the fold. Target-fold matches therefore
-#    carry a genuinely pre-match rating — the forward-chained design the research validated. The
-#    time decay is anchored at the first target kickoff, so the newest history matches count most.
+# 1. LEAK-SAFE FIT — and note carefully WHICH set that means.
+#    A `SplitBoundary` splits the FOLD's own matches into a frozen history block and an expanding
+#    target block; BOTH are training data for that fold (`create_features` builds `ordered_ids =
+#    [history; target]`, and the engine's likelihood runs over all of them). The out-of-sample
+#    matches live at `dynamics_col == time_step + 1` and are fetched separately by
+#    `Data.get_next_matches` — they are never in `ordered_ids`.
+#    So `fit_on = :training` (the default) fits the ridge on history ∪ target, i.e. EXACTLY the
+#    information set the Turing model itself is trained on. That is leak-free by construction and
+#    it lets the rating keep updating through the target season.
+#    `fit_on = :history` fits on the frozen history block only. That is also leak-free but freezes
+#    the rating at the start of the target season, so by the last fold it is ~9 months stale. It is
+#    kept as a config option so the difference can be measured rather than asserted.
+#    Either way the time decay is anchored at the LAST match in the fit set, so the most recent
+#    training matches carry the most weight.
 #
 # 2. NO `minutes_played` WEIGHTING. `player_extractors.jl` weights each rating by
 #    `clamp(minutes_played, 0, 90)/90`, but on tiers 56/57 `minutes_played` is IDENTICALLY 0 before
@@ -51,23 +61,26 @@ function add_feature!(F_data::Dict, config::AbstractPlusMinusFeature, ordered_id
     prep = pm_prepared(ds)
     nrow(prep.segments) == 0 && return emit_zeros!()
 
-    # --- 1. the fold split ------------------------------------------------------------------
-    haskey(F_data, :history_match_ids) || error(
-        "AbstractPlusMinusFeature needs F_data[:history_match_ids] to fit leak-safe. " *
-        "The builder stashes it (src/features/builder.jl); a hand-rolled F_data must set it too.")
-    hist = F_data[:history_match_ids]::Set{Int}
-    isempty(hist) && return emit_zeros!()
+    # --- 1. which matches the ridge may learn from -------------------------------------------
+    fit_ids = if config.fit_on === :history
+        haskey(F_data, :history_match_ids) || error(
+            "AbstractPlusMinusFeature(fit_on = :history) needs F_data[:history_match_ids]. " *
+            "The builder stashes it (src/features/builder.jl); a hand-rolled F_data must too.")
+        F_data[:history_match_ids]::Set{Int}
+    elseif config.fit_on === :training
+        Set(Int.(ordered_ids))
+    else
+        error("Unknown fit_on = $(config.fit_on); expected :training or :history")
+    end
+    isempty(fit_ids) && return emit_zeros!()
 
-    # Anchor the time decay at the first target kickoff, so the ratings are "as of" the moment they
-    # are used. With no target matches (a pure-history fold) fall back to the last history date.
-    date_of = Dict{Int, Date}(Int(r.match_id) => r.match_date for r in eachrow(ds.matches))
-    target_dates = [date_of[i] for i in Int.(ordered_ids) if haskey(date_of, i) && !(i in hist)]
-    hist_dates   = [date_of[i] for i in Int.(ordered_ids) if haskey(date_of, i) && i in hist]
-    T_rating = !isempty(target_dates) ? minimum(target_dates) :
-               (!isempty(hist_dates) ? maximum(hist_dates) : maximum(prep.segments.match_date))
+    # Anchor the decay at the last match the ridge is allowed to see.
+    date_of  = Dict{Int, Date}(Int(r.match_id) => r.match_date for r in eachrow(ds.matches))
+    fit_dates = [d for (i, d) in date_of if i in fit_ids]
+    T_rating = isempty(fit_dates) ? maximum(prep.segments.match_date) : maximum(fit_dates)
 
-    # --- 2. the ridge fit, history only -----------------------------------------------------
-    segs = prep.segments[in.(Int.(prep.segments.match_id), Ref(hist)), :]
+    # --- 2. the ridge fit --------------------------------------------------------------------
+    segs = prep.segments[in.(Int.(prep.segments.match_id), Ref(fit_ids)), :]
     fit = fit_ratings(segs;
                       target        = pm_target(config),
                       λ             = config.λ,

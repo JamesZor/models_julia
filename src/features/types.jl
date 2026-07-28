@@ -105,6 +105,14 @@ end
 # The estimator knobs travel WITH the struct, so a variant is fully described by its config.
 # Defaults are the research's per-target tuned cells; `w_sim = 0` everywhere on purpose — see
 # src/features/plus_minus/ridge.jl for why the Brier-optimal `w_sim = 0.9` is NOT the default.
+#
+# `fit_on` picks which of the fold's matches the ridge may learn from:
+#   :training (default) — history ∪ target, i.e. EXACTLY the matches the engine's own likelihood
+#                         runs over. Out-of-sample matches sit at `dynamics_col == time_step + 1`
+#                         and are never in the fold, so this is leak-free and the rating keeps
+#                         updating through the target season.
+#   :history            — the frozen history block only. Also leak-free, but the rating is stale by
+#                         up to a season on the later folds. Kept so the difference is measurable.
 abstract type AbstractPlusMinusFeature <: AbstractFeatureConfig end
 
 # The GREEN-LIT cell: split-half reliability 0.669 vs the SofaScore rating's 0.660, and better
@@ -113,18 +121,21 @@ Base.@kwdef struct ShotsPlusMinusFeature <: AbstractPlusMinusFeature
     w_sim::Float64          = 0.0
     λ::Float64              = 1000.0
     half_life_days::Float64 = 730.0
+    fit_on::Symbol          = :training
 end
 
 Base.@kwdef struct ShotsOnTargetPlusMinusFeature <: AbstractPlusMinusFeature
     w_sim::Float64          = 0.0
     λ::Float64              = 1000.0
     half_life_days::Float64 = 730.0
+    fit_on::Symbol          = :training
 end
 
 Base.@kwdef struct GoalsPlusMinusFeature <: AbstractPlusMinusFeature
     w_sim::Float64          = 0.0
     λ::Float64              = 1000.0
     half_life_days::Float64 = 730.0
+    fit_on::Symbol          = :training
 end
 
 # The LEAST TEAM-LOADED cell (club R² 0.212 vs 0.389 for shots), at the cost of a lower split-half
@@ -133,6 +144,7 @@ Base.@kwdef struct XGPlusMinusFeature <: AbstractPlusMinusFeature
     w_sim::Float64          = 0.0
     λ::Float64              = 200.0
     half_life_days::Float64 = 730.0
+    fit_on::Symbol          = :training
 end
 
 """
