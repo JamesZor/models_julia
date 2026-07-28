@@ -117,10 +117,18 @@ println(scores)
 # ==========================================
 # 4. ECONOMIC — Kelly growth / ROI / CLV
 # ==========================================
-bt = BF.BackTesting.run_backtest(ds, exps, [BF.Signals.KellyCriterion(1.0)])
-summary = BF.BackTesting.summarize_models(bt)
-println("\n===== KELLY BACKTEST =====")
-println(summary)
+# `market_config` is REQUIRED — run_backtest defaults it to `nothing` and model_inference then
+# errors ("market_config must be provided"). Wrapped in try so a backtest failure cannot discard
+# the scoring table above, which is the expensive part.
+try
+    bt = BF.BackTesting.run_backtest(
+        ds, exps, [BF.Signals.BayesianKelly()];
+        market_config = D.Markets.DEFAULT_MARKET_CONFIG)
+    println("\n===== KELLY BACKTEST =====")
+    println(BF.BackTesting.summarize_models(bt))
+catch err
+    @error "backtest failed" exception = (err, catch_backtrace())
+end
 
 # ==========================================
 # 5. VERDICT SCAFFOLD

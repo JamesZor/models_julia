@@ -106,9 +106,31 @@ scores = EV.evaluate_experiments(
 println("\n===== PROPER SCORING, ALL ARMS (diff_ll = model − market; negative is better) =====")
 println(scores)
 
-bt = BF.BackTesting.run_backtest(ds, exps, [BF.Signals.KellyCriterion(1.0)])
-println("\n===== KELLY BACKTEST, ALL ARMS =====")
-println(BF.BackTesting.summarize_models(bt))
+# ==========================================
+# 3. ECONOMIC — growth / ROI per selection
+# ==========================================
+# `market_config` is REQUIRED: run_backtest defaults it to `nothing` and model_inference then
+# errors ("market_config must be provided"). r10 omitted it and lost its backtest after a 7-hour
+# train. Wrapped in try so a backtest failure can never discard the scoring above.
+LEDGER = nothing; TEARSHEET = nothing
+try
+    global LEDGER = BF.BackTesting.run_backtest(
+        ds, exps, [BF.Signals.BayesianKelly()];
+        market_config = D.Markets.DEFAULT_MARKET_CONFIG)
+    println("\n===== KELLY BACKTEST, ALL ARMS (by model) =====")
+    println(BF.BackTesting.summarize_models(LEDGER))
+
+    global TEARSHEET = BF.BackTesting.generate_tearsheet(LEDGER)
+    core = [:home, :draw, :away, :btts_yes, :btts_no,
+            :under_15, :over_15, :under_25, :over_25, :under_35, :over_35]
+    for val in (:roi_pct, :hurdle_G, :bets_placed)
+        println("\n", "="^70, "\n $val by selection\n", "="^70)
+        sub = filter(r -> Symbol(r.selection) in core, TEARSHEET)
+        println(unstack(sub, :selection, :model_name, val))
+    end
+catch err
+    @error "backtest failed — the scoring table above still stands" exception = (err, catch_backtrace())
+end
 
 println("""
 
