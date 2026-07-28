@@ -152,6 +152,92 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
 
+- 2026-07-28 — **LOOK-AHEAD AUDIT of the plus-minus features. ONE real leak, and it is small and
+  measured; everything else is clean.** Asked directly, answered by measurement rather than
+  argument.
+
+  **Verified clean:**
+  - **The ridge fit.** `fit_ids` = history ∪ target of the fold; OOS matches sit at
+    `dynamics_col == time_step + 1` and never enter it (checked: 0 of 33 OOS matches for fold 6
+    appear in that fold's id set).
+  - **Time-decay anchor** — `T_rating` is the last match date *inside* the fit set.
+  - **`competition_sets`** — accumulated chronologically, up to and including each match; the
+    whole-sample version would leak and is explicitly avoided.
+  - **Player universe, weight normalisation** — computed on the fit subset only.
+  - **`y_shots` / `y_sot` / `y_goals`** — pure event counts. **`ShotsPlusMinusFeature` therefore
+    has NO look-ahead of any kind.**
+
+  **THE ONE REAL LEAK — `y_xg` only.** `fit_shot_xg` is fitted GLOBALLY over all 20,033 shots in
+  the store (cached in `pm_prepared`), so `P(goal | zone, body-part, context)` embeds goal outcomes
+  from matches the model is about to predict. Team- and player-agnostic, but genuinely future
+  information. Measured on fold 6 by refitting the cell table on `fit_ids` only (10,136 shots):
+
+  | quantity | global (current) vs history-only |
+  |---|---|
+  | per-player rating ρ (663 players) | **0.9946** Pearson / 0.9906 Spearman |
+  | per-player RMS difference | 11.6% of one rating sd |
+  | **outfield pillar ρ** (1,808 match-sides) | **0.9942** |
+  | pillar RMS difference | 0.0113 = **11.5% of pillar sd** (0.0983) |
+  | **implied shift in log λ** at `w_att ≈ 0.3` | **0.0034, i.e. ~0.34% of the goal rate** |
+
+  Three reasons it is not driving anything, strongest last:
+  1. ~0.004 goals on λ ≈ 1.3 — below the resolution at which any arm differs.
+  2. Part of the 11.5% is estimation noise, not leakage: the history-only table sees half the
+     shots, so its cells shrink harder toward the base rate (rating sd 0.0162 vs 0.0173).
+  3. **The leak-free arm BEAT the leaked one.** `apm_shots` (pure counts, zero look-ahead) scored
+     G 0.0253 / ROI 1.66% against `apm_xg`'s G 0.0202 / 1.07%. If the global table conferred an
+     advantage, `apm_xg` should have won.
+
+  Kept global ON PURPOSE so the src port reproduces the WP7 numbers exactly (ρ = 1.000000 vs the
+  prototype). **Fix when convenient:** move `fit_shot_xg` inside the extractor keyed on `fit_ids`
+  (~50 ms/fold); needs the two xg arms retrained. Expected to change nothing (ρ = 0.994) — which
+  is the point, converting a caveat into a checked fact now that `funnel_apm_xg` leads.
+
+  - **Not leakage but worth knowing:** the aggregation uses the ACTUAL starting XI and each
+    player's position in that match. Both are available ~1 h pre-kickoff and the closing line we
+    benchmark against has them too (the Ireland engines do the same) — but it does assume team
+    news at bet time.
+  - `ds.matches` is `status_type = 'finished'` only, and `injury_time1/2` are post-match — both
+    universal to the repo, and the injury times only ever touch training-fold segments.
+
+- 2026-07-28 — **GLMEdge (forecast encompassing) is a better lens than log-loss, and it sees what
+  log-loss cannot.** `Y ~ prob_fair_close + spread_fair`: does our DEVIATION from the market carry
+  information beyond the market's own price? Coefficient on `spread_fair`, higher = more edge.
+
+  | model | all: coef / z | 1X2: coef / z | O/U: coef / z |
+  |---|---|---|---|
+  | **funnel_apm_xg** | **3.01 / 6.65** | 1.71 / 1.91 | **2.97 / 4.01** |
+  | funnel_winner | 2.85 / 6.28 | 1.07 / 1.07 | 2.85 / 4.00 |
+  | apm_xg | 2.33 / 5.36 | **2.39 / 2.50** | 0.93 / 1.32 |
+  | apm_shots | 2.29 / 5.33 | 2.07 / 2.29 | 0.98 / 1.43 |
+  | goals_baseline | 2.48 / 5.03 | 1.42 / 1.39 | 2.14 / 2.30 |
+  | apm_pillar_only | 1.81 / 4.82 | 1.67 / 2.29 | 0.56 / 0.90 |
+
+  Every model's deviations from the closing line are informative (z 4.8–6.7) — which log-loss
+  completely obscured. The O/U split (funnel arms z ≈ 4.0, APM-only z ≈ 1.3) matches the growth
+  result and is the most reproducible pattern in the study.
+  **⚠ These z are NOT match-clustered** — the same defect that halved the log-loss t-stats.
+  Deflating by the measured ~1.9 factor: overall 6.65 → ~3.5 (survives), O/U 4.01 → ~2.1
+  (marginal), 1X2 2.50 → ~1.3 (does not survive). Treat the overall edge as solid, the O/U split
+  as probable, the 1X2 split as unproven.
+
+  **Also: `LPD` is NOT an independent lens for binary markets.** For a binary outcome the posterior
+  predictive probability IS the posterior mean of `p`, so `calc_lpd_samples` returns
+  `log(mean(p_s))` — algebraically the negative of log-loss at the posterior mean. Confirmed in the
+  r10 output: `apm_goals` logloss 0.484512, LPD −0.484512, identical for every arm. Its
+  `std`/`skewness`/`kurtosis` columns do add information; the headline number cannot separate
+  models that log-loss cannot.
+
+- 2026-07-28 — **r12 FUSION (`DynamicFunnelPlusMinusGoalsLeagueTimeDecayModel`): best point estimate
+  on every lens, but tied with the funnel wherever it is tested.** Clean scoring
+  (DC excluded): 1X2 0.00364, BTTS 0.00068, O/U −0.00449, **all −0.00216** vs `funnel_winner`'s
+  −0.00186. It inherited both parents per-market — 1X2 0.00475 → 0.00364 (≈94% of the gap to
+  `apm_xg`) while keeping the funnel's O/U. But paired, match-clustered: **t = −0.57, better on
+  49.4% of matches.** A coin flip. Same story economically: G 0.0396 vs 0.0390 on Betfair.
+  **Record it as a TIE.** The `funnel_apm_shots` arm (predicted redundant, since the funnel already
+  eats shot volume) was still training when this was written — it only tests the mechanism, whose
+  premise (the 1X2/totals division of labour) is itself not significant.
+
 - 2026-07-28 — **THE MONEY LENS IS THE ONE THAT SEPARATES THESE MODELS — AND IT MUST BE PRICED ON
   BETFAIR, NOT THE SOFASCORE/BET365 CLOSE. Log-loss called the top four arms a statistical tie;
   growth does not.** `BayesianKelly`, curated to O/U + BTTS (1X2 and CorrectScore dropped, see
