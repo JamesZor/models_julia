@@ -152,6 +152,131 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
 
+- 2026-07-28 — **WP-D: the APM pillar WORKS, but the funnel still wins overall — and the two win
+  in DIFFERENT MARKETS.** Seven arms, ScottishLower, target seasons 24/25 + 25/26, 22 walk-forward
+  folds × 4 chains × 1000 samples (300 warmup), 710 OOS matches.
+
+  **⚠ READ THE CLEAN TABLE, NOT THE HEADLINE `evaluate_experiments` OUTPUT.** `LogLoss` over ALL
+  selections is CONTAMINATED on this DataStore by a Double Chance defect (see the separate entry
+  below). Everything here excludes DC.
+
+  `diff_ll = model − market`, market = **de-vigged closing line** (`prob_fair_close`, i.e. implied
+  close ÷ overround, from `sofascore.match_odds` — the feed this repo labels "Bet365 close"; it is
+  NOT Betfair). **Negative = the model BEATS the closing line.**
+
+  | model | 1X2 | BTTS | O/U | all clean |
+  |---|---|---|---|---|
+  | **funnel_winner** | 0.00475 | 0.00060 | **−0.00435** | **−0.00186** |
+  | apm_xg | **0.00357** | 0.00100 | −0.00187 | −0.00039 |
+  | apm_shots | 0.00381 | 0.00078 | −0.00185 | −0.00036 |
+  | apm_sot | 0.00577 | 0.00146 | −0.00178 | 0.00017 |
+  | apm_goals | 0.00748 | 0.00136 | −0.00200 | 0.00036 |
+  | apm_pillar_only | 0.00716 | 0.00207 | −0.00034 | 0.00149 |
+  | goals_baseline | 0.00680 | 0.00142 | 0.00784 | 0.00677 |
+
+  **① Q1 — apm_shots vs its no-APM twin: PASS, and not marginally.** −0.00036 vs +0.00677, a
+  Δ of **−0.00713** on the clean aggregate. Every APM variant beats the twin. The pillar carries
+  real information *after* free per-team α/β have already absorbed the team-level component, which
+  is the conservative form of the test (WP7's central worry was that RAPM is team strength in
+  disguise). The smoke-run posterior showed the engine actually using it: `w_att 0.148 ± 0.130`,
+  `w_def 0.263 ± 0.112` — the defensive weight ~2.3 posterior sd from zero, net of team strength.
+
+  **② Q2 — apm_shots vs the funnel: the funnel wins overall (−0.00186 vs −0.00036), but LOSES on
+  1X2.** This is the result worth carrying forward. The funnel's advantage is *entirely* totals:
+  −0.00435 on O/U against the APM arms' ≈ −0.0019. On 1X2 the ordering reverses — apm_xg 0.00357
+  and apm_shots 0.00381 beat the funnel's 0.00475. **A clean division of labour: the APM pillar
+  carries WHO WINS (lineup quality → 1X2); the funnel carries HOW MANY GOALS (shot volume →
+  totals).** That is what motivates the r12 fusion arms.
+
+  **③ Q3 — the target sweep orders xg ≈ shots > sot > goals, NOT WP7's reliability ordering, and
+  that is coherent.** WP7 picked `y_shots` on split-half reliability but recorded `y_xg` as the
+  *least team-loaded* cell (club R² 0.212 vs 0.389). In an engine that already models team
+  strength with α/β, the least team-loaded rating should contribute the most *incremental*
+  information — which is what happened. xg and shots are a dead heat overall (−0.00039 vs
+  −0.00036); xg is slightly better on 1X2, shots slightly better on BTTS.
+
+  **④ H1 vs H2 — the rating ADJUSTS team strength, it cannot REPLACE it.** `apm_pillar_only`
+  (`StaticZeroDynamics`, α ≡ β ≡ 0, Ireland's `outfield_*` form) scores +0.00149: **better than
+  the no-APM baseline (+0.00677), far worse than the same engine with α/β (−0.00036).** So the
+  rating genuinely carries team-strength information — a team is partly its players — but not
+  enough to stand alone. Consistent with what it is: a 730-day-half-life ridge that shrinks
+  low-minute players to zero (663 of ~1,440 rated on fold 6), versus the per-match Kalman filter
+  the Ireland engines consume. Priors were widened to `Normal(0, 1.5)` for that arm, since without
+  α/β the weights must carry the whole between-team spread rather than a residual — at the r10
+  prior of 0.3 it would have produced a null for a purely mechanical reason.
+
+  - **CAVEAT ON apm_xg SPECIFICALLY.** Its target is built from the BBC-commentary zonal xG model
+    (56/57 has **zero** SofaScore xG — verified: 0 player-xG rows, 0 matches flagged `has_xg`).
+    That model is fitted GLOBALLY over all shots in the store rather than per fold — deliberate,
+    since it is how the research computed the `y_xg` the WP7 verdict rests on, and the table
+    carries no team or player identity. But it is the only arm with any look-ahead at all, and it
+    is the arm that leads on 1X2. Do not rank it above `apm_shots` without refitting the cell
+    table per fold; on the aggregate the two are tied anyway.
+  - **Coverage:** `y_shots`, `y_sot` and `y_xg` exist only on live-text-covered matches (50.5% of
+    segments, 23/24+); `fit_ratings` restricts them to `covered`. Only `y_goals` uses the full
+    sample — and it is the weakest arm.
+  - **Cost:** ≈58 min per APM arm (88 fold×chain tasks at ~42 s), ≈30 min for `apm_pillar_only`
+    (49 parameters vs 101), ≈2.5 h for `goals_baseline` (see the efficiency note below).
+  - **NEXT:** r12 fuses the pillar into the funnel — `funnel_apm_xg` (shot QUALITY per player,
+    invisible to the funnel; predicted to help) and `funnel_apm_shots` (shot VOLUME decomposed to
+    players, already exploited by the funnel; predicted redundant). If the division of labour in
+    ② is real the fusion should land near −0.0030. `bbc_xg_proxy` r07b's funnel+iso fusion was
+    null/soft-negative, so a null here would not be surprising.
+
+- 2026-07-28 — **⚠ DOUBLE CHANCE IS BROKEN IN `ds.odds`, AND IT SILENTLY CORRUPTS ANY LogLoss
+  SCORED OVER ALL SELECTIONS. This is a pre-existing src defect, not something this branch
+  introduced — it affects every stream that has ever scored DC.**
+
+  Two errors that are self-consistent for the market and punishing for the model:
+
+  1. **`is_winner` marks only ONE DC selection per match when TWO should win.** Measured over
+     ScottishLower (`processing.jl:111` does `out_df.is_winner = df.winning`, passing SofaScore's
+     flag through unmodified):
+
+     | 1X2 outcome | DC_1X | DC_X2 | DC_12 |
+     |---|---|---|---|
+     | home | 1.000 ✔ | 0.000 ✔ | **0.000 ✘** (should be 1) |
+     | draw | 0.998 ✔ | **0.002 ✘** (should be 1) | 0.000 ✔ |
+     | away | 0.000 ✔ | 1.000 ✔ | **0.000 ✘** (should be 1) |
+
+     Average DC winners per match: **0.995**, not 2. `DC_12` is never marked a winner at all.
+  2. **`prob_fair_close` halves DC probabilities.** `_enrich_market_data!` normalises every market
+     group to sum to 1.0, but DC selections must sum to **2.0**. Measured mean vig by market:
+     1X2 0.100, BTTS 0.079, O/U 0.065, **DoubleChance 1.161** (overround 2.16 — correct for DC,
+     then wrongly normalised away).
+
+  Because both are ~halved, the market looks *calibrated* on DC (mean fair p 0.333 vs win rate
+  0.331) — which is why it survives a naive calibration check. But the MODEL prices `DC_12`
+  correctly from its score grid at ≈0.72 and is then scored against a label saying it lost:
+  ≈ −log(0.28) = 1.27 nats per row versus the market's ≈ 0.45. DC is ~13% of the 16,712 scored
+  selections, so the artefact is worth **≈0.03 nats — larger than the entire model−market gap and
+  ~6× every real effect in the WP-D table.**
+
+  **It reversed the headline conclusion.** With DC included, every arm appeared to LOSE to the
+  market (`diff_ll` +0.027 to +0.032) and `apm_xg` topped the table. With DC excluded,
+  `funnel_winner` beats the closing line outright (−0.00186) and leads. Both the "we lose to the
+  market" claim and the arm ordering were artefacts.
+
+  - **Workaround in use:** score per market family and never aggregate over all selections —
+    `LogLoss([:home,:draw,:away])`, `LogLoss([:btts_yes,:btts_no])`, `LogLoss(over/under…)`.
+  - **Proper fix (NOT applied — it would change every historical comparison in the repo):**
+    normalise DC to 2.0 in `_enrich_market_data!`, and derive DC `is_winner` from the 1X2 result
+    rather than trusting the feed flag. Flagging rather than changing unilaterally.
+  - Minor, same area: a handful of DC rows carry team-name selections (`"Falkirk or Draw"`,
+    n = 1 each) instead of `DC_*` codes.
+
+- 2026-07-28 — **Engine efficiency note (not a correctness issue).** `goals_baseline`
+  (`DynamicSmileDoublePoissonGoalsLeagueTimeDecayModel(market_on = false)`) took **2.5 h against
+  58 min** for the APM engines. Cause: in `goals_smile_league.jl:102-114` `market_active`
+  multiplies the pillars *after* the logpdfs are computed, so with the market off the engine still
+  evaluates 909 supremacy logpdfs and a 909×5 smile matrix per gradient — ~5,500 taped ReverseDiff
+  nodes contributing exactly 0 — and its goals term uses `logpdf.(Poisson.(λ), goals)` rather than
+  sufficient statistics. The posterior is unaffected (multiplying by zero removes the contribution
+  exactly; the orphaned `σ_sup`/`σ_smile`/`log_φ` just sample their priors), so it remains a valid
+  twin. Gating the *computation* rather than the *contribution* would be a cheap future win.
+  For reference the APM engine's gradient benchmarks at **0.558 ms** vs the funnel's 0.709 ms,
+  both inside the repo's 0.64 ms target — the slow wall-clock was tape compilation, not the model.
+
 - 2026-07-28 — **src graduation WP-A/WP-B/WP-C: the port is BIT-FAITHFUL to the prototype.**
   Verified on the server against `ScottishLower` (56/57 only, so the numbers below are the
   lower-tier slice of the pooled 54–57 figures in the entries further down).
