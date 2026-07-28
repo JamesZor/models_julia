@@ -236,9 +236,9 @@ function extract_parameters(
         lg  = l_idx > 0 ? δ_mat[:, l_idx] : zeros(n_samples)
         γlg = l_idx > 0 ? γ_mat[:, l_idx] : zeros(n_samples)
 
-        # Ratings for THIS match — the map covers every match in the fold, so out-of-sample rows
-        # resolve here exactly as in-sample ones do. A match absent from the map (no lineups)
-        # falls back to 0.0, i.e. a league-average side.
+        # Ratings for THIS match — the extractor builds the map over the WHOLE store precisely so
+        # out-of-sample rows (which are never in the fold) resolve here exactly as in-sample ones
+        # do. A match absent from the map (no lineups) falls back to 0.0, a league-average side.
         m_r = get(ratings_map, mid, Dict{Tuple{String, String}, Float64}())
         r_h = (get(m_r, ("home", "D"), 0.0) + get(m_r, ("home", "M"), 0.0) +
                get(m_r, ("home", "F"), 0.0)) - 10.0 * base
