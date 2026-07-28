@@ -152,9 +152,49 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
 
-- 2026-07-28 — **WP-D: the APM pillar WORKS, but the funnel still wins overall — and the two win
-  in DIFFERENT MARKETS.** Seven arms, ScottishLower, target seasons 24/25 + 25/26, 22 walk-forward
-  folds × 4 chains × 1000 samples (300 warmup), 710 OOS matches.
+- 2026-07-28 — **⚠ SIGNIFICANCE TESTING OVERTURNS HALF OF THE ENTRY BELOW. READ THIS FIRST.**
+  The WP-D entry that follows ranks arms on point estimates alone. Paired per-observation log-loss
+  differences, **clustered by match** (selections within a match are heavily dependent, so the
+  naive t roughly doubles), on the 10,579 clean observations / 709 matches:
+
+  | comparison | mean Δ | t (clustered) | % matches better | verdict |
+  |---|---|---|---|---|
+  | apm_xg vs goals_baseline | −0.00717 | **−4.53** | 68.3% | **real** |
+  | apm_shots vs goals_baseline | −0.00713 | **−4.31** | 69.0% | **real** |
+  | funnel vs goals_baseline | −0.00864 | **−3.97** | 68.1% | **real** |
+  | apm_pillar_only vs goals_baseline | −0.00528 | **−2.62** | 66.1% | **real** |
+  | apm_pillar_only vs apm_shots | +0.00185 | **+2.32** | 48.1% | **real (pillar_only WORSE)** |
+  | funnel_apm_xg vs funnel | −0.00030 | −0.57 | 49.4% | ns |
+  | funnel_apm_xg vs apm_xg | −0.00177 | −1.02 | 52.3% | ns |
+  | apm_xg vs funnel (all) | +0.00147 | +0.77 | 47.2% | ns |
+  | apm_xg vs funnel (1X2) | −0.00118 | −0.49 | 53.0% | ns |
+  | apm_xg vs funnel (O/U) | +0.00248 | +1.12 | 44.8% | ns |
+
+  **What is actually established:**
+  1. **Every engine beats the no-APM baseline, decisively** (t −2.62 to −4.53, ~68% of matches).
+     Q1 passes on its own terms — the APM pillar carries real information net of α/β.
+  2. **`apm_pillar_only` is significantly WORSE than `apm_shots`** (t = +2.32). H2 is **rejected**:
+     the rating adjusts team strength, it cannot replace it. This is a genuine finding, not a
+     point-estimate impression.
+  3. **NOTHING separates funnel / apm_xg / apm_shots / funnel_apm_xg.** Every pairwise comparison
+     among the top four is ns. **Q2 is INCONCLUSIVE, not "the funnel wins".**
+
+  **Two claims in the entry below are therefore WITHDRAWN:**
+  - *"funnel_winner is the outright winner, not tied"* — it leads on point estimate but is not
+    separable from the APM arms (t = 0.77).
+  - *"a clean division of labour: APM owns 1X2, funnel owns totals"* — the 1X2 gap is t = −0.49
+    and the O/U gap t = +1.12. The point estimates are consistent with the story, but a coherent
+    pattern among non-significant differences is a hypothesis, not a result. **The r12 fusion
+    experiment was motivated by this pattern and should be read in that light** — its own gain
+    over the funnel is likewise ns (t = −0.57, better on 49.4% of matches, i.e. a coin flip).
+
+  The test is not underpowered: it resolves the baseline comparisons at t ≈ −4 on the same data.
+  Separating the top arms needs more matches (more leagues/seasons) or a different lens —
+  growth/CLV, which is this project's preferred criterion anyway and is still outstanding.
+
+- 2026-07-28 — **WP-D: the APM pillar WORKS. Rankings among the top arms are NOT significant —
+  see the correction entry above.** Seven arms, ScottishLower, target seasons 24/25 + 25/26,
+  22 walk-forward folds × 4 chains × 1000 samples (300 warmup), 710 OOS matches.
 
   **⚠ READ THE CLEAN TABLE, NOT THE HEADLINE `evaluate_experiments` OUTPUT.** `LogLoss` over ALL
   selections is CONTAMINATED on this DataStore by a Double Chance defect (see the separate entry
