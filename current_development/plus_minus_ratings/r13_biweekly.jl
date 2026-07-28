@@ -66,7 +66,17 @@ ARMS = [
                             player_ratings_feature = F.XGPlusMinusFeature()),
 ]
 
-for (name, model) in ARMS
+# Only the first N arms run. Set to 3 (funnel_apm_xg, funnel_winner, apm_shots) so the sweep
+# finishes overnight — that trio answers the primary question, "does finer fold granularity move
+# the APM arms relative to the funnel?". `goals_baseline` and `apm_xg` are DEFERRED, not dropped:
+# the baseline is the slowest arm by ~2x (the smile engine computes its market pillars and then
+# multiplies them by zero) and would eat the whole night on its own. Consequence to remember when
+# reading the output: WITHOUT `goals_baseline` at biweekly, this run CANNOT re-test "APM beats its
+# twin" — the one comparison that was statistically significant at monthly. It only re-tests the
+# rankings that were ties.
+const RUN_N = 3
+
+for (name, model) in ARMS[1:min(RUN_N, length(ARMS))]
     @info "=== $name (biweekly) ==="
     try
         task = E.create_experiment_task(
@@ -102,7 +112,7 @@ function load_latest(dir, names)
     return out, got
 end
 
-exps, got = load_latest(SAVE_DIR, first.(ARMS))
+exps, got = load_latest(SAVE_DIR, first.(ARMS))   # skips arms that were not run
 @info "loaded (biweekly)" got
 isempty(exps) && error("nothing trained")
 
