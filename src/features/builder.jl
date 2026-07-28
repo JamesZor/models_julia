@@ -93,8 +93,8 @@ function create_features(
     # --- Stash the fold split itself ---
     # Most extractors only need `ordered_ids`, but any feature that FITS something (rather than
     # looking it up) must know which of those matches it is allowed to learn from. The plus-minus
-    # RAPM ridge is the first such feature: it fits on history only and applies the resulting rating
-    # vector to the whole fold. Cheap and backward-compatible — nothing else reads these keys.
+    # RAPM ridge is the first such feature (see `AbstractPlusMinusFeature.fit_on`). Cheap and
+    # backward-compatible — nothing else reads these keys.
     F_data[:history_match_ids] = Set(Int.(boundary.history_match_ids))
     F_data[:target_match_ids]  = Set(Int.(boundary.target_match_ids))
 
