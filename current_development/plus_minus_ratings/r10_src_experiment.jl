@@ -16,12 +16,21 @@
 #
 # A CLEAN NEGATIVE IS A VALID RESULT and must be written into NOTES.md the same way a positive is.
 #
-# Run on the server (kaimon REPL), where the DB is local:
-#   ENV["JULIA_PKG_PRECOMPILE_AUTO"] = "0"
-#   include("current_development/plus_minus_ratings/r10_src_experiment.jl")
+# Run on the server, where the DB is local. THE BOX HAS 16 PHYSICAL CORES / 32 LOGICAL — start
+# Julia with one thread per PHYSICAL core and pin them, as every other runner in the repo does.
+# Launching `-t 32` unpinned oversubscribes: 32 threads fight over 16 cores and their hyperthread
+# siblings, and the queued sampler ends up using ~8-16 cores' worth of useful work out of a nominal
+# 32 (measured, 2026-07-28).
+#
+#   JULIA_PKG_PRECOMPILE_AUTO=0 julia --project -t 16 \
+#       current_development/plus_minus_ratings/r10_src_experiment.jl
 
 using BayesianFootball
 using DataFrames, Dates, Statistics, Printf
+using ThreadPinning
+
+pinthreads(:cores)
+@info "threads" n = Threads.nthreads() cores = ThreadPinning.ncores()
 
 const BF = BayesianFootball
 const D  = BF.Data
