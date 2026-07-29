@@ -67,6 +67,52 @@ Plan: `~/.claude/plans/elegant-skipping-pinwheel.md` (session 2026-07-29).
 Branch `feat/inplay-bbc-mvp`, off `feat/apm-player-rating-l1` (carries `ds.bbc_events`).
 Prototype only — **no `src/` changes**; WP-H is a written graduation sketch.
 
+- 2026-07-29: **OOS EVALUATION (user ask) — the in-sample optimism is NEGLIGIBLE and now
+  MEASURED; the market tie holds out of sample; the model's real error is the LEVEL, ~5% hot**
+  (`r08_oos.jl`, plus `l09` gaining the `:expo` integrator).
+  - **Split, on the pregame convention:** fit the NHPP on **24/25 only (360 matches, 955
+    goals)**, score **25/26 (349 matches, 971 goals)**. The 25/26 pregame latents are already
+    walk-forward OOS from the funnel run, so **both stages are out of sample end-to-end**.
+    BBC is what makes this a real test: 25/26 has incidents for only 16 of 175 t56 matches,
+    so an incidents-only holdout would have been almost entirely t57. First end-to-end use of
+    the BBC clock (`kind = :expo`, 18-bin [0,90] frame + per-match stoppage).
+  - **THE OPTIMISM QUESTION IS SETTLED.** Fitting the same spec on ALL data and scoring the
+    same test set gives a match-clustered log-loss gap of **+0.0010 (1X2, t = 1.91), +0.0007
+    (O/U, t = 0.65), −0.0007 (BTTS, t = −0.62)** — about **0.001 nats**. The monthly
+    walk-forward agrees independently: mean gap **0.00044** nats/row over 15 folds, max
+    0.0011, one fold negative. So every previously published in-play number (r02b's tie, r06's
+    tie on 376 matches) **stands as reported**. "Should be small" was right, and is now a
+    measurement rather than an assumption.
+  - **The market tie HOLDS out of sample** — 269 held-out matches, 7,574 rows:
+    1X2 t = **−0.04** (corr 0.931), O/U t = **+1.25** (corr 0.962), BTTS t = **−1.50**
+    (corr 0.827). All |t| < 2, same verdict as in-sample. NB the pooled row-level log-loss
+    puts the market marginally ahead in all three families while the match-clustered mean
+    favours the model on O/U — row-weighting vs match-weighting, neither significant. Report
+    it as a tie and say which weighting.
+  - **THE REAL ERROR IS THE LEVEL, and it is one scalar.** At kickoff on the held-out season
+    the model prices **2.920 goals against 2.782 realised — +5.0% hot**. Decomposed: the
+    pregame engine alone is 2.871, i.e. **+3.2% hot**, and the NHPP fitted on 24/25 adds
+    another ~1.8% (K = 1.0511 trained on 24/25 vs K = 1.0146 for the correctly-calibrated
+    in-sample fit). Two lessons: (a) the level DRIFTS between seasons — 24/25 realised 2.653
+    goals/match, 25/26 realised 2.782, up 4.9% — and a fixed α does not track it; (b) this is
+    a single number, so periodic K recalibration on recent matches is the cheap fix. **This is
+    a bigger error than anything the MVPs were chasing.**
+  - **The 1X2 favourite over-confidence SURVIVES out of sample**, milder but one-directional:
+    p 0.754 → y 0.702, p 0.843 → y 0.801, p 0.972 → y 0.953; and under-confident below 0.5
+    (0.028 → 0.032, 0.157 → 0.173). Classic over-dispersion. **Shrink the 1X2 book toward
+    0.5 before staking it.**
+  - **O/U miscalibrates the OTHER way — under-confident**: p 0.139 → y 0.101, p 0.861 →
+    y 0.899, p 0.652 → y 0.679. Totals are too COMPRESSED while 1X2 is too SPREAD. That is
+    consistent with the repo's existing "totals compression is denoising" finding, and it
+    means a single global shrinkage would fix one family and break the other — **calibrate
+    per family**.
+  - Posterior is stable across the split: α −4.577 vs −4.602, γ_man 0.421 vs 0.484
+    (×1.52 vs ×1.62), β 0.197 vs 0.148. γ_tr flips sign (−0.111 vs −0.055) but both hug
+    zero — consistent with game state being the weak term throughout. max R̂ 1.004.
+  - ⚠ Reporting trap: the per-checkpoint `bias` column is **structurally zero** (~1e-18)
+    because complementary selections sum to 1 within each family. Same for r06's
+    `model_minus_mkt`. Neither is evidence of unbiasedness; use the level check above.
+
 - 2026-07-29: **WP-E SKIPPED — user decision.** With MVP-1 and MVP-2 both null and the plan's
   pre-registered expectation (BBC's value is *coverage*, not a new model) holding, the user
   chose to go straight to the WP-F race rather than spend a fit on MVP-3. The plan itself
