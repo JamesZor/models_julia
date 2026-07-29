@@ -61,6 +61,53 @@ Thin Betfair LTP is enough: we need fair value, not fills.
   with ℓ1 crossing cost; race: hold vs exit-rule τ=−0.05 vs rebalancer.
   Benchmark to beat: exit-rule uplift +0.306±0.059 (t=5.21).
 
+## Log — BBC in-play MVP stream (newest first)
+
+Plan: `~/.claude/plans/elegant-skipping-pinwheel.md` (session 2026-07-29).
+Branch `feat/inplay-bbc-mvp`, off `feat/apm-player-rating-l1` (carries `ds.bbc_events`).
+Prototype only — **no `src/` changes**; WP-H is a written graduation sketch.
+
+- 2026-07-29: **WP-A DONE — Gate A PASS on all three blocking checks** (`l04_bbc_timeline.jl`,
+  `r04a_bbc_timeline_qa.jl`). 1,070 BBC matches, 38,137 timeline events across 11 event types,
+  **0 null minutes**, 0 running-score breaks. The headline is a data-quality *upgrade* over
+  what the plan pre-registered:
+  - **Goal reconciliation is 99.81% (1068/1070), not ~92%.** The pre-registered 92% is the
+    **team-slug** route, which this run reproduces exactly at **93.4%**. Deriving the goal
+    side by **differencing BBC's running `home_score`/`away_score`** instead recovers all
+    **67 own goals** (every slug-less goal row in 56/57 is an own goal, confirmed from the
+    text) and agrees with the slug route on 2,898/2,898 where both resolve. Own goals were
+    the predicted cause; the fix is that BBC *does* carry the answer, in the score column.
+    Note the `src` fetcher's "do NOT infer the side from the running score" warning is about
+    **shots**, where there is no score to difference — it does not apply to goal rows.
+  - **The 2 failures, enumerated and classified** — both single-match feed defects in t57,
+    neither an own goal: `11395473` (23/24) BBC has 2-1, final says 2-0 → one extra away
+    goal; `14035676` (25/26) BBC has 1-0, final says 1-3 → truncated commentary, 3 goals
+    missing. 0.19% loss; downstream packages drop these two by the reconciliation gate.
+  - **Reds cross-check vs `ds.incidents` (802 both-source matches): PASS with room.**
+    136 incident reds / 142 BBC reds, 135 paired → recall 99.3%, precision 95.1%, per-match
+    count agreement 99.3%. **Minute MAE 0.36, p90 = 1.0 min, only 1.5% differ by > 2 min**
+    (stop threshold was 10%). Subs likewise: 5,528 / 5,654, 5,514 paired, recall 99.7%,
+    MAE 0.26, 1.7% > 2 min. Given γ_man = ×1.70 is the dominant in-play effect, this is the
+    check that mattered and BBC clears it.
+  - **Side attribution is now 100.0% of 38,137 events.** BBC ships `post` (woodwork, 438
+    rows = 2.2% of all attempts) with **no team column at all** — the one gap the three-way
+    slug CASE cannot close. The club is in the free text (`"… (Dumbarton) hits the bar"`);
+    slug-normalised matching recovers 412 and a leading-token fallback the last 26
+    (`Inverness CT` → `inverness-caledonian-thistle`). Zero 56/57 fixtures have both teams
+    sharing a leading token, so the fallback cannot mis-assign.
+  - **BBC's clock is strictly better in stoppage.** BBC carries a real `added_time` (1–8)
+    where this SofaScore feed clamps every stoppage goal to exactly mm=45/90 with
+    added_time=0 (the r00 finding). `l04` therefore exposes both `t` (stoppage-inclusive,
+    for the slicer) and `tb` (base, the only clock comparable to `ds.incidents`) — the red
+    MAE above is computed on `tb`, or a pure convention difference would have scored as a
+    data disagreement.
+  - Deliberately NOT done: widening `src/Data/fetchers/sql/bbc_events.jl`. `build_shots(ds)`
+    reads `ds.bbc_events` wholesale and the APM port is verified bit-faithful (ρ = 1.000000);
+    the timeline is built by direct `LibPQ` query in the prototype instead. See WP-H.
+  - Gotcha banked: `d < bd && (best, bd = j, d)` parses as a **tuple expression**, not a
+    tuple assignment — it paired 0 events out of 5,650 and raised nothing. Use an explicit
+    `if` block.
+
 ## Log
 
 - 2026-07-14: stream created. Deep-research batch dispatched. r00 written.
