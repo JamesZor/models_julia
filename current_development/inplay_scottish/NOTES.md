@@ -67,6 +67,42 @@ Plan: `~/.claude/plans/elegant-skipping-pinwheel.md` (session 2026-07-29).
 Branch `feat/inplay-bbc-mvp`, off `feat/apm-player-rating-l1` (carries `ds.bbc_events`).
 Prototype only — **no `src/` changes**; WP-H is a written graduation sketch.
 
+- 2026-07-29: **WP-A extension (user ask) — BBC CLOSES r00's stoppage-clamping problem.**
+  r00 flagged that this SofaScore feed clamps every stoppage goal to exactly mm=45/90 with
+  added_time=0, so `l01` had to proxy the H2 tail with a flat `Tend = 95` and conflate H1
+  stoppage into the first H2 slice. It proposed `injury_time1`/`injury_time2` from
+  `sofascore.matches` as the fix.
+  - **That route is dead, confirmed not assumed:** both columns exist for all 1,970
+    matches and are **zero in 99.6% / 99.4%** of them. The field is present and unpopulated
+    for these leagues. BBC is the *only* stoppage source for 56/57.
+  - **BBC's `half_end` clock strings are the source** — `"45'+3"`, `"90'+5"` — i.e. stoppage
+    actually PLAYED, not announced. **All 2,136 parse**, covering 1,069 of 1,070 matches.
+    (BBC also emits `added_time` posts carrying the announced `value`, but only 1,326 of
+    them; `half_end` is both more complete and the more relevant quantity.)
+  - Measured: **H1 mean 2.29 min** (median 2, 5–95% [1, 4]), **H2 mean 4.84 min**
+    (median 5, [3, 7]). So the incumbent's flat 5-minute H2 tail was well *centred*
+    (−0.16 min on average) but wrong per match across a 3–7 min spread, and **H1 stoppage —
+    2.29 min per match of real exposure — was not modelled at all**.
+  - **Two fixes, both in `l04`.** `bin_exposure` / `build_slices_bbc` put stoppage where it
+    belongs, in the **offset**: a fixed 18-bin [0, 90] frame where the terminal bin of each
+    half carries `Δt + at`, instead of `Tend = 95` smuggling it in as an extra bin. Keeping
+    the bin structure fixed is what keeps `δ_time` identifiable across matches. And
+    `event_clock` corrects the clock itself: BBC minute labels are **1-indexed** (an event
+    labelled minute t happened in elapsed (t−1, t], so it belongs at t − 0.5, not t), and
+    H1 stoppage is compressed into (44.5, 45) so it stays in its own half.
+  - **The clock bug this exposes is real and measurable: 88 of 2,965 goals (3.0%) change
+    HALF** between the incumbent clock and the corrected one. Under `time + added_time` an
+    H1 stoppage goal at 45+3 sits at minute 48 — *after* the second-half kickoff labelled
+    46 — so it is both ordered wrongly against other events and binned into the first H2
+    slice, where it also corrupts the trailing/leading game state of every later slice.
+  - Verified: all 2,965 goals bin inside [0, 90) under the new clock (none lost), max clock
+    89.93, 38,520 slice rows over 1,070 matches, 19 distinct offsets.
+  - `event_clock(...; mode = :incumbent)` reproduces `l01`'s convention exactly. **WP-F
+    therefore splits arm 0b in two** — `0b-naive` (BBC events, incumbent clock) isolates
+    *coverage*, `0b-clock` (BBC events, corrected clock + real exposure) isolates the
+    *clock*. Without that split a 0b win would confound the two, which is the same mistake
+    arm 0b exists to prevent for the MVPs.
+
 - 2026-07-29: **WP-A DONE — Gate A PASS on all three blocking checks** (`l04_bbc_timeline.jl`,
   `r04a_bbc_timeline_qa.jl`). 1,070 BBC matches, 38,137 timeline events across 11 event types,
   **0 null minutes**, 0 running-score breaks. The headline is a data-quality *upgrade* over
