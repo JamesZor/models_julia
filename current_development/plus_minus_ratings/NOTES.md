@@ -152,6 +152,69 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
 ## Findings log
 <!-- YYYY-MM-DD — WP / gate — result. Append newest-first. -->
 
+- 2026-07-29 — **r13 BIWEEKLY RERUN: the protocol objection is DEAD. Finer folds make every arm
+  uniformly WORSE and move the ranking by nothing. The monthly verdict stands.**
+
+  **Why the run existed.** r10/r11/r12 all used `dynamics_col = :match_month` (= `cld(match_week, 4)`,
+  four-week blocks → 22 folds). But the incumbent `funnel_winner` was graduated on `bbc_xg_proxy`'s
+  **60-fold ≈ biweekly** protocol, so the comparison, while internally fair, was not the protocol the
+  funnel was validated on. The specific worry was directional: the RAPM ridge is refit per fold, so a
+  fresher fold means a fresher rating, whereas shot volume is less time-sensitive — biweekly should
+  therefore FLATTER the APM arms. Three arms rerun (`funnel_apm_xg`, `funnel_winner`, `apm_shots`),
+  40 folds, identical 710 OOS matches, `data/experiments/plus_minus_biweek`.
+
+  **Clean scoring (DC excluded; negative = beats the de-vigged close):**
+
+  | model | 1X2 | BTTS | O/U | **all** monthly → biweekly | Δ |
+  |---|---|---|---|---|---|
+  | funnel_apm_xg | 0.00511 | 0.00156 | −0.00429 | −0.00216 → **−0.00162** | +0.00054 |
+  | funnel_winner | 0.00538 | 0.00137 | −0.00389 | −0.00186 → **−0.00133** | +0.00053 |
+  | apm_shots | 0.00505 | 0.00129 | −0.00145 | −0.00036 → **+0.00022** | +0.00058 |
+
+  **The three Δ agree to within 5e-6.** That is the whole result: the degradation is a pure protocol
+  effect applied equally to every arm, and the gaps that matter are untouched —
+  `funnel_apm_xg − funnel_winner` = −0.00030 monthly vs −0.00029 biweekly;
+  `apm_shots − funnel_winner` = +0.00150 vs +0.00155. The "fresher fold → fresher ridge" prediction
+  is **falsified**, and tightly: had it been real, the APM Δ would have been the *smallest*, not the
+  largest.
+
+  **GLMEdge (`spread_fair` coef / z, all selections, n = 10,579) reproduces it independently:**
+
+  | model | monthly | biweekly |
+  |---|---|---|
+  | funnel_apm_xg | 3.01 / 6.65 | 2.73 / 5.97 |
+  | funnel_winner | 2.85 / 6.28 | 2.60 / 5.65 |
+  | apm_shots | 2.29 / 5.33 | 2.04 / 4.73 |
+
+  Same uniform shrink, same ordering, and the funnel−apm gap is 0.56 on both protocols. All three
+  still carry information beyond the closing line (z 4.7–6.0 unclustered; ~2.5–3.1 after the
+  measured ~1.9 clustering deflation).
+
+  **WHY EVERYTHING GOT WORSE — `dynamics_col` does double duty, and this is the trap worth
+  remembering.** It is not only the CV splitter: `src/features/builder.jl:71` groups the target
+  window by the same column to build `time_indices` / `n_rounds`, i.e. the **Gaussian random-walk
+  step for team strength**. Halving the block length therefore doubles the number of GRW steps over
+  the same calendar span, so each team-strength state is informed by roughly half as many matches.
+  More parameters, thinner data per parameter, noisier states — degradation that hits every engine
+  equally, exactly as observed. *Interpretation, not an isolated measurement:* this run cannot
+  separate splitter granularity from dynamics granularity, since one knob sets both. Doing so needs
+  a splitter that takes the two independently, which the API does not currently expose.
+
+  **Economic, Betfair, curated O/U + BTTS (`sum_G` monthly → biweekly):**
+  `funnel_winner` 0.0390 → **0.0406** (ROI 6.45% → 5.8%, 1123 bets);
+  `funnel_apm_xg` 0.0396 → 0.0340 (6.75% → 6.1%, 1138 bets);
+  `apm_shots` 0.0253 → 0.0281 (1.66% → 1.01%, 1103 bets).
+  **The top two swap places.** That is not a new finding — it is confirmation of the old one: a pair
+  that changes order under a protocol change it should be insensitive to is a pair that is TIED
+  (t = −0.57 when tested). Everything else replicates: the funnel family ≫ APM-only on totals, and
+  Bet365 pricing of the same book is near-zero-to-negative (`sum_G` 0.0003 / −0.0 / −0.0053) against
+  Betfair's +0.028 to +0.041 — the venue effect remains larger than every model effect in this study.
+
+  **Consequence to carry:** the biweekly run deliberately omitted `goals_baseline` (slowest arm by
+  ~2×; the smile engine computes market pillars then multiplies them by zero) and `apm_xg`, so it
+  **cannot** re-test "APM beats its twin" — the one comparison that WAS significant at monthly
+  (t −2.62 … −4.53). It re-tested the ties, and they are still ties.
+
 - 2026-07-28 — **LOOK-AHEAD AUDIT of the plus-minus features. ONE real leak, and it is small and
   measured; everything else is clean.** Asked directly, answered by measurement rather than
   argument.
@@ -234,9 +297,20 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
   −0.00186. It inherited both parents per-market — 1X2 0.00475 → 0.00364 (≈94% of the gap to
   `apm_xg`) while keeping the funnel's O/U. But paired, match-clustered: **t = −0.57, better on
   49.4% of matches.** A coin flip. Same story economically: G 0.0396 vs 0.0390 on Betfair.
-  **Record it as a TIE.** The `funnel_apm_shots` arm (predicted redundant, since the funnel already
-  eats shot volume) was still training when this was written — it only tests the mechanism, whose
-  premise (the 1X2/totals division of labour) is itself not significant.
+  **Record it as a TIE.**
+
+  **`funnel_apm_shots` (AMENDED 2026-07-29, the arm finished after the entry above was written):
+  the pre-registered redundancy prediction came out RIGHT, in direction.** Clean scoring
+  1X2 0.00448, BTTS 0.00122, O/U −0.00380, **all −0.00146** — i.e. fusing the *shots* rating into
+  the funnel is WORSE than the plain funnel (−0.00186), while fusing the *xg* rating is better
+  (−0.00216). That is the "quality vs volume" mechanism doing exactly what §r12's header said it
+  would before the run: the funnel already reads shot COUNTS, so a shots plus-minus adds parameters
+  and no information, whereas xG plus-minus supplies shot QUALITY the funnel structurally cannot
+  see. Ordering `funnel_apm_xg` ≺ `funnel_winner` ≺ `funnel_apm_shots`.
+  **Weight this as directional evidence only.** The magnitude is the same order as the fusion-vs-
+  funnel difference that tested at t = −0.57 (ns), so the individual gaps are almost certainly not
+  significant either. What raises it above pattern-spotting is that the sign was PRE-REGISTERED in
+  the runner header, not read off the output afterwards.
 
 - 2026-07-28 — **THE MONEY LENS IS THE ONE THAT SEPARATES THESE MODELS — AND IT MUST BE PRICED ON
   BETFAIR, NOT THE SOFASCORE/BET365 CLOSE. Log-loss called the top four arms a statistical tie;
