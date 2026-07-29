@@ -162,6 +162,63 @@ function nowcast_cv(df::DataFrame; k::Int = 4, repeats::Int = 5, seed::Int = 42)
 end
 
 # ---------------------------------------------------------------------------
+# 2b. MATCH-CLUSTERED CV — the harness correction this stream needs
+# ---------------------------------------------------------------------------
+#
+# `l01.paired_diff` differences the 20 (repeat, fold) means and divides by their SD. That
+# treats 20 numbers as independent observations when (a) each fold mean already averages
+# ~137 held-out matches, so its variance is ~1/137 of the match-level variance, and (b) the
+# 5 repeats re-score THE SAME 550 matches. The independent unit is the MATCH.
+#
+# Measured inflation on WP-D: `nowcast_opp − full` scores t = 3.17 fold-paired and
+# **t = 1.07 match-clustered** — a factor of ~3, larger than the ~1.9–2× this repo had
+# previously measured elsewhere. Every fold-paired t in this stream (including the
+# incumbent's published 6.29 / 0.51 / 8.85) is overstated by roughly this factor. It does
+# not flip any published sign, but magnitudes must be read accordingly.
+#
+# Use `match_clustered_cv` + `mc_diff` for anything that has to survive a significance
+# claim; `cv_race` + `paired_diff` remain fine as a fast spec-screening workhorse.
+
+"""
+    match_clustered_cv(df, specs, fixed_pg_specs; k = 4, repeats = 5, seed = 42)
+        -> Dict{Symbol, Dict{Int, Float64}}
+
+Per-spec, per-MATCH mean held-out log-likelihood, averaged over repeats. Folds are by match,
+so a match is only ever scored by a model that never saw it.
+"""
+function match_clustered_cv(df::DataFrame, specs::Dict, fixed_pg_specs::Set;
+                            k::Int = 4, repeats::Int = 5, seed::Int = 42)
+    df = copy(df); df.off_pg = df.off .+ df.log_pg
+    mids = unique(df.match_id); rng = MersenneTwister(seed)
+    acc = Dict(s => Dict{Int, Vector{Float64}}() for s in keys(specs))
+    for rep in 1:repeats
+        perm = shuffle(rng, mids); folds = [Set(perm[i:k:end]) for i in 1:k]
+        for f in folds
+            tm = [!(m in f) for m in df.match_id]
+            tr = df[tm, :]; te = df[.!tm, :]
+            for (s, form) in specs
+                oc = s in fixed_pg_specs ? :off_pg : :off
+                m = glm(form, tr, Poisson(), LogLink(); offset = tr[!, oc])
+                μ = GLM.predict(m, te; offset = te[!, oc])
+                ll = logpdf.(Poisson.(max.(μ, 1e-9)), te.y)
+                for g in groupby(DataFrame(mid = te.match_id, ll = ll), :mid)
+                    push!(get!(acc[s], g.mid[1], Float64[]), mean(g.ll))
+                end
+            end
+        end
+    end
+    return Dict(s => Dict(m => mean(v) for (m, v) in d) for (s, d) in acc)
+end
+
+"Paired spec difference with the MATCH as the unit of independence."
+function mc_diff(mc::Dict, a::Symbol, b::Symbol)
+    ms = collect(keys(mc[a]))
+    d = [mc[a][m] - mc[b][m] for m in ms]
+    (mean = mean(d), se = std(d) / sqrt(length(d)),
+     t = mean(d) / (std(d) / sqrt(length(d))), n = length(d))
+end
+
+# ---------------------------------------------------------------------------
 # 3. Turing model
 # ---------------------------------------------------------------------------
 

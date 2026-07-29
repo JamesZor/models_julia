@@ -77,13 +77,19 @@ surplus_audit = (
 
 cvs = Dict(n => nowcast_cv(s) for (n, s) in slices)
 
-gate_d_cv = DataFrame(arm = String[], comparison = String[],
-                      mean = Float64[], se = Float64[], t = Float64[])
+const SPECS_ALL = merge(Dict(k => v for (k, v) in SPEC_FORMULAS), NOWCAST_FORMULAS)
+const FIXED_PG  = Set([:nowcast_fixed_pg, :full_fixed_pg])
+mcs = Dict(n => match_clustered_cv(s, SPECS_ALL, FIXED_PG) for (n, s) in slices)
+
+# Both t's are reported side by side. The MATCH-CLUSTERED one is the inferential number;
+# the fold-paired one is kept only to document the inflation factor.
+gate_d_cv = DataFrame(arm = String[], comparison = String[], mean = Float64[],
+                      t_fold_paired = Float64[], t_match_clustered = Float64[])
 for n in sort(collect(keys(cvs))), (a, b) in (
-        (:nowcast, :full), (:nowcast_opp, :nowcast),
-        (:nowcast_fixed_pg, :full_fixed_pg))
-    r = paired_diff(cvs[n], a, b)
-    push!(gate_d_cv, (n, "$a − $b", r.mean, r.se, r.t))
+        (:nowcast, :full), (:nowcast_opp, :full), (:nowcast_opp, :nowcast),
+        (:nowcast_fixed_pg, :full_fixed_pg), (:full, :state), (:state, :time))
+    r = paired_diff(cvs[n], a, b); m = mc_diff(mcs[n], a, b)
+    push!(gate_d_cv, (n, "$a − $b", m.mean, r.t, m.t))
 end
 
 # ---------------------------------------------------------------------------
@@ -132,14 +138,20 @@ confound = (γ_sf_fixed = γ_sf_fixed, γ_sf_free = γ_sf_free,
             # rate is pinned at 1 (the *_fixed_pg CV comparison)
             cv_fixed_pg_t = only(subset(gate_d_cv,
                 :arm => ByRow(==("funnel_apm_xg")),
-                :comparison => ByRow(==("nowcast_fixed_pg − full_fixed_pg"))).t))
+                :comparison => ByRow(==("nowcast_fixed_pg − full_fixed_pg"))).t_match_clustered))
 
 # ---------------------------------------------------------------------------
-# §5 leak audit — a FUTURE-shifted surplus must beat the causal one
+# §5 leak audit — a FUTURE-shifted surplus, as a NEGATIVE control on the causal build
 # ---------------------------------------------------------------------------
-# If shots carry in-match information about scoring, letting the covariate see one slice
-# AHEAD must help materially. If the causal and anti-causal versions score the same, the
-# term is not reading in-match information at all — it is reading something static.
+# ⚠ THIS CHECK ANSWERS LESS THAN IT LOOKS LIKE. It was written to ask "does surplus read
+# in-match information?" — but a goal IS a shot (`goals ⊂ shots` by construction), so
+# letting the covariate see the slice being predicted is near-tautological and the future
+# version wins by three orders of magnitude no matter what. It cannot separate information
+# from identity.
+#
+# What it DOES establish, and the reason it is kept: the causal build is not leaking. If
+# `build_nowcast_slices` had an off-by-one, the causal t would sit near the future t rather
+# than ~500× below it in mean effect. Read it as a negative control, nothing more.
 
 leak_audit = let s = copy(slices["funnel_apm_xg"])
     fut = similar(s.surplus)
@@ -158,7 +170,7 @@ end
 # ---------------------------------------------------------------------------
 
 cv_t = only(subset(gate_d_cv, :arm => ByRow(==("funnel_apm_xg")),
-                   :comparison => ByRow(==("nowcast − full"))).t)
+                   :comparison => ByRow(==("nowcast − full"))).t_match_clustered)
 cv_sig = abs(cv_t) > 2
 cal_moved = any(abs.(nc_bias.bias) .< abs.([0.0747, 0.0512, 0.0244]))  # vs MVP-1
 γ_credible = !(quantile(_cv(nc_chain, :γ_sf), 0.05) < 0 <
