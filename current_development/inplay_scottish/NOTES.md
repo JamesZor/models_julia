@@ -67,6 +67,18 @@ Plan: `~/.claude/plans/elegant-skipping-pinwheel.md` (session 2026-07-29).
 Branch `feat/inplay-bbc-mvp`, off `feat/apm-player-rating-l1` (carries `ds.bbc_events`).
 Prototype only — **no `src/` changes**; WP-H is a written graduation sketch.
 
+- 2026-07-29: **WP-E SKIPPED — user decision.** With MVP-1 and MVP-2 both null and the plan's
+  pre-registered expectation (BBC's value is *coverage*, not a new model) holding, the user
+  chose to go straight to the WP-F race rather than spend a fit on MVP-3. The plan itself
+  predicted MVP-3 would be **the weakest of the three** — it spends the most parameters on
+  the noisiest signal — so this drops the least informative arm.
+  **Consequence to remember if it is ever revived:** the blocking `fit_shot_xg` leak fix was
+  never done. `fit_shot_xg` is fitted globally, which pregame was measured as negligible
+  (pillar ρ 0.9942, implied log-λ shift 0.0034) but **in-play is disqualifying** — the model
+  would read the outcome of the shot it is pricing. MVP-3 cannot be run without refitting the
+  xG table excluding every match in the evaluation fold. Race arm 3 is therefore ABSENT, not
+  scored as null.
+
 - 2026-07-29: **WP-D DONE — GATE D NULL on both halves; and the run caught a HARNESS BUG that
   inflates every fold-paired t in this stream by ~3×** (`l07_nowcast.jl`, `r05_nowcast.jl`).
   - **⚠ THE HARNESS FINDING IS THE IMPORTANT ONE.** `l01.paired_diff` differences the 20
