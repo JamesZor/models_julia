@@ -7,10 +7,12 @@
 #     Goals_a ~ Poisson(λ_a),  log λ_a = μ_base(season) + δ_month + δ_league
 #                                        + dyn.α_a + dyn.β_h + w_att·R_a − w_def·R_h
 #
-# `R_x` is the summed RAPM of side x's OUTFIELD STARTERS (D + M + F), supplied by any
-# `Features.AbstractPlusMinusFeature` variant. Swapping the plus-minus target — shots (green-lit),
-# shots-on-target, goals, xG — is purely a matter of swapping `player_ratings_feature`; nothing in
-# this file changes.
+# `R_x` is the summed, centred rating of side x's OUTFIELD players (D + M + F), supplied by any
+# feature family that emits the `flat_<side>_<pos>_rating` vectors: every
+# `Features.AbstractPlusMinusFeature` variant (RAPM on shots — green-lit — shots-on-target, goals,
+# xG) AND `Features.PlayerRatingsFeature` (SofaScore ratings through a tracker). Swapping the rating
+# source is purely a matter of swapping `player_ratings_feature`; nothing in this file changes,
+# EXCEPT that a non-zero-base family needs a tighter `w_*_prior` (see the config below).
 #
 # WHY THIS ENGINE EXISTS: ScottishLower (tournaments 56/57) has ZERO SofaScore player ratings, so
 # the nine `outfield_*` xG engines cannot run there, and it has no player xG either. RAPM is the
@@ -42,7 +44,13 @@ Base.@kwdef struct DynamicGoalsPlusMinusLeagueTimeDecayModel{
     I<:AbstractInterceptionConfig,
     T<:AbstractDynamicsConfig,
     H<:AbstractHomeAdvantageConfig,
-    P<:Features.AbstractPlusMinusFeature
+    # Any rating family that emits the `flat_<side>_<pos>_rating` vectors + `:player_ratings_map`,
+    # i.e. `AbstractPlusMinusFeature` (RAPM) OR `PlayerRatingsFeature` (SofaScore, via a tracker).
+    # The engine body never inspects the family — it reads the flat vectors and centres with
+    # `Features.rating_base`, which dispatches per family. Widened 2026-07-29 for the ScottishUpper
+    # (54/55) stream, where SofaScore ratings exist and RAPM's live-text source starts only at 23/24.
+    # ⚠ A non-zero-base family needs a TIGHTER `w_*_prior` than the RAPM defaults — see below.
+    P<:Features.AbstractFeatureConfig
     } <: AbstractTimeDecayPlayerModel
       interception_config::I   = HierarchicalMonthlyInterception()
       dynamics_config::T       = TimeDecayDynamics()
@@ -52,6 +60,12 @@ Base.@kwdef struct DynamicGoalsPlusMinusLeagueTimeDecayModel{
       # at O(0.3-0.5). Centring both weights on ZERO is the honest prior — the research's own
       # verdict was "real but small signal", so the engine must be free to conclude the pillar is
       # worth nothing rather than being pushed into using it.
+      #
+      # ⚠ THESE DEFAULTS ARE CALIBRATED TO RAPM's SCALE. A minute-weighted SofaScore rating sums to
+      # ~10 × the mean rating over the outfield, so its CENTRED total has sd of order 1-3 — an order
+      # of magnitude larger than RAPM's. At sd 0.3 the pillar would swing log-λ by ±0.6 or more.
+      # Pass an explicit tighter prior (~Normal(0, 0.05)) when slotting in `PlayerRatingsFeature`,
+      # and check the realised centred-rating sd before trusting the fit.
       w_att_prior::Distribution = Normal(0.0, 0.3)
       w_def_prior::Distribution = Normal(0.0, 0.3)
       league_offset_sd::Float64 = 0.1   # zero-sum δ_league prior sd (gap ≈ 0.047 on 56/57)
@@ -141,8 +155,26 @@ end
 """Per-side Poisson sufficient statistics: `c_lin` weights `log λ`, `c_rate` weights `λ`."""
 _pm_goals_suff(goals::Vector{Int}, w::Vector{Float64}) = (c_lin = w .* goals, c_rate = w)
 
-"""Outfield-collapsed, centred rating for one side: (D + M + F) − 10·base."""
-_pm_outfield(D, M, F, base::Float64) = (D .+ M .+ F) .- (10.0 * base)
+"""
+Outfield-collapsed, centred rating for one side: `(D + M + F) − 10·base`, masked to 0 where the side
+has no rated minutes.
+
+⚠ The mask is NOT cosmetic. The extractors emit 0.0 for a side with no usable ratings (no lineups, or
+a season the rating provider never covered), and 0.0 is indistinguishable from a genuine zero total.
+Without the mask that "missing" side is centred to `−10·base`, i.e. a side rated ten full standard
+players BELOW league average — for SofaScore ratings (`base = 6.5`) that is −65 on the pillar input,
+which the weight prior then multiplies into a nonsense log-rate. Masking maps "no data" to "league
+average", which is the honest imputation.
+
+For the plus-minus family `base = 0`, so masked and unmasked agree exactly and RAPM behaviour is
+unchanged.
+"""
+function _pm_outfield(D, M, F, base::Float64)
+    tot = D .+ M .+ F
+    # Weighted ratings are sums of non-negative minute-weighted ratings, so an exact 0 total means
+    # "no rated minutes on this side", never a real rating.
+    return ifelse.(tot .> 0.0, tot .- (10.0 * base), zero(eltype(tot)))
+end
 
 function build_turing_model(config::DynamicGoalsPlusMinusLeagueTimeDecayModel,
                             feature_set::FeatureSet)
@@ -239,11 +271,13 @@ function extract_parameters(
         # Ratings for THIS match — the extractor builds the map over the WHOLE store precisely so
         # out-of-sample rows (which are never in the fold) resolve here exactly as in-sample ones
         # do. A match absent from the map (no lineups) falls back to 0.0, a league-average side.
+        # Masked exactly as the builder's `_pm_outfield`: a side with no rated minutes contributes 0
+        # (league average), NOT −10·base. See the `_pm_outfield` docstring.
         m_r = get(ratings_map, mid, Dict{Tuple{String, String}, Float64}())
-        r_h = (get(m_r, ("home", "D"), 0.0) + get(m_r, ("home", "M"), 0.0) +
-               get(m_r, ("home", "F"), 0.0)) - 10.0 * base
-        r_a = (get(m_r, ("away", "D"), 0.0) + get(m_r, ("away", "M"), 0.0) +
-               get(m_r, ("away", "F"), 0.0)) - 10.0 * base
+        _side(sd) = get(m_r, (sd, "D"), 0.0) + get(m_r, (sd, "M"), 0.0) + get(m_r, (sd, "F"), 0.0)
+        t_h, t_a = _side("home"), _side("away")
+        r_h = t_h > 0.0 ? t_h - 10.0 * base : 0.0
+        r_a = t_a > 0.0 ? t_a - 10.0 * base : 0.0
 
         pillar_h = w_att .* r_h .- w_def .* r_a
         pillar_a = w_att .* r_a .- w_def .* r_h
