@@ -43,10 +43,14 @@ const TRAIN_PAIRS = Set([(56, "24/25"), (56, "25/26"),
 sources = Dict{String, AbstractPregameSource}(
     "funnel_apm_xg" => known_source("funnel_apm_xg"),
     "funnel_winner" => known_source("funnel_winner"),
-    "legacy_hl365"  => LatentsFileSource(joinpath(dirname(dirname(@__DIR__)), "data",
-                                                  "scottish_decay_grid",
-                                                  "latents_hl365_hs2.jls")),
 )
+
+# Archival only. The legacy latents were produced on the homelab and never scp'd to
+# mcmc-beast, so it is normal for this to be absent here; every race arm composes against
+# one of the funnel engines above, so nothing downstream depends on it.
+const LEGACY_JLS = joinpath(dirname(dirname(@__DIR__)), "data", "scottish_decay_grid",
+                            "latents_hl365_hs2.jls")
+isfile(LEGACY_JLS) && (sources["legacy_hl365"] = LatentsFileSource(LEGACY_JLS))
 
 draws = Dict(k => pregame_draws(v, ds) for (k, v) in sources)
 qa = Dict(k => draws_qa(v, ds) for (k, v) in draws)
