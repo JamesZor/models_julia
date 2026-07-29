@@ -33,11 +33,72 @@ Requires l01, l02, l04, l05 to be included first.
 
 using DataFrames, Statistics, Random, Distributions
 
+"""
+    remaining_intensity_expo(chain, c; ...) -> (Λ_h, Λ_a)
+
+`l01.remaining_intensity` with per-match stoppage exposure on the fixed 18-bin [0,90] frame.
+Kept separate rather than folded into l01 so the incumbent's published numbers stay exactly
+reproducible under `:goals_flat`.
+"""
+function remaining_intensity_expo(chain, c::NHPPXConfig; pg_h, pg_a, gh, ga,
+                                  reds_h = 0, reds_a = 0, t_now,
+                                  at1 = L04_DEFAULT_AT1, at2 = L04_DEFAULT_AT2,
+                                  Tend = 90.0)
+    αv = _cv(chain, :α); βv = _cv(chain, :β)
+    gtr = _cv(chain, :γ_tr); gld = _cv(chain, :γ_ld); gman = _cv(chain, :γ_man)
+    edges = collect(0.0:c.Δt:Tend); nb = length(edges) - 1
+    expo = bin_exposure(at1, at2; Δt = c.Δt, Tend = Tend)
+    zt = _has(chain, "z_time") ? (_cm(chain, :z_time, nb) .* _cv(chain, :σ_time)) : nothing
+    gd = gh - ga; man_h = Float64(reds_a - reds_h); man_a = -man_h
+    Λh = zeros(length(αv)); Λa = zeros(length(αv))
+    for b in 1:nb
+        lo, hi = edges[b], edges[b+1]; hi <= t_now && continue
+        tmid = (lo + hi) / 2; zc = (tmid - 45) / 45
+        dt = expo[b] * (hi - max(lo, t_now)) / (hi - lo)
+        bh = αv .+ log(pg_h) .+ βv .* zc .+ gtr .* (gd < 0) .+ gld .* (gd > 0) .+ gman .* man_h
+        ba = αv .+ log(pg_a) .+ βv .* zc .+ gtr .* (gd > 0) .+ gld .* (gd < 0) .+ gman .* man_a
+        if zt !== nothing; bh = bh .+ zt[:, b]; ba = ba .+ zt[:, b]; end
+        Λh = Λh .+ exp.(bh) .* dt; Λa = Λa .+ exp.(ba) .* dt
+    end
+    return Λh, Λa
+end
+
+"""
+    InGameModel(name, chain, config, draws; kind = :flat, stoppage = Dict())
+
+`kind` selects the integrator:
+  `:flat` — l01's convention, `Tend = 95` with a flat `Δt` exposure. Reproduces the
+            incumbent's published numbers exactly.
+  `:expo` — the BBC clock: fixed 18-bin [0, 90] frame with each half's terminal bin carrying
+            that match's real stoppage (`bin_exposure`). Needs `stoppage`, and a chain fitted
+            with `build_slices_bbc`. Mixing an `:expo` chain with `:flat` integration (or the
+            reverse) silently misprices — the α it learnt is tied to its own exposure.
+"""
 struct InGameModel
     name::String
     chain::Any
     config::NHPPXConfig
     draws::PregameDraws
+    kind::Symbol
+    stoppage::Dict{Int, @NamedTuple{at1::Float64, at2::Float64}}
+end
+
+InGameModel(name, chain, config, draws; kind::Symbol = :flat,
+            stoppage = Dict{Int, @NamedTuple{at1::Float64, at2::Float64}}()) =
+    InGameModel(name, chain, config, draws, kind, stoppage)
+
+_stop(m::InGameModel, mid) = stoppage_of(m.stoppage, Int(mid))
+
+"Remaining-intensity kernels for a UNIT pregame rate, honouring the model's integrator."
+function ingame_kernels(m::InGameModel, mid::Integer, t::Real, gh, ga, rh, ra)
+    if m.kind === :expo
+        s = _stop(m, mid)
+        return remaining_intensity_expo(m.chain, m.config; pg_h = 1.0, pg_a = 1.0,
+            gh = gh, ga = ga, reds_h = rh, reds_a = ra, t_now = Float64(t),
+            at1 = s.at1, at2 = s.at2, Tend = m.config.Tend)
+    end
+    return intensity_kernels(m.chain, m.config; gh = gh, ga = ga,
+                             reds_h = rh, reds_a = ra, t_now = Float64(t))
 end
 
 "Does this model have a pregame posterior for the match?"
@@ -49,8 +110,9 @@ Base.haskey(m::InGameModel, mid::Integer) = haskey(m.draws, Int(mid))
 The t=0 kernel K — total composed intensity per unit pregame rate. K < 1 means the in-play
 module prices slightly fewer goals than the pregame engine (see the header).
 """
-function kernel_scale(m::InGameModel; t_now = 0.0)
-    K_h, _ = intensity_kernels(m.chain, m.config; gh = 0, ga = 0, t_now = t_now)
+function kernel_scale(m::InGameModel, mid = nothing; t_now = 0.0)
+    ref = mid === nothing ? first(keys(m.draws)) : Int(mid)
+    K_h, _ = ingame_kernels(m, ref, t_now, 0, 0, 0, 0)
     return mean(K_h)
 end
 
@@ -97,8 +159,7 @@ function ingame_remaining(m::InGameModel, mid::Integer, t::Real;
                           gh::Int = 0, ga::Int = 0, rh::Int = 0, ra::Int = 0,
                           n_pairs::Int = 2000, rng = Xoshiro(Int(mid)))
     d = m.draws[Int(mid)]
-    K_h, K_a = intensity_kernels(m.chain, m.config; gh = gh, ga = ga,
-                                 reds_h = rh, reds_a = ra, t_now = Float64(t))
+    K_h, K_a = ingame_kernels(m, mid, t, gh, ga, rh, ra)
     npg, nm = length(d.λ_h), length(K_h)
     Λh = Vector{Float64}(undef, n_pairs); Λa = similar(Λh)
     for s in 1:n_pairs
@@ -131,10 +192,13 @@ function ingame_book(m::InGameModel, mid::Integer, t::Real;
                      n_pairs::Int = 2000, max_goals::Int = 12, draws::Bool = false,
                      rng = Xoshiro(Int(mid)))
     d = m.draws[Int(mid)]
-    ppd = inplay_ppd(m.chain, m.config, d.λ_h, d.λ_a; gh = gh, ga = ga,
-                     reds_h = rh, reds_a = ra, t_now = Float64(t),
-                     markets = INGAME_MARKETS, n_pairs = n_pairs,
-                     max_goals = max_goals, rng = rng)
+    K_h, K_a = ingame_kernels(m, mid, t, gh, ga, rh, ra)
+    S = compose_score_matrix(d.λ_h, d.λ_a, K_h, K_a; gh = gh, ga = ga,
+                             n_pairs = n_pairs, max_goals = max_goals, rng = rng)
+    ppd = Dict{Symbol, Vector{Float64}}()
+    for mk in INGAME_MARKETS
+        merge!(ppd, Pred.compute_market_probs(S, mk))
+    end
     return draws ? ppd : Dict(k => mean(v) for (k, v) in ppd)
 end
 

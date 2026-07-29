@@ -52,35 +52,8 @@ end
 
 by_mid(arm::RaceArm) = Dict(m.mid => m for m in arm.mseqs)
 
-"""
-    remaining_intensity_expo(chain, c; ...) -> (Λ_h, Λ_a)
-
-`l01.remaining_intensity` with per-match stoppage exposure on the fixed 18-bin [0,90] frame.
-Kept separate rather than folded into l01 so the incumbent's published numbers stay exactly
-reproducible under `:goals_flat`.
-"""
-function remaining_intensity_expo(chain, c::NHPPXConfig; pg_h, pg_a, gh, ga,
-                                  reds_h = 0, reds_a = 0, t_now,
-                                  at1 = L04_DEFAULT_AT1, at2 = L04_DEFAULT_AT2,
-                                  Tend = 90.0)
-    αv = _cv(chain, :α); βv = _cv(chain, :β)
-    gtr = _cv(chain, :γ_tr); gld = _cv(chain, :γ_ld); gman = _cv(chain, :γ_man)
-    edges = collect(0.0:c.Δt:Tend); nb = length(edges) - 1
-    expo = bin_exposure(at1, at2; Δt = c.Δt, Tend = Tend)
-    zt = _has(chain, "z_time") ? (_cm(chain, :z_time, nb) .* _cv(chain, :σ_time)) : nothing
-    gd = gh - ga; man_h = Float64(reds_a - reds_h); man_a = -man_h
-    Λh = zeros(length(αv)); Λa = zeros(length(αv))
-    for b in 1:nb
-        lo, hi = edges[b], edges[b+1]; hi <= t_now && continue
-        tmid = (lo + hi) / 2; zc = (tmid - 45) / 45
-        dt = expo[b] * (hi - max(lo, t_now)) / (hi - lo)
-        bh = αv .+ log(pg_h) .+ βv .* zc .+ gtr .* (gd < 0) .+ gld .* (gd > 0) .+ gman .* man_h
-        ba = αv .+ log(pg_a) .+ βv .* zc .+ gtr .* (gd > 0) .+ gld .* (gd < 0) .+ gman .* man_a
-        if zt !== nothing; bh = bh .+ zt[:, b]; ba = ba .+ zt[:, b]; end
-        Λh = Λh .+ exp.(bh) .* dt; Λa = Λa .+ exp.(ba) .* dt
-    end
-    return Λh, Λa
-end
+# `remaining_intensity_expo` now lives in l09_ingame.jl (the in-game model owns the
+# stoppage-aware integrator); include l09 before using the :goals_expo arm.
 
 """
     arm_lambdas_and_kernels(arm, ms, t_now, gh, ga, rh, ra)
