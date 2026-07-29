@@ -67,6 +67,66 @@ Plan: `~/.claude/plans/elegant-skipping-pinwheel.md` (session 2026-07-29).
 Branch `feat/inplay-bbc-mvp`, off `feat/apm-player-rating-l1` (carries `ds.bbc_events`).
 Prototype only — **no `src/` changes**; WP-H is a written graduation sketch.
 
+- 2026-07-29: **WP-C DONE — GATE C IS A CLEAN NULL on its pre-registered criterion, and the
+  null is TRUSTWORTHY because a control resolved on the same data. The decomposition then
+  found the real mechanism, in conversion rather than volume** (`l06_shot_flow.jl`,
+  `r04_shot_flow.jl`). 550 matches, **10,202 shots vs 1,498 goals = 6.8× the counts**;
+  realised 9.27 shots / 1.36 goals per team-match against pregame λ_s 9.03 and p2 0.1488
+  (empirical 0.1468 — the thinning assumption holds to 1.4% before any fitting).
+  - **The pre-registered question was: is the incumbent's game-state null (`state − time`
+    t = 0.51 on goals) a real absence, or a resolution failure at 1.4 goals per team-match?
+    Answer: a REAL ABSENCE.**
+
+    | arm | resolution | counts | t_time | **t_state** | t_man |
+    |---|---|---|---|---|---|
+    | funnel_apm_xg | shots | 10,202 | 1.04 | **0.33** | 8.62 |
+    | funnel_apm_xg | goals | 1,498 | 3.06 | **0.60** | 4.43 |
+    | funnel_winner | shots | 10,202 | 1.04 | **−0.21** | 8.52 |
+    | funnel_winner | goals | 1,498 | 3.06 | **1.17** | 4.36 |
+
+    Win condition was |t| > 2 at shot resolution. Measured 0.33 / −0.21 — **not merely
+    short of it, slightly WEAKER than at goal resolution.** Recorded as a null.
+  - **Why this null is believable rather than a power failure — the control resolved.**
+    `γ_man` goes **t = 4.4 (goals) → 8.6 (shots)**, i.e. the red-card effect nearly doubles
+    its t-stat on exactly the 6.8× counts that left game state flat. The instrument works;
+    it just finds nothing for game state. Without that control the null would be worth
+    little, which is why the race was run at both resolutions on the SAME matches.
+  - **BUT game state does act — on CONVERSION, not volume.** Empirical conversion by state:
+    **level 13.9%, leading 17.3%, trailing 13.6%.** Match-CLUSTERED bootstrap (2,000 reps
+    over 550 matches, because a Binomial likelihood treats 10k shots as independent when
+    they cluster in matches): **leading − level = +0.0337 ± 0.0071, z = 4.76**, CI
+    [0.020, 0.048]; trailing − level = −0.003, z = −0.48 (nil). The Turing fit agrees:
+    κ_ld = +0.252 [0.146, 0.360], κ_tr = −0.028 [−0.137, 0.080].
+    **A team that is ahead does not shoot more — it shoots better.** Counter-attacking
+    transition chances, which is a quality effect a goal-count model cannot see.
+  - **This RESOLVES the open question r01/r01b left.** r01 found `γ_ld = +0.09` on goals with
+    the sign FLIPPED vs Ireland's −0.24, and r01b could only say it was "most consistent
+    with pregame-λ frailty, not team character". The shot decomposition shows what it
+    actually is: on shot VOLUME `γ_ld = −0.073` [−0.116, −0.030] — **negative, back in
+    Ireland's direction** — while conversion is strongly positive. The goal-level `γ_ld`
+    was the NET of two real, opposite-signed mechanisms, not an artifact. `γ_tr = +0.049`
+    [0.005, 0.092] (trailing teams shoot slightly more, convert no better).
+  - **Second part of Gate C — checkpoint bias — REGRESSED.** Remaining-goals bias at
+    60/75/85′ is **−0.075 / −0.051 / −0.024** (se 0.041 / 0.033 / 0.023) against the
+    incumbent's clean +0.020 / +0.014 / +0.003. MVP-1 **under**-predicts late goals.
+    The diagnosis is in the same table: `t_time` falls 3.06 (goals) → 1.04 (shots), so goal
+    intensity rises over the match *more* than shot intensity does — conversion rises late,
+    and constant-p2 thinning structurally cannot express that. Same story as `γ_man` 0.436
+    on shots (×1.55) vs the incumbent's 0.53 on goals (×1.70): conversion improves with a
+    man advantage too.
+  - **Verdict: MVP-1 as specified is NOT a replacement for the incumbent** — it is worse on
+    the calibration check while being null on the term it was built to resolve. Its value is
+    diagnostic: it separates volume from conversion and settles the γ_ld question. The
+    indicated fix (state- and time-dependent p2, already fitted here and credibly non-zero)
+    is a change of specification, not a tuning knob, and belongs to a later iteration rather
+    than being smuggled into WP-F. Carry MVP-1 into the race as specified.
+  - max R̂ 1.006 across both fits.
+  - Ops note: the kaimon gate reported `failed — no activity for 10m` at 15m34s while Julia
+    was still running and had already written `out/r04_gate_c.jls`. **Check artifacts and
+    load average, not the gate's verdict.** Load had fallen 6.57 → 0.54, confirming
+    completion; `ps` `%CPU` is a lifetime average and stays pinned at 416, so it is useless
+    as a liveness signal — the load average is the live one.
+
 - 2026-07-29: **WP-B DONE — pregame source is pluggable; GATE B FAILS ON THE LETTER, for one
   fully-diagnosed scalar reason** (`l05_pregame_source.jl`, `r04b_pregame_source.jl`).
   - `AbstractPregameSource` replaces r01/r02's hard-coded `.jls` read. `ExperimentSource`
