@@ -176,7 +176,8 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
   `funnel_apm_xg − funnel_winner` = −0.00030 monthly vs −0.00029 biweekly;
   `apm_shots − funnel_winner` = +0.00150 vs +0.00155. The "fresher fold → fresher ridge" prediction
   is **falsified**, and tightly: had it been real, the APM Δ would have been the *smallest*, not the
-  largest.
+  largest. ⚠ But see the mechanism section below: the shift is a dispersion effect, so read this as
+  "the ranking is protocol-invariant", NOT as "monthly is the better protocol".
 
   **GLMEdge (`spread_fair` coef / z, all selections, n = 10,579) reproduces it independently:**
 
@@ -190,15 +191,51 @@ the SofaScore-fed model on held-out Brier. A clean negative is a valid outcome.
   still carry information beyond the closing line (z 4.7–6.0 unclustered; ~2.5–3.1 after the
   measured ~1.9 clustering deflation).
 
-  **WHY EVERYTHING GOT WORSE — `dynamics_col` does double duty, and this is the trap worth
-  remembering.** It is not only the CV splitter: `src/features/builder.jl:71` groups the target
-  window by the same column to build `time_indices` / `n_rounds`, i.e. the **Gaussian random-walk
-  step for team strength**. Halving the block length therefore doubles the number of GRW steps over
-  the same calendar span, so each team-strength state is informed by roughly half as many matches.
-  More parameters, thinner data per parameter, noisier states — degradation that hits every engine
-  equally, exactly as observed. *Interpretation, not an isolated measurement:* this run cannot
-  separate splitter granularity from dynamics granularity, since one knob sets both. Doing so needs
-  a splitter that takes the two independently, which the API does not currently expose.
+  **WHY EVERYTHING GOT WORSE — two wrong explanations killed by measurement, and the surviving
+  one is a DISPERSION effect, not a bias.** (Corrected 2026-07-29 after the first write-up of this
+  entry claimed a Gaussian-random-walk mechanism. **There is no GRW in these engines.**
+  `TimeDecayDynamics` samples ONE static `α`, `β` per team; the time variation is an observation
+  weight, `match_weights = 0.5 .^ (date_deltas ./ days_half_life)`
+  (`goals_funnel_league.jl:179`). `time_indices` / `n_rounds` are built by `builder.jl:71` but are
+  **not consumed by any of these three engines** — only by time-varying dynamics such as
+  `MultiScaleDynamics`. For this study `dynamics_col` therefore changes the fold schedule and
+  nothing else.)
+
+  1. **DEAD — sample composition.** A uniform shift across three different engines is what you get
+     if the scored set (and therefore the market term in `diff_ll`) moved. It did not: both
+     protocols score the identical 710 matches, `|intersect| = 710`. Monthly covers months 1–11 ×
+     2 seasons (11 time steps → 22 folds), biweekly biweeks 1–20 (20 → 40).
+  2. **DEAD — level bias.** Compared on the same 710 matches, `funnel_winner`'s posterior-mean λ:
+
+     | | monthly | biweekly | realized |
+     |---|---|---|---|
+     | mean λ_tot | 2.7466 | 2.7417 | 2.7183 |
+     | totals bias (t) | −0.0282 (**−0.48**) | −0.0234 (**−0.40**) | |
+     | mean supremacy | 0.1468 | 0.1444 | 0.1972 |
+     | supremacy bias (t) | +0.0504 (**+0.76**) | +0.0527 (**+0.79**) | |
+     | RMSE totals | 1.5545 | 1.5563 | |
+     | RMSE supremacy | 1.7780 | 1.7789 | |
+
+     **Neither protocol has a detectable level bias, and the two are the same model on point
+     accuracy** — RMSE differs in the fourth decimal. Note monthly is if anything the *more*
+     biased on totals and still scores better, so the monthly advantage is NOT calibration.
+     (The ~0.05-goal under-prediction of home supremacy is shared, protocol-invariant and ns at
+     t ≈ 0.8 — worth revisiting on a bigger sample given 1X2 is the weak market for every arm.)
+  3. **SURVIVES — the predictive spread shrinks.** `sd(λ_tot)` **0.2628 → 0.2563 (−2.5%)** and
+     `cor(λ_tot, realized total)` 0.1024 → 0.0936, while `cor(λ_monthly, λ_biweekly) = 0.976`.
+     Supremacy spread is untouched (0.3071 vs 0.3087). So biweekly makes the same central
+     prediction slightly more timidly. Given `totals-compression-is-denoising` — the edge here is
+     **fading market over-dispersion on totals**, not out-predicting the market's mean — a model
+     that deviates less from the market captures less of that edge, and O/U carries 10 of the 15
+     scored selections.
+
+  **The honest reading, and it cuts against taking monthly's edge at face value:** the monthly run
+  scores better by being BOLDER, not by being more accurate. On every accuracy measure the two
+  protocols are indistinguishable. So the 0.0005-nat gap is not evidence that monthly is the better
+  protocol — it is evidence that the score is sensitive to how much dispersion the model carries.
+  **No verified mechanism for WHY the spread shrinks.** More folds means each fold trains on up to
+  2 weeks MORE data, which should widen the posterior spread, not narrow it — so the obvious story
+  runs the wrong way and is not offered here. It needs its own experiment.
 
   **Economic, Betfair, curated O/U + BTTS (`sum_G` monthly → biweekly):**
   `funnel_winner` 0.0390 → **0.0406** (ROI 6.45% → 5.8%, 1123 bets);
