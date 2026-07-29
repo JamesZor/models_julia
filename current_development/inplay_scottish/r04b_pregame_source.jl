@@ -93,6 +93,50 @@ function gate_b(chain, cfg, ms_list, dsrc; n_match = 100, n_pairs = 2000)
             abs(mean(K0_h) - 1) < 0.05 && abs(mean(K0_a) - 1) < 0.05)
 end
 
+"""
+    gate_b_decompose(chain, cfg, ms_list, dsrc; ...)
+
+Attributes whatever gap `gate_b` finds. Re-prices the pregame reference with λ scaled by
+the scalar kernel `K`; if the gap collapses, the entire disagreement is a uniform LEVEL
+rescaling and the two books agree in SHAPE — which is a different (and much milder) thing
+than the composed grid disagreeing structurally with the pregame grid.
+
+Reports `max_raw` (what `gate_b` scores) beside `max_scaled` (what is left once the level
+is removed). `max_scaled` at the Monte Carlo floor means the gate reduces to a single
+number, `K`, rather than to 17 independent failures.
+"""
+function gate_b_decompose(chain, cfg, ms_list, dsrc; n_match = 100, n_pairs = 2000)
+    K0_h, K0_a = intensity_kernels(chain, cfg; gh = 0, ga = 0, t_now = 0.0)
+    kh, ka = mean(K0_h), mean(K0_a)
+    rows = DataFrame(sel = Symbol[], d_raw = Float64[], d_scaled = Float64[])
+    rng = Xoshiro(7)
+    sel = ms_list[randperm(rng, length(ms_list))[1:min(n_match, length(ms_list))]]
+    for ms in sel
+        λh = dsrc[ms.mid].λ_h; λa = dsrc[ms.mid].λ_a
+        ppd = inplay_ppd(chain, cfg, λh, λa; gh = 0, ga = 0, t_now = 0.0,
+                         n_pairs = n_pairs, rng = Xoshiro(ms.mid))
+        Spre = compose_score_matrix(λh, λa, ones(1), ones(1); gh = 0, ga = 0,
+                                    n_pairs = n_pairs, rng = Xoshiro(ms.mid))
+        Sscl = compose_score_matrix(λh .* kh, λa .* ka, ones(1), ones(1); gh = 0, ga = 0,
+                                    n_pairs = n_pairs, rng = Xoshiro(ms.mid))
+        pre = Dict{Symbol, Float64}(); scl = Dict{Symbol, Float64}()
+        for m in default_markets()
+            for (s, v) in Pred.compute_market_probs(Spre, m); pre[s] = mean(v); end
+            for (s, v) in Pred.compute_market_probs(Sscl, m); scl[s] = mean(v); end
+        end
+        for s in keys(pre)
+            push!(rows, (s, mean(ppd[s]) - pre[s], mean(ppd[s]) - scl[s]))
+        end
+    end
+    per_sel = combine(groupby(rows, :sel),
+        :d_raw    => (x -> maximum(abs.(x))) => :max_raw,
+        :d_scaled => (x -> maximum(abs.(x))) => :max_scaled,
+        :d_scaled => mean => :mean_scaled)
+    (kernel = kh, per_sel = per_sel,
+     max_raw = maximum(per_sel.max_raw), max_scaled = maximum(per_sel.max_scaled),
+     level_explains = 1 - maximum(per_sel.max_scaled) / maximum(per_sel.max_raw))
+end
+
 function fit_arm(name; samples = 600, warmup = 300, chains = 4)
     d = draws[name]
     ms = assemble_matches(ds, d, TRAIN_PAIRS)          # incidents source, l01 clock
@@ -114,6 +158,7 @@ function fit_arm(name; samples = 600, warmup = 300, chains = 4)
     serialize(joinpath(OUT, "r04b_mseqs_$(name).jls"), ms)
     (name = name, mseqs = ms, slices = sl, chain = ch, race = race, post = post,
      gate = gate_b(ch, config, ms, d),
+     decomp = gate_b_decompose(ch, config, ms, d),
      n_matches = length(ms), n_rows = nrow(sl), n_goals = sum(sl.y),
      max_rhat = maximum(skipmissing(ss[:, :rhat])))
 end
@@ -133,6 +178,7 @@ GATE_B = (
         kernel_h = [a.gate.kernel_h for a in values(arms)],
         kernel_a = [a.gate.kernel_a for a in values(arms)],
         max_price_gap = [a.gate.max_abs_diff for a in values(arms)],
+        gap_after_level = [a.decomp.max_scaled for a in values(arms)],
         n_sel = [a.gate.n_selections for a in values(arms)],
         max_rhat = [a.max_rhat for a in values(arms)],
         pass = [a.gate.pass for a in values(arms)]),

@@ -67,6 +67,58 @@ Plan: `~/.claude/plans/elegant-skipping-pinwheel.md` (session 2026-07-29).
 Branch `feat/inplay-bbc-mvp`, off `feat/apm-player-rating-l1` (carries `ds.bbc_events`).
 Prototype only — **no `src/` changes**; WP-H is a written graduation sketch.
 
+- 2026-07-29: **WP-B DONE — pregame source is pluggable; GATE B FAILS ON THE LETTER, for one
+  fully-diagnosed scalar reason** (`l05_pregame_source.jl`, `r04b_pregame_source.jl`).
+  - `AbstractPregameSource` replaces r01/r02's hard-coded `.jls` read. `ExperimentSource`
+    goes through `load_experiment` → `extract_oos_predictions`; `LatentsFileSource` keeps
+    the legacy file loadable with its shot fields explicitly `nothing` rather than silently
+    substituted. `assemble_matches` generalises `l01.assemble_nhpp_matches` along both axes
+    the race needs (event source: incidents or BBC seqs + stoppage; pregame source: full
+    draw vectors, not the posterior mean).
+  - **Funnel latents load clean and the thinning identity holds**: 710 matches × 4,000
+    draws; λ_h 1.445 / λ_a 1.299, λ_s_h 9.72 / λ_s_a 8.74, p2 0.1488, and
+    9.715 × 0.1488 = 1.445 = λ_h exactly. ~9–10 shots vs ~1.4 goals per team-match is the
+    **7× count advantage MVP-1 is betting on**.
+  - Coverage confirms the plan's ceiling: latents exist for **24/25 + 25/26 only** (710),
+    and under `require_incidents` that is **551 matches** — the same common subset WP-F
+    will race on, so Gate B is measured on the race's own sample.
+  - **Gate B is NOT inherited and was refit, not rechecked.** The NHPP absorbs the pregame
+    level into α, so pairing a multiplier chain trained against one pregame engine with a
+    different engine's λ is the uncongeniality failure RESEARCH.md §3 warns about. Both
+    arms were refit on 551 matches / 1,503 goals (max R̂ ≤ 1.005).
+
+    | arm | kernel | max price gap | gap after removing level |
+    |---|---|---|---|
+    | funnel_apm_xg | 0.9856 | **0.0115** | 0.0018 |
+    | funnel_winner | 0.9835 | **0.0138** | 0.0018 |
+
+    Pre-registered thresholds were kernel ≈ 0.988 (~1.2%) and max gap < 0.01. **Both arms
+    miss both.** Recorded as a FAIL, not rounded into a pass.
+  - **The whole failure is one scalar.** `gate_b_decompose` re-prices the pregame reference
+    with λ scaled by K: the max gap collapses **0.0138 → 0.0018** with per-selection means
+    < 0.0008, i.e. the Monte Carlo floor at `n_pairs = 2000`. So the composed and pregame
+    books agree in SHAPE on all 17 selections and differ only by a uniform level rescale.
+    The gap is not 17 failures; it is K, twice.
+  - **Interpretation: this is the funnel engines being hotter than the decay grid, which the
+    NHPP is correctly reporting.** K < 1 means the NHPP, fitted on realised goal times, puts
+    total intensity 1.4% (APM) / 1.6% (winner) below the pregame λ — against the old grid's
+    1.2%. The signature is diagnostic: every `over_*` biased down, every `under_*` up by the
+    same amount, 1X2 barely touched (max 0.003) because a uniform scaling of both sides
+    cancels in the ratio. Note this is still far inside the **~5% pregame hotness already
+    recorded for this stack**, so nothing new is broken — the funnel arms are simply
+    0.2–0.4 pp hotter than the engine the 0.988 threshold was calibrated on.
+  - **Do not "fix" this by recentring α to force K = 1.** That would make the in-play book
+    inherit the pregame engine's level bias, which is worse fair value, not better. The
+    honest options are to carry the offset as a known, measured property or to re-threshold
+    the gate against the funnel engines; that is a call for the user, not a silent waiver.
+  - Gotcha banked: a 111-hour-old REPL threw
+    `MethodError: no method matching extract_oos_predictions(::DataStore, ::ExperimentResults)`
+    with a `@world(...DataStore, 38680:39881)` annotation — Revise had rebound `DataStore`,
+    so the method was compiled against a dead world age. Same family as the `const` Union
+    trap, but triggered by uptime rather than by an edit. `manage_repl restart` fixes it.
+  - The legacy `latents_hl365_hs2.jls` is a homelab artifact and is not on mcmc-beast; the
+    source is skipped when absent, since every race arm composes against a funnel engine.
+
 - 2026-07-29: **WP-A extension (user ask) — BBC CLOSES r00's stoppage-clamping problem.**
   r00 flagged that this SofaScore feed clamps every stoppage goal to exactly mm=45/90 with
   added_time=0, so `l01` had to proxy the H2 tail with a flat `Tend = 95` and conflate H1
