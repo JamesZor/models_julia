@@ -67,6 +67,43 @@ Plan: `~/.claude/plans/elegant-skipping-pinwheel.md` (session 2026-07-29).
 Branch `feat/inplay-bbc-mvp`, off `feat/apm-player-rating-l1` (carries `ds.bbc_events`).
 Prototype only — **no `src/` changes**; WP-H is a written graduation sketch.
 
+- 2026-07-29: **CALIBRATION LAYER (user ask) — NULL on predictive score, REAL on reliability;
+  and the level drift turns out NOT to be forecastable** (`l10_calibrate.jl`, `r09_calibrated.jl`).
+  Everything fitted on 24/25 with r08's 24/25-only chain, tested on 25/26. Four arms plus an
+  oracle reference.
+  - **The level fix barely fires, because there is nothing to learn.** Fitted on 24/25 the
+    level multiplier is **0.9945** (−0.55%); the test season actually needs **0.9528** (−4.7%).
+    The model was correctly levelled on its training season and became 5% hot on the next one
+    — **genuine season-to-season drift, not a stable bias**, so it cannot be pre-corrected.
+    Held-out hotness moves only 4.95% → 4.37%. A trailing-120-match rolling level does better
+    (mean 0.975 vs oracle 0.953) but is noisy across the season (0.910–1.053).
+  - **Even the ORACLE level does not improve the book** — match-clustered gains vs raw:
+    O/U −0.00003 (t = −0.03), BTTS −0.0013 (t = −0.83), 1X2 +0.00035 (t = 0.97). So the +5%
+    level error is **real but nearly irrelevant to the probabilities that matter for staking**.
+    It would bite on a direct total-goals derivative; on the 1X2/O/U/BTTS book it is second
+    order. Worth knowing before anyone spends effort chasing it.
+  - **The calibrator could not see the miscalibration that appears out of sample.** Fitted on
+    24/25 it reads 1X2 `b = 0.981` — essentially identity, "nothing wrong here" — while the
+    held-out season needs shrinkage. It sharpened O/U (`b = 1.054`) and BTTS (`b = 1.151`)
+    instead. **The 1X2 over-confidence does not transfer across seasons**, so it survives
+    calibration: 0.754 → 0.707, 0.842 → 0.807, 0.972 → 0.952 after the full layer.
+  - **Race verdict: NULL on log-loss.** Best gain is O/U `level+family` **+0.00078, t = 2.03**
+    — one of **12** comparisons, worth about the same as the measured in-sample optimism
+    (0.001 nats), and it survives no multiplicity correction. 1X2 +0.00023 (t = 1.08), BTTS
+    −0.00019 (t = −0.14, slightly worse). Recorded as a null.
+  - **But reliability genuinely tightens**, which is the part Kelly cares about. Max |p − y|
+    over buckets with n ≥ 50: **BTTS 0.062 → 0.043, O/U 0.038 → 0.029, 1X2 0.052 → 0.046**.
+    That is the textbook pattern — calibration fixes the *reliability* component of the score
+    without touching *resolution*, so log-loss barely moves while the stated probabilities
+    become more honest. For staking that is worth having even at flat log-loss.
+  - **Practical recommendation:** ship `l10` (cheap, does not hurt, tightens reliability), use
+    `rolling_level` rather than a frozen seasonal constant, and do **not** expect either to
+    improve predictive score. The model's discrimination is what it is; the layer only makes
+    its numbers mean what they say.
+  - `apply_calibration` renormalises within each market group. Calibrating selections
+    independently breaks home+draw+away = 1 and each O/U pair, which would hand a Kelly
+    staking layer fake arbitrage to size into.
+
 - 2026-07-29: **OOS EVALUATION (user ask) — the in-sample optimism is NEGLIGIBLE and now
   MEASURED; the market tie holds out of sample; the model's real error is the LEVEL, ~5% hot**
   (`r08_oos.jl`, plus `l09` gaining the `:expo` integrator).
