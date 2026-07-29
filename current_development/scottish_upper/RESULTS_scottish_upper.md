@@ -16,24 +16,39 @@
     `rating`) do not have that circularity.
   Absolute numbers here are therefore **not comparable** to the 56/57 or Ireland streams.
 
-## 1. r00 — data QA
+## 1. r00 — data QA ✅ PASSED (2026-07-29, `r00_out.txt`)
 
 | item | value | note |
 |---|---|---|
-| season strings | | must be SHARED across 54 and 55, else the pooled window silently halves |
+| season strings | `"20/21"…"25/26"`, **shared by both tiers** | fetcher strips the competition prefix — pooled `target_seasons` works |
 | matches / season | 198 (54, rounds 1–33) · 180 (55) | 54's 5 post-split rounds are absent from the DB |
-| O/U ladder density (Kmax=4) | | |
-| mean goals 54 / 55 | | |
-| `δ_league` gap `|log(m1/m2)|` | | vs `league_offset_sd = 0.1` |
-| goal-total sd ratio 54:55 | | a level offset cannot absorb a SPREAD difference |
-| V/M 54 / 55 | | Poisson vs NegBin base |
-| BBC shots coverage | | expect ~100% both tiers, all seasons |
-| rating coverage 22/23 (tier 55) | | **decides `history_seasons`** |
-| biweek folds (grid window) | | sets the per-cell budget |
-| market inversion OK % | | |
-| betfair rows | 0 expected | |
+| O/U ladder density | u05–u55 ≈376/378 in both grid seasons | **Kmax=4 comfortable**; u75 thin |
+| mean goals 54 / 55 | 2.694 / 2.620 | |
+| `δ_league` gap | **0.0279** | well inside `league_offset_sd = 0.1` — no widening needed |
+| goal-total sd ratio 54:55 | **0.954** | tiers differ in LEVEL not SPREAD ⇒ a level offset is the right tool; the planned "wider gap" risk did not materialise |
+| **V/M 54 / 55** | **0.965 / 1.09** | **⚠ different dispersion regimes** — 54 sub-Poisson, 55 over-dispersed. Unlike 56/57, `none_nb` is a genuinely informative reference here |
+| BBC shots coverage | **2218/2218 = 100%**, both tiers, all 6 seasons | best shot data in the project |
+| rating coverage 22/23 (tier 55) | **0/180 (0%)** | exactly the case the src masking fix targets |
+| biweek folds (grid window) | **40** (week 77 / month 22), history ≈756/fold | sets the per-cell budget |
+| market inversion | DP **2213/2213 (100%)**; smile full-ladder 2113/2213, Λ rising 2.297→2.759 | textbook market smile |
+| betfair | **536 matches, tier 54 only** (23/24–25/26) | ⚠ see correction below |
 
-**Decisions taken:** `history_seasons = ___`, `league_offset_sd = ___`, `INCLUDE_SMILE = ___`.
+### ⚠ Betfair correction
+
+The stream was designed on a verified "0 Betfair rows" reading. **A backfill for 54/55 began
+2026-07-29 15:26 and is in progress**: tier 54 at 598 SUCCESS / 392 PENDING (536 usable matches),
+tier 55 at 0 SUCCESS / 895 PENDING.
+
+- The pooled grid **keeps Bet365 as the uniform training anchor**. A Betfair-on-54 / Bet365-on-55
+  pillar would confound the anchor with the league.
+- Betfair on tier 54 is now usable as a **secondary CLV check** on the winner (536 matches — more
+  than 56/57 ever had).
+- The **full anchor A/B re-opens once tier 55 completes** — that is the open Ireland counter-test.
+- **⚠ The DataStore cache was written mid-ingest.** Re-fetch with `force = true` before any run whose
+  result depends on Betfair.
+
+**Decisions taken:** `history_seasons = 2` (the mask makes the unrated 22/23 block safe — r01 CHECK 4
+must confirm), `league_offset_sd = 0.1`, `INCLUDE_SMILE` = pending r01's runtime table.
 
 ## 2. r01 — smoke + runtime calibration
 

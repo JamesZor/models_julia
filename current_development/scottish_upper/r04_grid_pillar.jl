@@ -26,8 +26,23 @@ Record which pattern 54/55 shows; do not assume either.
 `mw = 0.0` is included on purpose: it is the structural control at otherwise identical spec, so the
 sweep contains its own baseline and does not depend on cross-grid comparability.
 
-BETFAIR: still none for 54/55 at time of writing. If the historical odds land before this runs, add
-an anchor A/B here — the winning cell duplicated with the pillar built from the Betfair close:
+BETFAIR — STATUS AS OF r00 (2026-07-29): a backfill for these tiers is IN PROGRESS. Tier 54 had 536
+usable matches (23/24-25/26); tier 55 had none (all PENDING). Before adding the anchor A/B, re-check:
+
+    SELECT m.tournament_id, mm.status, count(*) FROM sofascore.matches m
+    JOIN betfair.match_meta mm ON m.match_id = mm.match_id
+    WHERE m.tournament_id IN (54,55) GROUP BY 1,2;
+
+⚠ DO NOT run a Betfair-anchored cell while only tier 54 has coverage. A pillar built from Betfair on
+54 and Bet365 on 55 confounds the ANCHOR with the LEAGUE, and nothing in the resulting table is
+readable. The A/B needs BOTH tiers, or it needs a 54-only segment.
+
+⚠ ALSO re-fetch the DataStore first — `load_datastore_cached` reuses any cache under 24h old, so a
+cache written mid-ingest silently carries a partial Betfair domain:
+    ds = Data.load_datastore_cached(Data.ScottishUpper(); force = true)
+
+Once BOTH tiers are complete, add the A/B — the winning cell duplicated with the pillar built from
+the Betfair close:
 
     odds_bf = Data.summarize_betfair_market(ds; open_window=(-100000.0,-10.0), close_window=(-20.0,0.0))
     ds_bf   = Data.DataStore(ds.segment, ds.matches, ds.statistics, odds_bf,

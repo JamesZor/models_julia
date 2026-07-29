@@ -20,7 +20,7 @@ routing did NOT carry to a different Scottish segment (Ireland's interior `mw` o
 |---|---|---|
 | Finished matches | 1,188 / 6 seasons | 1,030 / 6 seasons |
 | Bet365 (SofaScore) odds — 1X2 / O-U / BTTS | 99.7% | 99.9% |
-| **Betfair** | **0 rows** | **0 rows** |
+| **Betfair** | **0 rows** ⟶ *see r00 correction: a backfill started 2026-07-29, 536 matches usable* | **0 rows** ⟶ *ingest pending* |
 | **xG** | **25/26 only** (198) | 23/24+ (530) |
 | SofaScore shots / SoT | 100% all seasons | 23/24+ only (533) |
 | **BBC shots + SoT (`ds.bbc`)** | **100%, all 6 seasons** | **100%, all 6 seasons** |
@@ -31,12 +31,13 @@ routing did NOT carry to a different Scottish segment (Ireland's interior `mw` o
 
 Four consequences that shaped the design:
 
-1. **No Betfair anywhere.** `core.tournament_config` has `betfair_competition_id = NULL` for both and
-   no betfair component — it was never collected, so there is nothing to backfill from this DB.
-   Training anchor AND benchmark are both the **de-vigged Bet365 close** (`prob_fair_close`), as on
-   56/57. This is self-referential and weaker than Ireland's setup — say so in the results, don't
-   compare the absolute numbers across streams. *(User is separately sourcing Betfair history; if it
-   arrives, the anchor A/B becomes a follow-up — see "Deferred" below.)*
+1. **No Betfair at design time** — `core.tournament_config` had `betfair_competition_id = NULL` for
+   both tiers and no betfair component. Training anchor AND benchmark are therefore both the
+   **de-vigged Bet365 close** (`prob_fair_close`), as on 56/57. That is self-referential for the
+   market-anchored cells and weaker than Ireland's setup — say so in the results, and do not compare
+   absolute numbers across streams. **⟶ SUPERSEDED IN PART: a Betfair backfill began during the
+   planning session; see the r00 correction in the findings log. The uniform Bet365 training anchor
+   still stands for this round.**
 2. **The Ireland keepers cannot run.** Every one requires `Features.XGFeature`, and 54 has xG for a
    single season. Their *pillar designs* port to the team/league goals engines; the xG likelihood
    does not.
@@ -146,4 +147,70 @@ include(joinpath(ROOT, "current_development/scottish_upper/r05_eval_pillar.jl"))
 
 ## Findings log
 
-*(fill as runners complete)*
+### 2026-07-29 — r00 data QA ✅ STAGE 0 CLOSED (`r00_out.txt`)
+
+DataStore built fresh: matches 2218 · odds 49463 · lineups 85543 · incidents 37632 · bbc 2218 ·
+bbc_events 25168 · **betfair 839667 (see the correction below)**.
+
+- **Season strings are `"20/21"…"25/26"`** (plain slash format) and are **SHARED across both
+  tournaments** — the matches fetcher does strip the competition prefix, so a pooled
+  `target_seasons` works. Gate cleared.
+- **Grid window**: targets `["24/25","25/26"]`, hs=2, warmup_period=0 → **`:match_biweek` = 40 folds**
+  (week 77 / month 22), history ≈ 756 matches/fold. Some folds have 0 target matches (`min=0`) — a
+  handful of wasted folds, same as 56/57.
+- **δ_league**: mean goals 54 = 2.694 vs 55 = 2.620 → gap `|log(m1/m2)| = 0.0279`. Comfortably inside
+  `league_offset_sd = 0.1`; **no widening needed**. Goal-total sd ratio 1.612/1.690 = **0.954**, i.e.
+  the tiers differ in level but *not* meaningfully in spread — which is precisely the condition a
+  level-only offset needs. The "wider quality gap" risk flagged in the plan did **not** materialise;
+  pooling is sound.
+- **⚠ DISPERSION REGIMES DIFFER**: V/M **54 = 0.965** (sub-Poisson) vs **55 = 1.09** (over-dispersed).
+  On 56/57 both tiers were sub-Poisson and the NB reference was inert. Here a single pooled
+  dispersion is a genuine simplification, so **`none_nb` is a more informative reference than it was
+  on 56/57** — read it carefully rather than as a formality.
+- **O/U ladder**: u05–u55 dense in both grid seasons (≈376/378); u65 dense from 22/23; u75 thin.
+  **Kmax=4 comfortable.** 1X2 and BTTS ≈ full coverage.
+- **BBC shots/SoT: 100% on BOTH tiers in ALL SIX seasons** (2218/2218). Confirms the funnel arm has
+  the best shot data in the project.
+- **Player ratings**: tier 54 100% every season; **tier 55 has ZERO before 23/24** and ~100% from
+  23/24. So the 22/23 history block that `hs=2` pulls in for the 24/25 target folds is **0% rated on
+  tier 55** — exactly the case the src masking fix was written for. See the decision below.
+- **Team churn**: 12 teams in 54, 10 in 55, steady. 2–4 teams change division every season plus 0–2
+  new to the segment — the shared team map + pooled design is justified.
+- **Market inversion**: DP λ plausible on **2213/2213 (100%)** odds-matches (λ_home median 1.363);
+  smile full-ladder on 2113/2213, median Λ^mkt(K) rises 2.297 → 2.759 — a textbook market smile.
+
+#### ⚠ CORRECTION — Betfair is NOT absent; it is being ingested right now
+
+The plan was written on a verified read of "0 Betfair rows for 54/55". That was true at the time.
+**A Betfair backfill for these tiers started 2026-07-29 15:26 and is in progress:**
+
+| tier | SUCCESS | PENDING | usable matches in the DataStore |
+|---|---|---|---|
+| 54 | 598 | 392 | **536** (23/24: 140 · 24/25: 198 · 25/26: 198) |
+| 55 | 0 | 895 | **0** |
+
+Consequences:
+1. **The pooled grid keeps the de-vigged Bet365 close as the TRAINING anchor.** A pillar built from
+   Betfair on tier 54 and Bet365 on tier 55 would confound the anchor with the league — not a
+   comparison anyone can read. Uniform anchor, no exceptions.
+2. Betfair on **tier 54** is now good enough for a **secondary CLV check** on the r03/r05 winner
+   (536 matches over 3 seasons — more than 56/57 ever had).
+3. The **full anchor A/B re-opens once tier 55 completes** (and 54's remaining 392 land). That is the
+   open Ireland counter-test — a deep top division is exactly where "book beats exchange" was
+   predicted to flip. Re-check `betfair.match_meta` status counts before r04.
+4. **⚠ CACHE STALENESS.** `.cache/datastore_ScottishUpper.jls` was written mid-ingest.
+   `load_datastore_cached` reuses any cache under 24h old, so **every runner until the ingest
+   finishes will silently see a partial Betfair domain**. Re-fetch with
+   `Data.load_datastore_cached(Data.ScottishUpper(); force = true)` once the backfill completes, and
+   before any run whose result depends on Betfair.
+
+#### Decisions taken
+
+- `history_seasons` — **KEEP 2**. The 22/23 block is unrated on tier 55, but the src masking fix maps
+  an unrated side to *league average* rather than to −10·base, so those matches still contribute
+  their goals/shots signal and simply carry no rating information. Dropping to hs=1 would truncate
+  the 365-day decay for every arm to protect one. **r01 CHECK 4 must confirm the mask holds** (no
+  values below −30); if it does not, fall back to hs=1 uniformly.
+- `league_offset_sd` — **keep 0.1** (gap 0.0279).
+- `INCLUDE_SMILE` — decide from r01's runtime table.
+- Betfair — **secondary CLV check only** this round; anchor A/B deferred to r04 pending the ingest.
