@@ -111,6 +111,11 @@ Prototype only — **no `src/` changes**; WP-H is a written graduation sketch.
     inherit the pregame engine's level bias, which is worse fair value, not better. The
     honest options are to carry the offset as a known, measured property or to re-threshold
     the gate against the funnel engines; that is a call for the user, not a silent waiver.
+  - **USER DECISION (2026-07-29): accept and carry the offset.** Gate B stands in the log as
+    a documented marginal FAIL; K is recorded per pregame arm as a known calibration
+    property of the pregame/multiplier pair (funnel_apm_xg 0.9856, funnel_winner 0.9835),
+    and downstream work proceeds. Any later composed-price claim must state which K it
+    carries.
   - Gotcha banked: a 111-hour-old REPL threw
     `MethodError: no method matching extract_oos_predictions(::DataStore, ::ExperimentResults)`
     with a `@world(...DataStore, 38680:39881)` annotation — Revise had rebound `DataStore`,
