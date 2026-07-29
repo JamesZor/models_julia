@@ -81,24 +81,39 @@ struct InGameModel
     draws::PregameDraws
     kind::Symbol
     stoppage::Dict{Int, @NamedTuple{at1::Float64, at2::Float64}}
+    level::Float64
 end
 
 InGameModel(name, chain, config, draws; kind::Symbol = :flat,
-            stoppage = Dict{Int, @NamedTuple{at1::Float64, at2::Float64}}()) =
-    InGameModel(name, chain, config, draws, kind, stoppage)
+            stoppage = Dict{Int, @NamedTuple{at1::Float64, at2::Float64}}(),
+            level::Float64 = 1.0) =
+    InGameModel(name, chain, config, draws, kind, stoppage, level)
+
+"""
+    with_level(m, level) -> InGameModel
+
+A copy whose remaining intensity is scaled by `level`. The OOS run measured the model
+pricing 2.920 goals against 2.782 realised at kickoff (+5.0%), of which the pregame engine
+carries +3.2% — so the level, not the shape, is this model's largest error, and it is a
+single number. `fit_level` in l10 estimates it from recent matches.
+"""
+with_level(m::InGameModel, level::Real) =
+    InGameModel(m.name, m.chain, m.config, m.draws, m.kind, m.stoppage, Float64(level))
 
 _stop(m::InGameModel, mid) = stoppage_of(m.stoppage, Int(mid))
 
 "Remaining-intensity kernels for a UNIT pregame rate, honouring the model's integrator."
 function ingame_kernels(m::InGameModel, mid::Integer, t::Real, gh, ga, rh, ra)
-    if m.kind === :expo
+    K_h, K_a = if m.kind === :expo
         s = _stop(m, mid)
-        return remaining_intensity_expo(m.chain, m.config; pg_h = 1.0, pg_a = 1.0,
+        remaining_intensity_expo(m.chain, m.config; pg_h = 1.0, pg_a = 1.0,
             gh = gh, ga = ga, reds_h = rh, reds_a = ra, t_now = Float64(t),
             at1 = s.at1, at2 = s.at2, Tend = m.config.Tend)
+    else
+        intensity_kernels(m.chain, m.config; gh = gh, ga = ga,
+                          reds_h = rh, reds_a = ra, t_now = Float64(t))
     end
-    return intensity_kernels(m.chain, m.config; gh = gh, ga = ga,
-                             reds_h = rh, reds_a = ra, t_now = Float64(t))
+    return m.level == 1.0 ? (K_h, K_a) : (K_h .* m.level, K_a .* m.level)
 end
 
 "Does this model have a pregame posterior for the match?"
