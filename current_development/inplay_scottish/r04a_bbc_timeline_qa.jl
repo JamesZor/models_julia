@@ -34,7 +34,8 @@ const T_IDS = [56, 57]
 conn = bbc_conn()
 timeline = fetch_bbc_timeline(conn, T_IDS)
 resolve_sides!(timeline; matches = ds.matches)
-seqs = build_event_seqs(timeline)
+stoppage = fetch_stoppage(conn, T_IDS)
+seqs = build_event_seqs(timeline; stoppage = stoppage)
 close(conn)
 
 # ---------------------------------------------------------------------------
@@ -104,6 +105,54 @@ side_qa = combine(groupby(timeline, :event_type),
 sort!(side_qa, :n, rev = true)
 
 # ---------------------------------------------------------------------------
+# §6 stoppage time per half (r00's open clamping problem)
+# ---------------------------------------------------------------------------
+
+# SofaScore has the columns but not the data — confirm rather than assume, because r00
+# proposed injury_time1/2 as the fix.
+sofa_inj = DataFrame(LibPQ.execute(bbc_conn(),
+    "SELECT match_id, injury_time1, injury_time2 FROM sofascore.matches " *
+    "WHERE tournament_id = ANY('{56,57}')"))
+sofa_zero = (n = nrow(sofa_inj),
+             frac_zero_h1 = mean(coalesce.(sofa_inj.injury_time1, 0) .== 0),
+             frac_zero_h2 = mean(coalesce.(sofa_inj.injury_time2, 0) .== 0))
+
+st_df = DataFrame(match_id = collect(keys(stoppage)),
+                  at1 = [v.at1 for v in values(stoppage)],
+                  at2 = [v.at2 for v in values(stoppage)])
+stoppage_stats = (
+    matches = nrow(st_df),
+    at1 = (mean = mean(st_df.at1), median = median(st_df.at1),
+           q05 = quantile(st_df.at1, 0.05), q95 = quantile(st_df.at1, 0.95)),
+    at2 = (mean = mean(st_df.at2), median = median(st_df.at2),
+           q05 = quantile(st_df.at2, 0.05), q95 = quantile(st_df.at2, 0.95)),
+    # how much exposure the incumbent's flat Tend=95 proxy misses, per match
+    h2_vs_flat5 = mean(st_df.at2 .- 5.0),
+    h1_dropped_by_incumbent = mean(st_df.at1),
+    sofascore_injury_time_usable = !(sofa_zero.frac_zero_h1 > 0.95),
+    sofa_zero = sofa_zero,
+)
+
+# Clock sanity: under :incumbent, H1 stoppage events sort AFTER the H2 kickoff; under
+# :bbc they must not. Count goals whose half flips between the two conventions.
+seqs_inc = build_event_seqs(timeline; stoppage = stoppage, clock = :incumbent)
+clock_qa = let nflip = 0, ntot = 0
+    for (mid, s) in seqs
+        si = seqs_inc[mid]
+        for (a, b) in zip(s.goals, si.goals)
+            ntot += 1
+            ((a.t < 45) != (b.t < 45)) && (nflip += 1)
+        end
+    end
+    (goals = ntot, half_flips_vs_incumbent = nflip,
+     frac = nflip / max(ntot, 1),
+     max_bbc_clock = maximum(maximum(g.t for g in s.goals; init = 0.0) for s in values(seqs)))
+end
+
+# Exposure vector sanity on a median match.
+expo_example = bin_exposure(2.0, 5.0)
+
+# ---------------------------------------------------------------------------
 # verdict
 # ---------------------------------------------------------------------------
 
@@ -119,12 +168,15 @@ GATE_A = (
     red_agree = red_agree, red_minutes = red_min, red_per = red_per,
     sub_agree = sub_agree, sub_minutes = sub_min,
     side_qa = side_qa,
+    stoppage = stoppage, stoppage_stats = stoppage_stats,
+    clock_qa = clock_qa, expo_example = expo_example,
     pass = (coverage = pass_cov, reconciliation = pass_recon, reds = pass_reds),
     verdict = (pass_cov && pass_recon && pass_reds) ? "GATE A PASS" : "GATE A FAIL",
 )
 
 OUT = joinpath(@__DIR__, "out"); mkpath(OUT)
 serialize(joinpath(OUT, "r04a_seqs.jls"), seqs)
+serialize(joinpath(OUT, "r04a_stoppage.jls"), stoppage)
 serialize(joinpath(OUT, "r04a_gate.jls"),
           (; GATE_A.coverage, GATE_A.recon, GATE_A.recon_by_season, GATE_A.side_qa,
              GATE_A.recon_failures, GATE_A.pass, GATE_A.verdict))

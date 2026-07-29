@@ -101,6 +101,63 @@ function fetch_bbc_timeline(conn::LibPQ.Connection, t_ids::Vector{Int})
 end
 
 # ---------------------------------------------------------------------------
+# 2b. Stoppage time per half — the fix for r00's clamping problem
+# ---------------------------------------------------------------------------
+#
+# r00 recorded that this SofaScore feed clamps EVERY stoppage goal to exactly mm=45 or
+# mm=90 with added_time=0, so the terminal NHPP slices carry a league-mean guess instead
+# of real exposure, and it suggested `injury_time1`/`injury_time2` from `sofascore.matches`
+# as the fix. That route is DEAD: those columns exist for all 1,970 matches but are 0 in
+# 1,963 / 1,959 of them — the field is present and unpopulated for these leagues.
+#
+# BBC's `half_end` posts carry the clock as a string — `"45'+3"`, `"90'+5"` — which is the
+# stoppage ACTUALLY PLAYED, not the amount announced (BBC also emits `added_time` posts
+# with the announced `value`, but only ~1,326 of them vs 2,136 `half_end` posts). All
+# 2,136 parse. This is the only stoppage source available for 56/57.
+
+const L04_CLOCK_RE = r"^(\d+)'(?:\+(\d+))?$"
+
+# Observed medians (56/57, 1,069 matches): H1 2.0, H2 5.0. Used only for the handful of
+# matches whose `half_end` post is missing.
+const L04_DEFAULT_AT1 = 2.0
+const L04_DEFAULT_AT2 = 5.0
+
+"Parse a BBC clock string into (minute_label, stoppage). Returns `missing` if malformed."
+function parse_bbc_clock(c)
+    m = match(L04_CLOCK_RE, coalesce(c, ""))
+    m === nothing && return missing
+    return (parse(Int, m.captures[1]),
+            m.captures[2] === nothing ? 0 : parse(Int, m.captures[2]))
+end
+
+"""
+    fetch_stoppage(conn, t_ids) -> Dict{Int, @NamedTuple{at1::Float64, at2::Float64}}
+
+Per-match stoppage played in each half, from the `half_end` clock strings. Missing halves
+fall back to `L04_DEFAULT_AT1` / `L04_DEFAULT_AT2`.
+"""
+function fetch_stoppage(conn::LibPQ.Connection, t_ids::Vector{Int})
+    df = DataFrame(LibPQ.execute(conn, """
+        SELECT lt.match_id, lt.clock
+        FROM bbc.live_text lt
+        JOIN sofascore.matches m ON m.match_id = lt.match_id
+        WHERE m.tournament_id = ANY(\$1) AND lt.event_type = 'half_end'
+        ORDER BY lt.match_id, lt.post_index
+        """, [t_ids]))
+    out = Dict{Int, @NamedTuple{at1::Float64, at2::Float64}}()
+    for r in eachrow(df)
+        p = parse_bbc_clock(r.clock); p === missing && continue
+        mid = Int(r.match_id)
+        cur = get(out, mid, (at1 = L04_DEFAULT_AT1, at2 = L04_DEFAULT_AT2))
+        out[mid] = p[1] <= 45 ? (at1 = Float64(p[2]), at2 = cur.at2) :
+                                (at1 = cur.at1, at2 = Float64(p[2]))
+    end
+    return out
+end
+
+stoppage_of(st, mid) = get(st, mid, (at1 = L04_DEFAULT_AT1, at2 = L04_DEFAULT_AT2))
+
+# ---------------------------------------------------------------------------
 # 3. Minutes + side resolution
 # ---------------------------------------------------------------------------
 
@@ -194,45 +251,159 @@ end
 # 4. Per-match event sequences
 # ---------------------------------------------------------------------------
 
-# `t` is the stoppage-inclusive minute (what the NHPP slicer consumes); `tb` is the base
-# minute, the only clock comparable with `ds.incidents`. l01's `build_slices` touches only
+# `t` is the clock the NHPP slicer bins on (see `event_clock`); `tb` is the base minute
+# label, the only clock comparable with `ds.incidents`. l01's `build_slices` touches only
 # `.t` / `.home`, so the extra field is inert there.
 const TSeq = Vector{@NamedTuple{t::Float64, tb::Float64, home::Bool}}
 
-_seq(sub::AbstractDataFrame, types)::TSeq = begin
+"""
+    event_clock(t_label, at, at1, at2, mode) -> Float64
+
+Map a BBC event to a slicing clock.
+
+`mode = :incumbent` reproduces `l01`'s convention exactly — `time + added_time`, on a
+[0, 95] frame — so a BBC-sourced arm can be raced against the incidents-sourced incumbent
+with the clock held fixed.
+
+`mode = :bbc` (default) is the corrected clock, and fixes two things at once:
+
+1. **1-indexed minute labels.** An event labelled minute `t` happened in elapsed
+   `(t−1, t]`, so it belongs at `t − 0.5`, not `t`. The incumbent bins the raw label, which
+   puts everything one 5-minute bin late at each boundary (labels 1–4 in bin [0,5) instead
+   of 1–5).
+
+2. **Stoppage lands in the right half.** Under the incumbent clock an H1 stoppage event at
+   `45 + 3` sits at minute 48 — *after* the second-half kickoff at label 46, so it is both
+   ordered wrongly and binned into the first H2 slice. Here the H1 stoppage block is
+   compressed into `(44.5, 45)` and the H2 block into `(89.5, 90)`, monotone in the true
+   playing order, so every event stays inside its own half and inside the terminal bin
+   whose exposure `bin_exposure` extends. The whole match then lives on a fixed [0, 90]
+   frame with 18 bins, and the per-match stoppage shows up as EXPOSURE rather than as a
+   variable number of bins — which is what keeps `δ_time` identifiable across matches.
+"""
+function event_clock(t_label::Real, at::Real, at1::Real, at2::Real, mode::Symbol)
+    mode === :incumbent && return Float64(t_label) + Float64(at)
+    mode === :bbc || error("unknown clock mode $mode")
+    if t_label <= 45
+        return at <= 0 ? Float64(t_label) - 0.5 :
+                         44.5 + 0.5 * Float64(at) / (Float64(at1) + 1.0)
+    else
+        return at <= 0 ? Float64(t_label) - 0.5 :
+                         89.5 + 0.5 * Float64(at) / (Float64(at2) + 1.0)
+    end
+end
+
+_seq(sub::AbstractDataFrame, types, at1, at2, mode)::TSeq = begin
     out = TSeq()
     for r in eachrow(sub)
         (r.event_type in types && !ismissing(r.side)) || continue
-        push!(out, (t = r.minute, tb = r.base_minute, home = Bool(r.side)))
+        push!(out, (t = event_clock(r.time, coalesce(r.added_time, 0), at1, at2, mode),
+                    tb = r.base_minute, home = Bool(r.side)))
     end
     sort!(out, by = x -> x.t)
     out
 end
 
 """
-    build_event_seqs(tl) -> Dict{Int, NamedTuple}
+    build_event_seqs(tl; stoppage = nothing, clock = :bbc) -> Dict{Int, NamedTuple}
 
-Per match: `(goals, reds, subs, shots, corners)`, each a sorted `Vector{(t, home)}` —
-exactly the shape `l01`'s `goals_of` / `reds_of` return, so `build_slices` consumes either
-source unchanged.
+Per match: `(goals, reds, subs, shots, corners, at1, at2)`. The five event streams are
+sorted `Vector{(t, tb, home)}` — the shape `l01`'s `goals_of` / `reds_of` return, so
+`build_slices` consumes either source unchanged — and `at1` / `at2` are the stoppage
+minutes played, for `build_slices_bbc`.
 
-Note `goals ⊂ shots`: a goal is a shot that went in, and the shot-flow NHPP (WP-C) needs
-the full attempt count including goals.
+`goals ⊂ shots` by construction: a goal is a shot that went in, and the shot-flow NHPP
+(WP-C) needs the full attempt count including goals.
+
+Pass `clock = :incumbent` to bin on `l01`'s clock instead; see `event_clock`.
 """
-function build_event_seqs(tl::DataFrame)
+function build_event_seqs(tl::DataFrame; stoppage = nothing, clock::Symbol = :bbc)
     hasproperty(tl, :side) || error("call resolve_sides!(tl) first")
-    out = Dict{Int, @NamedTuple{goals::TSeq, reds::TSeq, subs::TSeq,
-                                shots::TSeq, corners::TSeq}}()
+    out = Dict{Int, @NamedTuple{goals::TSeq, reds::TSeq, subs::TSeq, shots::TSeq,
+                                corners::TSeq, at1::Float64, at2::Float64}}()
     for g in groupby(tl, :match_id)
-        out[Int(g.match_id[1])] = (
-            goals   = _seq(g, ("goal",)),
-            reds    = _seq(g, L04_RED_EVENTS),
-            subs    = _seq(g, ("substitution",)),
-            shots   = _seq(g, L04_SHOT_EVENTS),
-            corners = _seq(g, ("corner",)),
+        mid = Int(g.match_id[1])
+        st = stoppage === nothing ? (at1 = L04_DEFAULT_AT1, at2 = L04_DEFAULT_AT2) :
+                                    stoppage_of(stoppage, mid)
+        out[mid] = (
+            goals   = _seq(g, ("goal",),           st.at1, st.at2, clock),
+            reds    = _seq(g, L04_RED_EVENTS,      st.at1, st.at2, clock),
+            subs    = _seq(g, ("substitution",),   st.at1, st.at2, clock),
+            shots   = _seq(g, L04_SHOT_EVENTS,     st.at1, st.at2, clock),
+            corners = _seq(g, ("corner",),         st.at1, st.at2, clock),
+            at1 = st.at1, at2 = st.at2,
         )
     end
     return out
+end
+
+# ---------------------------------------------------------------------------
+# 4b. Stoppage-aware slicing
+# ---------------------------------------------------------------------------
+
+"""
+    bin_exposure(at1, at2; Δt = 5.0, Tend = 90.0) -> Vector{Float64}
+
+Exposure (minutes at risk) of each nominal slice. Every bin is `Δt` except the terminal
+bin of each half, which carries that half's stoppage on top — [40,45) gets `Δt + at1` and
+[85,90) gets `Δt + at2`. This replaces the incumbent's fixed `Tend = 95` proxy, under which
+H2 stoppage got a flat 5 minutes for every match (observed mean 4.84, but the 5–95% range
+is 3–7) and H1 stoppage got none at all, being conflated into the first H2 slice.
+"""
+function bin_exposure(at1::Real, at2::Real; Δt::Float64 = 5.0, Tend::Float64 = 90.0)
+    nb = Int(cld(Tend, Δt))
+    e = fill(Δt, nb)
+    h1 = Int(cld(45.0, Δt))          # bin containing [45-Δt, 45)
+    e[h1] += Float64(at1)
+    e[nb] += Float64(at2)
+    return e
+end
+
+"""
+    build_slices_bbc(mseqs; Δt = 5.0, Tend = 90.0) -> DataFrame
+
+`l01.build_slices` with two changes, and otherwise identical column-for-column so the same
+`SPEC_FORMULAS` / `cv_race` / Turing model consume it:
+
+  * `Tend = 90` on a fixed 18-bin frame instead of `Tend = 95`, because stoppage is no
+    longer smuggled in as an extra bin; and
+  * the offset is `log(bin_exposure(...))` per match rather than a constant `log Δt`.
+
+Each `mseqs` entry must carry `at1` / `at2` (i.e. come from `build_event_seqs`).
+"""
+function build_slices_bbc(mseqs; Δt::Float64 = 5.0, Tend::Float64 = 90.0)
+    edges = collect(0.0:Δt:Tend); nb = length(edges) - 1
+    n = 2 * nb * length(mseqs)
+    y = Vector{Int}(undef, n); off = Vector{Float64}(undef, n)
+    z = similar(off); lpg = similar(off); tr = similar(off); ld = similar(off)
+    man = similar(off); gsi = Vector{Int}(undef, n); tix = Vector{Int}(undef, n)
+    mid = Vector{Int}(undef, n); ishome = Vector{Bool}(undef, n)
+    team = Vector{String}(undef, n)
+    k = 0
+    for ms in mseqs
+        expo = bin_exposure(ms.at1, ms.at2; Δt = Δt, Tend = Tend)
+        for b in 1:nb
+            lo, hi = edges[b], edges[b+1]; tmid = (lo + hi) / 2
+            gh = count(g ->  g.home && g.t < lo, ms.goals)
+            ga = count(g -> !g.home && g.t < lo, ms.goals)
+            yh = count(g ->  g.home && lo <= g.t < hi, ms.goals)
+            ya = count(g -> !g.home && lo <= g.t < hi, ms.goals)
+            rh = count(c ->  c.home && c.t < lo, ms.reds)
+            ra = count(c -> !c.home && c.t < lo, ms.reds)
+            gd = gh - ga
+            for (h, yc, pg, gds, mans, tm) in ((true,  yh, ms.pgh,  gd, ra - rh, ms.home),
+                                               (false, ya, ms.pga, -gd, rh - ra, ms.away))
+                k += 1
+                y[k] = yc; off[k] = log(expo[b]); z[k] = (tmid - 45) / 45
+                lpg[k] = log(pg); tr[k] = Float64(gds < 0); ld[k] = Float64(gds > 0)
+                man[k] = Float64(mans); gsi[k] = clamp(gds, -3, 3) + 4; tix[k] = b
+                mid[k] = ms.mid; ishome[k] = h; team[k] = tm
+            end
+        end
+    end
+    DataFrame(y = y, off = off, z = z, log_pg = lpg, trailing = tr, leading = ld,
+              man_adv = man, gs_idx = gsi, time_idx = tix, match_id = mid,
+              is_home = ishome, team = team)
 end
 
 """
