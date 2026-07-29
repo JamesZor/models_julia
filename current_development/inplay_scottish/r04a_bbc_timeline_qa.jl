@@ -33,7 +33,7 @@ const T_IDS = [56, 57]
 
 conn = bbc_conn()
 timeline = fetch_bbc_timeline(conn, T_IDS)
-resolve_sides!(timeline)
+resolve_sides!(timeline; matches = ds.matches)
 seqs = build_event_seqs(timeline)
 close(conn)
 
@@ -52,7 +52,8 @@ cov_stats = (n_matches = length(seqs),
              null_minutes = count(ismissing, timeline.time),
              by_type = sort(combine(groupby(timeline, :event_type), nrow => :n),
                             :n, rev = true),
-             score_breaks = metadata(timeline, "score_breaks"))
+             score_breaks = metadata(timeline, "score_breaks"),
+             text_recovered = metadata(timeline, "text_recovered"))
 
 # ---------------------------------------------------------------------------
 # §2 goal reconciliation (running-score route) + the slug route for contrast

@@ -110,19 +110,59 @@ bbc_minute(r)::Float64 = Float64(r.time) + Float64(coalesce(r.added_time, 0))
 "BBC base minute, ignoring stoppage — the only clock comparable to `ds.incidents`."
 bbc_base_minute(r)::Float64 = Float64(r.time)
 
+_slugify(s) = replace(replace(lowercase(strip(String(s))), r"[^a-z0-9 ]" => ""), " " => "-")
+_nrm(s) = replace(String(s), r"-fc$" => "")
+_first_token(slug) = first(split(_nrm(slug), "-"))
+
 """
-    resolve_sides!(tl) -> tl
+    recover_sides_from_text!(tl, matches) -> n_recovered
+
+Second-chance side attribution for rows the slug CASE could not resolve. BBC writes the
+club in parentheses in the free text — `"James Hilton (Dumbarton) hits the bar..."` — which
+recovers the 438 `post` (woodwork) rows, the one event type BBC ships with NO team column
+at all (2.2% of all attempts, so dropping them would quietly bias the shot stream).
+
+Matching is: slugify the parenthesised name, normalise `-fc`, compare to both sides; then
+fall back to the leading token, which resolves the sole remaining alias in these leagues
+(`Inverness CT` vs `inverness-caledonian-thistle`). The fallback is only applied when the
+token identifies exactly one side — and zero 56/57 fixtures have both teams sharing a
+leading token, so it cannot silently pick the wrong one.
+"""
+function recover_sides_from_text!(tl::DataFrame, matches::DataFrame)
+    tm = Dict(Int(r.match_id) => (String(r.home_team), String(r.away_team))
+              for r in eachrow(matches))
+    n = 0
+    for i in 1:nrow(tl)
+        ismissing(tl.side[i]) || continue
+        txt = coalesce(tl.text[i], ""); mid = Int(tl.match_id[i])
+        m = match(r"\(([^)]+)\)", txt)
+        (m === nothing || !haskey(tm, mid)) && continue
+        h, a = tm[mid]
+        nm = _nrm(_slugify(m.captures[1]))
+        s = nm == _nrm(h) ? true : nm == _nrm(a) ? false : missing
+        if ismissing(s)
+            fn, fh, fa = _first_token(nm), _first_token(h), _first_token(a)
+            s = (fn == fh && fn != fa) ? true : (fn == fa && fn != fh) ? false : missing
+        end
+        ismissing(s) || (tl.side[i] = s; n += 1)
+    end
+    return n
+end
+
+"""
+    resolve_sides!(tl; matches = nothing) -> tl
 
 Adds `:side` (`Union{Missing,Bool}`, true = home) and `:minute` / `:base_minute`.
 
 Goal rows are resolved by differencing the running score within each match (ordered by
 post_index): the side whose tally increments by exactly 1 owns the goal. This is exact for
 own goals and needs no team slug. Rows where neither tally increments by exactly 1 fall
-back to the slug and are reported by `timeline_qa` as a running-score break.
+back to the slug and are counted in the `"score_breaks"` metadata.
 
-Every other event type keeps the slug-derived `is_home_event`.
+Every other event type keeps the slug-derived `is_home_event`; pass `matches` (i.e.
+`ds.matches`) to additionally run `recover_sides_from_text!` over whatever is left.
 """
-function resolve_sides!(tl::DataFrame)
+function resolve_sides!(tl::DataFrame; matches::Union{Nothing, DataFrame} = nothing)
     side = Vector{Union{Missing, Bool}}(tl.is_home_event)
     breaks = 0
     for g in groupby(tl, :match_id)
@@ -145,6 +185,8 @@ function resolve_sides!(tl::DataFrame)
     tl.minute = [bbc_minute(r) for r in eachrow(tl)]
     tl.base_minute = [bbc_base_minute(r) for r in eachrow(tl)]
     metadata!(tl, "score_breaks", breaks; style = :note)
+    nrec = matches === nothing ? 0 : recover_sides_from_text!(tl, matches)
+    metadata!(tl, "text_recovered", nrec; style = :note)
     return tl
 end
 
