@@ -67,6 +67,60 @@ Plan: `~/.claude/plans/elegant-skipping-pinwheel.md` (session 2026-07-29).
 Branch `feat/inplay-bbc-mvp`, off `feat/apm-player-rating-l1` (carries `ds.bbc_events`).
 Prototype only — **no `src/` changes**; WP-H is a written graduation sketch.
 
+- 2026-07-29: **WP-D DONE — GATE D NULL on both halves; and the run caught a HARNESS BUG that
+  inflates every fold-paired t in this stream by ~3×** (`l07_nowcast.jl`, `r05_nowcast.jl`).
+  - **⚠ THE HARNESS FINDING IS THE IMPORTANT ONE.** `l01.paired_diff` differences the 20
+    (repeat, fold) means and divides by their SD. That treats 20 numbers as independent when
+    (a) each fold mean already averages ~137 held-out matches, so its variance is ~1/137 of
+    the match-level variance, and (b) the 5 repeats re-score **the same 550 matches**. The
+    independent unit is the MATCH.
+
+    | comparison | t fold-paired | **t match-clustered (n=550)** |
+    |---|---|---|
+    | nowcast − full | 1.43 | **0.60** |
+    | nowcast_opp − full | 3.17 | **1.07** |
+    | nowcast_opp − nowcast | 2.43 | 0.91 |
+    | full − state (man_adv control) | 8.62 | **2.43** |
+    | state − time | 0.33 | 0.22 |
+
+    Inflation ≈ **2.4–3×**, larger than the ~1.9× measured elsewhere in this repo, and it
+    is analytic: `SE_fold = σ_match/√(137·20)` vs `SE_match = σ_match/√550` ⇒ ratio √(2740/550)
+    = 2.23, plus the repeat correlation. **Every fold-paired t in this stream is overstated
+    by roughly this factor, including the incumbent's published 6.29 / 0.51 / 8.85.** No
+    published sign flips and no conclusion reverses — man_adv survives at 2.43, state stays
+    null at 0.22 — but magnitudes must be read accordingly. `match_clustered_cv` / `mc_diff`
+    added; `cv_race` / `paired_diff` are demoted to fast spec-screening only. **WP-F must use
+    the clustered harness.**
+  - Also revises WP-C's numbers downward without changing its verdict: t_state 0.33 → ~0.14,
+    t_man 8.62 → 2.43. The control argument survives because it rests on the RATIO.
+  - **Gate D (i): NULL.** Own surplus adds t = **0.60** over the incumbent (pre-registered
+    bar was |t| > 2). γ_sf = 0.109 [0.027, 0.192] is credibly positive in-sample, but it does
+    not buy held-out prediction. Adding the OPPONENT's surplus reaches t = 1.07 — the t = 3.17
+    that looked significant was purely the harness bug. Recorded as a null; **not** written up
+    as a near-miss.
+  - **Gate D (ii): calibration is CLEAN, which does not rescue it.** Bias at 60/75/85′ =
+    **+0.004 / +0.016 / +0.016** (se ~0.04/0.03/0.02) — comparable to the incumbent's
+    +0.020/+0.014/+0.003 and far better than MVP-1's −0.075/−0.051/−0.024. By surplus tercile
+    all nine cells sit within ~1 SE (largest: high-surplus +0.058 ± 0.069 at 60′). The gate
+    required both halves to move together; only one did, so it is a null.
+  - **The pre-registered confound is CLEANLY RULED OUT** — this null is not a confound
+    artifact. Freeing the pregame-rate exponent retains **98.3%** of γ_sf (0.1090 → 0.1071)
+    and ρ = 0.917 [0.684, 1.160] covers 1, so the model is not rescaling the pregame belief.
+    Pinning the pregame rate at 1 leaves the surplus contribution unchanged (t 1.46 vs 1.43
+    fold-paired). Surplus is genuinely measuring in-match deviation; there is just not much
+    in it.
+  - **Leak audit — kept, but it answers less than it looks like.** The future-shifted surplus
+    scores t = 28.3 vs the causal 1.43. That is **tautological, not informative**: a goal IS a
+    shot (`goals ⊂ shots` by construction), so letting the covariate see the slice being
+    predicted cannot lose. What it does establish is that the causal build is **not leaking** —
+    an off-by-one would have put the causal t near the future one instead of ~500× below it in
+    mean effect. Downgraded in the code to a negative control. A real version would have to
+    exclude goals from the shot count.
+  - Surplus covariate audits clean pre-fit: E[shots] calibrated to 2% late in the match
+    (7.65 observed vs 7.51 expected), the high clamp binds on 0.035% of rows, 15.0% of rows
+    are held at surplus = 0 (the early slices where E < 1 shot), raw cor(surplus, y) = 0.020.
+  - Posterior otherwise reproduces the incumbent: β 0.145, γ_man 0.493 (×1.64), max R̂ 1.005.
+
 - 2026-07-29: **WP-C DONE — GATE C IS A CLEAN NULL on its pre-registered criterion, and the
   null is TRUSTWORTHY because a control resolved on the same data. The decomposition then
   found the real mechanism, in conversion rather than volume** (`l06_shot_flow.jl`,
