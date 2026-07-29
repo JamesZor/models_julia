@@ -261,11 +261,15 @@ function cross_check_events(seqs, ds, kind::Symbol; tol::Float64 = 2.0)
         i = inc_of(mid)
         used = falses(length(i)); npair = 0
         for e in b
-            best, bd = 0, Inf
+            best = 0; bd = Inf
             for (j, x) in enumerate(i)
                 (used[j] || x.home != e.home) && continue
                 d = abs(x.t - e.tb)
-                d < bd && (best, bd = j, d)
+                # NB: `d < bd && (best, bd = j, d)` parses as a tuple expression, not an
+                # assignment — it silently paired nothing. Keep the explicit block.
+                if d < bd
+                    best = j; bd = d
+                end
             end
             if best > 0
                 used[best] = true; npair += 1
