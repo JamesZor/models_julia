@@ -127,11 +127,43 @@ function build_books(spec::BookSpec, latents_df::DataFrame, expr, odds_df::DataF
 end
 
 """
+    component_hash(x, h = UInt(0)) -> UInt
+
+Content hash of a configuration component: its type name plus its field values, recursively.
+
+Julia's default `hash` for an immutable struct holding a non-isbits field falls back to
+`objectid`, which is identity-based -- so two `BakerMcHale()` values built in the same session
+hash differently. Hashing a spec directly therefore produces a key that never repeats and a
+cache that never hits, silently turning every policy sweep back into a full rebuild.
+"""
+function component_hash(x, h::UInt = UInt(0))
+    h = hash(string(nameof(typeof(x))), h)
+    for f in fieldnames(typeof(x))
+        v = getfield(x, f)
+        h = if v isa Union{Number,Symbol,AbstractString,Bool}
+                hash(v, h)
+            elseif v isa AbstractArray && eltype(v) <: Union{Number,Symbol,AbstractString}
+                hash(collect(v), h)     # hash(::AbstractArray) is content-based
+            else
+                component_hash(v, h)
+            end
+    end
+    return h
+end
+
+"""
     book_cache_key(spec) -> UInt
 
-Stable hash of everything that can change a `MatchBook`. Use it to name a serialised cache:
+Content hash of everything that can change a `MatchBook`. Use it to name a serialised cache:
 a `PolicySpec` sweep must never rebuild books.
+
+Equal specs give equal keys -- asserted in `test/portfolio_tests.jl` for a spec carrying a
+`BakerMcHale`, which is the case that breaks under a naive `hash`.
 """
-book_cache_key(spec::BookSpec) = hash((typeof(spec.price), typeof(spec.allocator),
-                                       spec.shrink, spec.exec,
-                                       string.(spec.markets.markets)))
+function book_cache_key(spec::BookSpec)
+    h = component_hash(spec.price)
+    h = component_hash(spec.allocator, h)
+    h = component_hash(spec.shrink, h)
+    h = component_hash(spec.exec, h)
+    return hash(string.(spec.markets.markets), h)
+end

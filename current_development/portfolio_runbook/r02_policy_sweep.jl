@@ -40,11 +40,10 @@ grid = DataFrame(trust = Float64[], lambda = Float64[], cap = Float64[], shrink 
 
 @info "sweeping policies (books are NOT rebuilt)"
 @time for w in (0.10, 0.25, 0.50, 1.00), lam in (0.0, 10.0, 23.0), use_bm in (false, true)
-    pol = PF.PolicySpec(trust = PF.FlatTrust(w),
-                        risk  = lam > 0 ? PF.SlateDrawdown(lam) : PF.NoRisk(),
-                        cap   = PF.FixedCap(0.25))
-    t = PF.simulate(pol, slates; use_shrink = use_bm)
-    m = PF.path_metrics(t)
+    local pol = PF.PolicySpec(trust = PF.FlatTrust(w),
+                              risk  = lam > 0 ? PF.SlateDrawdown(lam) : PF.NoRisk(),
+                              cap   = PF.FixedCap(0.25))
+    local m = PF.path_metrics(PF.simulate(pol, slates; use_shrink = use_bm))
     push!(grid, (w, lam, 0.25, use_bm, m.mean_exposure, m.mean_k_risk, m.roi,
                  m.final, m.growth_per_slate, m.mdd, m.n_capped))
 end
@@ -99,10 +98,10 @@ println("\n", "="^96, "\n=== CALIBRATING TO A TARGET EXPOSURE ===\n", "="^96)
 
 base = PF.PolicySpec(trust = PF.FlatTrust(1.0), cap = PF.FixedCap(0.99))
 for target in (0.05, 0.10, 0.15)
-    lam = PF.calibrate_lambda(base, slates; target_exposure = target, use_shrink = false)
-    pol = PF.PolicySpec(trust = PF.FlatTrust(1.0), risk = PF.SlateDrawdown(lam),
-                        cap = PF.FixedCap(0.99))
-    m = PF.path_metrics(PF.simulate(pol, slates; use_shrink = false))
+    local lam = PF.calibrate_lambda(base, slates; target_exposure = target, use_shrink = false)
+    local pol = PF.PolicySpec(trust = PF.FlatTrust(1.0), risk = PF.SlateDrawdown(lam),
+                              cap = PF.FixedCap(0.99))
+    local m = PF.path_metrics(PF.simulate(pol, slates; use_shrink = false))
     @printf("  target %.0f%% -> lambda %6.2f | realised %.1f%% | growth %.5f | final %.3fx | mdd %.1f%%\n",
             100target, lam, 100m.mean_exposure, m.growth_per_slate, m.final, m.mdd)
 end

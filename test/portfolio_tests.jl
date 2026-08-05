@@ -221,6 +221,17 @@ end
     @test PF.book_cache_key(fixture_spec()) == PF.book_cache_key(fixture_spec())
     @test PF.book_cache_key(fixture_spec()) !=
           PF.book_cache_key(fixture_spec(price = PF.RawPrice()))
+
+    # The case that actually breaks: a component holding a non-isbits field. Julia's default
+    # hash for such a struct is identity-based, so a naive key differs for equal specs and the
+    # cache never hits. NoShrinkage is field-less and hides this -- BakerMcHale does not.
+    bm(; kw...) = PF.BookSpec(markets = PD.MarketConfig(PD.AbstractMarket[PD.Market1X2()]),
+                              shrink = PF.BakerMcHale(); kw...)
+    @test PF.book_cache_key(bm()) == PF.book_cache_key(bm())
+    @test PF.book_cache_key(bm()) != PF.book_cache_key(bm(shrink = PF.NoShrinkage()))
+    @test PF.book_cache_key(bm()) !=
+          PF.book_cache_key(bm(shrink = PF.BakerMcHale(n_draws = 64)))
+    @test PF.component_hash(PF.BakerMcHale()) == PF.component_hash(PF.BakerMcHale())
 end
 
 # -------------------------------------------------------------------
