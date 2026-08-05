@@ -29,10 +29,16 @@ policy = PF.PolicySpec(trust = PF.FlatTrust(0.25), risk = PF.SlateDrawdown(23.0)
 # In production this is "today's card". Here we take one real match day and pretend we do not
 # know the results, so the numbers are checkable against r01.
 
-target_date = sort(unique([r.match_date for r in eachrow(ds.matches)
-                           if r.match_id in latents_df.match_id]))[end - 4]
-fixture_ids = [r.match_id for r in eachrow(ds.matches)
-               if Date(r.match_date) == Date(target_date) && r.match_id in latents_df.match_id]
+_have = Set(latents_df.match_id)
+_by_date = Dict{Date,Vector{Int}}()
+for r in eachrow(ds.matches)
+    r.match_id in _have || continue
+    push!(get!(_by_date, Date(r.match_date), Int[]), Int(r.match_id))
+end
+# pick the busiest day -- a full Saturday card is the case worth looking at, because that is
+# where simultaneous exposure actually bites
+target_date = argmax(d -> length(_by_date[d]), collect(keys(_by_date)))
+fixture_ids = _by_date[target_date]
 
 @info "match day" date = target_date fixtures = length(fixture_ids)
 
