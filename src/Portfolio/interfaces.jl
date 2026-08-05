@@ -45,12 +45,17 @@ allocate(a::AbstractAllocator, ::AbstractVector, ::AbstractMatrix, ::ExecutionCo
 # ---------------------------------------------------------------- shrinkage
 
 """
-    shrink_factor(s::AbstractShrinkage, score_matrix, R, p, alloc, exec) -> Float64
+    shrink_factor(s::AbstractShrinkage, score_matrix, R, p, alloc, exec; seed_offset = 0) -> Float64
 
 Scalar in `[0, 1]` correcting the point-estimate allocation for parameter uncertainty.
+
+`seed_offset` is part of the contract, not an optional extra: any shrinkage that samples the
+posterior must decorrelate its draws across matches, and doing that from the match id keeps a
+book reproducible regardless of how many threads built it. Deterministic implementations accept
+it and ignore it.
 """
 shrink_factor(s::AbstractShrinkage, ::Any, ::AbstractMatrix, ::AbstractVector,
-              ::AbstractAllocator, ::ExecutionConfig) =
+              ::AbstractAllocator, ::ExecutionConfig; seed_offset::Int = 0) =
     error("shrink_factor not implemented for $(typeof(s))")
 
 # ---------------------------------------------------------------- trust

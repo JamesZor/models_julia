@@ -100,11 +100,6 @@ function build_book(spec::BookSpec, latents_row, expr, odds_df::DataFrame,
                      res.a, k, res.kkt, res.converged)
 end
 
-# `shrink_factor` for the stateless shrinkages ignores the per-match seed offset.
-shrink_factor(s::AbstractShrinkage, sm, R::AbstractMatrix, p::AbstractVector,
-              a::AbstractAllocator, e::ExecutionConfig; seed_offset::Int = 0) =
-    shrink_factor(s, sm, R, p, a, e)
-
 """
     build_books(spec, latents_df, expr, odds_df, ds) -> Vector{MatchBook}
 

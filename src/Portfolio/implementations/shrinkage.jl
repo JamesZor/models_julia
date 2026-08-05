@@ -5,7 +5,7 @@ export NoShrinkage, FractionalKelly, BakerMcHale
 "Keep the point-estimate allocation as-is."
 struct NoShrinkage <: AbstractShrinkage end
 shrink_factor(::NoShrinkage, ::Any, ::AbstractMatrix, ::AbstractVector,
-              ::AbstractAllocator, ::ExecutionConfig) = 1.0
+              ::AbstractAllocator, ::ExecutionConfig; seed_offset::Int = 0) = 1.0
 
 "Fixed fraction of full Kelly. `FractionalKelly(0.5)` is the folk half-Kelly."
 struct FractionalKelly <: AbstractShrinkage
@@ -16,7 +16,7 @@ struct FractionalKelly <: AbstractShrinkage
     end
 end
 shrink_factor(s::FractionalKelly, ::Any, ::AbstractMatrix, ::AbstractVector,
-              ::AbstractAllocator, ::ExecutionConfig) = s.k
+              ::AbstractAllocator, ::ExecutionConfig; seed_offset::Int = 0) = s.k
 
 """
     BakerMcHale(; n_draws = 128, grid = 0.0:0.02:1.0, seed = 20260805)
