@@ -34,12 +34,17 @@ function fixture_score_matrix(; max_h = 8, max_a = 8, n_draws = 24, lh = 1.4, la
     return PP.ScoreMatrix(data)
 end
 
-"Quotes frame for one match: a complete 1X2 book and a complete O/U 2.5 book."
+"""
+Quotes frame for one match: a complete 1X2 book and a complete O/U 2.5 book.
+
+`ou_overround` is the book's actual overround, i.e. `sum(1/d)`. Note the inversion: to get a
+book summing to `ov` with shape `w`, the price is `1/(ov*w)`, NOT `ov/w` -- the latter produces
+a book summing to `1/ov` and silently flips an intended arbitrage into vig.
+"""
 function fixture_quotes(; match_id = 1, ou_overround = 1.04)
-    # an O/U pair with a controlled overround
-    p_over  = 0.52
-    d_over  = ou_overround / p_over
-    d_under = ou_overround / (1 - p_over)
+    p_over  = 0.52                       # relative shape of the pair
+    d_over  = 1 / (ou_overround * p_over)
+    d_under = 1 / (ou_overround * (1 - p_over))
     DataFrame(
         match_id    = fill(match_id, 5),
         market_name = ["1X2", "1X2", "1X2", "OverUnder", "OverUnder"],
