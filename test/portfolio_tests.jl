@@ -295,4 +295,29 @@ end
     @test length(PF.group(PF.SingleMatchSlate(), books)) == 9
 end
 
+# -------------------------------------------------------------------
+@testset "match-day: unsettled books stake but do not simulate" begin
+    f = fixture_book()
+    played   = f.book
+    unplayed = PF.MatchBook(2, played.date, played.sels, played.p_grid, played.R,
+                            nothing,                      # <- no result yet
+                            played.a_kelly, 1.0, played.kkt, played.converged)
+
+    @test PF.is_settled(played)
+    @test !PF.is_settled(unplayed)
+
+    # an unsettled book can be STAKED
+    pol   = PF.PolicySpec(trust = PF.FlatTrust(0.25), risk = PF.NoRisk())
+    alloc = PF.stake_slate(pol, PF.Slate(played.date, [unplayed]), ctx0())
+    @test sum(sum(a) for a in alloc.stakes) > 0
+    @test alloc.exposure <= pol.cap.cap + 1e-9
+
+    # ... but NOT simulated
+    @test_throws AssertionError PF.simulate(pol, [PF.Slate(played.date, [unplayed])])
+    @test PF.simulate(pol, [PF.Slate(played.date, [played])]) isa PF.Trajectory
+
+    # a mixed slate is refused too -- half a result is not a backtest
+    @test_throws AssertionError PF.simulate(pol, [PF.Slate(played.date, [played, unplayed])])
+end
+
 end # @testset "Portfolio"

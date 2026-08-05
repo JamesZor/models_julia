@@ -113,7 +113,9 @@ This is the cache boundary: a `MatchBook` is a pure function of the data and the
 
 * `p_grid`  -- posterior-mean score grid, length `N = max_h * max_a`, normalised to 1.
 * `R`       -- Jacot return matrix, `N x n`; wealth after the bets is `1 .+ R * a`.
-* `settle`  -- realised per-unit payoff of each selection (win / push / lose).
+* `settle`  -- realised per-unit payoff of each selection (win / push / lose), or `nothing`
+              for a fixture that has not been played. An unsettled book can be STAKED but not
+              SIMULATED; `simulate` refuses them.
 * `a_kelly` -- allocation on the posterior mean, at full size.
 * `k_shrink`-- parameter-uncertainty factor from the `AbstractShrinkage`.
 * `kkt`     -- KKT residual of `a_kelly`; should be ~1e-6.
@@ -124,7 +126,7 @@ struct MatchBook
     sels::Vector{Selection}
     p_grid::Vector{Float64}
     R::Matrix{Float64}
-    settle::Vector{Float64}
+    settle::Union{Nothing,Vector{Float64}}
     a_kelly::Vector{Float64}
     k_shrink::Float64
     kkt::Float64

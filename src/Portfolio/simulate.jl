@@ -14,12 +14,17 @@ Two assertions guard the failures the prototype shipped with:
 * slates must be sorted. Final wealth is order-invariant but drawdown, Ulcer, Calmar and Martin
   are not -- on the same 628-match book, Martin ranged 52 to 144 across random orderings of the
   identical returns.
+* every book must be settled -- you cannot backtest an unplayed fixture.
 * a slate cannot lose more than the bankroll. Guaranteed by `FixedCap`'s `(0,1)` constraint;
   asserted anyway so a future cap implementation cannot quietly break it.
 """
 function simulate(policy::PolicySpec, slates::Vector{Slate};
                   use_shrink::Bool = true, scale::Float64 = 1.0)
     @assert issorted(slates, by = s -> s.window) "slates must be chronological"
+    @assert all(is_settled(b) for sl in slates for b in sl.books) """
+        simulate needs settled books: at least one fixture has no result.
+        Build with require_result = true (the default) for a backtest; unsettled books are for
+        stake_sheet only."""
 
     bank     = 1.0
     hist     = Float64[1.0]

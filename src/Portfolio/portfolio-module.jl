@@ -74,6 +74,7 @@ include("book.jl")
 include("slates.jl")
 include("stake.jl")
 include("simulate.jl")
+include("matchday.jl")
 include("metrics.jl")
 include("calibrate.jl")
 

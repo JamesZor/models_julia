@@ -11,7 +11,7 @@ Read them in order; each builds on the previous one.
 | `_setup.jl` | shared data loading. Every runner includes it. Caches to `.jls` so you pay the cost once. |
 | `r01_quickstart.jl` | the whole pipeline in ~20 lines. Build books, group into slates, simulate, report. |
 | `r02_policy_sweep.jl` | **the payoff of the design.** Build books once, sweep dozens of policies for free. |
-| `r03_matchday_stakes.jl` | pricing a fixture you have not played yet, and producing a stake sheet. |
+| `r03_matchday_stakes.jl` | **the match-day recipe** — pricing unplayed fixtures into a stake sheet. |
 | `r04_diagnostics.jl` | what to check before you believe a number. |
 | `r05_extending.jl` | adding your own trust model and filter without touching `src/`. |
 
@@ -31,6 +31,22 @@ draws per match. Simulating a policy against those books takes milliseconds. So:
 * change a **`PolicySpec`** field → reuse the books you already have.
 
 If you find yourself rebuilding books to try a different `lambda`, something has gone wrong.
+
+## Match day in one call
+
+```julia
+sys   = PF.PortfolioSystem(PF.BookSpec(markets = MARKETS), PF.PolicySpec())
+sheet = PF.stake_sheet(sys, latents_df, expr, odds_df, ds; bankroll = 1000.0)
+PF.slate_summary(sheet)          # check EXPOSURE before you read the bets
+```
+
+`latents_df` for upcoming fixtures comes from `match_day_inference/src/inference.jl`
+(`compute_todays_matches_latents`), not from `extract_oos_predictions`. `odds_df` needs the
+`ds.odds` schema; a live feed with those columns works exactly like the historical summary.
+
+Backtest and match-day share one code path. The only difference is that an unplayed book has
+`settle == nothing`; it can be staked, and `simulate` refuses it rather than scoring a missing
+result as a loss.
 
 ## The counter-intuitive bit
 

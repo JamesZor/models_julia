@@ -5,7 +5,8 @@
 # Everything here is a pure function of the data and the BookSpec. Nothing in a PolicySpec can
 # reach it, which is what makes `hash(BookSpec)` a sound cache key.
 
-export extract_selections, build_book, build_books, book_cache_key
+export extract_selections, build_book, build_books, book_cache_key, fixture_table,
+       is_settled
 
 "Trust key for a selection: `1X2_home`, `O/U 2.5_over_25`, `BTTS_btts_yes`."
 selection_family(group::AbstractString, line::Real, sel::Symbol) =
@@ -61,19 +62,26 @@ function extract_selections(odds_df::DataFrame, match_id::Integer, spec::BookSpe
     return out
 end
 
-"""
-    build_book(spec, latents_row, expr, odds_df, scores) -> MatchBook | nothing
+"Date, and final score when the fixture has been played."
+const FixtureInfo = @NamedTuple{date::Date, score::Union{Nothing,Tuple{Int,Int}}}
 
-Returns `nothing` for any match we cannot both stake and settle: no usable quotes, no final
-score, or a score-matrix failure. Quotes are checked *before* the score matrix is computed,
-because that is the expensive step.
+"""
+    build_book(spec, latents_row, expr, odds_df, fixtures; require_result = true) -> MatchBook | nothing
+
+Returns `nothing` for any match we cannot stake: unknown fixture, no usable quotes, or a
+score-matrix failure. Quotes are checked *before* the score matrix is computed, because that is
+the expensive step.
+
+With `require_result = false` an unplayed fixture is built with `settle = nothing`. Such a book
+can be staked (that is match-day use) but not simulated -- `simulate` refuses it.
 """
 function build_book(spec::BookSpec, latents_row, expr, odds_df::DataFrame,
-                    scores::Dict{Int,Tuple{Int,Int,Date}})
+                    fixtures::Dict{Int,FixtureInfo}; require_result::Bool = true)
     m_id = latents_row.match_id
-    haskey(scores, m_id) || return nothing
+    haskey(fixtures, m_id) || return nothing
+    fx = fixtures[m_id]
+    (require_result && fx.score === nothing) && return nothing
     any(==(m_id), odds_df.match_id) || return nothing
-    h, a, dt = scores[m_id]
 
     score_matrix = try
         Predictions.compute_score_matrix(expr.config.model,
@@ -97,30 +105,47 @@ function build_book(spec::BookSpec, latents_row, expr, odds_df::DataFrame,
     k   = shrink_factor(spec.shrink, score_matrix, R, p_grid, spec.allocator, spec.exec;
                         seed_offset = m_id)
 
-    return MatchBook(m_id, dt, sels, p_grid, R,
-                     settle_vector(sels, h, a, spec.exec.commission),
-                     res.a, k, res.kkt, res.converged)
+    settle = fx.score === nothing ? nothing :
+             settle_vector(sels, fx.score[1], fx.score[2], spec.exec.commission)
+
+    return MatchBook(m_id, fx.date, sels, p_grid, R, settle, res.a, k, res.kkt, res.converged)
+end
+
+"""
+    fixture_table(ds) -> Dict{Int,FixtureInfo}
+
+Kick-off date for every match, plus the final score where one exists. Built once and shared
+across the threaded book build.
+"""
+function fixture_table(ds)
+    out = Dict{Int,FixtureInfo}()
+    for r in eachrow(ds.matches)
+        sc = (ismissing(r.home_score) || ismissing(r.away_score)) ? nothing :
+             (Int(r.home_score), Int(r.away_score))
+        out[Int(r.match_id)] = (date = Date(r.match_date), score = sc)
+    end
+    return out
 end
 
 """
     build_books(spec, latents_df, expr, odds_df, ds) -> Vector{MatchBook}
+
+`require_result = false` admits unplayed fixtures, which is what match-day staking needs.
 
 Threaded over matches. Returns books sorted by `(date, match_id)` -- chronological order is
 established here, once, so nothing downstream has to remember to sort. Path metrics computed on
 an unsorted series are meaningless, and the prototype's `latents.df` order was neither
 chronological nor recoverable by sorting on `match_id`.
 """
-function build_books(spec::BookSpec, latents_df::DataFrame, expr, odds_df::DataFrame, ds)
-    scores = Dict{Int,Tuple{Int,Int,Date}}()
-    for r in eachrow(ds.matches)
-        (ismissing(r.home_score) || ismissing(r.away_score)) && continue
-        scores[r.match_id] = (Int(r.home_score), Int(r.away_score), Date(r.match_date))
-    end
+function build_books(spec::BookSpec, latents_df::DataFrame, expr, odds_df::DataFrame, ds;
+                    require_result::Bool = true)
+    fixtures = fixture_table(ds)
 
     n   = nrow(latents_df)
     buf = Vector{Union{Nothing,MatchBook}}(undef, n)
     Threads.@threads for i in 1:n
-        buf[i] = build_book(spec, latents_df[i, :], expr, odds_df, scores)
+        buf[i] = build_book(spec, latents_df[i, :], expr, odds_df, fixtures;
+                            require_result = require_result)
     end
 
     books = MatchBook[b for b in buf if b !== nothing]
