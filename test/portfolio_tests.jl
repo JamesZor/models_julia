@@ -167,6 +167,10 @@ end
     sels = PF.extract_selections(partial, 1, spec, fixture_model_probs(sm))
     @test all(s -> s.group != "OverUnder", sels)
     @test count(s -> s.group == "1X2", sels) == 3
+
+    # match ids arrive as Int32 from ds.matches and Int64 from a latents frame
+    @test length(PF.extract_selections(q, Int32(1), spec, fixture_model_probs(sm))) ==
+          length(PF.extract_selections(q, Int64(1), spec, fixture_model_probs(sm)))
 end
 
 # -------------------------------------------------------------------

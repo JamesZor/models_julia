@@ -21,8 +21,10 @@ than it looks: the vig-removal step divides by the sum over whatever legs are pr
 group missing a leg silently manufactures edge on the survivors -- up to 20% on a 1X2 market
 missing one way. On ScottishLower ~70% of O/U 0.5 groups and 2 of 1522 1X2 groups are partial.
 """
-function extract_selections(odds_df::DataFrame, match_id::Int, spec::BookSpec,
+function extract_selections(odds_df::DataFrame, match_id::Integer, spec::BookSpec,
                             model_probs::Dict)
+    # `Integer`, not `Int`: match ids arrive as Int32 from `ds.matches` and Int64 from a
+    # latents frame, and a caller composing the primitives by hand should not have to know which.
     rows = view(odds_df, odds_df.match_id .== match_id, :)
     out  = Selection[]
     isempty(rows) && return out
