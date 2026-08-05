@@ -17,5 +17,8 @@ using DataFrames, Dates, InlineStrings # Add any other packages your tests need 
 
     println("Running Momentum Features tests...")
     include("momentum_tests.jl")
+
+    println("Running Portfolio Module tests...")
+    include("portfolio_tests.jl")
 end
 
