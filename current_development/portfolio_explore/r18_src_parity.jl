@@ -48,13 +48,18 @@ MK = DD.MarketConfig(reduce(vcat, (DD.AbstractMarket[DD.Market1X2(), DD.MarketBT
 # -------------------------------------------------------------------
 # Build both
 # -------------------------------------------------------------------
-@info "building l06 reference books"
-ref = @time build_books(latents_df, expr, odds, MK, ds;
-                        cfg = PortfolioConfig(), shrink = ShrinkConfig(enabled = true, n_draws = 128))
-
-@info "building src/Portfolio books"
 spec = PF.BookSpec(markets = MK)                      # defaults match l06 exactly
-new = @time PF.build_books(spec, latents_df, expr, odds, ds)
+
+if !isdefined(Main, :ref) || get(ENV, "R18_REBUILD", "0") == "1"
+    @info "building l06 reference books"
+    global ref = @time build_books(latents_df, expr, odds, MK, ds;
+                                   cfg = PortfolioConfig(),
+                                   shrink = ShrinkConfig(enabled = true, n_draws = 128))
+end
+if !isdefined(Main, :new) || get(ENV, "R18_REBUILD", "0") == "1"
+    @info "building src/Portfolio books"
+    global new = @time PF.build_books(spec, latents_df, expr, odds, ds)
+end
 
 # -------------------------------------------------------------------
 # 1. Book-level diff
@@ -67,23 +72,26 @@ chk(ok, msg) = ok ? nothing : push!(fails, msg)
 chk(length(ref) == length(new), "book count $(length(ref)) vs $(length(new))")
 chk([b.m_id for b in ref] == [b.m_id for b in new], "match ids / ordering differ")
 
-d_stake, d_k, d_settle, d_odds, d_R = 0.0, 0.0, 0.0, 0.0, 0.0
-for (r, n) in zip(ref, new)
-    r.m_id == n.m_id || continue
-    chk(length(r.sels) == length(n.sels), "selection count differs on $(r.m_id)")
-    length(r.sels) == length(n.sels) || continue
-    # l06 and the module iterate a Dict, so selection ORDER can differ -- compare by key
-    perm = [findfirst(s -> (s.group, s.line, s.selection) ==
-                           (t.group, t.line, t.selection), n.sels) for t in r.sels]
-    chk(all(!isnothing, perm), "selection sets differ on $(r.m_id)")
-    all(!isnothing, perm) || continue
-    p = Int.(perm)
-    d_stake  = max(d_stake,  maximum(abs.(r.a_kelly .- n.a_kelly[p]); init = 0.0))
-    d_k      = max(d_k,      abs(r.k_bm - n.k_shrink))
-    d_settle = max(d_settle, maximum(abs.(r.settle .- n.settle[p]); init = 0.0))
-    d_odds   = max(d_odds,   maximum(abs.([s.odds_used for s in r.sels] .-
-                                          [n.sels[i].odds_used for i in p]); init = 0.0))
-    d_R      = max(d_R,      maximum(abs.(r.R .- n.R[:, p]); init = 0.0))
+# accumulate inside a let so the loop body writes locals, not ambiguous globals
+d_odds, d_R, d_settle, d_stake, d_k = let do_ = 0.0, dR = 0.0, ds_ = 0.0, dst = 0.0, dk = 0.0
+    for (r, n) in zip(ref, new)
+        r.m_id == n.m_id || continue
+        chk(length(r.sels) == length(n.sels), "selection count differs on $(r.m_id)")
+        length(r.sels) == length(n.sels) || continue
+        # l06 and the module both iterate a Dict, so selection ORDER may differ -- match by key
+        perm = [findfirst(s -> (s.group, s.line, s.selection) ==
+                               (t.group, t.line, t.selection), n.sels) for t in r.sels]
+        chk(all(!isnothing, perm), "selection sets differ on $(r.m_id)")
+        all(!isnothing, perm) || continue
+        p = Int.(perm)
+        do_ = max(do_, maximum(abs.([s.odds_used for s in r.sels] .-
+                                    [n.sels[i].odds_used for i in p]); init = 0.0))
+        dR  = max(dR,  maximum(abs.(r.R .- n.R[:, p]); init = 0.0))
+        ds_ = max(ds_, maximum(abs.(r.settle .- n.settle[p]); init = 0.0))
+        dst = max(dst, maximum(abs.(r.a_kelly .- n.a_kelly[p]); init = 0.0))
+        dk  = max(dk,  abs(r.k_bm - n.k_shrink))
+    end
+    (do_, dR, ds_, dst, dk)
 end
 
 @printf("  max |Δ odds_used|   %.3e\n", d_odds)
