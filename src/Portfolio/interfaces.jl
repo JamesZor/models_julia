@@ -55,7 +55,7 @@ book reproducible regardless of how many threads built it. Deterministic impleme
 it and ignore it.
 """
 shrink_factor(s::AbstractShrinkage, ::Any, ::AbstractMatrix, ::AbstractVector,
-              ::AbstractAllocator, ::ExecutionConfig; seed_offset::Int = 0) =
+              ::AbstractAllocator, ::ExecutionConfig; seed_offset::Integer = 0) =
     error("shrink_factor not implemented for $(typeof(s))")
 
 # ---------------------------------------------------------------- trust

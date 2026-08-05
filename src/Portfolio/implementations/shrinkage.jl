@@ -5,7 +5,7 @@ export NoShrinkage, FractionalKelly, BakerMcHale
 "Keep the point-estimate allocation as-is."
 struct NoShrinkage <: AbstractShrinkage end
 shrink_factor(::NoShrinkage, ::Any, ::AbstractMatrix, ::AbstractVector,
-              ::AbstractAllocator, ::ExecutionConfig; seed_offset::Int = 0) = 1.0
+              ::AbstractAllocator, ::ExecutionConfig; seed_offset::Integer = 0) = 1.0
 
 "Fixed fraction of full Kelly. `FractionalKelly(0.5)` is the folk half-Kelly."
 struct FractionalKelly <: AbstractShrinkage
@@ -16,7 +16,7 @@ struct FractionalKelly <: AbstractShrinkage
     end
 end
 shrink_factor(s::FractionalKelly, ::Any, ::AbstractMatrix, ::AbstractVector,
-              ::AbstractAllocator, ::ExecutionConfig; seed_offset::Int = 0) = s.k
+              ::AbstractAllocator, ::ExecutionConfig; seed_offset::Integer = 0) = s.k
 
 """
     BakerMcHale(; n_draws = 128, grid = 0.0:0.02:1.0, seed = 20260805)
@@ -52,12 +52,12 @@ end
 
 function shrink_factor(s::BakerMcHale, score_matrix, R::AbstractMatrix{Float64},
                        p_true::AbstractVector{Float64}, alloc::AbstractAllocator,
-                       exec::ExecutionConfig; seed_offset::Int = 0)
+                       exec::ExecutionConfig; seed_offset::Integer = 0)
     size(R, 2) == 0 && return 1.0
     n_samples = size(score_matrix.data, 3)
     n_samples <= 1 && return 1.0
 
-    rng   = Random.MersenneTwister(s.seed + seed_offset)
+    rng   = Random.MersenneTwister(s.seed + Int(seed_offset))
     draws = Random.randperm(rng, n_samples)[1:min(s.n_draws, n_samples)]
 
     # portfolio return vector implied by each draw's own optimal allocation
