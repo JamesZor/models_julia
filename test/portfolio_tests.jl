@@ -9,7 +9,7 @@
 
 using Test
 using BayesianFootball
-using DataFrames, Dates, Statistics, LinearAlgebra
+using DataFrames, Dates, Statistics, LinearAlgebra, Random
 
 const PF = BayesianFootball.Portfolio
 const PD = BayesianFootball.Data
@@ -36,8 +36,7 @@ end
 
 "Quotes frame for one match: a complete 1X2 book and a complete O/U 2.5 book."
 function fixture_quotes(; match_id = 1, ou_overround = 1.04)
-    o_over  = 2.0 * (2.0 / ou_overround)  / 2.0
-    # build an O/U pair with a controlled overround
+    # an O/U pair with a controlled overround
     p_over  = 0.52
     d_over  = ou_overround / p_over
     d_under = ou_overround / (1 - p_over)
