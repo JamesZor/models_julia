@@ -134,6 +134,17 @@ println(sheet)
 
 println("""
 
+  You will see rows with NEGATIVE edge that still carry a stake. That is not a bug.
+
+  This is a PORTFOLIO Kelly solve, not a list of independent value bets: the allocator
+  maximises expected log-growth over the whole 144-state score grid at once, so it will happily
+  take a small negative-edge position when it hedges a larger correlated one in the same match
+  (typically a draw against a big home/away position). Judge the sheet per match, not per row.
+  If you want only standalone value, add a `MinEdge` filter to the policy -- but expect growth
+  to fall, because you have removed the hedges.""")
+
+println("""
+
   Before acting on a sheet like this:
    * `odds` is the de-arbed TRADED price from a 20-minute pre-kick-off window. On this league
      the median O/U and BTTS market has ONE trade in that window. It is not a quote you can
