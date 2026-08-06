@@ -66,13 +66,7 @@ export NUTSConfig, ADVIConfig, MAPConfig # From Samplers
 export TrainingConfig, Independent, SequentialPriorUpdate # From Training
 
 # 
-using .Data: Markets 
+using .Data: Markets
 export Markets
-
-
-# --- ADDED DEV HELPERS ---
-include("./dev_helpers/dev-helpers.jl")
-# --- EXPORT HELPER ---
-export load_scottish_data
 
 end
