@@ -8,7 +8,8 @@ Read them in order; each builds on the previous one.
 
 | file | what it teaches |
 |---|---|
-| `_setup.jl` | shared data loading. Every runner includes it. Caches to `.jls` so you pay the cost once. |
+| `_setup.jl` | shared data loading (**ScottishLower** / `funnel_apm_xg`). Every runner includes it. Caches to `.jls`. |
+| `_setup_ireland.jl` | same contract, **Ireland Premier** / `src_sup40_sw40`. Swap the include and every runner works unchanged. Ireland has 4x the median tick count — the better book. |
 | `r01_quickstart.jl` | the whole pipeline in ~20 lines. Build books, group into slates, simulate, report. |
 | `r02_policy_sweep.jl` | **the payoff of the design.** Build books once, sweep dozens of policies for free. |
 | `r03_matchday_stakes.jl` | **the match-day recipe** — pricing unplayed fixtures into a stake sheet. |
