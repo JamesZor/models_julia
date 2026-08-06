@@ -17,11 +17,19 @@ _chain_members(c) = getfield(c, first(fieldnames(typeof(c))))
 _is_chain(x) = x isa SourceChain || x isa GateChain || x isa ResolverChain ||
                x isa MaterialiserChain
 
-"One-line description of a component: type name plus its fields, or its members if a chain."
+"""
+One-line description of a component: type name plus its fields, or its members if a chain.
+
+The separator carries the combinator, because they are not the same and the difference matters:
+`→` for first-success (`SourceChain`, `ResolverChain`) and `&` for conjunctive (`GateChain`,
+which runs every member and concatenates reasons).
+"""
 function _component_line(x)
     name = string(nameof(typeof(x)))
-    _is_chain(x) &&
-        return name * "(" * join(string.(nameof.(typeof.(_chain_members(x)))), " → ") * ")"
+    if _is_chain(x)
+        sep = x isa GateChain ? " & " : " → "
+        return name * "(" * join(string.(nameof.(typeof.(_chain_members(x)))), sep) * ")"
+    end
     props = propertynames(x)
     isempty(props) && return name
     inner = join(("$p=$(_fmt(getproperty(x, p)))" for p in props), ", ")
