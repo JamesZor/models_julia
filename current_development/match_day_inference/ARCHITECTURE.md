@@ -7,6 +7,74 @@ two of them change what should be built.
 
 ---
 
+## 0. Decisions taken (user, 2026-08-06)
+
+| # | Decision | Consequence |
+|---|---|---|
+| 1 | Instruments are **abstract**: back-only, or back-and-lay, swappable | `AbstractInstrumentRule`. See the risk-normalisation note below — it means **no `src/Portfolio` change** |
+| 2 | Canonical selection space stays **`{over, under}`**; back/lay is an execution detail | the model, payoff matrix and allocator never see a lay |
+| 3 | **Bankroll is a parameter**, not £15 | `AbstractStakeRounding` must be bankroll-relative; £15 was a test only |
+| 4 | **Read Postgres directly**; no stabilising view | intervals are ~1min and timing is not critical, so schema churn in the POC datastore is an accepted cost |
+| 5 | Replay source is **`order_book_1m`**, not the free-API last-traded price | more depth, and the corpus grows every match week — so the replay set is a *query*, never a fixed list |
+| 6 | **v1 targets Ireland**; Scottish collected in parallel | Ireland has the data and the validated engine (`src_sup40_sw40`); Scottish is where the finding-F overlay is biggest, so it follows. **But see below — "Ireland" is two segments, not one.** |
+
+### ⚠ "Ireland" in the live feed is two tournaments, and only one has an engine
+
+```
+Data.Ireland()             -> tournament_ids = [79]   "Premier Division"
+Data.IrelandFirstDivision()-> tournament_ids = [718]  "First Division"
+```
+
+They are separate `DataTournemantSegment`s, and the live Betfair feed carries **more First
+Division than Premier** — 38 events vs 33. But `src_sup40_sw40` was trained on
+`Data.Ireland()`, i.e. **79 only**.
+
+This is not a naming quibble. Per the stream that opened 718, its dispersion regime is
+materially different from 79 (variance/mean ≈ 1.14, negative-binomial beating Poisson by 9–12
+AIC, versus 79 sitting near-Poisson), which is why the recommendation there was to *stratify*
+dispersion rather than pool. Running the 79 engine over 718 fixtures would price a
+higher-dispersion league with a lower-dispersion posterior — silently, and in the direction
+that under-prices totals tails.
+
+So decision 6 needs one more bit: **does v1 mean 79 only, or 79 + 718?** If 79 only, the
+fixture source must filter on segment and the extra 38 live events per cycle go unused. If both,
+718 needs its own trained engine before match day, not after. Recommend **79 only for v1** —
+it is the one with a validated engine, a paper-track history and the `staking_layer` OOS work
+behind it — and 718 as the first extension, since the live book is already being collected.
+
+### The consequence of (1) + (2): lays need no Portfolio change at all
+
+This is the load-bearing simplification and it is worth stating precisely.
+
+A lay is a back on the complement **once you measure the position in units of risk**. Laying
+`Under` at `d` with backer stake `b` risks liability `b(d−1)` and wins `b`. Set the liability to
+`s`, so `b = s/(d−1)`; then win/risk `= 1/(d−1)`, which is exactly the win/risk of a back at
+`D = 1 + 1/(d−1) = d/(d−1)`.
+
+So if the instrument layer emits **`(effective_odds D, risk s)`**, every downstream object —
+the payoff matrix, `KellyLogUtility`, `BakerMcHale`, `SlateDrawdown`, `FixedCap` — is already
+denominated in risk and works **unchanged**. `FixedCap` does not under-count, because what it
+sums is liability by construction.
+
+The only thing that differs is the order ticket, at the very last step:
+
+```
+back :  place stake        = s              at D
+lay  :  place backer stake = s / (d - 1)    at d       (liability = s)
+```
+
+Earlier drafts of this file said the cap "must become liability-based". That was wrong — it is
+liability-based already, provided the morphism normalises before Portfolio sees anything.
+`AbstractInstrumentRule` therefore returns an `Instrument`, and `Selection.odds_used` receives
+`D`.
+
+Commission stays clean for a non-obvious reason: within one market group the optimum never
+covers every outcome (that is asserted, `r04` diagnostic "market groups fully covered: 0"), so
+you never hold both sides of the same Betfair market and per-bet commission does not need to
+become per-market netting.
+
+---
+
 ## 1. Four findings that reshape the design
 
 ### A. Identity resolution is already solved. The resolver is dead.
@@ -632,13 +700,20 @@ at the Portfolio end, correct seam, and it makes the broken path in finding B re
 The alternative — synthesising a `ds` with today's fixtures grafted onto `.matches` — puts
 unplayed matches into a structure whose every other consumer assumes they are played.
 
-**Q4 — Execution price.** *Recommendation: `BestBack` only for v1, with the book snapshot
-persisted so lay/mid can be evaluated offline later.* Backing Over and laying Under are the same
-position, so admitting lays doubles the selection count without adding a single independent bet
-— and Portfolio's allocator would happily take both sides and double-count the exposure.
-**Your call, and it is a real one:** the O/U ladder plus lays is genuinely over-complete, so
-"take whichever side is cheaper" is a live edge. But it needs the payoff matrix to know two
-selections are the same state, which `Data.grade_selection` does not currently express.
+**Q4 — Execution price. RESOLVED** (decision 1/2, §0). Instruments are abstract:
+`DirectBackOnly` and `BestOfBackLay` are both `AbstractInstrumentRule` implementations, chosen
+per run. The canonical selection stays `{over, under}`, so `Data.grade_selection` needs no
+change and the payoff matrix never sees two rows for one state — my earlier worry about that
+was misplaced, because the morphism collapses the pair *before* a `Selection` is constructed.
+
+What remains open here is narrower and empirical: **is the finding-F gain real at size?**
+`ask_volumes` is in the table and unqueried. Recommended default until it is checked:
+`BestOfBackLay` for pricing (it is a strict improvement on the number), `DirectBackOnly` for
+placement. The instrument abstraction makes flipping that a config change, which is the point.
+
+A second open one: `SizedBestOfBackLay` should reject a synthetic price whose required backer
+stake `s/(d−1)` exceeds available `ask_size`. Without it the O/U 5.5 (46%) and O/U 0.5 (23%)
+figures will flow straight into stakes as though they were free.
 
 **Q5 — Feature materialisation.** *Recommendation: per-feature dispatch on `Val{:name}`,
 mirroring `Features.add_feature!`.* The special-case version cannot run `src_sup40_sw40`, which
