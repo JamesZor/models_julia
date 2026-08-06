@@ -30,7 +30,9 @@
 # Below we simulate match day honestly: take a real card, and price it as if the results were
 # unknown.
 
-include("_setup.jl")
+# include("_setup.jl")
+# include("current_development/portfolio_runbook/_setup.jl")
+include("current_development/portfolio_runbook/_setup_ireland.jl")
 
 # ===================================================================
 # 1. The system you are betting
@@ -68,6 +70,162 @@ card = latents_df[in.(latents_df.match_id, Ref(Set(_by_date[target_date]))), :]
 # ===================================================================
 
 sheet = PF.stake_sheet(sys, card, expr, odds, ds; bankroll = BANKROLL)
+
+
+## Junk test
+# 1. Build books requiring actual match results
+books  = PF.build_books(sys.book, card, expr, odds, ds; require_result = true)
+
+# 2. Group into slates and simulate forward
+slates = PF.group(sys.policy.grouping, books)
+traj   = PF.simulate(sys, slates)
+
+# 3. Inspect trade log and portfolio path metrics
+display(traj.bets)
+display(PF.path_metrics(traj))
+
+
+## junk 2 
+    # 1. Join sheet with ds.matches to get final scores
+    df_eval = innerjoin(
+        sheet, 
+        select(ds.matches, :match_id, :home_score, :away_score), 
+        on = :match_id
+    )
+
+    # 2. Grade each bet (true = Win, false = Loss, missing = Push/Void)
+    df_eval.graded = [
+        BayesianFootball.Data.grade_selection(r.group, r.line, r.selection, r.home_score, r.away_score) 
+        for r in eachrow(df_eval)
+    ]
+
+    # 3. Calculate per-unit payoff (incorporating your commission model)
+    comm = sys.book.exec.commission
+    df_eval.unit_payoff = [
+        ismissing(g) ? 0.0 : (g ? PF.net_return(comm, r.odds) : -1.0)
+        for (g, r) in zip(df_eval.graded, eachrow(df_eval))
+    ]
+
+    # 4. Calculate P&L for each bet
+    df_eval.pnl = df_eval.stake .* df_eval.unit_payoff
+
+    # 5. Print summary
+    tot_staked = sum(df_eval.stake)
+    tot_pnl    = sum(df_eval.pnl)
+    roi_pct    = (tot_pnl / tot_staked) * 100
+    wins       = count(coalesce.(df_eval.graded, false))
+    losses     = count(coalesce.(.!df_eval.graded, false))
+    pushes     = count(ismissing.(df_eval.graded))
+
+    println("📊 Match Day Performance (2025-04-04):")
+    println("  Total Staked : £", round(tot_staked, digits=2))
+    println("  Total P&L    : £", round(tot_pnl, digits=2))
+    println("  ROI          : ", round(roi_pct, digits=2), "%")
+    println("  Bets Graded  : ", nrow(df_eval), " (Wins: $wins, Losses: $losses, Push: $pushes)")
+
+    # View itemized bets with final scorelines and P&L
+    select(df_eval, :match_id, :group, :selection, :odds, :home_score, :away_score, :graded, :stake, :pnl)
+
+
+### junk 3 
+
+    using Printf
+    
+    function evaluate_matchdays(sys, latents_df, _by_date, expr, odds, ds; 
+                                dates = sort(collect(keys(_by_date))), 
+                                bankroll = 1000.0, 
+                                compound = true,
+                                max_days = nothing)
+        
+        selected_dates = max_days === nothing ? dates : dates[1:min(max_days, length(dates))]
+        comm = sys.book.exec.commission
+    
+        println("\n┌" * "─"^91 * "┐")
+        println("│ " * rpad(" ⚽ MATCHDAY PORTFOLIO PERFORMANCE DASHBOARD", 89) * " │")
+        println("├" * "─"^12 * "┬" * "─"^7 * "┬" * "─"^6 * "┬" * "─"^12 * "┬" * "─"^12 * "┬" * "─"^11 * "┬" * "─"^13 * "┬" * "─"^9 * "┤")
+        @printf("│ %-10s │ %-5s │ %-4s │ %-10s │ %-10s │ %-9s │ %-11s │ %-9s │\n",
+                "Date", "Fixt", "Bets", "Staked (£)", "P&L (£)", "ROI (%)", "Wealth (£)", "W / L / P")
+        println("├" * "─"^12 * "┼" * "─"^7 * "┼" * "─"^6 * "┼" * "─"^12 * "┼" * "─"^12 * "┼" * "─"^11 * "┼" * "─"^13 * "┼" * "─"^9 * "┤")
+    
+        cum_staked = 0.0
+        cum_pnl    = 0.0
+        cum_wealth = Float64(bankroll)
+        total_bets = 0
+    
+        for target_date in selected_dates
+            match_ids = _by_date[target_date]
+            card = latents_df[in.(latents_df.match_id, Ref(Set(match_ids))), :]
+            nrow(card) == 0 && continue
+    
+            # Generate live matchday sheet (sizing based on current wealth if compounding)
+            current_bankroll = compound ? cum_wealth : bankroll
+            sheet = PF.stake_sheet(sys, card, expr, odds, ds; bankroll = current_bankroll)
+            if isempty(sheet)
+                @printf("│ %-10s │ %5d │ %4d │ %10.2f │ %10.2f │ %8.2f%% │ %11.2f │ %-9s │\n",
+                        string(target_date), nrow(card), 0, 0.0, 0.0, 0.0, cum_wealth, "0/0/0")
+                continue
+            end
+
+            # Join scores & grade
+            df_eval = innerjoin(sheet, select(ds.matches, :match_id, :home_score, :away_score), on = :match_id)
+            if isempty(df_eval)
+                continue
+            end
+
+            df_eval.graded = [
+                BayesianFootball.Data.grade_selection(r.group, r.line, r.selection, r.home_score, r.away_score)
+                for r in eachrow(df_eval)
+            ]
+
+            df_eval.unit_payoff = [
+                ismissing(g) ? 0.0 : (g ? PF.net_return(comm, r.odds) : -1.0)
+                for (g, r) in zip(df_eval.graded, eachrow(df_eval))
+            ]
+            df_eval.pnl = df_eval.stake .* df_eval.unit_payoff
+
+            staked = sum(df_eval.stake)
+            pnl    = sum(df_eval.pnl)
+            roi    = staked > 0 ? (pnl / staked) * 100 : 0.0
+            w      = count(coalesce.(df_eval.graded, false))
+            l      = count(coalesce.(.!df_eval.graded, false))
+            p      = count(ismissing.(df_eval.graded))
+            wlp    = "$w/$l/$p"
+
+            cum_staked += staked
+            cum_pnl    += pnl
+            cum_wealth += pnl
+            total_bets += nrow(df_eval)
+
+            pnl_str = @sprintf("%+10.2f", pnl)
+            roi_str = @sprintf("%+8.2f%%", roi)
+
+            @printf("│ %-10s │ %5d │ %4d │ %10.2f │ %10s │ %9s │ %11.2f │ %-9s │\n",
+                    string(target_date), nrow(card), nrow(df_eval), staked, pnl_str, roi_str, cum_wealth, wlp)
+        end
+
+        println("├" * "─"^12 * "┼" * "─"^7 * "┼" * "─"^6 * "┼" * "─"^12 * "┼" * "─"^12 * "┼" * "─"^11 * "┼" * "─"^13 * "┼" * "─"^9 * "┤")
+        tot_roi = cum_staked > 0 ? (cum_pnl / cum_staked) * 100 : 0.0
+        tot_pnl_str = @sprintf("%+10.2f", cum_pnl)
+        tot_roi_str = @sprintf("%+8.2f%%", tot_roi)
+        @printf("│ %-10s │ %5s │ %4d │ %10.2f │ %10s │ %9s │ %11.2f │ %-9s │\n",
+                "TOTAL", "", total_bets, cum_staked, tot_pnl_str, tot_roi_str, cum_wealth, "")
+        println("└" * "─"^12 * "┴" * "─"^7 * "┴" * "─"^6 * "┴" * "─"^12 * "┴" * "─"^12 * "┴" * "─"^11 * "┴" * "─"^13 * "┴" * "─"^9 * "┘\n")
+    end
+
+  ### How to run in REPL:
+
+  # 1. Run across all match days in dataset:
+    evaluate_matchdays(sys, latents_df, _by_date, expr, odds, ds; bankroll = 1000.0)
+
+  # 2. Sample just the first 10 match days:
+    evaluate_matchdays(sys, latents_df, _by_date, expr, odds, ds; bankroll = 1000.0, max_days = 10)
+
+  # 3. Sample a specific date range:
+    all_dates = sort(collect(keys(_by_date)))
+    evaluate_matchdays(sys, latents_df, _by_date, expr, odds, ds; dates = all_dates[10:20])
+
+
+####
 
 # ===================================================================
 # 4. Check the SLATE before you look at the bets
