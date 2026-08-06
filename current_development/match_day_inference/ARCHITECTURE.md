@@ -525,8 +525,11 @@ route to validating any of this (§9 Q2).
         |
   STAGE 6  INFERENCE ────────────────────────────────────────────────────────────
         |   Models.PreGame.extract_parameters(model, fixtures, feature_set, chain)
-        |   chain = last training split's posterior
-        |   ⚠ no re-fit; staleness of the chain is unmeasured (§9 Q6)
+        |   chain = training_results[N] where N = length(training_results)
+        |   ⚠ N INDEXES A LIST THAT IS RECOMPUTED AT INFERENCE TIME. Measured on
+        |     src_sup40_sw40: 29 training_results, 31 boundaries today. The rule
+        |     silently drops the two most recent windows, and is only correct at
+        |     all if the splitter APPENDS rather than recomputes. (§9 Q11)
         v
      latents_df  (λ draws per fixture)
         |
@@ -622,6 +625,31 @@ something says otherwise; the staking-layer work measured CorrectScore at −20%
 nothing, so beyond two hand-written paper tracks there is no record of what was priced when. A
 `StakeSheet` row with `as_of` and the book snapshot makes CLV computable — and per §10, CLV is a
 far higher-power test than P/L on this sample size.
+
+**Q11 — Which split do we condition on?** *No recommendation; I think this one is a defect and
+want you to look at it.* `inference.jl` picks the chain with
+`last_split_idx = length(experiment.training_results)`, then indexes **today's** freshly built
+`feature_collection` with that same integer. Measured on `src_sup40_sw40` (Ireland,
+`GroupedCVConfig(Targets=["2025","2026"], Hist=2)`):
+
+```
+length(ex.training_results)              29     <- fitted 2026-07-04
+length(create_id_boundaries(ds, cfg))    31     <- rebuilt 2026-08-06
+```
+
+Two problems, one certain and one conditional:
+
+- **Certain:** it always conditions on split 29 of 31, silently discarding the two most recent
+  windows. Today's fixtures are priced off a posterior and a feature set that stop two
+  match-weeks short, with no warning.
+- **Conditional:** the pairing is only *correct* if the splitter appends new boundaries and
+  leaves old ones untouched. If `GroupedCVConfig` ever recomputes its windows when data grows,
+  index 29 means a different window in the chain than in the features — a chain fitted on one
+  period applied to another period's covariates, which would be silently and badly wrong.
+
+A match-day system should name the split it wants by its **boundary**, not by a positional index
+into a list whose length changes underneath it. This needs checking before anything is built on
+top of it; it may also affect `Experiments.extract_oos_predictions`.
 
 **Q10 — Module home.** *Recommendation: `src/MatchDay/` for stages 1-3 and 7, `src/features/` for
 stage 4, `src/Data/` for the live-book adapter.* The materialiser is a Features concept and will
