@@ -75,15 +75,78 @@ Design consequence: the fixture table is a MatchDay responsibility, not a Portfo
 `build_books` takes a `Dict{Int,FixtureInfo}` directly (small change, right seam), or MatchDay
 constructs a `ds`-shaped object with today's fixtures appended (larger, worse). See §9 Q3.
 
-### C. The order-book collector is down.
+### C. Three collectors are down, and Postgres is the only surviving copy.
 
-Last tick `2026-08-02 14:57 UTC`; **99 markets opened after that timestamp** and were never
-ticked. Not an off-season gap — markets exist with no data. Whatever writes
-`betfair_live.order_book_1m` stopped four days before this was written.
+Confirmed by the user: **Redis on the homelab is down.** That is not a side issue — it is the
+live path. `whatstheodds/pipeline/stream_worker.py` drains Redis into Postgres
+(`INSERT INTO betfair_live.order_book_1m ... ON CONFLICT (market_id, symbol, ts) DO UPDATE`,
+downsampled to the minute), so **`order_book_1m` is the persisted Redis feed, not a parallel
+one.** The brief listed "same collector?" as an unproven inference; it is now proven, and it
+means one `AbstractBookSource` adapter genuinely does serve both live and replay.
+
+It also means Postgres currently holds the only copy of anything.
+
+```
+job                          last output        state
+order-book drain             2026-08-02 14:57   dead (99 markets opened after, never ticked)
+identity resolver            2026-06-22 KO      dead (finding A)
+provisional-lineup scraper   2026-06-26 14:07   dead (finding E)
+```
 
 The live feed also now covers more than the brief recorded: Scottish Premiership,
 Championship, **League One and League Two** (= `ScottishLower`, 56/57 — the modelled segment)
 appeared 2026-08-01, plus Finnish Ykkösliiga. All at 0% resolution, all unticked.
+
+Two column-level facts from the drain that change the design:
+
+- **`last_price_traded` is NULL in 100% of rows** (0 of 428,411). `stream_worker` only writes
+  prices and volumes. So the live/replay path has **no traded price at all** — it cannot
+  reproduce `odds_close`, which the backtest takes from `betfair.odds_history`. Live must price
+  off the book. That is the honest number anyway, but it means replay and backtest are not
+  measuring the same quantity and must never be compared without saying so.
+- **`market_matched` / `total_matched` are populated in 38.4% of rows** (164,515 of 428,411).
+  A `MinMatched` liquidity gate would be blind on the other 62%.
+
+### E. The lineup scraper works. It fires at the wrong hour.
+
+The user's instinct — "we need to get the lineup differently, add a get-lineup query before the
+game starts" — is right, and the precise version is narrower than a redesign: **the scraper
+already exists and is correct; it has never been run inside the window where the answer changes.**
+
+`sofascore.lineup_provisional` in full — 220 rows, 10 matches, and the number that matters:
+
+```
+match                            kickoff             scraped        hrs before KO   confirmed
+drogheda-united v shelbourne     2026-06-19 18:45    13:09:45            5.6          false
+galway-united v derry-city       2026-06-19 18:45    13:09:43            5.6          false
+st-patricks v sligo-rovers       2026-06-19 18:45    13:09:45            5.6          false
+waterford v shamrock-rovers      2026-06-19 18:45    13:09:54            5.6          false
+bohemian v dundalk               2026-06-19 19:00    13:09:47            5.8          false
+shelbourne v bohemian            2026-06-22 18:45    17:08:50            1.6          false
+shamrock-rovers v galway         2026-06-26 18:30    14:07:27            4.4          false
+derry-city v drogheda            2026-06-26 18:45    14:07:50            4.6          false
+dundalk v waterford              2026-06-26 18:45    14:07:28            4.6          false
+bohemian v st-patricks           2026-06-26 19:00    14:07:31            4.9          false
+```
+
+Every scrape ran **4.4–5.8 hours before kick-off** (one at 1.6h), always returning exactly 22
+players. SofaScore publishes the confirmed XI roughly **one hour** before kick-off.
+**`confirmed` has therefore never once been true, on any match, ever.**
+
+`scrape_today_provisional_lineups` in `sofascrape/pipeline/orchestrator.py` even documents the
+fix in its own docstring — *"Re-run as kickoff nears to refresh"*. That re-run has never happened.
+
+Three consequences, in descending order of importance:
+
+1. **`ConfirmedXI` cannot be a blocking gate.** On every row of evidence that exists, it would
+   block 100% of fixtures. This settles §9 Q7 empirically rather than by judgement.
+2. **The fix is a schedule, not a query.** A second invocation at ~T−45min, against the same
+   function. The Julia side needs no new scraper — it needs to read `scraped_at`, compute
+   `kickoff − scraped_at`, and carry that as lineup staleness.
+3. **This is exactly the two-snapshot workflow the paper tracks already describe.** 12 Jun
+   priced at 17:38 pre-lineup and re-priced at 20:11 with XIs confirmed, and found the totals
+   edges held. The infrastructure only ever captured the first snapshot; the second was done by
+   hand, in a browser. That gap *is* the missing feature.
 
 ### D. Portfolio already does what the paper tracks show being done by hand.
 
@@ -537,12 +600,17 @@ Plus an asymmetry that matters more than the LastValue case: the prototype has a
 tracker therefore fails **loudly** at training (MethodError) and **silently** at serving (gets
 the mean). That is precisely backwards. Whatever else is decided, delete that fallback.
 
-**Q7 — Staleness and gating.** *Recommendation: `IdentityResolved`, `MaxBookAge(15min)` and
-`MinMatched` in v1; `ConfirmedXI` as a warning not a block.* Findings A and C say the two things
-most likely to be wrong on any given Saturday are a dead resolver and a dead collector, and
-neither currently produces a visible symptom. **Your call:** should an unconfirmed XI block a
-bet, or just flag it? The 12 Jun track priced at 17:38 pre-lineup and the totals edges held, so
-blocking may cost more than it saves.
+**Q7 — Staleness and gating.** *Recommendation: `IdentityResolved` and `MaxBookAge(15min)`
+blocking; `ConfirmedXI` and `MinMatched` reporting-only.* This was posed as your call; finding E
+answers it with data instead. `confirmed` has never been true on any match in the table, so a
+blocking `ConfirmedXI` blocks everything — it becomes usable only after the T−45min re-scrape
+exists, and even then it should start as a warning. `MinMatched` is demoted for a separate
+reason: `market_matched` is NULL in 62% of order-book rows, so the gate would be blind more
+often than not, and a gate that silently passes on missing data is worse than no gate.
+
+Findings A, C and E say the three things most likely to be wrong on a given Saturday are a dead
+resolver, a dead drain and a stale XI. **None of them currently produces a visible symptom** —
+that is the actual justification for the gate layer, more than any per-bet filtering.
 
 **Q8 — What gets bet.** *Recommendation: config, defaulting to O/U + BTTS, 1X2 display-only.*
 Both paper tracks confirm the negative-G read on 1X2, and 12 Jun found the stronger version:
@@ -642,10 +710,24 @@ PF.fixture_table(Ireland)   1029 entries, 0 unplayed, latest 2026-08-02         
 ds.matches missing scores   0 of 1029
 ```
 
-Unverified, flagged rather than assumed:
-- **Is the Redis feed alive?** `Redis.jl` is not in the server project, and 100.124.38.117 is
-  not reachable from this session. The Postgres archive is definitely stale (finding C); whether
-  the live path shares its fate is unknown and is the first thing to check.
-- **Is `order_book_1m` written by the same collector as Redis?** Inferred from schema and
-  timing, never proven. If true, one adapter serves live and replay; if false, replay tests a
-  different code path than production and is worth much less.
+```
+sofascore.lineup_provisional  220 rows / 10 matches / 2026-06-19..06-26
+  confirmed = true            0 matches, ever                               <- finding E
+  scrape lead time            4.4-5.8h before KO (one at 1.6h); XI lands ~1h out
+order_book_1m columns         last_price_traded NULL in 428,411 of 428,411 (100%)
+                              market_matched populated in 164,515 (38.4%)
+```
+
+Both brief-level unknowns are now closed:
+- **Is the Redis feed alive?** No — confirmed down by the user. Postgres holds the only copy.
+- **Is `order_book_1m` written by the same collector?** Yes, proven:
+  `whatstheodds/pipeline/stream_worker.py` drains Redis into it with
+  `ON CONFLICT (market_id, symbol, ts) DO UPDATE`. One adapter serves live and replay.
+
+Still unverified:
+- **Why did three jobs stop within days of each other in late June?** The resolver (last KO
+  2026-06-22) and the lineup scraper (last run 2026-06-26) died together; the order-book drain
+  survived until 2026-08-02. A common cause is worth ruling in or out before designing gates
+  around them independently.
+- **Does the sofascrape provisional scraper still work?** Its last successful run predates the
+  outage, so "it fires at the wrong hour" (finding E) assumes it would succeed if fired at all.
