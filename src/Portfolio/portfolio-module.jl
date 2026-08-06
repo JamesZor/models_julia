@@ -78,6 +78,9 @@ include("matchday.jl")
 include("metrics.jl")
 include("calibrate.jl")
 
+# last: it dispatches on every type and component defined above
+include("display.jl")
+
 # --- public surface ----------------------------------------------------------
 
 export

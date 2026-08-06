@@ -131,11 +131,4 @@ Partition chronologically ordered books into simultaneous settlement windows.
 group(g::AbstractSlateGrouping, ::Vector{MatchBook}) =
     error("group not implemented for $(typeof(g))")
 
-# ---------------------------------------------------------------- display
-
-for T in (:AbstractPricePolicy, :AbstractCommissionModel, :AbstractAllocator,
-          :AbstractShrinkage, :AbstractTrustModel, :AbstractRiskModel,
-          :AbstractExposureCap, :AbstractSelectionFilter, :AbstractSlateGrouping)
-    @eval component_name(x::$T) = string(nameof(typeof(x)))
-    @eval Base.show(io::IO, x::$T) = print(io, component_name(x))
-end
+# Display lives in display.jl -- including `component_name`, which now renders fields.
