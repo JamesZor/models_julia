@@ -47,21 +47,26 @@ draws per match. Simulating a policy against those books takes milliseconds. So:
 
 If you find yourself rebuilding books to try a different `lambda`, something has gone wrong.
 
-## Match day in one call
+## Match day
+
+**Use `src/MatchDay` — see `current_development/matchday_runbook/`.** It manufactures both
+inputs for unplayed fixtures and hands them here.
 
 ```julia
-sys   = PF.PortfolioSystem(PF.BookSpec(markets = MARKETS), PF.PolicySpec())
-sheet = PF.stake_sheet(sys, latents_df, expr, odds_df, ds; bankroll = 1000.0)
-PF.slate_summary(sheet)          # check EXPOSURE before you read the bets
+res = MD.match_day(spec, sys, DD.Ireland(), expr, ds; as_of = ..., bankroll = 1000.0)
+PF.slate_summary(res.sheet)      # check EXPOSURE before you read the bets
+MD.blocked_report(res)           # read THIS before concluding "no bets today"
 ```
 
-`latents_df` for upcoming fixtures comes from `match_day_inference/src/inference.jl`
-(`compute_todays_matches_latents`), not from `extract_oos_predictions`. `odds_df` needs the
-`ds.odds` schema; a live feed with those columns works exactly like the historical summary.
+⚠️ **The `ds` method of `stake_sheet` cannot price an unplayed fixture.** `fixture_table(ds)` is
+derived from `ds.matches`, the curated store of *finished* matches, so it holds no entry with a
+`nothing` score and an upcoming fixture is absent from it entirely — `build_book` returns
+`nothing` for every one and the sheet comes back **silently empty**. Pass a
+`Dict{Int,FixtureInfo}` instead; `MatchDay.fixture_info(cards)` builds it.
 
-Backtest and match-day share one code path. The only difference is that an unplayed book has
-`settle == nothing`; it can be staked, and `simulate` refuses it rather than scoring a missing
-result as a loss.
+Backtest and match-day still share one code path. The only difference is that an unplayed book
+has `settle == nothing`: it can be staked, and `simulate` refuses it rather than scoring a
+missing result as a loss.
 
 ## The counter-intuitive bit
 
