@@ -169,6 +169,56 @@ book +£1.60 on £3 vs −£0.13 as placed) is a hand-computed version of what t
 the layer being replaced is not just duplicated code, it is the reason the user is doing
 portfolio construction in their head at 17:15 on a Friday.**
 
+### F. The back/lay overlay is worth most exactly where you bet.
+
+Your instinct that "under back is the same as an over lay" is right, and it is worth more than
+I expected. For a two-runner market, laying at `d` is backing the complement at `d/(d−1)`, so
+every O/U position has **two instruments** and you should always take the better one:
+
+```
+effective_over  = max( best_back(Over) , lay_to_back(best_lay(Under)) )
+lay_to_back(d)  = d / (d - 1)
+```
+
+Worked from a real snapshot (Waterford v Shelbourne, O/U 2.5, 2026-08-02):
+back Over = 4.80 direct; lay Under at 1.26 → `1.26/0.26` = **4.846**, i.e. 0.96% better.
+
+Measured across 43,796 uncrossed two-sided snapshots, the *median* gain is ≈0 — the book is
+arbitrage-free, so usually the two instruments agree. But taking the better one is a free
+option, and the option has value. `E[max(0, gain)]` per (competition, market), with the back
+side's own overround alongside:
+
+```
+competition              O/U1.5  O/U2.5  O/U3.5 | back overround @ 3.5
+                          over    over    over  |
+Scottish League Two       0.13%   1.09%   6.43% |   7.94%
+Scottish League One       0.20%   0.97%   3.48% |   6.63%
+Scottish Championship     0.20%   0.93%   5.07% |   4.33%
+Scottish Premiership      0.29%   0.47%   1.94% |   1.71%
+Irish Division 1          0.30%   0.43%   1.88% |   2.13%
+Irish Premier Division    0.28%   0.37%   1.13% |   1.39%
+```
+
+**The gain tracks book width almost monotonically.** It is worth ~1% on Ireland Premier's tight
+central lines and **3.5–6.4% on Scottish League One / Two** — which is `ScottishLower`, the
+segment `funnel_apm_xg` models. As you said, it depends on league and market, so it cannot be a
+constant: it is a per-(competition, market, side) property that must be measured, not assumed.
+
+It is also **asymmetric by side**. On O/U 3.5 the Over is the longshot and `opt_over` dominates;
+on Irish Division 1's O/U 2.5 it inverts (`opt_under` 1.17% vs `opt_over` 0.43%). The rule is
+structural: *quote a longshot by laying its complement*, because the complement is a
+near-certainty and therefore tightly priced, while the longshot's own back book is wide.
+
+Two caveats before this is treated as free money:
+
+- **Size is unverified.** To lay Under 0.5 for £1 of *risk* the backer's stake must be
+  `1/(d−1)` — large at short prices. The `ask_volumes` are in the table and this must be
+  checked before the gain is believed, especially for the O/U 5.5 (46%) and O/U 0.5 (23%)
+  outliers, which almost certainly reflect an empty back book rather than a real edge.
+- **Exposure changes meaning.** A lay's risk is liability `(d−1)×stake`, not stake.
+  `FixedCap` sums stakes. If lays are placed rather than merely priced, the cap must become
+  liability-based or it silently under-counts. See §9 Q4.
+
 ---
 
 ## 2. The 30-second version
@@ -292,6 +342,16 @@ AbstractBookSource          quotes(src, ref, as_of) -> DataFrame
 AbstractQuoteRule           quote_price(rule, levels) -> Float64
                             BestBack | BestLay | MidPrice | DepthWeighted         SPLIT from source
                                                                                   (§9 Q4)
+
+AbstractInstrumentRule      instrument(rule, canonical_sel, book) -> Instrument
+                            DirectBackOnly | BestOfBackLay                        the finding-F morphism.
+                            | SizedBestOfBackLay                                  canonical selection stays
+                                                                                  {over,under}; this picks
+                                                                                  HOW to express it
+
+AbstractStakeRounding       round_stake(r, frac, bankroll, instrument) -> Float64
+                            NoMinimum | FloorOrDrop(1.0)                          the £1 floor, as two
+                            | FloorOrRoundUp(1.0)                                 swappable policies
 
 AbstractReadinessGate       ready(gate, card) -> Ready | Blocked(reason)
                             ConfirmedXI | MaxBookAge | MinMatched | MaxSpread
@@ -669,11 +729,17 @@ orchestration and the gates are genuinely new.
    Both produce an empty DataFrame. Finding B means the second is currently
    guaranteed. Every empty result must carry a reason.
 
-3. £1 IS THE BETFAIR MINIMUM AND THE BANKROLL IS £15.
-   Portfolio's min_selection_stake = 1e-4 is meaningless at that scale: a 1e-4
-   fraction of £15 is 0.15p. Stakes are discrete in £1 units, so a 6.7% granularity
-   sits on top of every allocation. NOTHING IN THE SYSTEM MODELS THIS. It is not
-   fatal but it makes the allocator's third decimal place theatre.
+3. THE £1 MINIMUM IS A FLOOR, NOT A LATTICE.  (corrected)
+   An earlier draft of this file called stakes "discrete in £1 units, 6.7%
+   granularity". That is wrong: £1 is the MINIMUM, and £1.01, £1.02 ... are all
+   legal. Penny granularity on a £15 bankroll is 0.067% and can be ignored.
+   The real constraint is the floor: a leg the allocator sizes at £0.40 must be
+   ROUNDED UP to £1 (2.5x over-staked, breaking the cap) or DROPPED (losing the
+   diversification the joint solve was buying). That is the design question,
+   and it is a live one at £15 -- see AbstractStakeRounding in §5.
+   Note lays interact with this favourably: a lay's risk is (d-1) x stake, so
+   laying at 1.26 puts only £0.26 at risk for the £1 minimum. The morphism in
+   finding F therefore also BUYS SMALLER MINIMUM POSITIONS on short prices.
 
 4. p_market IS A BENCHMARK, NOT A PRICE -- BUT ON MATCH DAY IT IS ALSO A FEATURE.
    For market-pillar engines the same number enters twice, once as a model input
