@@ -7,6 +7,7 @@ struct ScottishLower <: DataTournemantSegment end
 struct ScottishUpper <: DataTournemantSegment end
 struct Ireland       <: DataTournemantSegment end
 struct IrelandFirstDivision <: DataTournemantSegment end
+struct IrelandAll    <: DataTournemantSegment end
 struct SouthKorea    <: DataTournemantSegment end
 struct Norway    <: DataTournemantSegment end
 struct Veikkausliiga <: DataTournemantSegment end
@@ -26,6 +27,13 @@ tournament_ids(::ScottishLower) = [56, 57]
 tournament_ids(::ScottishUpper) = [54, 55]
 tournament_ids(::Ireland)       = [79]
 tournament_ids(::IrelandFirstDivision) = [718]
+# 79 = Premier Division, 718 = First Division. Pooled on the same argument as ScottishUpper:
+# promoted/relegated teams (dundalk 718->79, cork-city 79->718 in 2026) keep one rating.
+# NOTE the player-level engines carry NO zero-sum δ_league offset — unlike the ...League...
+# team engines — so here the tier gap lands in the teams' α/β rather than in a league term.
+# That is harmless while every fixture is within-tier, but it is not the same model as
+# ScottishLower's pooling. 718 also runs hotter: 3.22 goals/match in August vs 79's 2.13.
+tournament_ids(::IrelandAll)    = [79, 718]
 tournament_ids(::SouthKorea)    = [3284, 6230]
 tournament_ids(::Norway)    = [5, 6]
 tournament_ids(::Veikkausliiga) = [31]   # Finnish top flight
