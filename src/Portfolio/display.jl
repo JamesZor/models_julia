@@ -14,6 +14,14 @@
 _pf_fmt(v::Float64) = string(round(v, digits = 6))
 _pf_fmt(v::AbstractRange) = "$(first(v)):$(step(v)):$(last(v))"
 _pf_fmt(v::AbstractString) = "\"$v\""
+
+# Summarise long vectors. BakerMcHale's shrinkage grid is 51 elements and dumping it makes the
+# spec unreadable, which defeats the point of the display.
+function _pf_fmt(v::AbstractVector)
+    length(v) <= 4 && return string(v)
+    return "[$(first(v)) … $(last(v))] ($(length(v)) pts)"
+end
+
 _pf_fmt(v) = string(v)
 
 "Print one `├──`/`└──` row."
