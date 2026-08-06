@@ -45,6 +45,7 @@ using Dates
 using Statistics
 using LinearAlgebra
 using Random
+using Printf          # display.jl
 using Optim
 
 using ..Data
