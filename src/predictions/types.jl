@@ -20,6 +20,9 @@ struct ScoreMatrix{T} <: AbstractScoreMatrix
     # We could store the model reference here if needed, but 'data' is usually sufficient.
 end
 
+score_matrix_data(sm::ScoreMatrix) = sm.data
+
+
 # ------------------------------------------------------------------
 # 2. Output Containers (The final product)
 # ------------------------------------------------------------------

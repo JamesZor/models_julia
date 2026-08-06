@@ -54,7 +54,8 @@ function shrink_factor(s::BakerMcHale, score_matrix, R::AbstractMatrix{Float64},
                        p_true::AbstractVector{Float64}, alloc::AbstractAllocator,
                        exec::ExecutionConfig; seed_offset::Integer = 0)
     size(R, 2) == 0 && return 1.0
-    n_samples = size(score_matrix.data, 3)
+    sm_data = Predictions.score_matrix_data(score_matrix)
+    n_samples = size(sm_data, 3)
     n_samples <= 1 && return 1.0
 
     rng   = Random.MersenneTwister(s.seed + Int(seed_offset))
@@ -63,10 +64,11 @@ function shrink_factor(s::BakerMcHale, score_matrix, R::AbstractMatrix{Float64},
     # portfolio return vector implied by each draw's own optimal allocation
     port = Vector{Vector{Float64}}(undef, length(draws))
     @inbounds for (i, j) in enumerate(draws)
-        q = vec(score_matrix.data[:, :, j])          # copy -> concrete Vector{Float64}
+        q = vec(sm_data[:, :, j])          # copy -> concrete Vector{Float64}
         q ./= sum(q)
         port[i] = R * allocate(alloc, q, R, exec).a
     end
+
 
     best_k, best_u = 0.0, -Inf
     for k in s.grid

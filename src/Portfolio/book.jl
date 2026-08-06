@@ -96,9 +96,11 @@ function build_book(spec::BookSpec, latents_row, expr, odds_df::DataFrame,
     sels = extract_selections(odds_df, m_id, spec, model_probs)
     isempty(sels) && return nothing
 
-    max_h, max_a, _ = size(score_matrix.data)
-    p_grid = vec(mean(score_matrix.data, dims = 3)[:, :, 1])
+    sm_data = Predictions.score_matrix_data(score_matrix)
+    max_h, max_a, _ = size(sm_data)
+    p_grid = vec(mean(sm_data, dims = 3)[:, :, 1])
     p_grid ./= sum(p_grid)                       # absorb grid truncation
+
 
     R   = payoff_matrix(sels, max_h, max_a, spec.exec.commission)
     res = allocate(spec.allocator, p_grid, R, spec.exec)

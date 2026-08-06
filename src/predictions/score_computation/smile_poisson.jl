@@ -27,6 +27,9 @@ struct SmileScoreMatrix <: AbstractScoreMatrix
     Λ::Matrix{Float64}               # [nK × n_samples] per-strike total intensity (K = row-1)
 end
 
+score_matrix_data(sm::SmileScoreMatrix) = sm.grid.data
+
+
 # 1. Adapter: DataFrame Row -> NamedTuple
 extract_params(::AbstractSmilePoissonEngines, row) =
     (λ_h = row.λ_h, λ_a = row.λ_a, λ_tot = row.λ_tot, φ = row.φ)
