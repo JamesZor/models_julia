@@ -59,6 +59,8 @@ const PortfolioComponent = Union{AbstractPricePolicy, AbstractCommissionModel, A
                                  AbstractExposureCap, AbstractSelectionFilter,
                                  AbstractSlateGrouping}
 
+Base.show(io::IO, x::PortfolioComponent) = print(io, component_name(x))
+
 function Base.show(io::IO, ::MIME"text/plain", x::PortfolioComponent)
     printstyled(io, string(nameof(typeof(x))), color = :green, bold = true)
     props = propertynames(x)
