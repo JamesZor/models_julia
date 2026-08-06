@@ -24,7 +24,6 @@ export MyDistributions
 # include("data/data-module.jl") #
 # FIX: dev test 
 include("./Data/data-module.jl")
-include("./DataLegacy/data-module.jl")
 
 # 4. Features depends on Data, TypesInterfaces, and Models.
 include("features/features-module.jl") #
