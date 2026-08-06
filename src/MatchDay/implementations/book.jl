@@ -53,7 +53,12 @@ function quotes(s::ArchivedOrderBook, r::Resolved, as_of::DateTime)
     isempty(rows) && return out
 
     for row in eachrow(rows)
-        key = betfair_to_key(String(row.market_type), String(row.symbol))
+        mt, sym = String(row.market_type), String(row.symbol)
+        # MATCH_ODDS runners are team names, so they need the fixture to resolve; every other
+        # market names its runners structurally ("Over 2.5 Goals", "Yes").
+        key = mt == "MATCH_ODDS" ?
+              betfair_to_key_1x2(sym, r.fixture.home, r.fixture.away) :
+              betfair_to_key(mt, sym)
         key === nothing && continue
         # Prices and volumes are integers scaled x10000 on the exchange feed.
         lv = BookLevels(_unscale(row.bid_prices), _unscale(row.bid_volumes),
