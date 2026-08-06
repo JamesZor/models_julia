@@ -59,13 +59,20 @@ end
 
 Inverse mapping, from a `market_metadata.market_type` plus an `order_book_1m.symbol`.
 
-Runner names are matched on structure, not on team identity: `"Over 2.5 Goals"`, `"Under 2.5
-Goals"`, `"Yes"`, `"No"`, `"Draw"`. The home/away runners of MATCH_ODDS carry team names, which
-cannot be resolved without the fixture, so 1X2 home/away are handled by
-[`betfair_to_key_1x2`](@ref) instead.
+Runner names are matched structurally. MATCH_ODDS arrives **already normalised** to `"home"`,
+`"draw"`, `"away"` -- the collector does that, so no team-name matching is needed. (An earlier
+version of this file assumed those runners carried team names, which is what the raw Betfair
+API returns; it does not survive the collector. Verified against `order_book_1m`.)
+`betfair_to_key_1x2` remains as a fallback for a feed that has not been normalised.
 """
 function betfair_to_key(market_type::AbstractString, runner::AbstractString)
-    if startswith(market_type, "OVER_UNDER_")
+    if market_type == "MATCH_ODDS"
+        r = lowercase(strip(runner))
+        r == "home" && return (group = "1X2", line = 0.0, selection = :home)
+        r == "draw" && return (group = "1X2", line = 0.0, selection = :draw)
+        r == "away" && return (group = "1X2", line = 0.0, selection = :away)
+        return nothing
+    elseif startswith(market_type, "OVER_UNDER_")
         digits = market_type[12:end]
         length(digits) < 2 && return nothing
         line = tryparse(Float64, digits[1:end-1] * "." * digits[end:end])
