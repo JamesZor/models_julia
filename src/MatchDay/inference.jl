@@ -19,7 +19,58 @@
 # so no market-pillar engine could ever run on match day. Materialisers dispatch per feature.
 
 export select_split, matchday_latents, RatingsFromTracker, MarketPillarFromBook,
-       MaterialiserChain
+       MaterialiserChain, check_coverage
+
+"""
+    INJECTABLE_KEYS
+
+`FeatureSet.data` entries that are **per-match lookup maps**, which is what
+`extract_parameters` indexes for a fixture it has never seen. Everything else in a `FeatureSet`
+is a flat training-time array (`:flat_home_goals`, `:flat_market_λ_home`, ...) and is not read
+at inference.
+
+Verified against `DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel`, whose
+`extract_parameters` reads exactly `row.home_team`/`row.away_team` (via `:team_map`),
+`row.match_id` (via `:player_ratings_map`), and optional `row.season_idx`/`row.month_idx`.
+"""
+const INJECTABLE_KEYS = (:player_ratings_map,)
+
+"""
+    check_coverage(fs, fixtures, model)
+
+Assert that every fixture is actually representable, and say precisely what is missing when it
+is not.
+
+This checks **per-fixture coverage**, not per-feature presence. `haskey(fs.data,
+:player_ratings_map)` is true straight out of training and tells you nothing about today; a
+fixture absent from that map is priced off `get(ratings_map, mid, Dict())`, i.e. an empty
+rating vector, silently.
+"""
+function check_coverage(fs, fx::Vector{Fixture}, model)
+    data = fs.data
+    problems = String[]
+
+    if haskey(data, :team_map)
+        tm = data[:team_map]
+        unknown = unique(vcat([f.home for f in fx if !haskey(tm, f.home)],
+                              [f.away for f in fx if !haskey(tm, f.away)]))
+        isempty(unknown) || push!(problems,
+            "teams absent from team_map (would be priced as league-average): " *
+            join(unknown, ", "))
+    end
+
+    if haskey(data, :player_ratings_map)
+        rm = data[:player_ratings_map]
+        missing_ids = [f.m_id for f in fx if !haskey(rm, f.m_id)]
+        isempty(missing_ids) || push!(problems,
+            "fixtures with no entry in player_ratings_map (extract_parameters would fall back " *
+            "to an empty Dict and price them with zero player strength): " *
+            join(string.(missing_ids), ", "))
+    end
+
+    isempty(problems) && return true
+    error("MatchDay.check_coverage: " * join(problems, " | "))
+end
 
 """
     select_split(expr, boundaries; strict = true) -> (idx, chain, warning)
@@ -199,14 +250,22 @@ function matchday_latents(spec::MatchDaySpec, expr, ds, cards::Vector{<:FixtureC
     lineups = Dict(c.fixture.m_id => c.lineup for c in cards if c.lineup !== nothing)
     ctx = (ds = ds, model = model, as_of = as_of, odds = odds_df, lineups = lineups)
 
-    for feat in Features.required_features(model)
-        materialise!(spec.features, Val(feat), fs, fx, ctx) && continue
-        haskey(fs.data, feat) || error(
-            "MatchDay: no materialiser handled required feature :$feat, and the training " *
-            "FeatureSet has no entry for it. Add an AbstractFeatureMaterialiser method for " *
-            "Val{:$feat} -- carrying a stale value forward silently is the failure this " *
-            "check exists to prevent.")
+    # What `extract_parameters` actually needs for an unseen fixture is narrow: the team_map
+    # must know both teams, and any per-match lookup map must have an entry keyed by match_id.
+    # The flat `:flat_*` arrays are training-time data and are NOT read at inference.
+    #
+    # Note `Features.required_features(model)` returns feature *config objects*, not symbols, so
+    # it cannot be used to drive `Val` dispatch. Materialisers are keyed on the FeatureSet's own
+    # per-match map names instead, which is what extract_parameters indexes.
+    for key in INJECTABLE_KEYS
+        haskey(fs.data, key) || continue
+        materialise!(spec.features, Val(key), fs, fx, ctx)
     end
+
+    # Per-fixture coverage, not per-feature presence. `haskey(fs.data, :player_ratings_map)` is
+    # true straight out of training and says nothing about today -- checking it would be exactly
+    # the silent stale-value failure this guard exists to prevent.
+    check_coverage(fs, fx, model)
 
     frame = DataFrame(match_id = [f.m_id for f in fx],
                       home_team = [f.home for f in fx],
