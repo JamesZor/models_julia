@@ -36,11 +36,25 @@ dispersion rather than pool. Running the 79 engine over 718 fixtures would price
 higher-dispersion league with a lower-dispersion posterior — silently, and in the direction
 that under-prices totals tails.
 
-So decision 6 needs one more bit: **does v1 mean 79 only, or 79 + 718?** If 79 only, the
-fixture source must filter on segment and the extra 38 live events per cycle go unused. If both,
-718 needs its own trained engine before match day, not after. Recommend **79 only for v1** —
-it is the one with a validated engine, a paper-track history and the `staking_layer` OOS work
-behind it — and 718 as the first extension, since the live book is already being collected.
+**RESOLVED: 79 only for v1.** The fixture source filters on segment, and the ~38 First Division
+events per cycle are collected but not priced. 718 is the first extension and needs its own
+trained engine before it is bet, not after.
+
+### Decision 8 — size/volume checking is out of scope
+
+Deliberate call: `ask_volumes` is not queried and `SizedBestOfBackLay` is not built for v1.
+Justified by stake size — at a small bankroll the available depth on a central line will not
+bind.
+
+One mechanic to be aware of rather than to fix now. The synthetic instrument needs backer stake
+`s/(d−1)`, which **blows up as `d → 1`**: laying Under 0.5 at 1.02 requires £50 of backer stake
+for £1 of risk. So the lines where size *could* bind are exactly the extreme ones — which is
+also where the finding-F gain looked implausible (O/U 5.5 at 46%, O/U 0.5 at 23%).
+
+There is a guard that costs nothing and needs no volume data: **reject a synthetic whose
+leverage `1/(d−1)` exceeds a threshold**. At 20× that removes every price below `d = 1.05`,
+which kills both outliers without a single size query. Recommended as the `BestOfBackLay`
+default rather than as separate machinery.
 
 ### The consequence of (1) + (2): lays need no Portfolio change at all
 
@@ -277,15 +291,15 @@ on Irish Division 1's O/U 2.5 it inverts (`opt_under` 1.17% vs `opt_over` 0.43%)
 structural: *quote a longshot by laying its complement*, because the complement is a
 near-certainty and therefore tightly priced, while the longshot's own back book is wide.
 
-Two caveats before this is treated as free money:
+One caveat survives, and one has been retracted:
 
-- **Size is unverified.** To lay Under 0.5 for £1 of *risk* the backer's stake must be
-  `1/(d−1)` — large at short prices. The `ask_volumes` are in the table and this must be
-  checked before the gain is believed, especially for the O/U 5.5 (46%) and O/U 0.5 (23%)
-  outliers, which almost certainly reflect an empty back book rather than a real edge.
-- **Exposure changes meaning.** A lay's risk is liability `(d−1)×stake`, not stake.
-  `FixedCap` sums stakes. If lays are placed rather than merely priced, the cap must become
-  liability-based or it silently under-counts. See §9 Q4.
+- **The extremes are not real.** O/U 5.5 (46%) and O/U 0.5 (23%) almost certainly reflect an
+  empty or near-empty back book rather than an edge. Size is out of scope (decision 8), so
+  these are handled by the leverage cap in §0 — reject a synthetic needing more than ~20×
+  leverage — which removes them on price alone. The central lines (1.5/2.5/3.5), where the
+  0.3–6.4% figures sit, are unaffected by that guard.
+- ~~Exposure changes meaning and `FixedCap` must become liability-based.~~ **Retracted.** Once
+  the morphism normalises to risk units, `FixedCap` is already summing liability. See §0.
 
 ---
 
@@ -706,14 +720,11 @@ per run. The canonical selection stays `{over, under}`, so `Data.grade_selection
 change and the payoff matrix never sees two rows for one state — my earlier worry about that
 was misplaced, because the morphism collapses the pair *before* a `Selection` is constructed.
 
-What remains open here is narrower and empirical: **is the finding-F gain real at size?**
-`ask_volumes` is in the table and unqueried. Recommended default until it is checked:
-`BestOfBackLay` for pricing (it is a strict improvement on the number), `DirectBackOnly` for
-placement. The instrument abstraction makes flipping that a config change, which is the point.
-
-A second open one: `SizedBestOfBackLay` should reject a synthetic price whose required backer
-stake `s/(d−1)` exceeds available `ask_size`. Without it the O/U 5.5 (46%) and O/U 0.5 (23%)
-figures will flow straight into stakes as though they were free.
+Size checking is out of scope for v1 (decision 8). `BestOfBackLay` carries a **leverage cap**
+instead — reject the synthetic when `1/(d−1)` exceeds ~20× — which removes the implausible
+extremes using price alone. `SizedBestOfBackLay` stays declared but unimplemented, in the same
+way `NetMarketCommission` and `VolTargetCap` are declared-but-unimplemented in `src/Portfolio`:
+the seam exists so adding it later changes no existing file.
 
 **Q5 — Feature materialisation.** *Recommendation: per-feature dispatch on `Val{:name}`,
 mirroring `Features.add_feature!`.* The special-case version cannot run `src_sup40_sw40`, which
