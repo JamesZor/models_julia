@@ -61,6 +61,355 @@ Thin Betfair LTP is enough: we need fair value, not fills.
   with ℓ1 crossing cost; race: hold vs exit-rule τ=−0.05 vs rebalancer.
   Benchmark to beat: exit-rule uplift +0.306±0.059 (t=5.21).
 
+## Log — BBC in-play MVP stream (newest first)
+
+Plan: `~/.claude/plans/elegant-skipping-pinwheel.md` (session 2026-07-29).
+Branch `feat/inplay-bbc-mvp`, off `feat/apm-player-rating-l1` (carries `ds.bbc_events`).
+Prototype only — **no `src/` changes**; WP-H is a written graduation sketch.
+
+- 2026-07-29: **CALIBRATION LAYER (user ask) — NULL on predictive score, REAL on reliability;
+  and the level drift turns out NOT to be forecastable** (`l10_calibrate.jl`, `r09_calibrated.jl`).
+  Everything fitted on 24/25 with r08's 24/25-only chain, tested on 25/26. Four arms plus an
+  oracle reference.
+  - **The level fix barely fires, because there is nothing to learn.** Fitted on 24/25 the
+    level multiplier is **0.9945** (−0.55%); the test season actually needs **0.9528** (−4.7%).
+    The model was correctly levelled on its training season and became 5% hot on the next one
+    — **genuine season-to-season drift, not a stable bias**, so it cannot be pre-corrected.
+    Held-out hotness moves only 4.95% → 4.37%. A trailing-120-match rolling level does better
+    (mean 0.975 vs oracle 0.953) but is noisy across the season (0.910–1.053).
+  - **Even the ORACLE level does not improve the book** — match-clustered gains vs raw:
+    O/U −0.00003 (t = −0.03), BTTS −0.0013 (t = −0.83), 1X2 +0.00035 (t = 0.97). So the +5%
+    level error is **real but nearly irrelevant to the probabilities that matter for staking**.
+    It would bite on a direct total-goals derivative; on the 1X2/O/U/BTTS book it is second
+    order. Worth knowing before anyone spends effort chasing it.
+  - **The calibrator could not see the miscalibration that appears out of sample.** Fitted on
+    24/25 it reads 1X2 `b = 0.981` — essentially identity, "nothing wrong here" — while the
+    held-out season needs shrinkage. It sharpened O/U (`b = 1.054`) and BTTS (`b = 1.151`)
+    instead. **The 1X2 over-confidence does not transfer across seasons**, so it survives
+    calibration: 0.754 → 0.707, 0.842 → 0.807, 0.972 → 0.952 after the full layer.
+  - **Race verdict: NULL on log-loss.** Best gain is O/U `level+family` **+0.00078, t = 2.03**
+    — one of **12** comparisons, worth about the same as the measured in-sample optimism
+    (0.001 nats), and it survives no multiplicity correction. 1X2 +0.00023 (t = 1.08), BTTS
+    −0.00019 (t = −0.14, slightly worse). Recorded as a null.
+  - **But reliability genuinely tightens**, which is the part Kelly cares about. Max |p − y|
+    over buckets with n ≥ 50: **BTTS 0.062 → 0.043, O/U 0.038 → 0.029, 1X2 0.052 → 0.046**.
+    That is the textbook pattern — calibration fixes the *reliability* component of the score
+    without touching *resolution*, so log-loss barely moves while the stated probabilities
+    become more honest. For staking that is worth having even at flat log-loss.
+  - **Practical recommendation:** ship `l10` (cheap, does not hurt, tightens reliability), use
+    `rolling_level` rather than a frozen seasonal constant, and do **not** expect either to
+    improve predictive score. The model's discrimination is what it is; the layer only makes
+    its numbers mean what they say.
+  - `apply_calibration` renormalises within each market group. Calibrating selections
+    independently breaks home+draw+away = 1 and each O/U pair, which would hand a Kelly
+    staking layer fake arbitrage to size into.
+
+- 2026-07-29: **OOS EVALUATION (user ask) — the in-sample optimism is NEGLIGIBLE and now
+  MEASURED; the market tie holds out of sample; the model's real error is the LEVEL, ~5% hot**
+  (`r08_oos.jl`, plus `l09` gaining the `:expo` integrator).
+  - **Split, on the pregame convention:** fit the NHPP on **24/25 only (360 matches, 955
+    goals)**, score **25/26 (349 matches, 971 goals)**. The 25/26 pregame latents are already
+    walk-forward OOS from the funnel run, so **both stages are out of sample end-to-end**.
+    BBC is what makes this a real test: 25/26 has incidents for only 16 of 175 t56 matches,
+    so an incidents-only holdout would have been almost entirely t57. First end-to-end use of
+    the BBC clock (`kind = :expo`, 18-bin [0,90] frame + per-match stoppage).
+  - **THE OPTIMISM QUESTION IS SETTLED.** Fitting the same spec on ALL data and scoring the
+    same test set gives a match-clustered log-loss gap of **+0.0010 (1X2, t = 1.91), +0.0007
+    (O/U, t = 0.65), −0.0007 (BTTS, t = −0.62)** — about **0.001 nats**. The monthly
+    walk-forward agrees independently: mean gap **0.00044** nats/row over 15 folds, max
+    0.0011, one fold negative. So every previously published in-play number (r02b's tie, r06's
+    tie on 376 matches) **stands as reported**. "Should be small" was right, and is now a
+    measurement rather than an assumption.
+  - **The market tie HOLDS out of sample** — 269 held-out matches, 7,574 rows:
+    1X2 t = **−0.04** (corr 0.931), O/U t = **+1.25** (corr 0.962), BTTS t = **−1.50**
+    (corr 0.827). All |t| < 2, same verdict as in-sample. NB the pooled row-level log-loss
+    puts the market marginally ahead in all three families while the match-clustered mean
+    favours the model on O/U — row-weighting vs match-weighting, neither significant. Report
+    it as a tie and say which weighting.
+  - **THE REAL ERROR IS THE LEVEL, and it is one scalar.** At kickoff on the held-out season
+    the model prices **2.920 goals against 2.782 realised — +5.0% hot**. Decomposed: the
+    pregame engine alone is 2.871, i.e. **+3.2% hot**, and the NHPP fitted on 24/25 adds
+    another ~1.8% (K = 1.0511 trained on 24/25 vs K = 1.0146 for the correctly-calibrated
+    in-sample fit). Two lessons: (a) the level DRIFTS between seasons — 24/25 realised 2.653
+    goals/match, 25/26 realised 2.782, up 4.9% — and a fixed α does not track it; (b) this is
+    a single number, so periodic K recalibration on recent matches is the cheap fix. **This is
+    a bigger error than anything the MVPs were chasing.**
+  - **The 1X2 favourite over-confidence SURVIVES out of sample**, milder but one-directional:
+    p 0.754 → y 0.702, p 0.843 → y 0.801, p 0.972 → y 0.953; and under-confident below 0.5
+    (0.028 → 0.032, 0.157 → 0.173). Classic over-dispersion. **Shrink the 1X2 book toward
+    0.5 before staking it.**
+  - **O/U miscalibrates the OTHER way — under-confident**: p 0.139 → y 0.101, p 0.861 →
+    y 0.899, p 0.652 → y 0.679. Totals are too COMPRESSED while 1X2 is too SPREAD. That is
+    consistent with the repo's existing "totals compression is denoising" finding, and it
+    means a single global shrinkage would fix one family and break the other — **calibrate
+    per family**.
+  - Posterior is stable across the split: α −4.577 vs −4.602, γ_man 0.421 vs 0.484
+    (×1.52 vs ×1.62), β 0.197 vs 0.148. γ_tr flips sign (−0.111 vs −0.055) but both hug
+    zero — consistent with game state being the weak term throughout. max R̂ 1.004.
+  - ⚠ Reporting trap: the per-checkpoint `bias` column is **structurally zero** (~1e-18)
+    because complementary selections sum to 1 within each family. Same for r06's
+    `model_minus_mkt`. Neither is evidence of unbiasedness; use the level check above.
+
+- 2026-07-29: **WP-E SKIPPED — user decision.** With MVP-1 and MVP-2 both null and the plan's
+  pre-registered expectation (BBC's value is *coverage*, not a new model) holding, the user
+  chose to go straight to the WP-F race rather than spend a fit on MVP-3. The plan itself
+  predicted MVP-3 would be **the weakest of the three** — it spends the most parameters on
+  the noisiest signal — so this drops the least informative arm.
+  **Consequence to remember if it is ever revived:** the blocking `fit_shot_xg` leak fix was
+  never done. `fit_shot_xg` is fitted globally, which pregame was measured as negligible
+  (pillar ρ 0.9942, implied log-λ shift 0.0034) but **in-play is disqualifying** — the model
+  would read the outcome of the shot it is pricing. MVP-3 cannot be run without refitting the
+  xG table excluding every match in the evaluation fold. Race arm 3 is therefore ABSENT, not
+  scored as null.
+
+- 2026-07-29: **WP-D DONE — GATE D NULL on both halves; and the run caught a HARNESS BUG that
+  inflates every fold-paired t in this stream by ~3×** (`l07_nowcast.jl`, `r05_nowcast.jl`).
+  - **⚠ THE HARNESS FINDING IS THE IMPORTANT ONE.** `l01.paired_diff` differences the 20
+    (repeat, fold) means and divides by their SD. That treats 20 numbers as independent when
+    (a) each fold mean already averages ~137 held-out matches, so its variance is ~1/137 of
+    the match-level variance, and (b) the 5 repeats re-score **the same 550 matches**. The
+    independent unit is the MATCH.
+
+    | comparison | t fold-paired | **t match-clustered (n=550)** |
+    |---|---|---|
+    | nowcast − full | 1.43 | **0.60** |
+    | nowcast_opp − full | 3.17 | **1.07** |
+    | nowcast_opp − nowcast | 2.43 | 0.91 |
+    | full − state (man_adv control) | 8.62 | **2.43** |
+    | state − time | 0.33 | 0.22 |
+
+    Inflation ≈ **2.4–3×**, larger than the ~1.9× measured elsewhere in this repo, and it
+    is analytic: `SE_fold = σ_match/√(137·20)` vs `SE_match = σ_match/√550` ⇒ ratio √(2740/550)
+    = 2.23, plus the repeat correlation. **Every fold-paired t in this stream is overstated
+    by roughly this factor, including the incumbent's published 6.29 / 0.51 / 8.85.** No
+    published sign flips and no conclusion reverses — man_adv survives at 2.43, state stays
+    null at 0.22 — but magnitudes must be read accordingly. `match_clustered_cv` / `mc_diff`
+    added; `cv_race` / `paired_diff` are demoted to fast spec-screening only. **WP-F must use
+    the clustered harness.**
+  - Also revises WP-C's numbers downward without changing its verdict: t_state 0.33 → ~0.14,
+    t_man 8.62 → 2.43. The control argument survives because it rests on the RATIO.
+  - **Gate D (i): NULL.** Own surplus adds t = **0.60** over the incumbent (pre-registered
+    bar was |t| > 2). γ_sf = 0.109 [0.027, 0.192] is credibly positive in-sample, but it does
+    not buy held-out prediction. Adding the OPPONENT's surplus reaches t = 1.07 — the t = 3.17
+    that looked significant was purely the harness bug. Recorded as a null; **not** written up
+    as a near-miss.
+  - **Gate D (ii): calibration is CLEAN, which does not rescue it.** Bias at 60/75/85′ =
+    **+0.004 / +0.016 / +0.016** (se ~0.04/0.03/0.02) — comparable to the incumbent's
+    +0.020/+0.014/+0.003 and far better than MVP-1's −0.075/−0.051/−0.024. By surplus tercile
+    all nine cells sit within ~1 SE (largest: high-surplus +0.058 ± 0.069 at 60′). The gate
+    required both halves to move together; only one did, so it is a null.
+  - **The pre-registered confound is CLEANLY RULED OUT** — this null is not a confound
+    artifact. Freeing the pregame-rate exponent retains **98.3%** of γ_sf (0.1090 → 0.1071)
+    and ρ = 0.917 [0.684, 1.160] covers 1, so the model is not rescaling the pregame belief.
+    Pinning the pregame rate at 1 leaves the surplus contribution unchanged (t 1.46 vs 1.43
+    fold-paired). Surplus is genuinely measuring in-match deviation; there is just not much
+    in it.
+  - **Leak audit — kept, but it answers less than it looks like.** The future-shifted surplus
+    scores t = 28.3 vs the causal 1.43. That is **tautological, not informative**: a goal IS a
+    shot (`goals ⊂ shots` by construction), so letting the covariate see the slice being
+    predicted cannot lose. What it does establish is that the causal build is **not leaking** —
+    an off-by-one would have put the causal t near the future one instead of ~500× below it in
+    mean effect. Downgraded in the code to a negative control. A real version would have to
+    exclude goals from the shot count.
+  - Surplus covariate audits clean pre-fit: E[shots] calibrated to 2% late in the match
+    (7.65 observed vs 7.51 expected), the high clamp binds on 0.035% of rows, 15.0% of rows
+    are held at surplus = 0 (the early slices where E < 1 shot), raw cor(surplus, y) = 0.020.
+  - Posterior otherwise reproduces the incumbent: β 0.145, γ_man 0.493 (×1.64), max R̂ 1.005.
+
+- 2026-07-29: **WP-C DONE — GATE C IS A CLEAN NULL on its pre-registered criterion, and the
+  null is TRUSTWORTHY because a control resolved on the same data. The decomposition then
+  found the real mechanism, in conversion rather than volume** (`l06_shot_flow.jl`,
+  `r04_shot_flow.jl`). 550 matches, **10,202 shots vs 1,498 goals = 6.8× the counts**;
+  realised 9.27 shots / 1.36 goals per team-match against pregame λ_s 9.03 and p2 0.1488
+  (empirical 0.1468 — the thinning assumption holds to 1.4% before any fitting).
+  - **The pre-registered question was: is the incumbent's game-state null (`state − time`
+    t = 0.51 on goals) a real absence, or a resolution failure at 1.4 goals per team-match?
+    Answer: a REAL ABSENCE.**
+
+    | arm | resolution | counts | t_time | **t_state** | t_man |
+    |---|---|---|---|---|---|
+    | funnel_apm_xg | shots | 10,202 | 1.04 | **0.33** | 8.62 |
+    | funnel_apm_xg | goals | 1,498 | 3.06 | **0.60** | 4.43 |
+    | funnel_winner | shots | 10,202 | 1.04 | **−0.21** | 8.52 |
+    | funnel_winner | goals | 1,498 | 3.06 | **1.17** | 4.36 |
+
+    Win condition was |t| > 2 at shot resolution. Measured 0.33 / −0.21 — **not merely
+    short of it, slightly WEAKER than at goal resolution.** Recorded as a null.
+  - **Why this null is believable rather than a power failure — the control resolved.**
+    `γ_man` goes **t = 4.4 (goals) → 8.6 (shots)**, i.e. the red-card effect nearly doubles
+    its t-stat on exactly the 6.8× counts that left game state flat. The instrument works;
+    it just finds nothing for game state. Without that control the null would be worth
+    little, which is why the race was run at both resolutions on the SAME matches.
+  - **BUT game state does act — on CONVERSION, not volume.** Empirical conversion by state:
+    **level 13.9%, leading 17.3%, trailing 13.6%.** Match-CLUSTERED bootstrap (2,000 reps
+    over 550 matches, because a Binomial likelihood treats 10k shots as independent when
+    they cluster in matches): **leading − level = +0.0337 ± 0.0071, z = 4.76**, CI
+    [0.020, 0.048]; trailing − level = −0.003, z = −0.48 (nil). The Turing fit agrees:
+    κ_ld = +0.252 [0.146, 0.360], κ_tr = −0.028 [−0.137, 0.080].
+    **A team that is ahead does not shoot more — it shoots better.** Counter-attacking
+    transition chances, which is a quality effect a goal-count model cannot see.
+  - **This RESOLVES the open question r01/r01b left.** r01 found `γ_ld = +0.09` on goals with
+    the sign FLIPPED vs Ireland's −0.24, and r01b could only say it was "most consistent
+    with pregame-λ frailty, not team character". The shot decomposition shows what it
+    actually is: on shot VOLUME `γ_ld = −0.073` [−0.116, −0.030] — **negative, back in
+    Ireland's direction** — while conversion is strongly positive. The goal-level `γ_ld`
+    was the NET of two real, opposite-signed mechanisms, not an artifact. `γ_tr = +0.049`
+    [0.005, 0.092] (trailing teams shoot slightly more, convert no better).
+  - **Second part of Gate C — checkpoint bias — REGRESSED.** Remaining-goals bias at
+    60/75/85′ is **−0.075 / −0.051 / −0.024** (se 0.041 / 0.033 / 0.023) against the
+    incumbent's clean +0.020 / +0.014 / +0.003. MVP-1 **under**-predicts late goals.
+    The diagnosis is in the same table: `t_time` falls 3.06 (goals) → 1.04 (shots), so goal
+    intensity rises over the match *more* than shot intensity does — conversion rises late,
+    and constant-p2 thinning structurally cannot express that. Same story as `γ_man` 0.436
+    on shots (×1.55) vs the incumbent's 0.53 on goals (×1.70): conversion improves with a
+    man advantage too.
+  - **Verdict: MVP-1 as specified is NOT a replacement for the incumbent** — it is worse on
+    the calibration check while being null on the term it was built to resolve. Its value is
+    diagnostic: it separates volume from conversion and settles the γ_ld question. The
+    indicated fix (state- and time-dependent p2, already fitted here and credibly non-zero)
+    is a change of specification, not a tuning knob, and belongs to a later iteration rather
+    than being smuggled into WP-F. Carry MVP-1 into the race as specified.
+  - max R̂ 1.006 across both fits.
+  - Ops note: the kaimon gate reported `failed — no activity for 10m` at 15m34s while Julia
+    was still running and had already written `out/r04_gate_c.jls`. **Check artifacts and
+    load average, not the gate's verdict.** Load had fallen 6.57 → 0.54, confirming
+    completion; `ps` `%CPU` is a lifetime average and stays pinned at 416, so it is useless
+    as a liveness signal — the load average is the live one.
+
+- 2026-07-29: **WP-B DONE — pregame source is pluggable; GATE B FAILS ON THE LETTER, for one
+  fully-diagnosed scalar reason** (`l05_pregame_source.jl`, `r04b_pregame_source.jl`).
+  - `AbstractPregameSource` replaces r01/r02's hard-coded `.jls` read. `ExperimentSource`
+    goes through `load_experiment` → `extract_oos_predictions`; `LatentsFileSource` keeps
+    the legacy file loadable with its shot fields explicitly `nothing` rather than silently
+    substituted. `assemble_matches` generalises `l01.assemble_nhpp_matches` along both axes
+    the race needs (event source: incidents or BBC seqs + stoppage; pregame source: full
+    draw vectors, not the posterior mean).
+  - **Funnel latents load clean and the thinning identity holds**: 710 matches × 4,000
+    draws; λ_h 1.445 / λ_a 1.299, λ_s_h 9.72 / λ_s_a 8.74, p2 0.1488, and
+    9.715 × 0.1488 = 1.445 = λ_h exactly. ~9–10 shots vs ~1.4 goals per team-match is the
+    **7× count advantage MVP-1 is betting on**.
+  - Coverage confirms the plan's ceiling: latents exist for **24/25 + 25/26 only** (710),
+    and under `require_incidents` that is **551 matches** — the same common subset WP-F
+    will race on, so Gate B is measured on the race's own sample.
+  - **Gate B is NOT inherited and was refit, not rechecked.** The NHPP absorbs the pregame
+    level into α, so pairing a multiplier chain trained against one pregame engine with a
+    different engine's λ is the uncongeniality failure RESEARCH.md §3 warns about. Both
+    arms were refit on 551 matches / 1,503 goals (max R̂ ≤ 1.005).
+
+    | arm | kernel | max price gap | gap after removing level |
+    |---|---|---|---|
+    | funnel_apm_xg | 0.9856 | **0.0115** | 0.0018 |
+    | funnel_winner | 0.9835 | **0.0138** | 0.0018 |
+
+    Pre-registered thresholds were kernel ≈ 0.988 (~1.2%) and max gap < 0.01. **Both arms
+    miss both.** Recorded as a FAIL, not rounded into a pass.
+  - **The whole failure is one scalar.** `gate_b_decompose` re-prices the pregame reference
+    with λ scaled by K: the max gap collapses **0.0138 → 0.0018** with per-selection means
+    < 0.0008, i.e. the Monte Carlo floor at `n_pairs = 2000`. So the composed and pregame
+    books agree in SHAPE on all 17 selections and differ only by a uniform level rescale.
+    The gap is not 17 failures; it is K, twice.
+  - **Interpretation: this is the funnel engines being hotter than the decay grid, which the
+    NHPP is correctly reporting.** K < 1 means the NHPP, fitted on realised goal times, puts
+    total intensity 1.4% (APM) / 1.6% (winner) below the pregame λ — against the old grid's
+    1.2%. The signature is diagnostic: every `over_*` biased down, every `under_*` up by the
+    same amount, 1X2 barely touched (max 0.003) because a uniform scaling of both sides
+    cancels in the ratio. Note this is still far inside the **~5% pregame hotness already
+    recorded for this stack**, so nothing new is broken — the funnel arms are simply
+    0.2–0.4 pp hotter than the engine the 0.988 threshold was calibrated on.
+  - **Do not "fix" this by recentring α to force K = 1.** That would make the in-play book
+    inherit the pregame engine's level bias, which is worse fair value, not better. The
+    honest options are to carry the offset as a known, measured property or to re-threshold
+    the gate against the funnel engines; that is a call for the user, not a silent waiver.
+  - **USER DECISION (2026-07-29): accept and carry the offset.** Gate B stands in the log as
+    a documented marginal FAIL; K is recorded per pregame arm as a known calibration
+    property of the pregame/multiplier pair (funnel_apm_xg 0.9856, funnel_winner 0.9835),
+    and downstream work proceeds. Any later composed-price claim must state which K it
+    carries.
+  - Gotcha banked: a 111-hour-old REPL threw
+    `MethodError: no method matching extract_oos_predictions(::DataStore, ::ExperimentResults)`
+    with a `@world(...DataStore, 38680:39881)` annotation — Revise had rebound `DataStore`,
+    so the method was compiled against a dead world age. Same family as the `const` Union
+    trap, but triggered by uptime rather than by an edit. `manage_repl restart` fixes it.
+  - The legacy `latents_hl365_hs2.jls` is a homelab artifact and is not on mcmc-beast; the
+    source is skipped when absent, since every race arm composes against a funnel engine.
+
+- 2026-07-29: **WP-A extension (user ask) — BBC CLOSES r00's stoppage-clamping problem.**
+  r00 flagged that this SofaScore feed clamps every stoppage goal to exactly mm=45/90 with
+  added_time=0, so `l01` had to proxy the H2 tail with a flat `Tend = 95` and conflate H1
+  stoppage into the first H2 slice. It proposed `injury_time1`/`injury_time2` from
+  `sofascore.matches` as the fix.
+  - **That route is dead, confirmed not assumed:** both columns exist for all 1,970
+    matches and are **zero in 99.6% / 99.4%** of them. The field is present and unpopulated
+    for these leagues. BBC is the *only* stoppage source for 56/57.
+  - **BBC's `half_end` clock strings are the source** — `"45'+3"`, `"90'+5"` — i.e. stoppage
+    actually PLAYED, not announced. **All 2,136 parse**, covering 1,069 of 1,070 matches.
+    (BBC also emits `added_time` posts carrying the announced `value`, but only 1,326 of
+    them; `half_end` is both more complete and the more relevant quantity.)
+  - Measured: **H1 mean 2.29 min** (median 2, 5–95% [1, 4]), **H2 mean 4.84 min**
+    (median 5, [3, 7]). So the incumbent's flat 5-minute H2 tail was well *centred*
+    (−0.16 min on average) but wrong per match across a 3–7 min spread, and **H1 stoppage —
+    2.29 min per match of real exposure — was not modelled at all**.
+  - **Two fixes, both in `l04`.** `bin_exposure` / `build_slices_bbc` put stoppage where it
+    belongs, in the **offset**: a fixed 18-bin [0, 90] frame where the terminal bin of each
+    half carries `Δt + at`, instead of `Tend = 95` smuggling it in as an extra bin. Keeping
+    the bin structure fixed is what keeps `δ_time` identifiable across matches. And
+    `event_clock` corrects the clock itself: BBC minute labels are **1-indexed** (an event
+    labelled minute t happened in elapsed (t−1, t], so it belongs at t − 0.5, not t), and
+    H1 stoppage is compressed into (44.5, 45) so it stays in its own half.
+  - **The clock bug this exposes is real and measurable: 88 of 2,965 goals (3.0%) change
+    HALF** between the incumbent clock and the corrected one. Under `time + added_time` an
+    H1 stoppage goal at 45+3 sits at minute 48 — *after* the second-half kickoff labelled
+    46 — so it is both ordered wrongly against other events and binned into the first H2
+    slice, where it also corrupts the trailing/leading game state of every later slice.
+  - Verified: all 2,965 goals bin inside [0, 90) under the new clock (none lost), max clock
+    89.93, 38,520 slice rows over 1,070 matches, 19 distinct offsets.
+  - `event_clock(...; mode = :incumbent)` reproduces `l01`'s convention exactly. **WP-F
+    therefore splits arm 0b in two** — `0b-naive` (BBC events, incumbent clock) isolates
+    *coverage*, `0b-clock` (BBC events, corrected clock + real exposure) isolates the
+    *clock*. Without that split a 0b win would confound the two, which is the same mistake
+    arm 0b exists to prevent for the MVPs.
+
+- 2026-07-29: **WP-A DONE — Gate A PASS on all three blocking checks** (`l04_bbc_timeline.jl`,
+  `r04a_bbc_timeline_qa.jl`). 1,070 BBC matches, 38,137 timeline events across 11 event types,
+  **0 null minutes**, 0 running-score breaks. The headline is a data-quality *upgrade* over
+  what the plan pre-registered:
+  - **Goal reconciliation is 99.81% (1068/1070), not ~92%.** The pre-registered 92% is the
+    **team-slug** route, which this run reproduces exactly at **93.4%**. Deriving the goal
+    side by **differencing BBC's running `home_score`/`away_score`** instead recovers all
+    **67 own goals** (every slug-less goal row in 56/57 is an own goal, confirmed from the
+    text) and agrees with the slug route on 2,898/2,898 where both resolve. Own goals were
+    the predicted cause; the fix is that BBC *does* carry the answer, in the score column.
+    Note the `src` fetcher's "do NOT infer the side from the running score" warning is about
+    **shots**, where there is no score to difference — it does not apply to goal rows.
+  - **The 2 failures, enumerated and classified** — both single-match feed defects in t57,
+    neither an own goal: `11395473` (23/24) BBC has 2-1, final says 2-0 → one extra away
+    goal; `14035676` (25/26) BBC has 1-0, final says 1-3 → truncated commentary, 3 goals
+    missing. 0.19% loss; downstream packages drop these two by the reconciliation gate.
+  - **Reds cross-check vs `ds.incidents` (802 both-source matches): PASS with room.**
+    136 incident reds / 142 BBC reds, 135 paired → recall 99.3%, precision 95.1%, per-match
+    count agreement 99.3%. **Minute MAE 0.36, p90 = 1.0 min, only 1.5% differ by > 2 min**
+    (stop threshold was 10%). Subs likewise: 5,528 / 5,654, 5,514 paired, recall 99.7%,
+    MAE 0.26, 1.7% > 2 min. Given γ_man = ×1.70 is the dominant in-play effect, this is the
+    check that mattered and BBC clears it.
+  - **Side attribution is now 100.0% of 38,137 events.** BBC ships `post` (woodwork, 438
+    rows = 2.2% of all attempts) with **no team column at all** — the one gap the three-way
+    slug CASE cannot close. The club is in the free text (`"… (Dumbarton) hits the bar"`);
+    slug-normalised matching recovers 412 and a leading-token fallback the last 26
+    (`Inverness CT` → `inverness-caledonian-thistle`). Zero 56/57 fixtures have both teams
+    sharing a leading token, so the fallback cannot mis-assign.
+  - **BBC's clock is strictly better in stoppage.** BBC carries a real `added_time` (1–8)
+    where this SofaScore feed clamps every stoppage goal to exactly mm=45/90 with
+    added_time=0 (the r00 finding). `l04` therefore exposes both `t` (stoppage-inclusive,
+    for the slicer) and `tb` (base, the only clock comparable to `ds.incidents`) — the red
+    MAE above is computed on `tb`, or a pure convention difference would have scored as a
+    data disagreement.
+  - Deliberately NOT done: widening `src/Data/fetchers/sql/bbc_events.jl`. `build_shots(ds)`
+    reads `ds.bbc_events` wholesale and the APM port is verified bit-faithful (ρ = 1.000000);
+    the timeline is built by direct `LibPQ` query in the prototype instead. See WP-H.
+  - Gotcha banked: `d < bd && (best, bd = j, d)` parses as a **tuple expression**, not a
+    tuple assignment — it paired 0 events out of 5,650 and raised nothing. Use an explicit
+    `if` block.
+
 ## Log
 
 - 2026-07-14: stream created. Deep-research batch dispatched. r00 written.

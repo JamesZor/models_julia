@@ -162,6 +162,7 @@ function add_split_col_match_week(data_store::DataStore, week_number::Int64 )::D
         data_store.lineups,
         data_store.incidents,
         data_store.betfair_odds,
-        data_store.bbc
+        data_store.bbc,
+        data_store.bbc_events
     )
 end

@@ -1,14 +1,22 @@
 # src/data/fetchers/sql/incidents.jl
 
 function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::IncidentsData)
+    # NOTE the id columns alongside the slugs. Slugs are NOT a safe join key across the name
+    # variants in these leagues, and the plus-minus segment builder
+    # (src/features/plus_minus/segments.jl) must join substitutions and dismissals straight onto
+    # `lineups.player_id`. The slug columns stay — other code reads them.
     query = """
-        SELECT 
+        SELECT
             i.id, i.match_id, i.incident_type, i.time, i.is_home, i.added_time,
             i.data -> 'player' ->> 'slug' AS player_name,
             i.data -> 'playerIn' ->> 'slug' AS player_in_name,
             i.data -> 'playerOut' ->> 'slug' AS player_out_name,
             i.data -> 'assist1' ->> 'slug' AS assist1_name,
             i.data -> 'assist2' ->> 'name' AS assist2_name,
+            (i.data -> 'player'    ->> 'id')::int AS player_id,
+            (i.data -> 'playerIn'  ->> 'id')::int AS player_in_id,
+            (i.data -> 'playerOut' ->> 'id')::int AS player_out_id,
+            (i.data -> 'assist1'   ->> 'id')::int AS assist1_id,
             i.data ->> 'incidentClass' AS incident_class,
             i.data ->> 'reason' AS reason,
             (i.data ->> 'injury')::boolean AS is_injury,
@@ -39,6 +47,10 @@ const INCIDENTS_SCHEMA = Dict{Symbol, Type}(
     :player_out_name => Union{Missing, String},
     :assist1_name => Union{Missing, String},
     :assist2_name => Union{Missing, String},
+    :player_id => Union{Missing, Int32},
+    :player_in_id => Union{Missing, Int32},
+    :player_out_id => Union{Missing, Int32},
+    :assist1_id => Union{Missing, Int32},
     :incident_class => Union{Missing, InlineStrings.String31},
     :reason => Union{Missing, InlineStrings.String31},
     :is_injury => Union{Missing, Bool},

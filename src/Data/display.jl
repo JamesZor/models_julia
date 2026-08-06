@@ -49,6 +49,8 @@ function Base.show(io::IO, ::MIME"text/plain", ds::DataStore)
     print_df_summary("Odds (Betfair)", :betfair_odds, ds.betfair_odds)
     print_df_summary("Lineups", :lineups, ds.lineups)
     print_df_summary("Incidents", :incidents, ds.incidents)
+    print_df_summary("BBC (match totals)", :bbc, ds.bbc)
+    print_df_summary("BBC (shot events)", :bbc_events, ds.bbc_events)
 end
 
 # Compact inline show (for arrays/logging)

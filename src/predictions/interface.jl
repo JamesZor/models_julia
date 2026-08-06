@@ -28,3 +28,11 @@ Calculates the probabilities (or outcome distributions) for a specific market
 given the score matrix. Returns a Dict of SelectionName => DistributionVector.
 """
 function compute_market_probs end
+
+"""
+    score_matrix_data(score_mat::AbstractScoreMatrix)
+
+Extracts the 3D score tensor `[max_h × max_a × n_samples]` from any `AbstractScoreMatrix`.
+"""
+function score_matrix_data end
+

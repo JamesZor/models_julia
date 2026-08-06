@@ -13,7 +13,7 @@ end
 Executes all data pipelines concurrently and aggregates them into the DataStore struct.
 """
 function get_datastore(conn::LibPQ.Connection, segment::DataTournemantSegment; custom_config = Markets.DEFAULT_MARKET_CONFIG)::DataStore
-    local matches, statistics, incidents, lineups, odds, betfair_odds, bbc
+    local matches, statistics, incidents, lineups, odds, betfair_odds, bbc, bbc_events
 
     @info "Building DataStore for $(typeof(segment))..."
 
@@ -27,9 +27,12 @@ function get_datastore(conn::LibPQ.Connection, segment::DataTournemantSegment; c
         @async betfair_odds = load_data(conn, segment, BetfairData())
         # Empty for every segment outside the Scottish tiers — that is expected, not a failure.
         @async bbc          = load_data(conn, segment, BBCData())
+        # Raw per-shot commentary (plus-minus ratings). Same Scottish-only coverage as BBCData.
+        @async bbc_events   = load_data(conn, segment, BBCEventsData())
     end
 
-    return DataStore(segment, matches, statistics, odds, lineups, incidents, betfair_odds, bbc)
+    return DataStore(segment, matches, statistics, odds, lineups, incidents, betfair_odds,
+                     bbc, bbc_events)
 end
 
 

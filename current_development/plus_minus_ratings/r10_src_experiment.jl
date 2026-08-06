@@ -1,0 +1,143 @@
+# current_development/plus_minus_ratings/r10_src_experiment.jl
+#
+# RUNNER. WP-D of the src graduation — the actual measurement.
+#
+# Everything below drives `src/` code; nothing is prototyped here. It answers two questions on
+# ScottishLower (tournaments 56/57):
+#
+#   Q1  apm_shots vs goals_baseline   — does the APM pillar add anything to its OWN no-APM twin?
+#   Q2  apm_shots vs funnel_winner    — does it beat the current best team-level engine?
+#
+# plus a variant sweep over the four plus-minus targets (shots / xG / goals / SoT).
+#
+# Primary gate: fold-level proper scoring (`LogLoss`, `LPD`, `CRPS`) via `evaluate_experiments`,
+# reading `diff_ll` (model − market). Secondary: a Kelly backtest for growth/CLV, because the
+# stream's own standing conclusion is to judge on growth G rather than LogLoss alone.
+#
+# A CLEAN NEGATIVE IS A VALID RESULT and must be written into NOTES.md the same way a positive is.
+#
+# Run on the server, where the DB is local. THE BOX HAS 16 PHYSICAL CORES / 32 LOGICAL — start
+# Julia with one thread per PHYSICAL core and pin them, as every other runner in the repo does.
+# Launching `-t 32` unpinned oversubscribes: 32 threads fight over 16 cores and their hyperthread
+# siblings, and the queued sampler ends up using ~8-16 cores' worth of useful work out of a nominal
+# 32 (measured, 2026-07-28).
+#
+#   JULIA_PKG_PRECOMPILE_AUTO=0 julia --project -t 16 \
+#       current_development/plus_minus_ratings/r10_src_experiment.jl
+
+using BayesianFootball
+using DataFrames, Dates, Statistics, Printf
+using ThreadPinning
+
+pinthreads(:cores)
+@info "threads" n = Threads.nthreads() cores = ThreadPinning.ncores()
+
+const BF = BayesianFootball
+const D  = BF.Data
+const F  = BF.Features
+const M  = BF.Models.PreGame
+const E  = BF.Experiments
+const EV = BF.Evaluation
+
+const SAVE_DIR       = "./data/experiments/plus_minus"
+const TARGET_SEASONS = ["24/25", "25/26"]
+const HISTORY_SEASONS = 2
+const DYNAMICS_COL   = :match_month
+const SAMPLES        = 1000
+const WARMUP         = 300
+const CHAINS         = 4
+
+# ==========================================
+# 0. DATA
+# ==========================================
+# The store now carries `bbc_events` (raw BBC shot commentary) and player ids on `incidents`.
+# `force=true` once after the schema change; the cache is picked up on later runs.
+ds = D.load_datastore_cached(D.ScottishLower())
+
+@printf("matches %d | lineups %d | incidents %d | bbc %d | bbc_events %d\n",
+        nrow(ds.matches), nrow(ds.lineups), nrow(ds.incidents), nrow(ds.bbc), nrow(ds.bbc_events))
+
+# ==========================================
+# 1. MODELS
+# ==========================================
+apm(f) = M.DynamicGoalsPlusMinusLeagueTimeDecayModel(player_ratings_feature = f)
+
+MODELS = [
+    # --- the APM variant sweep -----------------------------------------------------------
+    "apm_shots"      => apm(F.ShotsPlusMinusFeature()),           # GREEN-LIT cell
+    "apm_xg"         => apm(F.XGPlusMinusFeature()),              # least team-loaded
+    "apm_goals"      => apm(F.GoalsPlusMinusFeature()),           # base paper's target
+    "apm_sot"        => apm(F.ShotsOnTargetPlusMinusFeature()),
+    # --- the two baselines ---------------------------------------------------------------
+    # The no-APM twin: same goals likelihood, same dynamics, market pillars OFF so the ONLY
+    # difference from apm_* is the player pillar.
+    "goals_baseline" => M.DynamicSmileDoublePoissonGoalsLeagueTimeDecayModel(market_on = false),
+    # The current best team-level engine on this segment.
+    "funnel_winner"  => M.DynamicFunnelDoublePoissonGoalsLeagueTimeDecayModel(),
+]
+
+# ==========================================
+# 2. RUN
+# ==========================================
+results = Dict{String, E.ExperimentResults}()
+failed  = String[]
+for (name, model) in MODELS
+    @info "=== $name ==="
+    try
+        task = E.create_experiment_task(
+            ds, model, name, SAVE_DIR;
+            target_seasons  = TARGET_SEASONS,
+            history_seasons = HISTORY_SEASONS,
+            dynamics_col    = DYNAMICS_COL,
+            samples         = SAMPLES,
+            warmup          = WARMUP,
+            chains          = CHAINS,
+        )
+        r = E.run_experiment(task)
+        E.save_experiment(r)
+        results[name] = r
+    catch err
+        @error "model $name FAILED" exception = (err, catch_backtrace())
+        push!(failed, name)
+    end
+end
+isempty(failed) || @warn "these models did not complete: $failed"
+
+# ==========================================
+# 3. HEAD-TO-HEAD — proper scoring (the primary gate)
+# ==========================================
+order = [n for n in first.(MODELS) if haskey(results, n)]
+exps  = E.ExperimentResults[results[n] for n in order]
+
+scores = EV.evaluate_experiments(
+    EV.AbstractScoringRule[EV.LogLoss(), EV.LPD(), EV.CRPS()], exps, ds)
+println("\n===== PROPER SCORING (diff_ll = model − market; negative is better) =====")
+println(scores)
+
+# ==========================================
+# 4. ECONOMIC — Kelly growth / ROI / CLV
+# ==========================================
+# `market_config` is REQUIRED — run_backtest defaults it to `nothing` and model_inference then
+# errors ("market_config must be provided"). Wrapped in try so a backtest failure cannot discard
+# the scoring table above, which is the expensive part.
+try
+    bt = BF.BackTesting.run_backtest(
+        ds, exps, [BF.Signals.BayesianKelly()];
+        market_config = D.Markets.DEFAULT_MARKET_CONFIG)
+    println("\n===== KELLY BACKTEST =====")
+    println(BF.BackTesting.summarize_models(bt))
+catch err
+    @error "backtest failed" exception = (err, catch_backtrace())
+end
+
+# ==========================================
+# 5. VERDICT SCAFFOLD
+# ==========================================
+println("""
+
+Write the verdict into current_development/plus_minus_ratings/NOTES.md:
+  Q1  apm_shots vs goals_baseline  (its no-APM twin)   -> does the pillar add anything?
+  Q2  apm_shots vs funnel_winner   (best team-level)   -> does it beat the incumbent?
+  Q3  which PM target wins the sweep, and does the ordering match WP7's reliability ordering?
+A clean negative is a valid, publishable outcome.
+""")

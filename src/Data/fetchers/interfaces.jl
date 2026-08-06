@@ -12,6 +12,9 @@ struct IncidentsData  <: FootballDataType end
 # BBC match-page shot counts (bbc.match_stats / bbc.match_meta). Only the Scottish tiers
 # (tournaments 54-57) have coverage; every other segment resolves to an empty DataFrame.
 struct BBCData        <: FootballDataType end
+# Raw BBC shot-bearing commentary events (bbc.live_text). Same Scottish-only coverage as BBCData,
+# and additionally only from 23/24 (when live_text starts). Feeds the plus-minus rating family.
+struct BBCEventsData  <: FootballDataType end
 
 # ---------------------------------------------------------
 # The Pipeline Contracts (Fallbacks)

@@ -24,7 +24,6 @@ export MyDistributions
 # include("data/data-module.jl") #
 # FIX: dev test 
 include("./Data/data-module.jl")
-include("./DataLegacy/data-module.jl")
 
 # 4. Features depends on Data, TypesInterfaces, and Models.
 include("features/features-module.jl") #
@@ -54,9 +53,12 @@ include("./synthetic/synthetic-data-module.jl")
 
 include("./backtesting/backtesting-module.jl")
 
+# Portfolio depends on BackTesting's metric interface, so it must come after it.
+include("./Portfolio/portfolio-module.jl")
+
 # Export the main modules and key functions/types for users
 # *** UPDATED EXPORTS ***
-export Data, Features, Models, Samplers, Training, Experiments, Predictions, Markets, Calibration, BackTesting, Evaluation
+export Data, Features, Models, Samplers, Training, Experiments, Predictions, Markets, Calibration, BackTesting, Evaluation, Portfolio
 export AbstractFootballModel, Vocabulary, FeatureSet, required_mapping_keys
 
 # Maybe export core config types too?
@@ -64,13 +66,7 @@ export NUTSConfig, ADVIConfig, MAPConfig # From Samplers
 export TrainingConfig, Independent, SequentialPriorUpdate # From Training
 
 # 
-using .Data: Markets 
+using .Data: Markets
 export Markets
-
-
-# --- ADDED DEV HELPERS ---
-include("./dev_helpers/dev-helpers.jl")
-# --- EXPORT HELPER ---
-export load_scottish_data
 
 end

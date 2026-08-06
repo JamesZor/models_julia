@@ -24,6 +24,7 @@ include("fetchers/sql/lineups.jl")
 include("fetchers/sql/incidents.jl")
 include("fetchers/sql/odds.jl")
 include("fetchers/sql/bbc.jl")
+include("fetchers/sql/bbc_events.jl")
 include("fetchers/betfair_odds.jl")
 include("fetchers/datastore.jl")
 
@@ -40,7 +41,7 @@ include("./display.jl")
 export 
     # Types
     DBConfig, DataStore, DataTournemantSegment,
-    ScottishLower, Ireland, IrelandFirstDivision, SouthKorea, Norway, Veikkausliiga,
+    ScottishLower, ScottishUpper, Ireland, IrelandFirstDivision, SouthKorea, Norway, Veikkausliiga,
     
     # Functions
     load_datastore_sql, load_datastore_cached,

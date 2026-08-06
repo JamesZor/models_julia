@@ -46,6 +46,8 @@ export
     ScoreMatrix,
     
     # Functions
-    model_inference
+    model_inference,
+    score_matrix_data
 
 end
+
