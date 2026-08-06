@@ -17,7 +17,10 @@ include("_setup.jl")
 # key changes and you must rebuild. Change anything in a PolicySpec and you must not.
 
 spec = PF.BookSpec(markets = MARKETS)
-CACHE = joinpath(@__DIR__, "books_$(string(PF.book_cache_key(spec), base = 16)).jls")
+# NOTE the LEAGUE_TAG in the filename. book_cache_key hashes the SPEC only -- it knows
+# nothing about which league or engine produced the data, and both setups use the same
+# MARKETS, so without the tag Ireland and ScottishLower would share a cache file.
+CACHE = joinpath(@__DIR__, "books_$(LEAGUE_TAG)_$(string(PF.book_cache_key(spec), base = 16)).jls")
 
 books = if isfile(CACHE)
     @info "reusing cached books" CACHE

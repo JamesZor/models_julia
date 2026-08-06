@@ -43,7 +43,28 @@ const DD = BayesianFootball.Data
 const EE = BayesianFootball.Experiments
 const BT = BayesianFootball.BackTesting
 
-const RUNBOOK_CACHE = joinpath(@__DIR__, "_data_cache_ireland.jls")
+# -------------------------------------------------------------------
+# 0. League switching
+# -------------------------------------------------------------------
+# Guarding on `isdefined(Main, :ds)` alone is WRONG: after running the other league's setup
+# everything is already defined, so every block below would be skipped and you would silently
+# keep the previous league's data. Guard on WHICH league is loaded instead.
+#
+#   include("_setup.jl")          -> ScottishLower
+#   include("_setup_ireland.jl")  -> Ireland          (no restart needed, just include)
+#   ENV["RUNBOOK_RELOAD"]="1"     -> force a rebuild of the current league
+
+LEAGUE_TAG = :ireland
+
+_reload = !isdefined(Main, :PORTFOLIO_LEAGUE) ||
+          Main.PORTFOLIO_LEAGUE !== LEAGUE_TAG ||
+          get(ENV, "RUNBOOK_RELOAD", "0") == "1"
+
+if _reload && isdefined(Main, :PORTFOLIO_LEAGUE) && Main.PORTFOLIO_LEAGUE !== LEAGUE_TAG
+    @warn "switching league -- rebuilding ds/expr/odds/latents" from=Main.PORTFOLIO_LEAGUE to=LEAGUE_TAG
+end
+
+RUNBOOK_CACHE = joinpath(@__DIR__, "_data_cache_ireland.jls")
 
 # where r21 wrote the src smile grid; each cell is its own subdirectory
 const IRELAND_EXP_ROOT = joinpath(pkgdir(BayesianFootball), "data", "double_poisson_smile_src_grid")
@@ -52,7 +73,7 @@ const IRELAND_CELL     = "src_sup40_sw40"      # sup=0.4, smile=0.4 -- the valid
 # -------------------------------------------------------------------
 # 1. DataStore, with the Betfair market pillar swapped in
 # -------------------------------------------------------------------
-if !isdefined(Main, :ds)
+if _reload || !isdefined(Main, :ds)
     @info "loading Ireland DataStore (uses .cache/ if warm)"
     _ds_raw = DD.load_datastore_cached(DD.Ireland())
 
@@ -71,7 +92,7 @@ end
 # -------------------------------------------------------------------
 # 2. The trained engine
 # -------------------------------------------------------------------
-if !isdefined(Main, :expr)
+if _reload || !isdefined(Main, :expr)
     isdir(IRELAND_EXP_ROOT) || error("""
         No experiment tree at $(IRELAND_EXP_ROOT).
         The src smile grid is produced by
@@ -92,7 +113,7 @@ end
 # -------------------------------------------------------------------
 # 3. OOS latents  (expensive -> cached)
 # -------------------------------------------------------------------
-if !isdefined(Main, :latents_df)
+if _reload || !isdefined(Main, :latents_df)
     if isfile(RUNBOOK_CACHE)
         @info "restoring latents from cache" RUNBOOK_CACHE
         global latents_df = deserialize(RUNBOOK_CACHE).latents_df
@@ -110,12 +131,13 @@ end
 # the graded Betfair feed, so do not add them here -- they produce empty groups, which the
 # completeness guard then silently drops. CorrectScore exists but was a -20% ROI drag in the
 # staking_layer work; leave it out until something says otherwise.
-const MARKETS = DD.MarketConfig(reduce(vcat, (
+MARKETS = DD.MarketConfig(reduce(vcat, (
     DD.AbstractMarket[DD.Market1X2(), DD.MarketBTTS()],
     [DD.MarketOverUnder(i + 0.5) for i in 0:4],
 )))
 
-@info "Ireland runbook setup ready" n_matches = nrow(latents_df) n_quotes = nrow(odds) markets = length(MARKETS.markets)
+PORTFOLIO_LEAGUE = LEAGUE_TAG
+@info "Ireland runbook setup ready" league=LEAGUE_TAG n_matches = nrow(latents_df) n_quotes = nrow(odds) markets = length(MARKETS.markets)
 
 # ===================================================================
 # CHECKS -- run these before trusting anything downstream

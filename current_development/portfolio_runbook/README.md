@@ -16,6 +16,20 @@ Read them in order; each builds on the previous one.
 | `r04_diagnostics.jl` | what to check before you believe a number. |
 | `r05_extending.jl` | adding your own trust model and filter without touching `src/`. |
 
+## Switching leagues
+
+```julia
+include("_setup.jl")            # ScottishLower / funnel_apm_xg
+include("_setup_ireland.jl")    # Ireland Premier / src_sup40_sw40  -- no restart needed
+ENV["RUNBOOK_RELOAD"]="1"       # force a rebuild of whichever is current
+```
+
+Both files guard on a `PORTFOLIO_LEAGUE` sentinel, not on `isdefined(Main, :ds)`. Guarding on
+the latter means the second setup you include is a silent no-op and you keep the first league's
+data. Book caches are named `books_<league>_<spechash>.jls` for the same reason:
+`book_cache_key` hashes the *spec*, which is identical across leagues, so without the league tag
+the two would share a file.
+
 ## The one idea to hold on to
 
 The configuration is split in two, and the split is the whole design:
