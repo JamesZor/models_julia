@@ -32,8 +32,8 @@ Risk is solved per slate, so all fixtures settling together share one drawdown b
 exposure cap. That is the whole reason this is not a per-match loop.
 """
 function stake_sheet(sys::PortfolioSystem, latents_df::DataFrame, expr,
-                     odds_df::DataFrame, ds; bankroll::Real = 1.0)
-    books  = build_books(sys.book, latents_df, expr, odds_df, ds; require_result = false)
+                     odds_df::DataFrame, fixtures::Dict{Int,FixtureInfo}; bankroll::Real = 1.0)
+    books  = build_books(sys.book, latents_df, expr, odds_df, fixtures; require_result = false)
     isempty(books) && return _empty_sheet()
     slates = group(sys.policy.grouping, books)
 
@@ -59,8 +59,23 @@ function stake_sheet(sys::PortfolioSystem, latents_df::DataFrame, expr,
     return sort!(DataFrame(rows), [:slate, :stake], rev = [false, true])
 end
 
+stake_sheet(sys::PortfolioSystem, latents, expr, odds_df::DataFrame,
+            fixtures::Dict{Int,FixtureInfo}; kw...) =
+    stake_sheet(sys, latents.df, expr, odds_df, fixtures; kw...)
+
+"""
+    stake_sheet(sys, latents_df, expr, odds_df, ds; bankroll = 1.0)
+
+`DataStore` convenience method. **Returns an empty sheet for any fixture that has not been
+played** -- see the warning on `build_books(::BookSpec, ..., ds)`. Use the
+`Dict{Int,FixtureInfo}` method for live fixtures.
+"""
+stake_sheet(sys::PortfolioSystem, latents_df::DataFrame, expr, odds_df::DataFrame, ds;
+            bankroll::Real = 1.0) =
+    stake_sheet(sys, latents_df, expr, odds_df, fixture_table(ds); bankroll = bankroll)
+
 stake_sheet(sys::PortfolioSystem, latents, expr, odds_df::DataFrame, ds; kw...) =
-    stake_sheet(sys, latents.df, expr, odds_df, ds; kw...)
+    stake_sheet(sys, latents.df, expr, odds_df, fixture_table(ds); kw...)
 
 _empty_sheet() = DataFrame(slate = Date[], match_id = Int[], family = String[], group = String[],
                            line = Float64[], selection = Symbol[], odds_quoted = Float64[],
