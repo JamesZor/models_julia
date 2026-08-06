@@ -80,6 +80,9 @@ include("implementations/gates.jl")
 include("inference.jl")
 include("pipeline.jl")
 
+# last: it dispatches on every type and component defined above
+include("display.jl")
+
 export
     # seams
     AbstractFixtureSource, AbstractIdentityResolver, AbstractLineupSource, AbstractBookSource,

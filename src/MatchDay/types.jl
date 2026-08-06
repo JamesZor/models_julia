@@ -2,6 +2,8 @@
 #
 # Abstract seams, then the domain objects that flow through the pipeline, then configuration.
 # Mirrors src/Portfolio/types.jl deliberately -- the two modules are meant to read as one system.
+#
+# All `Base.show` methods live in display.jl, not here.
 
 # ===================================================================
 # 1. Abstract types -- the swappable seams
@@ -107,9 +109,6 @@ struct Fixture
     tournament_id::Int
 end
 
-Base.show(io::IO, f::Fixture) =
-    print(io, "Fixture($(f.m_id), $(f.home) v $(f.away), $(f.kickoff))")
-
 "Identifies one priced leg: market group, line, and the model's selection symbol."
 const SelectionKey = @NamedTuple{group::String, line::Float64, selection::Symbol}
 
@@ -200,9 +199,6 @@ end
 is_ready(::Ready) = true
 is_ready(::Blocked) = false
 
-Base.show(io::IO, b::Blocked) =
-    print(io, "Blocked(", join(("$k: $v" for (k, v) in b.reasons), "; "), ")")
-
 """
     FixtureCard
 
@@ -221,11 +217,6 @@ FixtureCard(f::Fixture, id, as_of::DateTime) = FixtureCard(f, id, nothing, as_of
 
 resolved(c::FixtureCard{Resolved})   = true
 resolved(c::FixtureCard{Unresolved}) = false
-
-Base.show(io::IO, c::FixtureCard) = print(io,
-    "FixtureCard($(c.fixture.m_id), $(c.fixture.home) v $(c.fixture.away), ",
-    resolved(c) ? "resolved" : "UNRESOLVED($(c.identity.reason))",
-    c.readiness === nothing ? "" : ", $(is_ready(c.readiness) ? "ready" : "blocked")", ")")
 
 # ===================================================================
 # 3. Configuration
@@ -272,6 +263,3 @@ struct MatchDayResult
     as_of::DateTime
 end
 
-Base.show(io::IO, r::MatchDayResult) = print(io,
-    "MatchDayResult($(nrow(r.sheet)) bets, $(length(r.cards)) priced, ",
-    "$(length(r.blocked)) blocked, as_of $(r.as_of))")
