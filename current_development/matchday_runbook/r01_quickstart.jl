@@ -8,6 +8,7 @@
 # src/Portfolio and are reached through one call to `stake_sheet`.
 
 include("_setup.jl")
+include("current_development/matchday_runbook/_setup.jl")
 
 # ===================================================================
 # 1. One call
@@ -73,7 +74,7 @@ println()
 # ===================================================================
 
 println("\n--- order tickets ---")
-for r in eachrow(first(sort(res.sheet, :risk, rev = true), 5))
+for r in eachrow(first(sort(res.sheet, :risk, rev = true), 24))
     t = MD.order_ticket(r)
     @printf("  %-9s %-4s %-10s %s @ %.2f   stake £%.2f   liability £%.2f\n",
             t.market, t.line == 0.0 ? "" : string(t.line), string(t.selection),

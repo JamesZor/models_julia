@@ -177,4 +177,54 @@ end
     @test MD.betfair_to_key("CORRECT_SCORE", "1 - 1") === nothing
 end
 
+@testset "M13 league_lookup is materialised, and its index matches Features'" begin
+    # The convention is set by Features.add_feature!(::LeagueFeature, ...):
+    # sort(unique(ds.matches.tournament_id)) enumerated from 1, keyed off the FULL DataStore.
+    ds = (matches = DataFrame(tournament_id = [57, 56, 57, 56], match_id = [1, 2, 3, 4]),)
+    fs = (data = Dict{Symbol,Any}(:league_lookup => Dict{Int,Int}()),)
+
+    fx = [MD.Fixture(101, "ross-county", "montrose",  DateTime(2026, 8, 8, 13), 56),
+          MD.Fixture(102, "elgin-city",  "forfar",    DateTime(2026, 8, 8, 13), 57),
+          MD.Fixture(103, "a",           "b",         DateTime(2026, 8, 8, 13), 79)]
+
+    @test MD.materialise!(MD.LeagueFromFixture(), Val(:league_lookup), fs, fx, (ds = ds,))
+    @test fs.data[:league_lookup][101] == 1        # 56 sorts first
+    @test fs.data[:league_lookup][102] == 2        # 57 second
+    # a tournament the store has never seen is left UNMAPPED, so check_coverage refuses it
+    # rather than silently assigning it a neighbouring league
+    @test !haskey(fs.data[:league_lookup], 103)
+end
+
+@testset "M14 check_coverage catches an unmaterialised league_lookup" begin
+    # Regression: :league_lookup was absent from INJECTABLE_KEYS, so pooled engines hit
+    # `get(league_lookup, mid, 0)` and priced the fixture with the δ_league offset ZEROED --
+    # i.e. at the mean of League One and League Two rather than in its own division.
+    fx = [MD.Fixture(101, "ross-county", "montrose", DateTime(2026, 8, 8, 13), 56)]
+    model = nothing
+
+    covered = (data = Dict{Symbol,Any}(:league_lookup => Dict(101 => 1)),)
+    @test MD.check_coverage(covered, fx, model)
+
+    bare = (data = Dict{Symbol,Any}(:league_lookup => Dict{Int,Int}()),)
+    @test_throws ErrorException MD.check_coverage(bare, fx, model)
+end
+
+@testset "M15 a materialiser chain refuses a key no member handles" begin
+    # The chain's docstring always claimed this; the caller used to discard the return value.
+    fs = (data = Dict{Symbol,Any}(:league_lookup => Dict{Int,Int}()),)
+    fx = [MD.Fixture(101, "a", "b", DateTime(2026, 8, 8, 13), 56)]
+    ds = (matches = DataFrame(tournament_id = [56], match_id = [1]),)
+
+    @test !MD.materialise!(MD.MaterialiserChain(MD.RatingsFromTracker()),
+                           Val(:league_lookup), fs, fx, (ds = ds,))
+    @test MD.materialise!(MD.MaterialiserChain(MD.RatingsFromTracker(), MD.LeagueFromFixture()),
+                          Val(:league_lookup), fs, fx, (ds = ds,))
+    # and the default spec carries a member for every injectable key, so none can go unhandled
+    # by accident when a new pooled engine is served
+    members = MD.MatchDaySpec().features.members
+    @test any(m -> m isa MD.RatingsFromTracker, members)
+    @test any(m -> m isa MD.LeagueFromFixture, members)
+    @test length(MD.INJECTABLE_KEYS) == 2
+end
+
 end

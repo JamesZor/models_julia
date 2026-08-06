@@ -18,8 +18,8 @@
 # place, which (a) mutates a cache and (b) has no path for any feature other than ratings --
 # so no market-pillar engine could ever run on match day. Materialisers dispatch per feature.
 
-export select_split, matchday_latents, RatingsFromTracker, MarketPillarFromBook,
-       MaterialiserChain, check_coverage
+export select_split, matchday_latents, RatingsFromTracker, LeagueFromFixture,
+       MarketPillarFromBook, MaterialiserChain, check_coverage
 
 """
     INJECTABLE_KEYS
@@ -29,11 +29,21 @@ export select_split, matchday_latents, RatingsFromTracker, MarketPillarFromBook,
 is a flat training-time array (`:flat_home_goals`, `:flat_market_λ_home`, ...) and is not read
 at inference.
 
-Verified against `DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel`, whose
-`extract_parameters` reads exactly `row.home_team`/`row.away_team` (via `:team_map`),
-`row.match_id` (via `:player_ratings_map`), and optional `row.season_idx`/`row.month_idx`.
+Both entries here are read as `get(map, match_id, <default>)`, so a fixture missing from either
+is priced silently rather than refused -- which is why every one of them must be materialised
+*and* covered by `check_coverage`.
+
+* `:player_ratings_map` -- read by every player-level engine
+  (`DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel` and friends); default `Dict()`,
+  i.e. zero player strength.
+* `:league_lookup` -- read by every pooled multi-division engine
+  (`DynamicFunnelDoublePoissonGoalsLeagueTimeDecayModel`, `...PlusMinus...`,
+  `...SmileLeague...`) as `get(league_lookup, mid, 0)`; default `0`, which **zeroes the
+  zero-sum δ_league offset**. On `ScottishLower [56, 57]` that offset is precisely the goal-level
+  gap between League One and League Two, so an unmaterialised fixture is priced at the mean of
+  the two tiers.
 """
-const INJECTABLE_KEYS = (:player_ratings_map,)
+const INJECTABLE_KEYS = (:player_ratings_map, :league_lookup)
 
 """
     check_coverage(fs, fixtures, model)
@@ -66,6 +76,15 @@ function check_coverage(fs, fx::Vector{Fixture}, model)
             "fixtures with no entry in player_ratings_map (extract_parameters would fall back " *
             "to an empty Dict and price them with zero player strength): " *
             join(string.(missing_ids), ", "))
+    end
+
+    if haskey(data, :league_lookup)
+        ll = data[:league_lookup]
+        missing_ids = [f.m_id for f in fx if !haskey(ll, f.m_id)]
+        isempty(missing_ids) || push!(problems,
+            "fixtures with no entry in league_lookup (extract_parameters would fall back to " *
+            "league index 0 and zero the δ_league offset, pricing them at the mean of the " *
+            "pooled divisions): " * join(string.(missing_ids), ", "))
     end
 
     isempty(problems) && return true
@@ -188,6 +207,37 @@ function latest_player_ratings(ds, tracker)
 end
 
 """
+    LeagueFromFixture()
+
+Maps each fixture's `tournament_id` onto the league index the pooled engines were trained with.
+
+The index convention is **not** free to reinvent: `Features.add_feature!(::LeagueFeature, ...)`
+builds it as `sort(unique(ds.matches.tournament_id))` enumerated from 1, keyed off the *full*
+DataStore rather than the split so it is stable across folds. This reconstructs it from the same
+`ds`, which is what makes the serving index identical to the training index by construction
+instead of by comment.
+
+A fixture whose tournament is absent from `ds.matches` is left unmapped, so `check_coverage`
+refuses it rather than assigning it an arbitrary neighbouring league.
+"""
+struct LeagueFromFixture <: AbstractFeatureMaterialiser end
+
+function materialise!(::LeagueFromFixture, ::Val{:league_lookup}, fs, fx::Vector{Fixture}, ctx)
+    league_ids = sort(unique(Int.(ctx.ds.matches.tournament_id)))
+    league_map = Dict(t => i for (i, t) in enumerate(league_ids))
+
+    map_ = fs.data[:league_lookup]
+    for f in fx
+        idx = get(league_map, f.tournament_id, nothing)
+        idx === nothing && continue
+        map_[f.m_id] = idx
+    end
+    return true
+end
+
+materialise!(::LeagueFromFixture, ::Val, _fs, ::Vector{Fixture}, _ctx) = false
+
+"""
     MarketPillarFromBook()
 
 Supplies market-derived features from the **same** `odds_df` the staking layer prices against.
@@ -259,7 +309,10 @@ function matchday_latents(spec::MatchDaySpec, expr, ds, cards::Vector{<:FixtureC
     # per-match map names instead, which is what extract_parameters indexes.
     for key in INJECTABLE_KEYS
         haskey(fs.data, key) || continue
-        materialise!(spec.features, Val(key), fs, fx, ctx)
+        materialise!(spec.features, Val(key), fs, fx, ctx) || error(
+            "MatchDay: no materialiser in $(typeof(spec.features)) handles :$key, which " *
+            "$(typeof(model)) reads per match_id. Carrying the trained map forward unchanged " *
+            "would price every fixture off that feature's fallback silently.")
     end
 
     # Per-fixture coverage, not per-feature presence. `haskey(fs.data, :player_ratings_map)` is
@@ -267,10 +320,22 @@ function matchday_latents(spec::MatchDaySpec, expr, ds, cards::Vector{<:FixtureC
     # the silent stale-value failure this guard exists to prevent.
     check_coverage(fs, fx, model)
 
+    # `month_idx` is the CALENDAR month, matching Features' `:flat_months`
+    # (`[Dates.month(date) for ...]`), and it must be supplied explicitly. Engines that read it
+    # do so as `hasproperty(row, :month_idx) ? Int(row.month_idx) : 1` -- so omitting it applied
+    # JANUARY's seasonality to every fixture. Ireland plays no matches at all in January, which
+    # makes `δ_month[:, 1]` pure prior; measured over three seasons August is tournament 79's
+    # lowest-scoring month (2.13 goals) and 718's highest (3.22), so the omission biased the two
+    # Irish divisions' totals in opposite directions.
+    #
+    # `season_idx` is deliberately NOT supplied. Its fallback is `n_seasons`, the most recent
+    # season in the training window, which is the correct season for an upcoming fixture. Naming
+    # it here would only create a second place for the index convention to drift.
     frame = DataFrame(match_id = [f.m_id for f in fx],
                       home_team = [f.home for f in fx],
                       away_team = [f.away for f in fx],
                       match_date = [Date(f.kickoff) for f in fx],
+                      month_idx = [month(f.kickoff) for f in fx],
                       match_week = fill(999, length(fx)))
 
     raw = Models.PreGame.extract_parameters(model, frame, fs, sel.chain)

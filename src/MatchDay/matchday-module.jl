@@ -93,6 +93,9 @@ export
     Fixture, SelectionKey, BookLevels, Instrument, Resolved, Unresolved, Player, Lineup,
     Ready, Blocked, FixtureCard, MatchDaySpec, MatchDayResult,
 
+    # materialisers
+    RatingsFromTracker, LeagueFromFixture, MaterialiserChain,
+
     # entry points
     match_day, build_cards, price_cards, fixture_info, order_ticket, blocked_report
 
