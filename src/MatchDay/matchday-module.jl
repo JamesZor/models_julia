@@ -40,7 +40,13 @@ of this.
 
 * The identity resolver, the order-book drain and the lineup scraper are all **dead** (last
   output 2026-06-22, 2026-08-02, 2026-06-26). `MatchMetaCrosswalk` resolves 100% when the job
-  runs and 0% after it stopped.
+  runs and 0% after it stopped. Re-measured 2026-08-07: the drain and the XI scrape are back,
+  but the crosswalk is still not running -- 0 rows for all 9 of that evening's fixtures. Reach
+  for `ResolverChain(MatchMetaCrosswalk(), LiveNameMatch())` when that is the case; the fallback
+  is opt-in rather than a default precisely so that a dead crosswalk stays visible.
+* The exchange collector only carries the **current day**. On 2026-08-07 it held markets for
+  that evening's 9 fixtures and none of Saturday's 22, so a weekend card has to be priced one
+  match day at a time rather than in a single Friday run.
 * `sofascore.lineup_provisional.confirmed` has **never** been true, because every scrape has run
   4.4-5.8h before kick-off and the XI lands ~1h out. `ConfirmedXI` is therefore non-blocking by
   default and `MaxLineupAge` is the usable gate.
@@ -95,6 +101,9 @@ export
 
     # materialisers
     RatingsFromTracker, LeagueFromFixture, MaterialiserChain,
+
+    # identity
+    MatchMetaCrosswalk, LiveNameMatch, ResolverChain, team_name_score, match_event_scores,
 
     # entry points
     match_day, build_cards, price_cards, fixture_info, order_ticket, blocked_report

@@ -227,4 +227,53 @@ end
     @test length(MD.INJECTABLE_KEYS) == 2
 end
 
+@testset "M16 team_name_score tiers, on the real 2026-08-07 spellings" begin
+    # Every pair below is a fixture that was actually on the card. The scorer is only ever asked
+    # "which of the 3-5 events in this kick-off window is this?", so the bar is separation, not
+    # absolute similarity -- but each tier still has to fire for the pair that motivated it.
+    @test MD.team_name_score("Galway Utd", "galway-united")   == 1.0    # alias utd -> united
+    @test MD.team_name_score("Kerry FC", "kerry-fc")          == 1.0    # dropped token
+    @test MD.team_name_score("Treaty United", "treaty-united-fc") == 1.0
+    @test MD.team_name_score("Partick", "partick-thistle")    == 0.9    # prefix
+    @test MD.team_name_score("Dundalk", "dundalk-fc")         == 1.0
+    # UCD is unmatchable by any substring rule and is a real fixture -- hence the initialism tier
+    @test MD.team_name_score("UCD", "university-college-dublin") == 0.85
+    # and wrong pairings have to score near zero, or the margin test means nothing
+    @test MD.team_name_score("Cork City", "cobh-ramblers")    == 0.0
+    @test MD.team_name_score("UCD", "wexford-fc")             == 0.0
+    @test MD.team_name_score("", "livingston")                == 0.0
+end
+
+@testset "M17 LiveNameMatch separates the real card by a wide margin" begin
+    # Reproduces the assignment offline: the 9 exchange events of 2026-08-07 against the 9
+    # SofaScore fixtures. This is the evidence behind min_margin = 0.25 -- the observed worst
+    # margin is 0.633, so the threshold sits an order of magnitude clear of the worst real case.
+    bf = [("Athlone Town", "Longford"), ("Bray Wanderers", "Finn Harps"),
+          ("Cobh Ramblers", "Treaty United"), ("Cork City", "Kerry FC"),
+          ("UCD", "Wexford F.C"), ("Derry City", "Sligo Rovers"),
+          ("Galway Utd", "Drogheda"), ("Shamrock Rovers", "Dundalk"),
+          ("Partick", "Livingston")]
+    sofa = [("athlone-town", "longford-town"), ("bray-wanderers", "finn-harps"),
+            ("cobh-ramblers", "treaty-united-fc"), ("cork-city", "kerry-fc"),
+            ("university-college-dublin", "wexford-fc"), ("derry-city", "sligo-rovers"),
+            ("galway-united", "drogheda-united"), ("shamrock-rovers", "dundalk-fc"),
+            ("partick-thistle", "livingston")]
+
+    pair(b, s) = (MD.team_name_score(b[1], s[1]) + MD.team_name_score(b[2], s[2])) / 2
+    worst_score, worst_margin = 1.0, 1.0
+    for (i, s) in enumerate(sofa)
+        scores = [pair(b, s) for b in bf]
+        order  = sortperm(scores, rev = true)
+        @test order[1] == i                                   # the right event wins
+        worst_score  = min(worst_score, scores[order[1]])
+        worst_margin = min(worst_margin, scores[order[1]] - scores[order[2]])
+    end
+    @test worst_score  >= 0.875
+    @test worst_margin >= 0.633
+    # the defaults must actually admit that card
+    r = MD.LiveNameMatch()
+    @test r.min_score  <= worst_score
+    @test r.min_margin <= worst_margin
+end
+
 end

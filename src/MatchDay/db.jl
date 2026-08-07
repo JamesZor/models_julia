@@ -143,6 +143,20 @@ WHERE mm.match_id = \$1 AND mm.match_id IS NOT NULL;
 """
 
 """
+Every live exchange event whose kick-off falls within a window, with its markets.
+
+Used by `LiveNameMatch` when `betfair.match_meta` has no row. `open_date` is a `timestamptz`
+here, unlike `sofascore.events.start_timestamp`, which is an epoch integer -- the two feeds do
+not agree on how to spell an instant, which is itself part of why the crosswalk exists.
+"""
+const LIVE_EVENTS_SQL = """
+SELECT event_id, home_team, away_team, open_date, competition, market_id, market_type
+FROM betfair_live.market_metadata
+WHERE open_date >= \$1 AND open_date <= \$2
+ORDER BY event_id;
+"""
+
+"""
 Most recent order-book snapshot at or before `as_of`, per (market, runner).
 
 `DISTINCT ON` with a descending `ts` is the point-in-time read that makes replay honest: it can
