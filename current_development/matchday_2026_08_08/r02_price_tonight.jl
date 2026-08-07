@@ -93,8 +93,16 @@ end
 #                      per-selection trust lost money out of sample.
 # * FixedCap(0.25)  -- the portfolio cap on simultaneous exposure is the dominant lever in the
 #                      whole system. Independent per-bet Kelly went bankrupt on the same book.
-# * MinEdge(0.03)   -- market curation plus a ~3% edge floor is what turned the backtest
-#                      positive; below it the book fills with noise.
+# * NO MinEdge     -- deliberately absent. A flat probability floor is not scale-free: 0.03
+#                      points is ~3.5% of a fair stake's return at odds 1.16 and ~20% at 6.60,
+#                      so it demands most edge exactly where the price is longest. Worse, on a
+#                      COMPRESSED model it selects for the fixtures whose market sits furthest
+#                      from the model's near-constant output -- which is how tournament 718 came
+#                      to hold 64% of the risk on the 2026-08-07 card. It amplified the bias it
+#                      should have filtered. Kelly already sizes a small edge small; that is the
+#                      principled version of the same intent, so the floor is redundant as well
+#                      as mis-shaped. If a floor is ever wanted again, make it EV-based
+#                      (p_model*odds - 1) so it is scale-free.
 # * MarketWhitelist -- totals and BTTS only. On the one out-of-sample test available, per-line
 #                      curation put trust at ~0 on 1X2 and ~0.5 on totals/BTTS, and the 1X2
 #                      family bled. Set CURATED = false to price the full book and see for
@@ -107,8 +115,7 @@ const TOTALS_BTTS = Set{Tuple{String,Float64,Symbol}}(
          [("OverUnder", i + 0.5, Symbol("over_",  replace(string(i + 0.5), "." => ""))) for i in 0:4],
          [("OverUnder", i + 0.5, Symbol("under_", replace(string(i + 0.5), "." => ""))) for i in 0:4]))
 
-filt = CURATED ? PF.FilterChain(PF.MinEdge(0.03), PF.MarketWhitelist(TOTALS_BTTS)) :
-                 PF.FilterChain(PF.MinEdge(0.03))
+filt = CURATED ? PF.MarketWhitelist(TOTALS_BTTS) : PF.KeepAll()
 
 const SYS = PF.PortfolioSystem(
     PF.BookSpec(markets = MD.MatchDaySpec().markets),
