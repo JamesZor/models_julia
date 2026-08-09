@@ -160,9 +160,19 @@ risk and work unchanged. `FixedCap` sums liability by construction — it never 
 "liability-aware". Only the order ticket differs:
 
 ```
-back :  stake        = s            at D
-lay  :  backer stake = s / (d - 1)  at d        (liability = s)
+back :  stake        = s            at D   on the selection itself
+lay  :  backer stake = s / (d - 1)  at d   on the COMPLEMENT   (liability = s)
 ```
+
+**The abstraction leaks here and only here.** Nothing downstream needs to know a lay exists —
+until you place the order, at which point *which runner* matters again. `Instrument` therefore
+carries `venue_key` alongside `key`: `key` is the position held and the key you grade against,
+`venue_key` is the runner the order touches. They differ on every synthetic.
+
+This was a live defect until 2026-08-09. `order_ticket` emitted the position's selection beside
+the complement's side and price, so acting on it placed the opposite position at a price
+belonging to the other runner — on 14 of 48 legs of the 2026-08-08 ScottishLower slate. The
+maths was never wrong and M2–M6 passed throughout; nothing tested the naming. M6b does now.
 
 Worked, from the real Waterford v Shelbourne O/U 2.5 book on 2026-08-02:
 
@@ -339,7 +349,7 @@ establish an edge.
 | work out why I got no bets | `r04_diagnostics.jl`, then `blocked_report` |
 | add my own component | `r05_extending.jl`, then `interfaces.jl` |
 | know how a price becomes a stake | `pipeline.jl` `price_cards` + `_attach_instruments!` |
-| know what is guaranteed | `test/matchday_tests.jl` (12 properties, 68 assertions) |
+| know what is guaranteed | `test/matchday_tests.jl` (18 properties, 114 assertions) |
 | see the SQL | `db.jl` — all of it, one blast radius |
 
 ---
