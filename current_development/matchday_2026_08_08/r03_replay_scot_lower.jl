@@ -391,21 +391,31 @@ isempty(clv_legs)  || CSV.write(joinpath(OUT_DIR, "clv_$stamp.csv"),  clv_legs)
 isempty(fill_legs) || CSV.write(joinpath(OUT_DIR, "fill_$stamp.csv"), fill_legs)
 CSV.write(joinpath(OUT_DIR, "policy_sweep_$stamp.csv"), sw)
 
-# The CORRECTED order tickets for the closing sheet. Deliberately not `MatchDay.order_ticket`:
-# that function names a synthetic leg by the position wanted while quoting the complement's side
-# and price, so acting on it places the opposite bet. See `venue_leg` in l02.
+# Order tickets for the closing sheet, from `MatchDay.order_ticket` -- which now names the runner
+# the order touches, because `Instrument` carries a `venue_key`.
+#
+# Cross-checked against `venue_leg`, which derives the venue runner STRUCTURALLY from
+# (group, line, selection) without consulting the Instrument dictionary. Two independent
+# derivations agreeing is what makes this trustworthy; the assertion is cheap and it is the
+# regression that matters most, because the failure mode is silent and places the opposite bet.
 close_sheet = out.legs[out.legs.as_of .== last(snaps), :]
-tickets = DataFrame([merge((match_id = r.match_id, market = r.group, line = r.line,
-                            model_selection = r.selection), venue_leg(r))
-                     for r in eachrow(close_sheet)])
-CSV.write(joinpath(OUT_DIR, "tickets_corrected_$stamp.csv"), tickets)
+tickets = DataFrame([MD.order_ticket(r) for r in eachrow(close_sheet)])
+
+for r in eachrow(close_sheet)
+    t, v = MD.order_ticket(r), venue_leg(r)
+    t.selection === v.selection || error(
+        "order_ticket and venue_leg disagree on match $(r.match_id) $(r.group) $(r.line) " *
+        "$(r.selection): $(t.selection) vs $(v.selection)")
+end
+
+CSV.write(joinpath(OUT_DIR, "tickets_$stamp.csv"), tickets)
 
 n_synth = count(==(:lay), close_sheet.side)
 println("\n", "="^100)
-@printf("  corrected tickets written: %d legs, of which %d (%.0f%%) are SYNTHETIC and are named\n",
+@printf("  tickets written: %d legs, %d (%.0f%%) SYNTHETIC (order placed on the complement)\n",
         nrow(tickets), n_synth, 100 * n_synth / nrow(tickets))
-println("  differently by MatchDay.order_ticket than by venue_leg. On a synthetic, order_ticket")
-println("  emits (selection = the position you want, side = :lay, price = the COMPLEMENT's lay")
-println("  price). Executing that places the opposite position. Fix: give `Instrument` a")
-println("  `venue_key` field and have `order_ticket` read it.")
+println("  order_ticket and venue_leg agree on the venue runner for all of them.")
+show(first(select(DataFrame(tickets), :match_id, :market, :line, :model_selection,
+                  :selection, :side, :price, :stake, :liability), 8), allcols = true)
+println()
 @info "written" dir = OUT_DIR

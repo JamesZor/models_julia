@@ -77,6 +77,10 @@ Take the position `key` by **laying its complement**. The effective back price i
 willing to fund. This is the price-only substitute for a depth check: at 20x it removes every
 laid price below 1.05, which is exactly where the measured "gain" was implausible (O/U 5.5 at
 46%, O/U 0.5 at 23% -- an empty back book, not an edge).
+
+The returned `Instrument` carries `complement` as its `venue_key`, because that -- not `key` --
+is the runner the order touches. `key` says what position we hold; `venue_key` and `venue_odds`
+together say what to place. Conflating the two prints a ticket for the opposite bet.
 """
 function synthetic_back(key::SelectionKey, complement::SelectionKey,
                         book::Dict{SelectionKey,BookLevels}, qrule::AbstractQuoteRule;
@@ -88,5 +92,5 @@ function synthetic_back(key::SelectionKey, complement::SelectionKey,
     lev > max_leverage && return nothing
     D = lay_to_back(d)
     isfinite(D) || return nothing
-    return Instrument(key, Float64(D), :lay, Float64(d), lev)
+    return Instrument(key, Float64(D), :lay, Float64(d), lev, complement)
 end

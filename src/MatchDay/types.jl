@@ -144,8 +144,20 @@ How one canonical selection will actually be taken.
 * `venue_odds` -- the price actually shown on the exchange for `side`.
 * `leverage` -- backer stake required per unit of risk. `1.0` for a back; `1/(d-1)` for a lay,
   which is what blows up as a laid price approaches 1.
+* `venue_key` -- **the runner the order actually touches.** Equal to `key` for a direct back;
+  the COMPLEMENT for a synthetic.
 
 For a lay, `odds = d/(d-1)` and the order placed is `stake_at_venue = risk * leverage`.
+
+`venue_key` exists because `key` and `venue_odds` describe DIFFERENT RUNNERS on a synthetic, and
+without it the two get printed together as though they belonged to each other. Backing Over 2.5
+by laying Under 2.5 at `d` is `Instrument(over_25, d/(d-1), :lay, d, lev, under_25)`; an order
+ticket naming `over_25` at `d` on the lay side is the opposite position at a price that belongs
+to the other runner. Measured on the 2026-08-08 ScottishLower slate: 14 of 48 legs were
+synthetics, so ~29% of tickets were mis-specified.
+
+The five-argument constructor defaults `venue_key = key`, which is correct for a direct back and
+is what keeps every existing call site right by construction rather than by inspection.
 """
 struct Instrument
     key::SelectionKey
@@ -153,7 +165,11 @@ struct Instrument
     side::Symbol
     venue_odds::Float64
     leverage::Float64
+    venue_key::SelectionKey
 end
+
+Instrument(key::SelectionKey, odds::Real, side::Symbol, venue_odds::Real, leverage::Real) =
+    Instrument(key, Float64(odds), side, Float64(venue_odds), Float64(leverage), key)
 
 "Backer stake to place at the venue to carry `risk` units of risk."
 venue_stake(inst::Instrument, risk::Real) = risk * inst.leverage

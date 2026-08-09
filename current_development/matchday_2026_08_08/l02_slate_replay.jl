@@ -385,13 +385,20 @@ end
 """
     venue_leg(row) -> (selection, side, price, stake, liability)
 
-The CORRECTED order ticket. Use this, not `MatchDay.order_ticket`, until `Instrument` carries a
-`venue_key`.
+The venue leg, derived from the sheet row ALONE.
 
-For `side == :lay` the exchange action is on the position's COMPLEMENT: wanting Over 2.5 by
-laying Under 2.5 at `d` means the order is *lay under_25 at d*. `order_ticket` prints
-`selection = over_25, side = :lay, price = d`, and laying over_25 at d is a different bet
-entirely — opposite exposure, at a price that belongs to the other runner.
+This was written when `MatchDay.order_ticket` mis-named every synthetic — `Instrument` had no
+field for the runner the order touches, so the ticket emitted the position's selection beside
+the complement's side and price. That is fixed in `src`: `Instrument` now carries `venue_key`,
+the sheet carries `venue_selection`, and `order_ticket` reads it.
+
+This function is kept as an INDEPENDENT CHECK, not as a workaround. It reconstructs the venue
+runner structurally, from `(group, line, selection)`, without consulting the `Instrument` that
+produced the row — so `venue_leg(row).selection == order_ticket(row).selection` is a real
+cross-validation of the src path rather than a restatement of it. `r03` asserts exactly that.
+
+It also re-tickets a saved CSV from a run that predates the fix, which is the other reason to
+keep it.
 
 1X2 has three outcomes and therefore no complement, so a 1X2 row is always a direct back and
 this function is the identity on it.

@@ -130,17 +130,23 @@ Attach the execution columns and apply the exchange minimum.
 
 `stake` from Portfolio is risk. `venue_stake` is what is actually placed, which for a lay is
 `risk/(d-1)` -- so a lay at a short price clears a £1 minimum with far less than £1 at risk.
+
+`venue_selection` is the runner the order touches, which for a synthetic is NOT `selection`.
+It is carried as its own column rather than re-derived at ticket time so that a saved sheet is
+executable on its own, without needing the `Instrument` dictionary that produced it.
 """
 function _attach_instruments!(sheet::DataFrame, insts, rounding::AbstractStakeRounding)
     n = nrow(sheet)
     side  = Vector{Symbol}(undef, n); venue = Vector{Float64}(undef, n)
     vstk  = Vector{Float64}(undef, n); risk = Vector{Float64}(undef, n)
+    vsel  = Vector{Symbol}(undef, n)
 
     for i in 1:n
         key = (group = sheet.group[i], line = sheet.line[i], selection = sheet.selection[i])
         inst = get(insts, (sheet.match_id[i], key), nothing)
         if inst === nothing
             side[i], venue[i], vstk[i], risk[i] = :back, sheet.odds[i], sheet.stake[i], sheet.stake[i]
+            vsel[i] = sheet.selection[i]
             continue
         end
         r = round_stake(rounding, sheet.stake[i], inst)
@@ -148,10 +154,12 @@ function _attach_instruments!(sheet::DataFrame, insts, rounding::AbstractStakeRo
         venue[i] = inst.venue_odds
         risk[i]  = r
         vstk[i]  = r <= 0 ? 0.0 : venue_stake(inst, r)
+        vsel[i]  = inst.venue_key.selection
     end
 
     sheet.side = side
     sheet.venue_odds = venue
+    sheet.venue_selection = vsel
     sheet.risk = risk
     sheet.venue_stake = vstk
     filter!(:risk => >(0.0), sheet)
@@ -164,18 +172,31 @@ _empty_sheet() = DataFrame(slate = Date[], match_id = Int[], family = String[], 
                            edge = Float64[], frac = Float64[], stake = Float64[],
                            k_risk = Float64[], slate_exposure = Float64[], capped = Bool[],
                            settled = Bool[], side = Symbol[], venue_odds = Float64[],
-                           risk = Float64[], venue_stake = Float64[])
+                           venue_selection = Symbol[], risk = Float64[], venue_stake = Float64[])
 
 """
     order_ticket(row) -> NamedTuple
 
 What to actually place on the exchange for one sheet row. The last step, and the only place the
 back/lay distinction becomes visible again.
+
+`selection` is `venue_selection` -- **the runner the order touches** -- and NOT the model's
+`selection`, which on a synthetic is its complement. The two are both reported, because they
+answer different questions: `selection` is what you type into the exchange, `model_selection`
+is the position it expresses and the key you grade against.
+
+This distinction is the whole reason `Instrument` carries a `venue_key`. Emitting the model's
+selection alongside the complement's side and price -- which this function used to do -- is an
+instruction to place the OPPOSITE bet at a price belonging to the other runner.
+
+Note `market` and `line` are unchanged by the morphism: a synthetic trades the other runner of
+the SAME market, never a different one.
 """
 order_ticket(row) = (match_id = row.match_id, market = row.group, line = row.line,
-                     selection = row.selection, side = row.side,
+                     selection = row.venue_selection, side = row.side,
                      price = row.venue_odds, stake = row.venue_stake,
-                     liability = row.side === :lay ? row.risk : row.venue_stake)
+                     liability = row.side === :lay ? row.risk : row.venue_stake,
+                     model_selection = row.selection)
 
 """
     blocked_report(result) -> DataFrame

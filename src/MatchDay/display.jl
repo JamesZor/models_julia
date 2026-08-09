@@ -294,22 +294,31 @@ function Base.show(io::IO, ::MIME"text/plain", i::Instrument)
     printstyled(io, uppercase(string(i.side)), color = i.side === :lay ? :magenta : :green,
                 bold = true)
     println(io)
-    _leaf(io, "selection", "$(i.key.group)$(i.key.line == 0.0 ? "" : " $(i.key.line)") " *
-                           "$(i.key.selection)")
-    _leaf(io, "venue odds", round(i.venue_odds, digits = 3))
+    _leaf(io, "position", "$(i.key.group)$(i.key.line == 0.0 ? "" : " $(i.key.line)") " *
+                          "$(i.key.selection)")
+    _leaf(io, "PLACE ON", "$(i.venue_key.selection)  @ $(round(i.venue_odds, digits = 3))";
+          value_color = i.venue_key == i.key ? :cyan : :magenta)
     _leaf(io, "effective", round(i.odds, digits = 4))
     _leaf(io, "leverage", "$(round(i.leverage, digits = 3))x", last = true)
     if i.side === :lay
-        printstyled(io, "\n  laying $(round(i.venue_odds, digits=2)) = backing ",
-                    "$(round(i.odds, digits=3)) in risk units.\n", color = :light_black)
+        printstyled(io, "\n  laying $(i.venue_key.selection) at $(round(i.venue_odds, digits=2)) ",
+                    "= backing $(i.key.selection) at $(round(i.odds, digits=3)) in risk units.\n",
+                    color = :light_black)
         printstyled(io, "  post £$(round(i.leverage, digits=2)) with the backer per £1 at risk.\n",
                     color = :light_black)
+        i.venue_key == i.key || printstyled(io,
+            "  NOTE the order is on $(i.venue_key.selection), NOT $(i.key.selection).\n",
+            color = :yellow)
     end
 end
 
+# The one-liner leads with the VENUE leg, because this is the string that gets pasted into a
+# chat window at 14:55 and acted on. The position it expresses is the parenthetical.
 Base.show(io::IO, i::Instrument) = print(io,
-    "Instrument($(i.key.selection), ", uppercase(string(i.side)),
-    " @ $(round(i.venue_odds, digits=3)) → eff $(round(i.odds, digits=3)))")
+    "Instrument(", uppercase(string(i.side)), " $(i.venue_key.selection) ",
+    "@ $(round(i.venue_odds, digits=3))",
+    i.venue_key == i.key ? "" : " ⇒ $(i.key.selection)",
+    ", eff $(round(i.odds, digits=3)))")
 
 # ==============================================================================
 # 6. Components -- generic tree, mirroring src/features/display.jl

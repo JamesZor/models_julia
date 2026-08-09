@@ -102,6 +102,45 @@ end
     @test MD.round_stake(up, 0.10, back) == 0.0    # 10x inflation, refused
 end
 
+@testset "M6b an order ticket names the runner the order touches" begin
+    # THE DEFECT THIS PINS DOWN. `Instrument.key` is the position we want; on a synthetic the
+    # venue action is on its COMPLEMENT. `order_ticket` used to emit (selection = key,
+    # side = :lay, price = the complement's lay price), which instructs the opposite position at
+    # a price belonging to the other runner. Measured on the 2026-08-08 ScottishLower slate,
+    # 14 of 48 legs were synthetics, so ~29% of tickets were wrong.
+    #
+    # M2-M6 all passed throughout, because the MATHS was never wrong -- only the naming. This is
+    # the one place the "downstream never needs to know a lay exists" abstraction must leak.
+    book, q = _ou25(), MD.BestAvailable()
+    ks   = collect(keys(book))
+    want = _key("OverUnder", 2.5, :over_25)
+    inst = MD.instrument(MD.BestOfBackLay(), want, MD.complement_of(want, ks), book, q)
+
+    @test inst.side === :lay                       # the synthetic wins on this snapshot
+    @test inst.key       == want                                       # position held
+    @test inst.venue_key == _key("OverUnder", 2.5, :under_25)          # runner traded
+    @test inst.venue_odds == 1.26                  # ...and that price is the COMPLEMENT's lay
+    @test inst.venue_key != inst.key               # the whole point
+
+    # A direct back trades the runner it names, so the two coincide -- including via the
+    # five-argument constructor, which is what keeps older call sites correct.
+    direct = MD.instrument(MD.DirectBackOnly(), want, MD.complement_of(want, ks), book, q)
+    @test direct.venue_key == direct.key == want
+    @test MD.Instrument(want, 4.8, :back, 4.8, 1.0).venue_key == want
+
+    # And the ticket carries the venue runner, with the model's selection still recoverable.
+    row = (match_id = 1, group = "OverUnder", line = 2.5, selection = inst.key.selection,
+           side = inst.side, venue_odds = inst.venue_odds, venue_selection = inst.venue_key.selection,
+           risk = 1.0, venue_stake = MD.venue_stake(inst, 1.0))
+    t = MD.order_ticket(row)
+    @test t.selection === :under_25        # what you place
+    @test t.model_selection === :over_25   # what it expresses
+    @test t.side === :lay
+    @test t.price == 1.26
+    @test t.liability == 1.0               # a lay's liability is the risk, not the venue stake
+    @test t.market == "OverUnder" && t.line == 2.5   # morphism never changes the market
+end
+
 @testset "M7 gates are conjunctive and collect every reason" begin
     # "unresolved" alone is a dead resolver; "unresolved" AND "no quotes" is a dead collector
     # too. Short-circuiting would hide the second, which is usually the informative one.
