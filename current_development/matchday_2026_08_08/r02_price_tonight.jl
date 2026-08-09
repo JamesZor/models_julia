@@ -88,9 +88,14 @@ end
 # ===================================================================
 # Every number here is carried over from the staking work rather than chosen fresh:
 #
-# * FlatTrust(0.5)  -- the simulation's verdict was to stake at a fixed w = 0.5 and keep a
-#                      learned trust model only as a junk-model alarm. Every attempt to LEARN
-#                      per-selection trust lost money out of sample.
+# * FlatTrust(0.3)  -- the simulation's verdict was a fixed w around 0.5 with a learned trust
+#                      model kept only as a junk-model alarm; 0.3 is a deliberate step below
+#                      that, this engine having priced the 2026-08-07 card near-constant.
+#                      ⚠ EXPECT NO EFFECT ON THE SHEET. `risk_factor` is homogeneous of degree
+#                      0, so once the drawdown constraint binds trust can only RESHAPE the book,
+#                      not resize it -- and it binds here (k_risk = 0.208 < 1). Trust and
+#                      shrinkage are substitutes for the cap, not additional to it. To actually
+#                      move exposure, move `lambda` on SlateDrawdown or the FixedCap.
 # * FixedCap(0.25)  -- the portfolio cap on simultaneous exposure is the dominant lever in the
 #                      whole system. Independent per-bet Kelly went bankrupt on the same book.
 # * NO MinEdge     -- deliberately absent. A flat probability floor is not scale-free: 0.03
