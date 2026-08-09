@@ -340,7 +340,26 @@ grid = Pair{String,Any}[
                                                        risk = PFX.SlateDrawdown(lambda = 23.0, mode = :sequential),
                                                        cap = PFX.FixedCap(0.25), filter = PFX.KeepAll()),
     "isolated drawdown (per match)"  => PFX.PolicySpec(trust = PFX.FlatTrust(0.5),
-                                                       risk = PFX.IsolatedDrawdown(lambda = 23.0),
+                                                       risk = PFX.IsolatedDrawdown(23.0),
+                                                       cap = PFX.FixedCap(0.25), filter = PFX.KeepAll()),
+    # The two cells the code review argues for, rather than the ones r02 happens to run:
+    #
+    # :joint  -- every fixture on this slate kicks off at 13:00, so there is no rebalancing
+    #            between them. `:sequential` solves sum_t log E[(1+kR_t)^-λ] <= 0, which is the
+    #            constraint for matches compounding one AFTER the other. `:joint` Monte-Carlos
+    #            the simultaneous sum, which is what actually happens here.
+    #
+    # trust   -- `MarketWhitelist` runs AFTER the cap, so curating 1X2 out TRUNCATES the book:
+    #            the survivors keep sizes solved for a portfolio that still contained 1X2, and
+    #            the freed capacity is simply not used. Per-family trust is applied BEFORE the
+    #            allocator, so the drawdown budget re-expands what is left. The staking-sim
+    #            "curated per-line w" result is a trust model, not a filter, and this is the
+    #            cell that tests whether the distinction is worth anything.
+    "joint drawdown (simultaneous)"  => PFX.PolicySpec(trust = PFX.FlatTrust(0.5),
+                                                       risk = PFX.SlateDrawdown(lambda = 23.0, mode = :joint),
+                                                       cap = PFX.FixedCap(0.25), filter = PFX.KeepAll()),
+    "per-family trust (1X2 -> 0)"    => PFX.PolicySpec(trust = family_trust(),
+                                                       risk = PFX.SlateDrawdown(lambda = 23.0, mode = :sequential),
                                                        cap = PFX.FixedCap(0.25), filter = PFX.KeepAll()),
 ]
 

@@ -709,6 +709,38 @@ function policy_sweep(sys, expr, close, results::Dict{Int,Tuple{Int,Int}},
     return DataFrame(rows)
 end
 
+"""
+    family_trust(; w_1x2 = 0.0, w_totals = 0.5, w_btts = 0.5)
+
+The curation result expressed as a TRUST model rather than as a filter.
+
+`MarketWhitelist` is applied last in `stake_slate`, after `apply_cap`, so it can only zero a
+stake — the legs that survive keep sizes that were solved for a portfolio still containing the
+ones removed, and the freed exposure is left on the table. `SelectionTrust` multiplies
+`a_kelly` *before* `risk_factor`, so the drawdown budget re-solves against the curated book and
+re-expands what is left.
+
+Same intent, different arithmetic, and the difference is exactly the capacity the whitelist
+throws away. `strict = false` because the table below is keyed by family shape rather than
+enumerated, and a `KeyError` on an unlisted line is not the failure mode worth having here.
+"""
+function family_trust(; w_1x2::Float64 = 0.0, w_totals::Float64 = 0.5, w_btts::Float64 = 0.5)
+    PF = _pf()
+    t = Dict{Tuple{String,Float64,Symbol},Float64}()
+    for s in (:home, :draw, :away)
+        t[("1X2", 0.0, s)] = w_1x2
+    end
+    t[("BTTS", 0.0, :btts_yes)] = w_btts
+    t[("BTTS", 0.0, :btts_no)]  = w_btts
+    for i in 0:5
+        line = i + 0.5
+        sfx  = replace(string(line), "." => "")
+        t[("OverUnder", line, Symbol("over_",  sfx))] = w_totals
+        t[("OverUnder", line, Symbol("under_", sfx))] = w_totals
+    end
+    return PF.SelectionTrust(t; default = w_totals, strict = false)
+end
+
 "Convenience: the totals+BTTS whitelist the curation work settled on."
 function totals_btts_whitelist()
     PF = _pf()
