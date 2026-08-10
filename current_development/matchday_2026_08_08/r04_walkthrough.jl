@@ -50,7 +50,8 @@ const EXP = BayesianFootball.Experiments
 const MD  = BayesianFootball.MatchDay
 const PF  = BayesianFootball.Portfolio
 
-include(joinpath(@__DIR__, "l02_slate_replay.jl"))
+# include(joinpath(@__DIR__, "l02_slate_replay.jl"))
+include("current_development/matchday_2026_08_08/l02_slate_replay.jl")
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════
 # STEP 1 — the DataStore
@@ -88,6 +89,7 @@ ds = DD.load_datastore_cached(DD.ScottishLower())
 # are the entire observable.
 
 expr = EXP.load_experiment("./data/matchday_wknd_0808/scot_lower_funnel_20260807_012812")
+expr = EXP.load_experiment("./data/matchday_wknd_0808/scot_upper_poisson_outfield_20260807_011126")
 
 @info "experiment" model = nameof(typeof(expr.config.model)) folds = length(expr.training_results)
 
@@ -197,27 +199,85 @@ println()
 #
 # (Verified by overround sign: the back side sums above 1, the lay side below.)
 
-AS_OF = DateTime(2026, 8, 8, 14, 0)          # kickoff = the closing book
+kick_off_m1 = DateTime(2026, 8, 8, 14, 0)          # kickoff = the closing book
+kick_off_m2 = DateTime(2026, 8, 8, 14, 20)          # kickoff = the closing book
 f_ross = first(f for f in fixtures if f.home == "ross-county")
 ident  = MD.resolve(MD.MatchMetaCrosswalk(), f_ross)
-book   = MD.quotes(MD.ArchivedOrderBook(), ident, AS_OF)
+book1   = MD.quotes(MD.ArchivedOrderBook(), ident, kick_off_m1)
+book2   = MD.quotes(MD.ArchivedOrderBook(), ident, kick_off_m2)
 
-show(sort!(DataFrame(
-        market = ["$(k.group) $(k.line == 0.0 ? "" : k.line)" for k in keys(book)],
-        sel    = [k.selection for k in keys(book)],
-        back   = [MD.best_back(b) for b in values(book)],
-        b_size = [isempty(b.back_size) ? 0.0 : b.back_size[1] for b in values(book)],
-        lay    = [MD.best_lay(b)  for b in values(book)],
-        l_size = [isempty(b.lay_size)  ? 0.0 : b.lay_size[1]  for b in values(book)],
-        matched = [b.matched for b in values(book)]), [:market, :sel]),
-     allrows = true, allcols = true)
-println()
+function show_market_book_at_time(book)
+    show(sort!(DataFrame(
+            market = ["$(k.group) $(k.line == 0.0 ? "" : k.line)" for k in keys(book)],
+            sel    = [k.selection for k in keys(book)],
+            back   = [MD.best_back(b) for b in values(book)],
+            lay    = [MD.best_lay(b)  for b in values(book)],
+            b_size = [isempty(b.back_size) ? 0.0 : b.back_size[1] for b in values(book)],
+            l_size = [isempty(b.lay_size)  ? 0.0 : b.lay_size[1]  for b in values(book)],
+            matched = [b.matched for b in values(book)]), [:market, :sel]),
+         allrows = true, allcols = true)
+    println()
+end
+
+
+show_market_book_at_time(book1)
+show_market_book_at_time(book2)
 
 # CHECK:  17 selections (1X2 ×3, BTTS ×2, O/U 0.5–5.5 ×12).
 #
 #         LOOK AT THE SIZE COLUMNS, not just the prices. On BTTS you will see ~£1–2 available on
 #         one side. That is the binding constraint on this league and nothing in `src` reads it
 #         (trap T8) — `BestAvailable` takes the price and discards the depth.
+
+
+#=
+julia> show_market_book_at_time(book1)
+17×7 DataFrame
+ Row │ market         sel       back     lay      b_size    l_size   matched
+     │ String         Symbol    Float64  Float64  Float64   Float64  Float64
+─────┼───────────────────────────────────────────────────────────────────────
+   1 │ 1X2            away         7.8      8.4     2.0299   184.06  3777.41
+   2 │ 1X2            draw         4.5      4.7    54.7       38.24  3777.41
+   3 │ 1X2            home         1.5      1.55  517.63      28.0   3777.41
+   4 │ BTTS           btts_no      1.99     2.04  342.1        1.0    127.08
+   5 │ BTTS           btts_yes     1.96     2.02    1.91       1.03   127.08
+   6 │ OverUnder 0.5  over_05      1.06     1.07  457.89      64.14   101.5
+   7 │ OverUnder 0.5  under_05    16.0     18.0     3.0       74.9    101.5
+   8 │ OverUnder 1.5  over_15      1.27     1.29    5.0       54.22   183.65
+   9 │ OverUnder 1.5  under_15     4.5      4.9    18.0        9.92   183.65
+  10 │ OverUnder 2.5  over_25      1.78     1.83    3.0       16.0    236.56
+  11 │ OverUnder 2.5  under_25     2.2      2.3    17.0       93.55   236.56
+  12 │ OverUnder 3.5  over_35      2.96     3.15    7.0       17.04    88.0
+  13 │ OverUnder 3.5  under_35     1.46     1.5    30.0        3.0     88.0
+  14 │ OverUnder 4.5  over_45      6.0      6.6     1.0        7.01   237.42
+  15 │ OverUnder 4.5  under_45     1.18     1.2    66.85       4.0    237.42
+  16 │ OverUnder 5.5  over_55     13.0     18.5    11.33      29.89     0.52
+  17 │ OverUnder 5.5  under_55     1.06     1.09  263.65     183.95     0.52
+
+julia> show_market_book_at_time(book2)
+17×7 DataFrame
+ Row │ market         sel       back     lay       b_size   l_size   matched
+     │ String         Symbol    Float64  Float64   Float64  Float64  Float64
+─────┼───────────────────────────────────────────────────────────────────────
+   1 │ 1X2            away         8.2    10.0        9.0      2.89  5168.58
+   2 │ 1X2            draw         4.3     5.2        9.0     11.0   5168.58
+   3 │ 1X2            home         1.46    1.55      12.05     4.0   5168.58
+   4 │ BTTS           btts_no      1.61    1.8       18.29    79.35   197.53
+   5 │ BTTS           btts_yes     2.22    2.66       1.5     11.4    197.53
+   6 │ OverUnder 0.5  over_05      1.09    1.11       3.15   118.0    427.4
+   7 │ OverUnder 0.5  under_05    10.0    15.0        3.0      7.48   427.4
+   8 │ OverUnder 1.5  over_15      1.34    1.45      13.63    49.0    204.23
+   9 │ OverUnder 1.5  under_15     3.5     4.1        3.04     5.17   204.23
+  10 │ OverUnder 2.5  over_25      2.14    2.36       8.19    20.0    237.37
+  11 │ OverUnder 2.5  under_25     1.76    1.85       2.0      6.17   237.37
+  12 │ OverUnder 3.5  over_35      1.03    4.7      194.7      3.76    88.09
+  13 │ OverUnder 3.5  under_35     1.27    1.52      16.43     5.11    88.09
+  14 │ OverUnder 4.5  over_45      8.8    12.0        1.88     4.0    237.42
+  15 │ OverUnder 4.5  under_45     1.09    1.1399   123.0    118.0    237.42
+  16 │ OverUnder 5.5  over_55     22.0   NaN         26.93     0.0      0.92
+  17 │ OverUnder 5.5  under_55     1.02    1.05     235.63   257.05     0.92
+=#
+
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════
 # STEP 7 — two prices become one tradeable instrument
@@ -238,16 +298,24 @@ println()
 # It leaks in exactly one place: the order ticket, where "which runner" matters again. That is
 # what `venue_key` is for.
 
-ks = collect(keys(book))
-for k in ks
-    k.group == "BTTS" || (k.group == "OverUnder" && k.line == 2.5) || continue
-    inst = MD.instrument(MD.BestOfBackLay(), k, MD.complement_of(k, ks), book, MD.BestAvailable())
-    inst === nothing && continue
-    direct = MD.instrument(MD.DirectBackOnly(), k, nothing, book, MD.BestAvailable())
-    @printf("  want %-10s → %-4s %-10s @ %6.3f   effective %6.3f  (direct back %6.3f, %+0.2f%%)\n",
-            k.selection, uppercase(string(inst.side)), inst.venue_key.selection,
-            inst.venue_odds, inst.odds, direct.odds, 100 * (inst.odds / direct.odds - 1))
-end
+
+function show_best_option_pricing(book)
+  ks = collect(keys(book))
+  for k in ks
+      k.group == "BTTS" || (k.group == "OverUnder" && k.line == 2.5) || continue
+      inst = MD.instrument(MD.BestOfBackLay(), k, MD.complement_of(k, ks), book, MD.BestAvailable())
+      inst === nothing && continue
+      direct = MD.instrument(MD.DirectBackOnly(), k, nothing, book, MD.BestAvailable())
+      @printf("  want %-10s → %-4s %-10s @ %6.3f   effective %6.3f  (direct back %6.3f, %+0.2f%%)\n",
+              k.selection, uppercase(string(inst.side)), inst.venue_key.selection,
+              inst.venue_odds, inst.odds, direct.odds, 100 * (inst.odds / direct.odds - 1))
+  end
+end 
+
+show_best_option_pricing(book1)
+show_best_option_pricing(book2)
+
+
 
 # CHECK:  Rows where `side = LAY` name a DIFFERENT runner than the one you asked for — that is
 #         the morphism working. `btts_yes` taken by LAYING `btts_no` is the same position.
@@ -312,7 +380,7 @@ sys = PF.PortfolioSystem(
                   cap    = PF.FixedCap(0.25),
                   filter = PF.KeepAll()))
 
-BANKROLL = 1000.0
+BANKROLL1 = 1000.0
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════
 # STEP 10 — RUN IT
@@ -324,7 +392,7 @@ BANKROLL = 1000.0
 # `as_of` is a CALL-SITE argument. No stage reads the clock internally, which is the whole
 # reason a past match day is replayable at all. Set it to `now(UTC)` and this is live pricing.
 
-res = MD.match_day(spec, sys, DD.ScottishLower(), expr, ds; as_of = AS_OF, bankroll = BANKROLL)
+res = MD.match_day(spec, sys, DD.ScottishLower(), expr, ds; as_of = kick_off_m1, bankroll = BANKROLL1)
 
 display(res)
 
@@ -350,7 +418,7 @@ isempty(br) ? println("\n  nothing blocked — the gate passed every fixture.") 
 sheet = res.sheet
 @printf("\n  legs            %d over %d fixtures\n", nrow(sheet), length(unique(sheet.match_id)))
 @printf("  total risk      £%.2f   (%.2f%% of bankroll live simultaneously)\n",
-        sum(sheet.risk), 100 * sum(sheet.risk) / BANKROLL)
+        sum(sheet.risk), 100 * sum(sheet.risk) / BANKROLL1)
 @printf("  k_risk          %.4f   ← drawdown budget cut stakes to this fraction of full Kelly\n",
         first(sheet.k_risk))
 @printf("  hard cap bound  %s\n", first(sheet.capped))
@@ -467,6 +535,10 @@ println()
 #
 # Same call, different `as_of`. This is the whole replay capability in one line.
 
+
+AS_OF = DateTime(2026, 8, 8, 14, 0)          # kickoff = the closing book
+BANKROLL=1000
+
 for t in (AS_OF - Minute(60), AS_OF - Minute(30), AS_OF)
     r = MD.match_day(spec, sys, DD.ScottishLower(), expr, ds; as_of = t, bankroll = BANKROLL)
     g = isempty(r.sheet) ? nothing : grade!(copy(r.sheet), results, sys)
@@ -482,14 +554,14 @@ end
 #
 # Change four things: the segment, the experiment path, the lineup source, and the match day.
 #
-#     ds_up   = DD.load_datastore_cached(DD.ScottishUpper())          # tournaments [54, 55]
-#     expr_up = EXP.load_experiment("./data/matchday_wknd_0808/scot_upper_poisson_outfield_20260807_011126")
-#     fx_up, res_up = slate_from_db(DD.tournament_ids(DD.ScottishUpper()), Date(2026,8,8))
-#     spec_up = MD.MatchDaySpec(
-#         fixtures = MD.ExplicitFixtures(fx_up),
-#         identity = MD.MatchMetaCrosswalk(),
-#         lineups  = MD.SourceChain(MD.ProvisionalDB(), MD.LastHistorical(ds_up)),   # ← REQUIRED
-#         gate     = MD.GateChain(MD.IdentityResolved(), MD.MaxBookAge(Minute(10))))
+    ds_up   = DD.load_datastore_cached(DD.ScottishUpper(), force=true)          # tournaments [54, 55]
+    expr_up = EXP.load_experiment("./data/matchday_wknd_0808/scot_upper_poisson_outfield_20260807_011126")
+    fx_up, res_up = slate_from_db(DD.tournament_ids(DD.ScottishUpper()), Date(2026,8,8))
+    spec_up = MD.MatchDaySpec(
+        fixtures = MD.ExplicitFixtures(fx_up),
+        identity = MD.MatchMetaCrosswalk(),
+        lineups  = MD.SourceChain(MD.ProvisionalDB(), MD.LastHistorical(ds_up)),   # ← REQUIRED
+        gate     = MD.GateChain(MD.IdentityResolved(), MD.MaxBookAge(Minute(10))))
 #
 # TWO THINGS WILL BITE YOU THERE, and both are worth meeting deliberately:
 #
