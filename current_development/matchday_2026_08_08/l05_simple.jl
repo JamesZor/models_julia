@@ -141,24 +141,31 @@ function matchday(segment, day::Date; experiment = nothing, markets = nothing,
     fixtures, results = slate_from_db(DDx.tournament_ids(segment), day)
     kickoff = minimum(f.kickoff for f in fixtures)
 
-    # ---- which fold, and is it clear of this card ------------------------------------------
+    # ---- which fold ------------------------------------------------------------------------
     #
-    # `select_split` now chooses by CONTENT: the most recent fold whose target window holds none
-    # of the fixtures being priced. It errors if no such fold exists. We call it here purely so
-    # the answer is visible up front rather than buried in a warning during inference.
-    bounds   = DDx.create_id_boundaries(ds, expr.config.splitter)
-    ids      = [f.m_id for f in fixtures]
-    naive    = min(length(expr.training_results), length(bounds))
-    sel      = MD.select_split(expr, bounds; strict = false, exclude = ids)
+    # Called with exactly the arguments `matchday_latents` uses, so what is printed here IS the
+    # fold inference will condition on — not a second opinion that could disagree.
+    #
+    # `get_next_matches(ds, fold, config)` is the round a fold was built to predict, so the fold
+    # for a match day is the one whose next round is this card. `exclude` is the fallback for
+    # genuinely unplayed fixtures, which are in no fold's next round.
+    bounds = DDx.create_id_boundaries(ds, expr.config.splitter)
+    ids    = [f.m_id for f in fixtures]
+    naive  = min(length(expr.training_results), length(bounds))
+    sel    = MD.select_split(expr, bounds; strict = false, exclude = ids,
+                             ds = ds, config = expr.config.splitter, fixture_ids = ids)
     @printf("  %-14s split %d of %d rebuilt  (target sizes %s)\n", "conditioning",
             sel.idx, length(bounds), string([length(b[1].target_match_ids) for b in bounds]))
-    if sel.idx != naive
-        n = length(intersect(Set(ids), Set(bounds[naive][1].target_match_ids)))
-        @printf("  %-14s stepped back from split %d, which held %d of this slate in its target\n",
-                "", naive, n)
-        @printf("  %-14s window — cache rebuilt after training. Split %d is clear.\n", "", sel.idx)
+    if sel.idx == naive
+        @printf("  %-14s most recent fold, and clear of this card\n", "")
     else
-        @printf("  %-14s leak-free\n", "")
+        nxt = try nrow(DDx.get_next_matches(ds, bounds[sel.idx], expr.config.splitter)) catch; 0 end
+        held = length(intersect(Set(ids), Set(bounds[naive][1].target_match_ids)))
+        @printf("  %-14s NOT the most recent (%d): that fold already holds %d of this slate in\n",
+                "", naive, held)
+        @printf("  %-14s its target window. Split %d is the one whose next round IS this card\n",
+                "", sel.idx)
+        @printf("  %-14s (%d matches). Cache rebuilt after training — retrain to catch up.\n", "", nxt)
     end
 
     # ---- coverage ------------------------------------------------------------------------

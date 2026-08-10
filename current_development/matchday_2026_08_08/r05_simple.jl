@@ -36,10 +36,16 @@ include(joinpath(@__DIR__, "l05_simple.jl"))         # the façade
 
 ctx = matchday(DD.ScottishUpper(), Date(2026, 8, 8))
 
-# EXPECT: 6 fixtures (2 in tournament 54, 4 in 55), all kicking off 14:00 UTC.
-#         "results: 0/6 present" — the scrape has not run for the top two divisions, so this
-#         slate can be PRICED but not SCORED. P&L below will read `missing`, not 0.0.
-#         For a slate that CAN be scored, use:  matchday(DD.ScottishLower(), Date(2026,8,8))
+# EXPECT: 6 fixtures (2 in tournament 54, 4 in 55), all kicking off 14:00 UTC, all 6 results
+#         present. (They were NOT present earlier on 2026-08-09 — the scrape for the top two
+#         divisions lags the lower ones by hours. If it says "0/6 present", that is the feed,
+#         not the model: everything below still prices, and `pnl` reads `missing` rather than
+#         0.0 so the two cases stay distinguishable.)
+#
+#         It will also report conditioning on split 2 of 3, NOT the most recent. That is
+#         correct: a DataStore rebuild regrew split 3's target window until it contained this
+#         card, and split 2 is the fold whose NEXT round is this slate. It does mean the model
+#         is a week behind — retrain rather than lean on the fallback.
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════
 # 2 · THE MARKET BOOK  — what you could actually have traded

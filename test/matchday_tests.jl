@@ -186,8 +186,17 @@ end
     # nothing to exclude behaves exactly as before
     @test MD.select_split(expr, boundaries; strict = false, exclude = Int[]).idx == 3
 
-    # and when EVERY fold has seen the card, refuse rather than pick one
-    @test_throws ErrorException MD.select_split(expr, boundaries; strict = false, exclude = [1])
+    # Falling back to the BASELINE fold (fold 1, zero target matches) is correct, not a
+    # degradation to be blocked. That fold is history-only, and its next round is week 1 -- so it
+    # is exactly the right chain for the opening round of a season. Banning it would break the
+    # one match day where it is the only defensible answer.
+    @test MD.select_split(expr, boundaries; strict = false, exclude = [1]).idx == 1
+
+    # But when EVERY fold has already seen the card, refuse rather than pick one. Needs a
+    # boundary set where even the first fold has targets -- with a baseline fold present the
+    # error is unreachable, which is the point of the assertion above.
+    b_all = [bnd([7]), bnd([7, 8]), bnd([7, 8, 9])]
+    @test_throws ErrorException MD.select_split(expr, b_all; strict = false, exclude = [7])
 
     # Rule 1 degrades safely. These boundaries carry no split metadata, so `get_next_matches`
     # cannot be called on them; the implementation must fall through to rule 2 rather than
