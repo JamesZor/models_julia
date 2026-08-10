@@ -172,28 +172,28 @@ end
     slate = [40, 41]                                   # the fixtures we are pricing
 
     # positional: takes fold 3, which contains the slate
-    @test select_split(expr, boundaries; strict = false).idx == 3
+    @test MD.select_split(expr, boundaries; strict = false).idx == 3
     # by content: steps back to the most recent fold clear of it
-    sel = select_split(expr, boundaries; strict = false, exclude = slate)
+    sel = MD.select_split(expr, boundaries; strict = false, exclude = slate)
     @test sel.idx == 2
     @test sel.chain == :chain2
     @test occursin("stepping back", sel.warning)
 
     # a clean card is unaffected, and reports no warning
-    @test select_split(expr, boundaries; strict = false, exclude = [99]).idx == 3
-    @test isempty(select_split(expr, boundaries; strict = false, exclude = [99]).warning)
+    @test MD.select_split(expr, boundaries; strict = false, exclude = [99]).idx == 3
+    @test isempty(MD.select_split(expr, boundaries; strict = false, exclude = [99]).warning)
 
     # nothing to exclude behaves exactly as before
-    @test select_split(expr, boundaries; strict = false, exclude = Int[]).idx == 3
+    @test MD.select_split(expr, boundaries; strict = false, exclude = Int[]).idx == 3
 
     # and when EVERY fold has seen the card, refuse rather than pick one
-    @test_throws ErrorException select_split(expr, boundaries; strict = false, exclude = [1])
+    @test_throws ErrorException MD.select_split(expr, boundaries; strict = false, exclude = [1])
 
     # Rule 1 degrades safely. These boundaries carry no split metadata, so `get_next_matches`
     # cannot be called on them; the implementation must fall through to rule 2 rather than
     # throw. That matters because a splitter whose metadata shape this does not understand
     # should cost accuracy of selection, never an outage.
-    sel2 = select_split(expr, boundaries; strict = false, exclude = slate,
+    sel2 = MD.select_split(expr, boundaries; strict = false, exclude = slate,
                         ds = nothing, config = nothing, fixture_ids = slate)
     @test sel2.idx == 2
 end
