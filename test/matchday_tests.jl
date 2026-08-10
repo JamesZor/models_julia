@@ -141,6 +141,42 @@ end
     @test t.market == "OverUnder" && t.line == 2.5   # morphism never changes the market
 end
 
+@testset "M6c select_split refuses a fold containing the fixtures being priced" begin
+    # THE DEFECT THIS PINS DOWN, measured on ScottishUpper 2026-08-09:
+    #
+    #   fold   targets   last target date   fixtures being priced, inside
+    #     2        10        2026-08-02       0    <- correct
+    #     3        22        2026-08-09       6    <- what min(n_trained, n_bounds) chose
+    #
+    # The DataStore cache had been force-rebuilt, so the splitter recomputed fold 3's window and
+    # it grew to swallow the card. Both counts were 3, so the POSITIONAL rule picked it and the
+    # count-mismatch warning never fired. Entirely silent, and the FeatureSet would have been
+    # built over a window containing the results.
+    bnd(target) = [(; target_match_ids = target, history_match_ids = Int[])]
+    boundaries  = [bnd(Int[]), bnd([1, 2, 3]), bnd([1, 2, 3, 40, 41])]
+    expr        = (training_results = [(:chain1,), (:chain2,), (:chain3,)],)
+
+    slate = [40, 41]                                   # the fixtures we are pricing
+
+    # positional: takes fold 3, which contains the slate
+    @test select_split(expr, boundaries; strict = false).idx == 3
+    # by content: steps back to the most recent fold clear of it
+    sel = select_split(expr, boundaries; strict = false, exclude = slate)
+    @test sel.idx == 2
+    @test sel.chain == :chain2
+    @test occursin("stepping back", sel.warning)
+
+    # a clean card is unaffected, and reports no warning
+    @test select_split(expr, boundaries; strict = false, exclude = [99]).idx == 3
+    @test isempty(select_split(expr, boundaries; strict = false, exclude = [99]).warning)
+
+    # nothing to exclude behaves exactly as before
+    @test select_split(expr, boundaries; strict = false, exclude = Int[]).idx == 3
+
+    # and when EVERY fold has seen the card, refuse rather than pick one
+    @test_throws ErrorException select_split(expr, boundaries; strict = false, exclude = [1])
+end
+
 @testset "M7 gates are conjunctive and collect every reason" begin
     # "unresolved" alone is a dead resolver; "unresolved" AND "no quotes" is a dead collector
     # too. Short-circuiting would hide the second, which is usually the informative one.

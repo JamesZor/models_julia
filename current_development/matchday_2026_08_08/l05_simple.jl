@@ -141,19 +141,25 @@ function matchday(segment, day::Date; experiment = nothing, markets = nothing,
     fixtures, results = slate_from_db(DDx.tournament_ids(segment), day)
     kickoff = minimum(f.kickoff for f in fixtures)
 
-    # ---- the leak check. Not optional, not a warning. -------------------------------------
-    bounds = DDx.create_id_boundaries(ds, expr.config.splitter)
-    idx    = min(length(expr.training_results), length(bounds))
-    leak   = length(intersect(Set(f.m_id for f in fixtures),
-                              Set(bounds[idx][1].target_match_ids)))
+    # ---- which fold, and is it clear of this card ------------------------------------------
+    #
+    # `select_split` now chooses by CONTENT: the most recent fold whose target window holds none
+    # of the fixtures being priced. It errors if no such fold exists. We call it here purely so
+    # the answer is visible up front rather than buried in a warning during inference.
+    bounds   = DDx.create_id_boundaries(ds, expr.config.splitter)
+    ids      = [f.m_id for f in fixtures]
+    naive    = min(length(expr.training_results), length(bounds))
+    sel      = MD.select_split(expr, bounds; strict = false, exclude = ids)
     @printf("  %-14s split %d of %d rebuilt  (target sizes %s)\n", "conditioning",
-            idx, length(bounds), string([length(b[1].target_match_ids) for b in bounds]))
-    leak == 0 || error("""
-        LEAKAGE: $leak of this slate's fixtures sit inside the TARGET window of split $idx, the
-        fold this chain is conditioned on. The model was fitted on the matches you are asking it
-        to price and every number downstream is meaningless. Retrain with a target season that
-        ends before $day, or fix select_split to choose by as_of rather than by index.""")
-    @printf("  %-14s leak-free\n", "")
+            sel.idx, length(bounds), string([length(b[1].target_match_ids) for b in bounds]))
+    if sel.idx != naive
+        n = length(intersect(Set(ids), Set(bounds[naive][1].target_match_ids)))
+        @printf("  %-14s stepped back from split %d, which held %d of this slate in its target\n",
+                "", naive, n)
+        @printf("  %-14s window — cache rebuilt after training. Split %d is clear.\n", "", sel.idx)
+    else
+        @printf("  %-14s leak-free\n", "")
+    end
 
     # ---- coverage ------------------------------------------------------------------------
     cov  = book_coverage(fixtures)

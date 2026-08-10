@@ -430,11 +430,20 @@ T1  THE DATASTORE CACHE EXPIRES AT 48h AND REBUILDS ITSELF ON LOAD.
     create_id_boundaries then returns MORE folds than the experiment has chains.
     → always print (n_trained, n_rebuilt) and assert the slate is not in the conditioning fold.
 
-T2  select_split PAIRS BY INDEX, NOT BY TIME.        (UNRESOLVED DEFECT)
-    idx = min(n_trained, n_rebuilt). On 2026-08-08 that happened to be leak-free — 2 trained,
-    3 rebuilt, idx = 2, and fold 2's target window predates the slate. That is ARITHMETIC LUCK,
-    not a temporal cutoff. Retrain and idx becomes 3 = the fold whose target IS the slate.
-    → the principled fix is to select the latest boundary whose target window closes before as_of.
+T2  select_split USED TO PAIR BY INDEX, NOT BY CONTENT.        (FIXED)
+    idx = min(n_trained, n_rebuilt). It bit for real on ScottishUpper 2026-08-09 after a
+    force-rebuild of the cache:
+
+        fold   targets   last target date   slate fixtures inside
+          2        10        2026-08-02       0    <- correct
+          3        22        2026-08-09       6    <- what the positional rule chose
+
+    Both counts were 3, so the count-mismatch warning NEVER FIRED. Silent.
+    → `select_split(...; exclude = <ids being priced>)` now picks the most recent fold whose
+      target window is clear of the card, and errors when no such fold exists. `matchday_latents`
+      always passes it. Pinned by test M6c.
+    → this does NOT excuse a stale pairing: stepping back to fold 2 means the two most recent
+      windows are unused, so the model is a week behind. Retrain rather than lean on it.
 
 T3  check_coverage IS A GLOBAL ABORT.
     One fixture with an unknown team kills the whole segment, not just that fixture.

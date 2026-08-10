@@ -92,19 +92,34 @@ function check_coverage(fs, fx::Vector{Fixture}, model)
 end
 
 """
-    select_split(expr, boundaries; strict = true) -> (idx, chain, warning)
+    select_split(expr, boundaries; strict = true, exclude = nothing) -> (idx, chain, warning)
 
-Choose which trained split to condition on, by boundary rather than by position.
+Choose which trained split to condition on.
 
-The chain at index `i` was fitted on the boundary that had index `i` **at training time**. If
-the boundary list has since grown, the correspondence survives only when the splitter appends.
-This checks that the boundary at `idx` still contains the same history/target match ids the
-chain was trained on where that is recoverable, and otherwise reports what it could not verify
-rather than assuming.
+The chain at index `i` was fitted on the boundary that had index `i` **at training time**. If the
+boundary list has since grown, the correspondence survives only when the splitter appends.
+
+`exclude` is the set of match ids being PRICED. When supplied, the chosen fold is the most recent
+one whose **target window contains none of them** — selection by content rather than by position.
+Pass it from any serving path; omit it only for offline inspection.
+
+Why this argument exists, measured on `ScottishUpper` 2026-08-09:
+
+```
+fold   targets   last target date   fixtures being priced, inside
+  2        10        2026-08-02       0     <- correct choice
+  3        22        2026-08-09       6     <- what min(n_trained, n_bounds) picked
+```
+
+The DataStore cache had been rebuilt, so the splitter recomputed fold 3's target window and it
+grew to swallow the very card being priced. Both counts were 3, so the positional rule selected
+it **and the mismatch warning never fired** — the failure was completely silent, and the
+FeatureSet handed to `extract_parameters` would have been built over a window containing the
+results. Choosing by content makes that unrepresentable.
 
 Returns the index used, the chain, and a warning string (empty when nothing is suspicious).
 """
-function select_split(expr, boundaries; strict::Bool = true)
+function select_split(expr, boundaries; strict::Bool = true, exclude = nothing)
     n_trained = length(expr.training_results)
     n_bounds  = length(boundaries)
     n_trained == 0 && error("experiment has no training results")
@@ -118,6 +133,28 @@ function select_split(expr, boundaries; strict::Bool = true)
                "$(n_bounds - idx) most recent window(s) are NOT used. This is only correct " *
                "if the splitter appends rather than recomputes its windows."
         strict && @warn "MatchDay.select_split: $warn"
+    end
+
+    if exclude !== nothing && !isempty(exclude)
+        ex   = Set(exclude)
+        safe = idx
+        while safe >= 1 && !isempty(intersect(ex, Set(boundaries[safe][1].target_match_ids)))
+            safe -= 1
+        end
+        safe == 0 && error(
+            "MatchDay.select_split: EVERY fold from 1..$(idx) has at least one of the " *
+            "$(length(ex)) fixtures being priced inside its TARGET window. There is no chain " *
+            "here that has not already seen this card. Retrain with a target season ending " *
+            "before these fixtures.")
+        if safe != idx
+            w = "split $(idx) contains $(length(intersect(ex, Set(boundaries[idx][1].target_match_ids)))) " *
+                "of the fixtures being priced in its target window; stepping back to split " *
+                "$(safe), whose window is clear of them. This normally means the DataStore " *
+                "cache was rebuilt after training and the splitter regrew the last fold."
+            warn = isempty(warn) ? w : warn * " | " * w
+            strict && @warn "MatchDay.select_split: $w"
+        end
+        idx = safe
     end
 
     chain = expr.training_results[idx][1]
@@ -291,8 +328,11 @@ function matchday_latents(spec::MatchDaySpec, expr, ds, cards::Vector{<:FixtureC
     fx    = Fixture[c.fixture for c in cards]
     isempty(fx) && return (DataFrame(), (; split = 0, warning = "no fixtures"))
 
+    # `exclude` is what makes the choice temporal rather than positional: the fold must not have
+    # today's fixtures in its target window. Without it a rebuilt DataStore silently regrows the
+    # last fold to include the card being priced -- see `select_split`.
     boundaries = Data.create_id_boundaries(ds, expr.config.splitter)
-    sel = select_split(expr, boundaries)
+    sel = select_split(expr, boundaries; exclude = [f.m_id for f in fx])
 
     fcol = Features.create_features(boundaries, ds, model)
     fs   = deepcopy(fcol[sel.idx][1])          # never mutate the cached FeatureSet

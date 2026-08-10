@@ -309,12 +309,18 @@ establish an edge.
    every scrape ran 4.4-5.8h before kickoff and the XI lands ~1h out. ConfirmedXI
    is therefore non-blocking by default and MaxLineupAge is the usable gate.
 
-4. THE SPLIT INDEX IS POSITIONAL AND DRIFTS.  (UNRESOLVED DEFECT)
-   The chain is picked as training_results[N] where N = length(training_results),
-   then the SAME integer indexes a boundary list rebuilt today. On src_sup40_sw40
-   that is 29 vs 31: the two most recent windows are silently unused, and the
-   pairing is correct at all only if the splitter appends rather than recomputes.
-   select_split warns on every run. Warning is not fixing.
+4. THE SPLIT INDEX WAS POSITIONAL AND DRIFTED.  (FIXED 2026-08-09)
+   The chain was picked as training_results[N] where N = min(n_trained, n_rebuilt),
+   then the SAME integer indexed a boundary list rebuilt today. Two failure modes:
+     (a) counts DIFFER -> the most recent windows go unused (29 vs 31 on
+         src_sup40_sw40). select_split warns; still true, still not fixed.
+     (b) counts MATCH but the last fold REGREW after a cache rebuild, swallowing
+         the card being priced. Measured on ScottishUpper 2026-08-09: fold 3 held
+         all 6 of that day's fixtures in its target window, and because 3 == 3 the
+         warning never fired at all.
+   select_split now takes `exclude` -- the ids being priced -- and returns the most
+   recent fold whose target window is clear of them, erroring if none is. Every
+   serving path passes it via matchday_latents. Pinned by test M6c.
 
 5. THE MARKET PILLAR IS A TRAINING FEATURE, NOT AN INFERENCE ONE.
    extract_parameters for the smile engine reads only home_team, away_team,
