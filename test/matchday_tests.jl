@@ -152,6 +152,19 @@ end
     # it grew to swallow the card. Both counts were 3, so the POSITIONAL rule picked it and the
     # count-mismatch warning never fired. Entirely silent, and the FeatureSet would have been
     # built over a window containing the results.
+    #
+    # This testset covers rules 2 and 3 (the `exclude` fallback and the positional default).
+    # Rule 1 -- POSITIVE identification via `Data.get_next_matches` -- needs a real DataStore and
+    # so cannot run in a DB-free suite. It was verified against the same ScottishUpper case:
+    #
+    #   fold   meta                        get_next_matches   slate fixtures in it
+    #     1    Season 26/27, Week 0          10 (week 1)        0
+    #     2    Season 26/27, Week 1          12 (week 2)        6   <- chosen, correctly
+    #     3    Season 26/27, Week 2           0 (unplayed)       0
+    #
+    # Rule 1 keys on (target_season, time_step) rather than on list position, so a rebuilt
+    # boundary list cannot move the answer. The two rules agree here; rule 1 gets there from the
+    # fold's own semantics rather than by elimination.
     bnd(target) = [(; target_match_ids = target, history_match_ids = Int[])]
     boundaries  = [bnd(Int[]), bnd([1, 2, 3]), bnd([1, 2, 3, 40, 41])]
     expr        = (training_results = [(:chain1,), (:chain2,), (:chain3,)],)
@@ -175,6 +188,14 @@ end
 
     # and when EVERY fold has seen the card, refuse rather than pick one
     @test_throws ErrorException select_split(expr, boundaries; strict = false, exclude = [1])
+
+    # Rule 1 degrades safely. These boundaries carry no split metadata, so `get_next_matches`
+    # cannot be called on them; the implementation must fall through to rule 2 rather than
+    # throw. That matters because a splitter whose metadata shape this does not understand
+    # should cost accuracy of selection, never an outage.
+    sel2 = select_split(expr, boundaries; strict = false, exclude = slate,
+                        ds = nothing, config = nothing, fixture_ids = slate)
+    @test sel2.idx == 2
 end
 
 @testset "M7 gates are conjunctive and collect every reason" begin

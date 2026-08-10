@@ -99,11 +99,23 @@ Choose which trained split to condition on.
 The chain at index `i` was fitted on the boundary that had index `i` **at training time**. If the
 boundary list has since grown, the correspondence survives only when the splitter appends.
 
-`exclude` is the set of match ids being PRICED. When supplied, the chosen fold is the most recent
-one whose **target window contains none of them** — selection by content rather than by position.
-Pass it from any serving path; omit it only for offline inspection.
+There are three rules, tried in this order.
 
-Why this argument exists, measured on `ScottishUpper` 2026-08-09:
+**1. `ds` + `config` + `fixture_ids` — POSITIVE IDENTIFICATION. Prefer this.**
+`Data.get_next_matches(ds, boundaries[i], config)` returns the matches at `time_step + 1`: the
+round fold `i` was built to predict. So the fold for a match day is simply the one whose *next
+round is this card*, and the answer is keyed on `(target_season, time_step)` — stable facts about
+the fold — rather than on its position in a list that gets recomputed. This is the same call
+`Experiments.post_processing` uses to generate out-of-sample predictions, which is what makes
+train and serve consistent by construction instead of by coincidence.
+
+**2. `exclude` — NEGATIVE FALLBACK.** The most recent fold whose target window contains none of
+the ids being priced. Used when rule 1 cannot answer, which is the normal LIVE case: an unplayed
+fixture is not in `ds.matches` at all, so no fold's `get_next_matches` can contain it.
+
+**3. Positional.** `min(n_trained, n_bounds)`, the original behaviour.
+
+Why rules 1 and 2 exist, measured on `ScottishUpper` 2026-08-09:
 
 ```
 fold   targets   last target date   fixtures being priced, inside
@@ -115,11 +127,12 @@ The DataStore cache had been rebuilt, so the splitter recomputed fold 3's target
 grew to swallow the very card being priced. Both counts were 3, so the positional rule selected
 it **and the mismatch warning never fired** — the failure was completely silent, and the
 FeatureSet handed to `extract_parameters` would have been built over a window containing the
-results. Choosing by content makes that unrepresentable.
+results.
 
 Returns the index used, the chain, and a warning string (empty when nothing is suspicious).
 """
-function select_split(expr, boundaries; strict::Bool = true, exclude = nothing)
+function select_split(expr, boundaries; strict::Bool = true, exclude = nothing,
+                      ds = nothing, config = nothing, fixture_ids = nothing)
     n_trained = length(expr.training_results)
     n_bounds  = length(boundaries)
     n_trained == 0 && error("experiment has no training results")
@@ -135,6 +148,29 @@ function select_split(expr, boundaries; strict::Bool = true, exclude = nothing)
         strict && @warn "MatchDay.select_split: $warn"
     end
 
+    # --- rule 1: the fold whose NEXT round is this card ------------------------------------
+    if ds !== nothing && config !== nothing && fixture_ids !== nothing && !isempty(fixture_ids)
+        want = Set(fixture_ids)
+        for i in idx:-1:1
+            nxt = try
+                Data.get_next_matches(ds, boundaries[i], config)
+            catch
+                continue          # metadata shape this splitter does not support; fall through
+            end
+            (isempty(nxt) || !hasproperty(nxt, :match_id)) && continue
+            hit = length(intersect(want, Set(nxt.match_id)))
+            hit == 0 && continue
+            i == idx || (w = "split $(idx) is the most recent trained fold, but the card being " *
+                             "priced is the NEXT round of split $(i) (matched $hit of " *
+                             "$(length(want)) fixtures via get_next_matches); conditioning on " *
+                             "$(i).";
+                         warn = isempty(warn) ? w : warn * " | " * w;
+                         strict && @info "MatchDay.select_split: $w")
+            return (idx = i, chain = expr.training_results[i][1], warning = warn)
+        end
+    end
+
+    # --- rule 2: the most recent fold that has not already seen this card -------------------
     if exclude !== nothing && !isempty(exclude)
         ex   = Set(exclude)
         safe = idx
@@ -328,11 +364,15 @@ function matchday_latents(spec::MatchDaySpec, expr, ds, cards::Vector{<:FixtureC
     fx    = Fixture[c.fixture for c in cards]
     isempty(fx) && return (DataFrame(), (; split = 0, warning = "no fixtures"))
 
-    # `exclude` is what makes the choice temporal rather than positional: the fold must not have
-    # today's fixtures in its target window. Without it a rebuilt DataStore silently regrows the
-    # last fold to include the card being priced -- see `select_split`.
+    # Identify the fold POSITIVELY where we can: `get_next_matches(ds, fold, config)` is the
+    # round that fold was built to predict, so the right fold for a match day is the one whose
+    # next round is this card. That is the same call the OOS prediction path uses, which is what
+    # keeps train and serve consistent. `exclude` is the fallback for genuinely unplayed
+    # fixtures, which are in no fold's next-round because they are not in ds.matches at all.
     boundaries = Data.create_id_boundaries(ds, expr.config.splitter)
-    sel = select_split(expr, boundaries; exclude = [f.m_id for f in fx])
+    ids = [f.m_id for f in fx]
+    sel = select_split(expr, boundaries; exclude = ids,
+                       ds = ds, config = expr.config.splitter, fixture_ids = ids)
 
     fcol = Features.create_features(boundaries, ds, model)
     fs   = deepcopy(fcol[sel.idx][1])          # never mutate the cached FeatureSet
