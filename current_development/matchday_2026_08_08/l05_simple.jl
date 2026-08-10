@@ -54,7 +54,7 @@
 #
 # Requires l02_slate_replay.jl (slate_from_db, book_coverage, grade!, family_trust).
 
-using DataFrames, Dates, Statistics, Printf
+using DataFrames, Dates, Statistics, Printf, Distributions
 
 # Where r01_train_weekend.jl puts its output. Change this if you train somewhere else.
 const EXPERIMENT_ROOT = "./data/matchday_wknd_0808"
@@ -310,6 +310,184 @@ function sheet_for(ctx::MatchDayContext, pol; as_of::DateTime = ctx.kickoff,
     snap = _snapshot(ctx, as_of)
     snap === nothing && return DataFrame()
     return _stake(ctx, snap, pol, Float64(bankroll))
+end
+
+"""
+    pregame(ctx; as_of = ctx.kickoff, bankroll = 1000.0, pol = policy()) -> NamedTuple
+
+**What the model believed before kick-off, next to what the market believed, next to what
+happened.** Four tables:
+
+* `goals` — per fixture: the model's expected home/away goals and supremacy, the market's
+  implied total, the gap, and the actual score.
+* `x2`    — per fixture: model vs market 1X2 probabilities, and the result.
+* `score` — per market family: log loss and Brier for the model AND for the de-vigged market,
+  scored on the actual outcome. **This is the only table that says whether the model is any
+  good**; ROI on a handful of fixtures cannot.
+* `pnl`   — per fixture: what was staked and what it returned.
+
+Expected goals are read out of `MatchBook.p_grid` rather than off a named latent column, so this
+works for any engine. The grid is column-major over (home, away) — see `Portfolio.grid_index`.
+
+The market's implied total is fitted by least squares to the de-vigged Over probabilities across
+the whole O/U ladder, which is more robust than reading a single line.
+
+Scoring is per market GROUP, not per selection: within a group the probabilities are renormalised
+and the actual winner scored once. Averaging a log loss over all selections of a 3-way market
+counts the same event three times, and on Double Chance it silently reverses the ranking.
+"""
+function pregame(ctx::MatchDayContext; as_of::DateTime = ctx.kickoff,
+                 bankroll::Real = 1000.0, pol = policy())
+    PF, DDx = _pf(), _dd()
+    snap = _snapshot(ctx, as_of)
+    snap === nothing && return nothing
+
+    books = PF.build_books(PF.BookSpec(markets = ctx.spec.markets), snap.latents, ctx.expr,
+                           snap.odds, snap.fixtures; require_result = false)
+    isempty(books) && return nothing
+
+    sheet = _stake(ctx, snap, pol, Float64(bankroll))
+    fx    = Dict(f.m_id => f for f in ctx.fixtures)
+
+    grows, xrows, srows = NamedTuple[], NamedTuple[], NamedTuple[]
+    for b in books
+        f  = get(fx, b.m_id, nothing); f === nothing && continue
+        sc = get(ctx.results, b.m_id, nothing)
+
+        # --- expected goals, straight out of the posterior score grid ----------------------
+        n = 12
+        eh = sum(h * b.p_grid[PF.grid_index(h, a, n)] for h in 0:n-1, a in 0:n-1)
+        ea = sum(a * b.p_grid[PF.grid_index(h, a, n)] for h in 0:n-1, a in 0:n-1)
+
+        # --- market-implied total, least squares over the whole O/U ladder -----------------
+        over = Dict{Float64,Float64}()
+        for l in unique(s.line for s in b.sels if s.group == "OverUnder")
+            grp = [s for s in b.sels if s.group == "OverUnder" && s.line == l]
+            length(grp) == 2 || continue
+            tot = sum(s.p_market for s in grp)
+            tot > 0 || continue
+            over[l] = only(s.p_market for s in grp if startswith(String(s.selection), "over_")) / tot
+        end
+        lam_mkt = isempty(over) ? NaN : _fit_poisson_total(over)
+
+        push!(grows, (match_id = b.m_id, fixture = "$(f.home) v $(f.away)",
+                      model_h = round(eh, digits = 2), model_a = round(ea, digits = 2),
+                      model_tot = round(eh + ea, digits = 2),
+                      model_sup = round(eh - ea, digits = 2),
+                      market_tot = round(lam_mkt, digits = 2),
+                      gap = round(eh + ea - lam_mkt, digits = 2),
+                      goals = sc === nothing ? missing : sc[1] + sc[2],
+                      score = sc === nothing ? "—" : "$(sc[1])-$(sc[2])"))
+
+        # --- 1X2, model vs market ----------------------------------------------------------
+        x = [s for s in b.sels if s.group == "1X2"]
+        if length(x) == 3
+            gm = Dict(s.selection => s.p_model for s in x); tm = sum(values(gm))
+            gk = Dict(s.selection => s.p_market for s in x); tk = sum(values(gk))
+            push!(xrows, (match_id = b.m_id, fixture = "$(f.home) v $(f.away)",
+                          H_model = round(gm[:home]/tm, digits = 3), H_mkt = round(gk[:home]/tk, digits = 3),
+                          D_model = round(gm[:draw]/tm, digits = 3), D_mkt = round(gk[:draw]/tk, digits = 3),
+                          A_model = round(gm[:away]/tm, digits = 3), A_mkt = round(gk[:away]/tk, digits = 3),
+                          result = sc === nothing ? "—" :
+                                   sc[1] > sc[2] ? "H" : sc[1] < sc[2] ? "A" : "D"))
+        end
+
+        # --- proper scoring, per market group ----------------------------------------------
+        sc === nothing && continue
+        byg = Dict{Tuple{String,Float64},Vector{Any}}()
+        for s in b.sels; push!(get!(byg, (s.group, s.line), []), s); end
+        for ((g, l), ss) in byg
+            pm = [s.p_model for s in ss];  pm ./= sum(pm)
+            pk = [s.p_market for s in ss]; pk ./= sum(pk)
+            y  = [coalesce(DDx.grade_selection(g, l, s.selection, sc[1], sc[2]), false) for s in ss]
+            sum(y) == 1 || continue        # skip pushes and degenerate groups
+            w = findfirst(y)
+            push!(srows, (group = g, line = l,
+                          ll_model = -log(max(pm[w], 1e-12)), ll_market = -log(max(pk[w], 1e-12)),
+                          br_model = sum((pm .- y).^2), br_market = sum((pk .- y).^2)))
+        end
+    end
+
+    score = isempty(srows) ? DataFrame() :
+        combine(groupby(DataFrame(srows), [:group, :line]), nrow => :n,
+                :ll_model  => (x -> round(mean(x), digits = 4)) => :LL_model,
+                :ll_market => (x -> round(mean(x), digits = 4)) => :LL_market,
+                [:ll_model, :ll_market] => ((a, c) -> round(mean(a) - mean(c), digits = 4)) => :LL_gap,
+                :br_model  => (x -> round(mean(x), digits = 4)) => :Brier_model,
+                :br_market => (x -> round(mean(x), digits = 4)) => :Brier_market)
+
+    pnl = isempty(sheet) ? DataFrame() :
+        combine(groupby(sheet, :match_id), nrow => :legs,
+                :risk => (x -> round(sum(x), digits = 2)) => :staked,
+                :pnl  => (x -> round(sum(x), digits = 2)) => :pnl,
+                [:pnl, :risk] => ((p, r) -> round(100sum(p)/sum(r), digits = 1)) => :roi_pct)
+
+    return (goals = DataFrame(grows), x2 = DataFrame(xrows), score = score, pnl = pnl,
+            as_of = as_of, gradeable = ctx.gradeable)
+end
+
+"Least-squares Poisson total against the de-vigged Over probabilities of the whole O/U ladder."
+function _fit_poisson_total(over::Dict{Float64,Float64})
+    best, bl = Inf, NaN
+    for lam in 0.40:0.01:6.50
+        e = 0.0
+        for (l, p) in over
+            e += (ccdf(Poisson(lam), floor(Int, l)) - p)^2
+        end
+        e < best && (best = e; bl = lam)
+    end
+    return bl
+end
+
+"""
+    show_pregame(ctx; kwargs...)
+
+`pregame` with the tables printed and the three summary numbers that matter spelled out:
+the model's total expected goals against the market's and the actual, the 1X2 dispersion ratio,
+and how the model scored against the market.
+"""
+function show_pregame(ctx::MatchDayContext; kwargs...)
+    p = pregame(ctx; kwargs...)
+    p === nothing && (println("  nothing priceable at that instant"); return nothing)
+
+    println("\n", "="^104, "\n  PRE-GAME — what the model believed, vs the market, vs what happened\n", "="^104)
+    show(p.goals, allrows = true, allcols = true); println()
+
+    g = p.goals
+    ok = .!isnan.(g.market_tot)
+    @printf("\n  expected goals over %d fixtures:  model %.1f   market %.1f%s\n",
+            nrow(g), sum(g.model_tot), sum(g.market_tot[ok]),
+            p.gradeable ? @sprintf("   ACTUAL %d", sum(skipmissing(g.goals))) : "")
+    same = count(>(0), skipmissing(g.gap))
+    @printf("  model is above the market on %d of %d fixtures", same, count(!ismissing, g.gap))
+    println(same == nrow(g) || same == 0 ?
+            "  ← one-sided, i.e. a LEVEL BIAS, not noise" : "")
+
+    println("\n--- 1X2: model vs market ---")
+    show(p.x2, allrows = true, allcols = true); println()
+    if nrow(p.x2) > 1
+        r = std(p.x2.H_model) / std(p.x2.H_mkt)
+        @printf("\n  sd(p_home) model %.3f vs market %.3f  →  DISPERSION RATIO %.2f\n",
+                std(p.x2.H_model), std(p.x2.H_mkt), r)
+        println(r < 0.75 ? "  ← the model cannot tell these fixtures apart as well as the market can.\n" *
+                           "    That manufactures fake edge on underdogs; treat 1X2 stakes with suspicion." :
+                "  ← comparable to the market's own spread.")
+    end
+
+    if !isempty(p.score)
+        println("\n--- proper scoring on the actual outcomes (lower is better) ---")
+        show(sort(p.score, :LL_gap), allrows = true, allcols = true); println()
+        wins = count(<(0), p.score.LL_gap)
+        @printf("\n  the model beats the market on %d of %d market groups.\n", wins, nrow(p.score))
+        println("  LL_gap is model minus market: negative = model better. This, not ROI, is the")
+        println("  measure of whether the model knows anything.")
+    end
+
+    if !isempty(p.pnl)
+        println("\n--- staked and returned, per fixture ---")
+        show(sort(p.pnl, :pnl), allrows = true, allcols = true); println()
+    end
+    return p
 end
 
 """

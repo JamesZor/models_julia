@@ -141,6 +141,32 @@ if !isempty(sheet)
     println()
 end
 
+# ═══════════════════════════════════════════════════════════════════════════════════════════
+# 7 · PRE-GAME BREAKDOWN  — why the ROI came out where it did
+# ═══════════════════════════════════════════════════════════════════════════════════════════
+#
+# Blocks 4-6 tell you WHAT the system did. This one tells you whether the model deserved to.
+#
+# Four tables: expected goals model vs market vs actual; 1X2 probabilities model vs market;
+# proper scoring (log loss and Brier) of BOTH against the outcomes; and P&L per fixture.
+#
+# Read the scoring table first and the ROI last. On a handful of fixtures ROI is almost pure
+# noise, while a one-sided goal-level gap or a collapsed 1X2 spread is visible immediately and
+# is a property of the model rather than of the day.
+
+pg = show_pregame(ctx; as_of = ctx.kickoff, bankroll = 1000.0)
+
+# THE TWO NUMBERS TO WATCH WEEK TO WEEK
+#
+#  * `gap` one-sided across every fixture  → a LEVEL BIAS in expected goals. Not noise: if the
+#    model is above the market on 6 of 6, that is a systematic offset you can correct.
+#
+#  * DISPERSION RATIO = sd(p_home model) / sd(p_home market). Below ~0.75 means the model cannot
+#    separate fixtures as well as the market does, so its biggest apparent "edges" sit on the
+#    underdogs of the most lopsided games — which is how ignorance gets sized as conviction.
+#    Log it every week: if it climbs toward 1.0 as the season fills in, it was a cold start.
+#    If it stays put, the engine is structurally under-dispersed and needs a wider prior.
+
 println("""
 
   ═══════════════════════════════════════════════════════════════════════════════════
