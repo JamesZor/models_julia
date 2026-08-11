@@ -156,8 +156,64 @@ match-clustered ROI interval. This reinforces the estimator hierarchy the stream
 around and is the single strongest argument for having built Layer-2-specific metrics rather
 than reusing the wealth metrics alone.
 
-### Still open in WP0
+### G4 PASS — and it inverts which league is better instrumented
 
-* **G4 (718 xG + player ratings preflight) not yet run** — needs the DataStores loaded.
+Ran against freshly loaded DataStores. **718 passes**, and the surprise is that the *second* tier
+is the better-instrumented one.
+
+xG presence, from `ds.statistics` filtered to `period == "ALL"` (matches with a stats row):
+
+| season | 79 (Premier) | 718 (First Div) |
+|---|---|---|
+| 2021 | 0 / 180 | 0 / 135 |
+| 2022 | 0 / 180 | 0 / 144 |
+| 2023 | **0 / 180** | 179 / 180 |
+| 2024 | **0 / 180** | 178 / 180 |
+| 2025 | 176 / 180 | 177 / 180 |
+| 2026 | 129 / 134 | 124 / 135 |
+
+Player ratings (`ds.lineups.rating`) run ~72–75% for **both** leagues from 2023, and 0% before.
+
+* **718 G4: PASS.** xG 92–99% across 2023+, ratings ~68–72%, and the single present-but-zero xG
+  (`wexford-fc v kerry-fc`, 2024-10-11, away xG 0.0 in a 4–0) is already neutralised in src —
+  `outfield_xg_smile_double_poisson.jl:196` floors xG at `1e-3` before the Gamma pillar. The
+  -Inf initialisation trap is closed.
+* **79 carries no statistics at all before 2025.** With the validated
+  `target_seasons = ["2025","2026"], history_seasons = 2`, tournament 79's history window
+  (2023–24) contributes **goals only** — the xG pillar is silent there — while 718's history
+  window contributes full xG.
+
+**Consequence.** The two leagues are trained on materially different information under the same
+config. This is not new breakage — it is exactly the config r21 validated and won with — but it
+means:
+
+1. Cross-league pooling of Layer-2 results must state the asymmetry rather than average over it.
+2. **718 is the stronger corpus on both counts**: 43 order-book fixtures to 79's 38, *and* two
+   extra seasons of xG history. Where the two disagree, 718 is the better-evidenced answer. This
+   is the opposite of the usual assumption that the top tier has the better data.
+3. Do **not** re-tune `history_seasons` to chase 79's xG. That is a Layer-1 decision and
+   re-opening it inside a Layer-2 stream is how a clean result gets confounded.
+
+**Trap found:** `ds.matches.has_xg` is `false` for **every season of 79, including 2025–26**,
+where xG demonstrably exists in `ds.statistics`. The flag is stale — gate on the statistics rows,
+never on `has_xg`.
+
+**Trap found:** loading `IrelandFirstDivision` silently rebuilt its DataStore (cache 110h old
+against a 48h TTL). This is trap T1 from the matchday ARCHITECTURE and the documented root cause
+of the fold-selection defect: a store that grows between training and post-processing makes
+`extract_oos_predictions` mis-pair folds. The store must be pinned before WP2 training and the
+`length(boundaries) == length(training_results)` assertion must hold at every use.
+
+### WP0 verdict
+
+**G1 PASS** (81/81) · **G2 PASS** (9.0 median markets) · **G3 PASS** (3.0 min, p10 = p90) ·
+**G4 PASS** (718 carries the engine).
+
+Carried into WP3: lookback **T-180**, coarse step 15 min to T-60, fine step **3 min** to KO,
+~28 snapshots/slate × 12 slates ≈ 336 `match_day` calls per arm.
+
+### Still open
+
 * `MatchDay._query` opens a connection per call; the corpus build is 92s of mostly connection
   setup. Worth a batched read if the corpus is rebuilt often.
+* DataStore pinning for WP2 (see the T1 trap above).
