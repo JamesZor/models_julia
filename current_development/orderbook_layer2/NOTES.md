@@ -294,8 +294,83 @@ intervals would shrink by roughly `sqrt(28)` and manufacture significance.
 2. A7's tolerance was tighter than `ClosingLineValue`'s own 5-dp rounding, so it failed on the
    rounding rather than the arithmetic. Test bug, not code bug.
 
-### Health warning wired in, not just documented
+### Health warning wired in, not just documented (WP1)
 
 `l2_path_metrics` returns `path_reliable = n_slates >= 25`, and `path_warning(tearsheet)` returns
 the sentence that must accompany any drawdown column. On this corpus (12 slates) it always
 fires. A11 asserts it does.
+
+---
+
+## 2026-08-11 — WP2 setup. A forced asymmetry between the two leagues.
+
+### The blocker: 718 has no SofaScore O/U ladder
+
+r21 trained the market pillar on SofaScore `ds.odds` and evaluated CLV against Betfair, keeping
+the feeds cleanly separated. Measured, that is impossible for 718:
+
+| matches with market, by season | 79 SofaScore | 718 SofaScore | 718 Betfair |
+|---|---|---|---|
+| 2023 O/U | 174/180 | **0** | 144/180 |
+| 2024 O/U | 180/180 | **0** | 144/180 |
+| 2025 O/U | 180/180 | **0** | 144/180 |
+| 2025 1X2 | 180/180 | **27/180** | 144/180 |
+| 2026 O/U | 134/134 | **0** | 80/135 |
+
+718's SofaScore feed carries **1X2 only, from 2022 onward**. `MarketSmileFeature(Kmax=4)` inverts
+the O/U ladder per strike, so on that feed it has nothing to invert and `smile_weight = 0.4`
+anchors to an empty feature. That is a **silently mis-specified** model, not a degraded one —
+it would train, converge, and be wrong.
+
+Decision (user's, with the alternatives priced): **79 stays r21-exact on SofaScore; 718 trains on
+Betfair.** The alternative of moving both to Betfair would have made them comparable but broken
+bit-identity with r21/b21 for 79; dropping 718 would have halved the corpus.
+
+### The window is not the close, and that is load-bearing
+
+`market_extractors.jl:71` reads `prob_fair_close`. So whatever is passed as `close_window` **is**
+the training pillar, whatever it is named. Training on the actual close would be circular: the
+Layer-2 evaluation measures CLV *against* the close, so the model would be scored against its own
+input.
+
+Chosen: `close_window = (-360, -180)`, which ends exactly where the WP4 decision grid begins.
+Measured coverage cost of that principle:
+
+| close_window | 718 matches with an O/U ladder (2023–26) |
+|---|---|
+| (−1440, −360) | 71 — too thin |
+| (−720, −360) | 232 |
+| **(−360, −180)** | **276** ← chosen |
+| (−180, −60) | 312 — but overlaps the decision window |
+
+### The caveat this leaves
+
+79's pillar is SofaScore at ~100%; 718's is Betfair at ~54%. **WP4–WP6 must report per league,
+never pooled** — a pooled difference would be confounded by the feed, not by the league. Combined
+with the WP0 finding that 79 has no xG before 2025 while 718 does, the two leagues now differ on
+*both* pillars, in *opposite* directions:
+
+| | 79 | 718 |
+|---|---|---|
+| xG history (2023–24) | absent | present |
+| market pillar | SofaScore, dense | Betfair, ~54% |
+| order-book fixtures | 38 | 43 |
+
+Neither is uniformly better instrumented. That is a reason to read them as two independent
+replications rather than as one pooled corpus — which, at this sample size, is arguably the more
+honest design anyway.
+
+### Job shape (dry-run, before training)
+
+* **31 folds per league** (2025 runs to biweek 17, 2026 to biweek 12, plus a baseline fold each).
+* Order-book window needs 2026 biweeks **8–12**; folds reach **0–12** → G-C will pass.
+* 124 chains per league (31 × 4) through the queued NUTS global queue.
+* Betfair pillar for 718: 2,534 rows over 518 matches.
+
+### DataStores are now pinned
+
+`load_datastore_cached` has a 48h TTL and rebuilt 718 silently during the WP0 preflight (trap
+T1). A store that grows between training and `extract_oos_predictions` makes the latter rebuild
+boundaries from the NEW store and zip them positionally against the OLD `training_results` —
+folds mis-pair with no error. WP2 serialises the exact stores it trained on, including the
+pillar-swapped 718, to `data/l2_ireland_engines/ds_*.jls`. **WP3 must load those, not the cache.**
