@@ -227,7 +227,8 @@ end
     # fair_close was stubbed as 1/(odds*1.03), so log(odds*fair) = -log(1.03) on every leg
     c = BT.compute_distributional_metric(ClosingLineValue(), led.df)
     @test c.clv_n > 0
-    @test c.clv_mean ≈ -log(1.03) atol = 1e-6
+    # tolerance is the metric's own rounding (5 dp), not floating-point epsilon
+    @test c.clv_mean ≈ -log(1.03) atol = 1e-5
     @test c.clv_pos ≈ 0.0                         # uniformly negative
     @test c.beat_close ≈ 0.0                      # no drift => never beat the close
 end

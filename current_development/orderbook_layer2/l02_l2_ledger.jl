@@ -231,7 +231,10 @@ function l2_tearsheet(l::Layer2Ledger;
             end
         end
         ci = bootstrap ? _clustered_roi(sub) : (roi_ci_lo = NaN, roi_ci_hi = NaN)
-        merge(stats, path, ci, wealth, dist)
+        # Merge PAIRWISE. `merge(::NamedTuple, ::AbstractDict)` is a two-argument method only —
+        # the varargs form is NamedTuple-to-NamedTuple, so a single mixed call is a MethodError.
+        # `BackTesting._compute_wealth_metrics` chains for the same reason.
+        merge(merge(merge(stats, path, ci), wealth), dist)
     end
 
     return sort!(out, cols)
