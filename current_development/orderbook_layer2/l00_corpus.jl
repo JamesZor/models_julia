@@ -23,11 +23,27 @@
 # ---------------------------------------------------------------------------------------------
 #
 #   fixtures            81 with a book  (38 in tournament 79, 43 in 718), out of 106 played
-#   window              2026-05-28 -> 2026-08-08
+#   window              2026-05-29 -> 2026-08-09, in 12 settlement windows
 #   crosswalk           81/81 present AND `is_verified` in `betfair.match_meta`
-#   markets             11 types per fixture, 811 markets total
-#   pre-KO depth        avg first tick T-379min (79) / T-591min (718); max ~48h
+#   markets             9 usable types per fixture (see MARKET SCOPE below)
+#   cadence             3.0 min, p10 = p90 = 3.0 -- a metronome, despite the table's name
+#   pre-KO depth        MEDIAN first tick T-225 min. 81/81 reach T-60, 66/81 T-180,
+#                       37/81 T-240, only 15/81 T-360
+#   two-sided quotes    99.5% of pre-KO rows carry both a bid and an ask
+#   top-of-book size    100% populated
+#   market_matched      23.8% populated -- see the note in `_fixture_coverage`
 #   in-play             the feed keeps running ~2h past kick-off
+#
+# Two of those lines are corrections of earlier readings, and both errors had the same shape --
+# an average taken over a column that is only sometimes there:
+#
+#   * "avg first tick T-379/T-591 min" was a MEAN dragged by a 48-hour outlier. The median is
+#     T-225 and the quartile that matters (how deep can a grid reach and still serve most
+#     fixtures) is T-180. `recommend_grid` now derives the grid from that quantile.
+#   * The matched-volume-by-time-to-kickoff profile (GBP 8 at T-24h rising to GBP 10.6k at the
+#     off) was computed with `avg()`, which skips NULLs -- so it silently described only the 18
+#     August fixtures that carry the column. The SPREAD half of that profile is sound, because
+#     bid/ask arrays are ~100% populated across all 81.
 #
 # The crosswalk being complete is the single fact that makes this stream cheap. The MatchDay
 # module docstring warns that `MatchMetaCrosswalk` resolves "0% after the job stopped" -- that
@@ -256,18 +272,32 @@ function _fixture_coverage(f, market_ids::Vector{String})
     lead = [Dates.value(f.kickoff - t) / 60_000 for t in ts]      # minutes before KO
     gaps = length(ts) > 1 ? diff(Dates.value.(ts)) ./ 60_000 : Float64[]
 
+    # `market_matched` is NOT a property of the exchange, it is a property of the COLLECTOR: it
+    # is NULL on every Ireland fixture before 2026-08-02 and populated after. Measured on the
+    # corpus, 8,085 of 33,954 pre-KO rows (23.8%) carry it. It is therefore reported alongside a
+    # `has_matched` flag rather than as a bare number, because a liquidity gate built on it would
+    # silently apply to 18 of 81 fixtures. Top-of-book SIZE (`bid_volumes`) is the usable
+    # liquidity signal here — that is 100% populated.
     mm = MD._query("""
-        SELECT max(market_matched) AS mm FROM betfair_live.order_book_1m
+        SELECT max(market_matched) AS mm,
+               count(*) FILTER (WHERE market_matched IS NOT NULL) AS n_mm,
+               count(*) AS n_rows
+        FROM betfair_live.order_book_1m
         WHERE market_id = ANY(\$1) AND ts <= \$2;
         """, (market_ids, f.kickoff))
     matched = isempty(mm) || ismissing(mm[1, :mm]) ? NaN : Float64(mm[1, :mm]) / 10_000
+    n_mm    = isempty(mm) ? 0 : Int(mm[1, :n_mm])
 
     return (first_lead_min = maximum(lead),
             last_lead_min  = minimum(lead),
             n_snaps_preko  = length(ts),
             cadence_min    = isempty(gaps) ? NaN : median(gaps),
-            matched_close  = matched)
+            matched_close  = matched,
+            has_matched    = n_mm > 0)
 end
+
+"Median that ignores `NaN`. A single missing fixture must not poison a corpus-wide summary."
+_nanmedian(v) = (u = filter(!isnan, collect(skipmissing(v))); isempty(u) ? NaN : median(u))
 
 """
     measure_cadence(corpus) -> NamedTuple
@@ -309,6 +339,38 @@ function subset_corpus(c::L2Corpus, tournament_id::Int)
 end
 
 """
+    recommend_grid(corpus; coverage = 0.80) -> NamedTuple
+
+Choose the snapshot grid from the measured feed rather than from intuition.
+
+`lookback` is the deepest reach that at least `coverage` of fixtures can actually honour. This
+matters more than it sounds: the MEAN first tick on this corpus is T-379/T-591 min, but the
+MEDIAN is T-225 and only 15 of 81 fixtures reach T-360. A grid set from the mean would run 4x
+the snapshots to serve 18% of the corpus, and every fixture past its own first tick contributes
+a `no quotes retrieved` block that reads like a broken pipeline.
+
+The grid is deliberately ADAPTIVE. Nothing moves fast at T-3h — spread is flat from T-4h to
+T-1h — so the coarse leg runs at `coarse_step` and only the final hour, where spread halves and
+the book fills, runs at the collector's true cadence.
+"""
+function recommend_grid(c::L2Corpus; coverage::Float64 = 0.80,
+                        fine_from::Period = Minute(60), coarse_step::Period = Minute(15))
+    fl = filter(!isnan, c.coverage.first_lead_min)
+    isempty(fl) && return (lookback = Minute(60), fine_step = Minute(3),
+                           coarse_step = coarse_step, fine_from = fine_from, honoured = 0.0)
+    lookback = Minute(Int(floor(quantile(fl, 1 - coverage))))
+    fine     = measure_cadence(c).recommended_step
+    return (lookback   = lookback,
+            fine_step  = fine,
+            coarse_step = coarse_step,
+            fine_from  = fine_from,
+            honoured   = count(>=(Dates.value(lookback)), fl) / length(fl),
+            n_snaps    = (Dates.value(lookback) - Dates.value(Minute(fine_from))) ÷
+                             Dates.value(Minute(coarse_step)) +
+                         Dates.value(Minute(fine_from)) ÷ Dates.value(Minute(fine)) + 1)
+end
+
+"""
     corpus_slates(corpus) -> Vector{@NamedTuple{day::Date, fixtures::Vector{Any}}}
 
 Group the corpus into settlement windows by kick-off date.
@@ -336,12 +398,13 @@ function corpus_report(c::L2Corpus)
     isempty(c.coverage) && return DataFrame()
     g = combine(groupby(c.coverage, :tournament_id),
                 nrow => :fixtures,
-                :n_markets     => mean       => :mean_markets,
-                :first_lead_min => median    => :med_first_lead_min,
-                :last_lead_min  => median    => :med_last_lead_min,
-                :n_snaps_preko  => median    => :med_snaps,
-                :cadence_min    => median    => :med_cadence_min,
-                :matched_close  => median    => :med_matched_close)
+                :n_markets      => mean        => :mean_markets,
+                :first_lead_min => _nanmedian  => :med_first_lead_min,
+                :last_lead_min  => _nanmedian  => :med_last_lead_min,
+                :n_snaps_preko  => _nanmedian  => :med_snaps,
+                :cadence_min    => _nanmedian  => :med_cadence_min,
+                :has_matched    => count       => :n_with_matched,
+                :matched_close  => _nanmedian  => :med_matched_close)
     return sort!(g, :tournament_id)
 end
 
