@@ -212,8 +212,90 @@ of the fold-selection defect: a store that grows between training and post-proce
 Carried into WP3: lookback **T-180**, coarse step 15 min to T-60, fine step **3 min** to KO,
 ~28 snapshots/slate × 12 slates ≈ 336 `match_day` calls per arm.
 
-### Still open
+### Still open after WP0
 
 * `MatchDay._query` opens a connection per call; the corpus build is 92s of mostly connection
   setup. Worth a batched read if the corpus is rebuilt often.
 * DataStore pinning for WP2 (see the T1 trap above).
+
+---
+
+## 2026-08-11 — WP1 apparatus built and gated. 96/96.
+
+`r01_apparatus_smoke.jl`, 2.9s, **no DB, no cache, no trained experiment** — it drives the real
+`Portfolio.simulate` over `MatchBook`s built from the hand-rolled score grid in
+`test/portfolio_tests.jl`. That is what makes a WP1 gate possible before WP2 and WP3 exist.
+
+Files: `l01_l2_experiment.jl` (run side), `l02_l2_ledger.jl` (judge side),
+`l03_l2_metrics.jl` (metrics), `r01_apparatus_smoke.jl` (gate).
+
+### The gate that matters: A2
+
+The apparatus makes exactly one claim that can be wrong *silently* — that a tearsheet row means
+the same thing as a `Portfolio.report`. A2 asserts it against the real system, not a
+reimplementation:
+
+* `l2_curve(ledger) ≈ Trajectory.bankroll` — exact, elementwise
+* `l2_path_metrics` reproduces `Portfolio.path_metrics` on all seven shared fields
+* `BackTesting.compute_metric(m, l2_curve(...))` reproduces `Portfolio.report(traj, ms)`
+
+**This is where the compounding bug would have surfaced.** `BackTesting._compute_wealth_metrics`
+builds its curve as `cumsum(pnl)` — arithmetic accumulation, correct for flat staking and wrong
+for a fractional-Kelly system that compounds once per settlement window. A Sharpe or Calmar off
+`cumsum` measures a strategy nobody ran, and nothing complains. `l2_curve` compounds the way
+`simulate` does; A2 is the proof, and A3 additionally shows a shuffled ledger still yields the
+chronological curve (final wealth is order-invariant, every drawdown statistic is not).
+
+### Design decisions worth remembering
+
+**Three-tier cost model.** Snapshots are expensive (DB + latent extraction), staking is cheap,
+entry selection is free. Entry rules are therefore pure selections over an already-replayed
+ledger, not separate replays. Without this a trust sweep would re-run ~800 `match_day` calls for
+an answer a `groupby` away — the same insight that lets `r02_policy_sweep` sweep 24 policies in
+0.9s.
+
+**The entry-assembly trap, and its repair.** `FixedLead` and `AtClose` fire a whole slate at one
+instant, so the Kelly solve, drawdown factor and exposure cap all still hold. `FirstQualifying`
+and `BestPrice` assemble legs from *different* instants, where those constraints were solved
+per-snapshot — so the assembled book can breach the cap that made each part legal. Every
+individual number is correct, which is why it is invisible. `recap_slates!` scales the slate
+back, preserving relative Kelly weights (A13 asserts a single scale factor across legs and that
+single-instant rules never trip it). The weights stay only *locally* optimal in those two rules;
+that is inherent to picking across time, and is why `BestPrice` is labelled an oracle.
+
+**Units.** `:stake` is a bankroll FRACTION (matching `Trajectory.bets.stake` and `stake_sheet`'s
+`:frac`), `:payoff` is unit payoff, `:pnl = stake * payoff`. Currency lives in `:stake_cash` /
+`:pnl_cash` and never enters a metric. A1 asserts the fractions are in `[0,1]`.
+
+### Metrics
+
+| metric | obs on this corpus | reads |
+|---|---|---|
+| `PriceDrift` | ~100k | nothing but the book — `log(odds_close/odds_entry)`, backer sign |
+| `ClosingLineValue` | ~1k | the model's own picks vs the de-vigged close |
+| `FillCost` | ~100k | VWAP down the ladder at several notional sizes |
+| `BernoulliGammaHurdle` | ~500 | the outcome (Layer 1's, unchanged) |
+
+`FillCost` takes a *vector* of stake sizes deliberately: WP0 found the timing gradient is in
+capacity, not price, so the pre-registered prediction is that these curves are flat in
+`:entry_bucket` at small stakes and separate only at large ones. One stake size would make that
+untestable — the shape across sizes is the result.
+
+Every interval resamples **matches**, matching `Portfolio.bootstrap_roi`'s scheme, B and seed so
+a CLV interval and an ROI interval from the same slice are comparable rather than merely
+similar. Nine markets on a fixture share a scoreline and ~28 snapshots share a book; unclustered
+intervals would shrink by roughly `sqrt(28)` and manufacture significance.
+
+### Two bugs found by the gate
+
+1. `merge(::NamedTuple, ::AbstractDict)` is a **two-argument** method — the varargs form is
+   NamedTuple-to-NamedTuple. Merging stats + path + ci + wealth + dist in one call is a
+   `MethodError`. Chained pairwise, which is why `BackTesting` does the same.
+2. A7's tolerance was tighter than `ClosingLineValue`'s own 5-dp rounding, so it failed on the
+   rounding rather than the arithmetic. Test bug, not code bug.
+
+### Health warning wired in, not just documented
+
+`l2_path_metrics` returns `path_reliable = n_slates >= 25`, and `path_warning(tearsheet)` returns
+the sentence that must accompany any drawdown column. On this corpus (12 slates) it always
+fires. A11 asserts it does.
