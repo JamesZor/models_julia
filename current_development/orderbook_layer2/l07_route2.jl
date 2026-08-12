@@ -82,8 +82,10 @@ function route2_setup(ds, expr; price::Symbol = :close)
 
     ds1 = DD.DataStore(ds.segment, ds.matches, ds.statistics, odds,
                        ds.lineups, ds.incidents, ds.betfair_odds)
+    # `.df`: `extract_oos_predictions` returns a `LatentStates` wrapper, and `build_books`
+    # dispatches on `latents_df::DataFrame`.
     latents = EE.extract_oos_predictions(ds1, expr)
-    books   = PF.build_books(reference_spec(), latents, expr, odds, ds1)
+    books   = PF.build_books(reference_spec(), latents.df, expr, odds, ds1)
     return (odds = odds, latents = latents, books = books, ds1 = ds1)
 end
 
