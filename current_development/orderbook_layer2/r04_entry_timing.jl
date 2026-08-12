@@ -47,6 +47,38 @@
 # opportunity.
 #
 # ---------------------------------------------------------------------------------------------
+# OUTCOME (2026-08-12) — H1 REJECTED, H3 HELD, and the two disagreed on first reading
+# ---------------------------------------------------------------------------------------------
+#
+# H1 said price would be nearly free to wait for. It is not. Leg-weighted CLV is **monotone in
+# entry time, in both leagues independently**, and every rung is negative:
+#
+#            entry rule        79 CLV      718 CLV
+#            AtClose          -0.0051      -0.0072     <- best executable rule
+#            FixedLead(5m)    -0.0057      -0.0084
+#            FixedLead(15m)   -0.0051      -0.0102
+#            FixedLead(30m)   -0.0082      -0.0124
+#            FixedLead(60m)   -0.0118      -0.0127
+#            FixedLead(90m)   -0.0143      -0.0131
+#            FixedLead(120m)  -0.0139      -0.0147
+#            BestPrice        +0.0152      +0.0119     <- oracle, by construction
+#
+# Entering two hours out costs ~0.8-0.9 percentage points of CLV per leg against entering at the
+# close. For scale, `hurdle_G_emp` at the close is ~0.0003. **The execution decision is an order
+# of magnitude larger than the edge being executed.**
+#
+# H3 held, but only once the verdict was moved onto the right estimator. On ROI, `RandomEntry`
+# beat `AtClose` in both leagues and `reading_4_oracle` duly reported "a real drift toward
+# kickoff". On CLV the control is WORSE than the close (-0.011 vs -0.005 on 79; -0.010 vs -0.007
+# on 718), so the oracle gap is hindsight after all. With ~260 legs the ROI intervals span about
+# ±40 percentage points — the ROI ordering was a coin toss, exactly as pre-registered.
+#
+# H2 was NOT tested on the first run: `FillCost` is not in the tearsheet's default distributional
+# metrics (`_default_dist_metrics()` is `BernoulliGammaHurdle` alone), so the capacity axis never
+# ran at all. `reading_6_fill` now requests it explicitly, and the ledger is saved so the
+# question can be re-asked without rebuilding Tier 1.
+#
+# ---------------------------------------------------------------------------------------------
 # THE ORACLE TRAP, AND THE CONTROL FOR IT
 # ---------------------------------------------------------------------------------------------
 #
@@ -278,39 +310,92 @@ reading_2_clv(led::Layer2Ledger) =
 """
     reading_3_wealth(led) -> DataFrame
 
-H2/H3 with money attached — the weakest reading, and the one whose CI matters more than its
-point estimate.
+H3 with money attached — the weakest reading, and the one whose CI matters more than its point
+estimate. On this corpus those intervals span roughly ±40 percentage points, so this table
+settles nothing on its own; where it disagrees with `reading_2_clv`, CLV wins.
 """
 reading_3_wealth(led::Layer2Ledger) = l2_tearsheet(led; groupby_cols = [:entry_name])
 
 """
-    reading_4_oracle(ts) -> DataFrame
+    reading_6_fill(led) -> DataFrame
+
+H2 — the capacity axis, which is the one the clock actually buys.
+
+`FillCost` is NOT in `_default_dist_metrics()` (that is `BernoulliGammaHurdle` alone), so the
+first run of this file never tested H2 at all. It is requested explicitly here.
+
+Grouped by entry bucket rather than by rule: the question is whether the book at T−120 can
+absorb a stake the book at the close can, and that is a property of the instant, not of the rule
+that chose it. `slip_*` is the size-weighted price paid walking the ladder for a stake of that
+size; `short_*` is the fraction of legs the ladder cannot fill at all.
+"""
+reading_6_fill(led::Layer2Ledger) =
+    l2_tearsheet(led; groupby_cols = [:entry_bucket],
+                 dist_metrics = [FillCost(stakes = [10.0, 100.0, 1000.0])], bootstrap = false)
+
+"""
+    clv_by_rule(clv) -> DataFrame
+
+Collapse the per-family CLV table to one leg-weighted figure per entry rule.
+
+`clv_mean` is a per-leg average, so pooling families means weighting by `clv_n`, not taking the
+mean of means — the families differ in size by an order of magnitude (35 legs on O/U 4.5 over
+versus 2 on O/U 4.5 under). NaN families are dropped rather than propagated: an empty family
+returns NaN by design and would otherwise poison the whole rule's figure, which is how
+`FirstQualifying(0.020)` came back NaN on 718.
+"""
+function clv_by_rule(clv::DataFrame)
+    ok = filter(r -> isfinite(r.clv_mean) && r.clv_n > 0, clv)
+    g = combine(groupby(ok, :entry_name)) do sub
+        w = sub.clv_n
+        (legs     = sum(w),
+         clv_mean = round(sum(sub.clv_mean .* w) / sum(w), digits = 5),
+         pct_pos  = round(sum(sub.clv_pos .* w) / sum(w), digits = 1))
+    end
+    return sort!(g, :clv_mean, rev = true)
+end
+
+"""
+    reading_4_oracle(ts, clv) -> DataFrame
 
 H3. Lines up the oracle, the null control and the baseline so the trap in the header is settled
 on one row rather than by eye across a table.
 
-`oracle_gap` is what a naive read would call the timing opportunity. `control_gap` is how much of
-it a rule with NO information also collects. The difference is the only part that could be real.
-"""
-function reading_4_oracle(ts::DataFrame)
-    getrow(n) = (i = findfirst(==(n), ts.entry_name); i === nothing ? nothing : ts[i, :])
-    base = getrow("AtClose")
-    orc  = getrow("BestPrice(oracle)")
-    ctl  = filter(r -> startswith(r.entry_name, "RandomEntry"), ts)
-    (base === nothing || orc === nothing) && return DataFrame()
+**Settled on CLV, not ROI.** The first version used ROI and returned "control also beats close →
+a real drift toward kickoff (H3 fails)" in both leagues. That verdict was wrong, and wrong for
+the reason the pre-registration warned about: with ~260 legs the ROI confidence intervals span
+roughly ±40 percentage points, so an ROI ordering is a coin toss dressed as a result. On CLV,
+which has the power, the control is *worse* than the close in both leagues and the oracle gap is
+entirely hindsight.
 
-    ctl_roi = isempty(ctl) ? NaN : mean(ctl.roi)
+`oracle_gap` is what a naive read calls the timing opportunity. `control_gap` is how much of it a
+rule with NO information also collects. `harvestable` is the only part that could be real.
+"""
+function reading_4_oracle(ts::DataFrame, clv::DataFrame)
+    c = clv_by_rule(clv)
+    getc(n) = (i = findfirst(==(n), c.entry_name); i === nothing ? NaN : c.clv_mean[i])
+    getr(n) = (i = findfirst(==(n), ts.entry_name); i === nothing ? NaN : ts.roi[i])
+
+    base, orc = getc("AtClose"), getc("BestPrice(oracle)")
+    ctl_rows  = filter(r -> startswith(r.entry_name, "RandomEntry"), c)
+    ctl       = isempty(ctl_rows) ? NaN : mean(ctl_rows.clv_mean)
+    (isnan(base) || isnan(orc)) && return DataFrame()
+
+    gap, cgap = orc - base, ctl - base
     return DataFrame(
-        at_close_roi   = base.roi,
-        oracle_roi     = orc.roi,
-        control_roi    = ctl_roi,
-        oracle_gap     = orc.roi - base.roi,
-        control_gap    = ctl_roi - base.roi,
-        harvestable    = (orc.roi - base.roi) - (ctl_roi - base.roi),
-        n_control_seeds = nrow(ctl),
-        verdict = abs(ctl_roi - base.roi) < 0.25 * abs(orc.roi - base.roi) ?
-                  "oracle gap is mostly HINDSIGHT (H3 holds)" :
-                  "control also beats close -> a real drift toward kickoff (H3 fails)")
+        at_close_clv    = base,
+        oracle_clv      = orc,
+        control_clv     = ctl,
+        oracle_gap      = gap,
+        control_gap     = cgap,
+        harvestable     = gap - cgap,
+        n_control_seeds = nrow(ctl_rows),
+        # ROI carried alongside so the disagreement is visible rather than quietly resolved
+        at_close_roi    = getr("AtClose"),
+        control_roi     = mean(filter(r -> startswith(r.entry_name, "RandomEntry"), ts).roi),
+        verdict = cgap <= 0 ?
+            "control is WORSE than the close -> the oracle gap is hindsight (H3 holds)" :
+            "control also beats the close -> a real drift toward kickoff (H3 fails)")
 end
 
 """
@@ -383,7 +468,9 @@ function run_league(tag::String, tid::Int, corpus_all)
     drift  = reading_1_drift(fz)
     clv    = reading_2_clv(led_fz)
     ts_fz  = reading_3_wealth(led_fz)
-    oracle = reading_4_oracle(ts_fz)
+    oracle = reading_4_oracle(ts_fz, clv)
+    clvr   = clv_by_rule(clv)
+    fill   = reading_6_fill(led_fz)
 
     println("\n[R5] what was even priceable, by lead — read this FIRST")
     show(stdout, MIME"text/plain"(), cover)
@@ -395,15 +482,21 @@ function run_league(tag::String, tid::Int, corpus_all)
     show(stdout, MIME"text/plain"(),
          select(ts_fz, :entry_name, :legs, :bets, :med_lead, :roi, :roi_ci_lo, :roi_ci_hi,
                 :final, :hurdle_G_emp))
-    println("\n\n[R4] oracle vs control — H3")
+    println("\n\n[R2] CLV per entry rule — the high-power estimator, read this over R3")
+    show(stdout, MIME"text/plain"(), clvr)
+    println("\n\n[R6] FillCost by entry bucket — H2, the capacity axis")
+    show(stdout, MIME"text/plain"(), fill)
+    println("\n\n[R4] oracle vs control — H3, settled on CLV")
     show(stdout, MIME"text/plain"(), oracle)
     println()
     pw = path_warning(ts_fz)
     isempty(pw) || println("\n", pw)
 
     mkpath(OUT_DIR)
-    res = (tag = tag, coverage = cover, drift = drift, clv = clv, ts_frozen = ts_fz,
-           oracle = oracle, n_snap_frozen = length(fz))
+    res = (tag = tag, coverage = cover, drift = drift, clv = clv, clv_by_rule = clvr,
+           ts_frozen = ts_fz, fill = fill,
+           oracle = oracle, n_snap_frozen = length(fz),
+           ledger = led_fz.df)
     serialize(joinpath(OUT_DIR, "$(tag)_entry.jls"), res)
     return res
 end
