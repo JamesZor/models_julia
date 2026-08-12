@@ -594,3 +594,83 @@ Two pieces of shared state, both checked rather than assumed:
 
 `threaded = false` restores the serial path, which is the cheapest way to rule threading out if a
 result ever looks odd.
+
+---
+
+## WP4 results — 2026-08-12
+
+**Headline: enter as late as possible. The execution decision is an order of magnitude larger
+than the edge being executed.**
+
+### The two estimators disagreed, and the low-power one was read first
+
+| entry rule | 79 ROI | 79 CLV | 718 ROI | 718 CLV |
+|---|---|---|---|---|
+| AtClose | 9.29% | **−0.0051** | −2.98% | **−0.0072** |
+| FixedLead(5m) | 10.68% | −0.0057 | −2.56% | −0.0084 |
+| FixedLead(15m) | 11.11% | −0.0051 | −3.34% | −0.0102 |
+| FixedLead(30m) | 12.29% | −0.0082 | +1.27% | −0.0124 |
+| FixedLead(60m) | 12.45% | −0.0118 | +3.01% | −0.0127 |
+| FixedLead(90m) | 8.03% | −0.0143 | +1.46% | −0.0131 |
+| FixedLead(120m) | 7.94% | −0.0139 | +1.02% | −0.0147 |
+| RandomEntry (3 seeds) | ~11.6% | ~−0.0112 | ~+1.0% | ~−0.0099 |
+| BestPrice (oracle) | 13.10% | +0.0152 | +0.56% | +0.0119 |
+
+ROI says *AtClose is the worst rule in both leagues*. CLV says *AtClose is the best rule in both
+leagues*, monotonically. **CLV wins**, and the pre-registration said so before either ran: the ROI
+confidence intervals here are roughly **±40 percentage points** (79 AtClose: [−20.9, +43.2]), so
+the ROI ordering is a coin toss. CLV is measured on ~250 legs with a consistent monotone gradient
+reproduced in two leagues that share no fixtures and were fitted on different market pillars.
+
+This is also the answer to the H3 oracle trap. On ROI, `RandomEntry` beat `AtClose` in both
+leagues and `reading_4_oracle` reported "a real drift toward kickoff (H3 fails)". On CLV the
+control is **worse** than the close (−0.0112 vs −0.0051 on 79; −0.0099 vs −0.0072 on 718), so the
+oracle's +2.04% price gain is hindsight, exactly as pre-registered. The verdict function now runs
+on CLV; the ROI figures are carried alongside so the disagreement stays visible.
+
+### H1 rejected — waiting is not free, it is the whole game
+
+The revised H1 predicted flat drift because WP0 measured spread as nearly flat pre-kickoff. Wrong.
+Entering 120 min out costs **0.9 pp of CLV per leg on 79** (−0.0051 → −0.0139) and **0.75 pp on
+718** (−0.0072 → −0.0147). Against a `hurdle_G_emp` of ~0.0003 at the close, the timing decision
+is roughly **30× the size of the modelled edge**.
+
+`PriceDrift` corroborates from ~19k quotes with no model in the loop: mean drift is positive and
+CI-excludes-zero in the 30–120 min buckets of both leagues (79: +0.0020 [0.0005, 0.0037] and
++0.0034 [0.0012, 0.0056]; 718: +0.0038 [0.0002, 0.0088] and +0.0057 [0.0026, 0.0095]), and ~0
+with a CI spanning zero inside 15 min. Positive drift means quoted odds LENGTHEN toward the
+close — which is what overround compression does to every selection at once as liquidity arrives.
+
+### The apparent contradiction, resolved
+
+Average quotes lengthen toward the close (`PriceDrift` > 0), yet entering at the close gives the
+best CLV. Both are true and they are the same fact: the overround compresses, so a *later* entry
+buys the same opinion at a *smaller* margin. `PriceDrift` measures the nominal price of an
+arbitrary selection; CLV measures what the model's chosen legs pay after de-vigging. The margin
+is the bridge.
+
+### The model has no positive CLV anywhere
+
+Every executable rule is negative on every family in both leagues. `clv_pos` at the close is
+**8.8% (79) / 10.2% (718)** — the model's picks are essentially never on the right side of the
+closing line. `AtClose` CLV of −0.005 to −0.007 is about what paying the half-spread costs.
+
+**This is the finding to carry into WP5 and WP6.** There is no demonstrated edge against the
+closing line at any entry time, so the staking layer is not amplifying a measured edge — it is
+allocating against a model whose advantage, if any, is smaller than the spread it pays. It is
+consistent with the standing note that the model loses narrowly to the close on 1X2.
+
+### Sampling caveats that bound all of the above
+
+* Deep entry buckets are populated only by late-kick-off fixtures in staggered slates (§WP3.6).
+* 718's `120-180m` drift bucket has **34 quotes** — ignore it.
+* 718's `FirstQualifying(0.020)` returned NaN CLV: one family with `clv_n = 0` propagating through
+  a mean of means. Fixed in `clv_by_rule`, which now weights by leg count and drops NaN families.
+
+### H2 never ran
+
+`FillCost` is not in `_default_dist_metrics()` (that is `BernoulliGammaHurdle` alone), so the
+capacity axis — the one thing the clock was supposed to buy — was never measured. `reading_6_fill`
+now requests it explicitly and the ledger is saved so it can be re-asked without rebuilding
+Tier 1. **Until it runs, "enter late" rests on price alone**, and the counter-argument that late
+books are deeper is untested.
