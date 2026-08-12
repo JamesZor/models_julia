@@ -191,10 +191,13 @@ function books_frame(books, ds)
     end
     isempty(rows) && return DataFrame()
     df = DataFrame(rows)
-    df.claim      = df.p_model .- df.p_market
     df.fair_close = df.p_market        # so l05/l06's cuts apply unchanged
     df.season     = Dates.year.(df.date)
-    df.stake      = zeros(nrow(df))    # placeholder; skill cuts do not use it
+    # `annotate!` adds :claim, :odds_band, :edge_band and :market — the cut columns every table
+    # in l05 groups on. Calling it here rather than re-deriving keeps the Route-2 bands
+    # identical to the order-book ones, which is what makes the two comparable.
+    annotate!(df)
+    df.stake      = zeros(nrow(df))    # placeholder; the skill cuts do not use it
     df.pnl        = zeros(nrow(df))
     return df
 end
