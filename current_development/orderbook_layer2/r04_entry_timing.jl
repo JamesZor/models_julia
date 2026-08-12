@@ -170,9 +170,9 @@ function build_arm(corpus, expr, ds, arm::Symbol)
     # book is continuously alive pass zero cards, so they cost a database read each and
     # contribute nothing but a blocked-report row.
     g = recommend_grid(corpus; coverage = 0.80)
-    @printf("\n--- Tier 1: %s, arm :%s, lookback %s (80%% of fixtures live that deep; " *
-            "first-tick would have said %s) ---\n", corpus.name, arm, g.lookback,
-            g.first_tick_lookback)
+    # NB a single literal — `@printf` will not accept a concatenated format string.
+    @printf("\n--- Tier 1: %s, arm :%s, lookback %s (80%% live that deep; first-tick said %s) ---\n",
+            corpus.name, arm, g.lookback, g.first_tick_lookback)
     t0 = time()
     s = build_snapshots(corpus, expr, ds; arm = arm, lookback = g.lookback,
                         fine_step = g.fine_step, coarse_step = g.coarse_step, verbose = true)
