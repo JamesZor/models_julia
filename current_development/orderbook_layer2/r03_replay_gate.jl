@@ -19,15 +19,21 @@
 # ---------------------------------------------------------------------------------------------
 #
 #   G1  stake_snapshots reproduces match_day's sheet ROW FOR ROW at the same instant
-#   G2  latents move with as_of on :live and do NOT on :frozen  (the arms are real)
+#   G2  the latent arms, measured with a test that CAN fail
 #   G3  the adaptive grid is honoured by the fixtures it is built for
+#   G3b the grid does not reach past the tradeable book
 #   G4  the stamped close is coherent — fair probabilities sum to ~1 per market group
 #   G5  entry rules behave on real data as they did on synthetic
 #
-# G2 is expected to report `false` for :live. That is a PASS, not a failure: `src_sup40_sw40` is
-# player-level, so its latents must move with the announced XI. If :live ever came back
-# invariant, the ratings materialiser would not be doing anything and the whole frozen/live
-# decomposition would be measuring nothing.
+# G2 previously asserted that `src_sup40_sw40`, being player-level, MUST have latents that move
+# with `as_of` — and treated invariance as proof the ratings materialiser was inert. The first
+# run disproved that: latents are bit-identical across the window, because serving latents are a
+# pure function of `(fixture, split)`. The gate now asserts the measured behaviour, and asserts
+# `n_compared > 0` first, because the helper it used to rely on could not fail.
+#
+# G3b exists because the failure it catches is invisible: an entry rule aimed at a lead the
+# readiness gate refuses to price does not error, it snaps to a shallower instant and reports
+# that instant's numbers under the deeper label.
 #
 # ---------------------------------------------------------------------------------------------
 # USAGE (server; needs WP2's pinned stores and trained experiments)
@@ -86,15 +92,19 @@ grid_rec = recommend_grid(c79; coverage = 0.80)
 @printf("recommended grid: lookback %s, fine %s from %s, coarse %s (honoured %.0f%%)\n",
         grid_rec.lookback, grid_rec.fine_step, grid_rec.fine_from, grid_rec.coarse_step,
         100 * grid_rec.honoured)
+@printf("  (first-tick lookback would have been %s — see live_lead_min in l00)\n",
+        grid_rec.first_tick_lookback)
 
 # One representative slate — the busiest, so the comparison has the most rows to disagree on.
+# NB `big_slate`, not `big`: a top-level binding named `big` in Main shadows `Base.big` for
+# everything included afterwards, and `r01_apparatus_smoke.jl` uses `factorial(big(i))`.
 slates    = corpus_slates(c79)
-big       = slates[argmax(length(s.fixtures) for s in slates)]
-test_spec = replay_spec(big.fixtures)
-test_grid = adaptive_grid(big.fixtures; lookback = Minute(180))
+big_slate = slates[argmax(length(s.fixtures) for s in slates)]
+test_spec = replay_spec(big_slate.fixtures)
+test_grid = adaptive_grid(big_slate.fixtures; lookback = grid_rec.lookback)
 t_mid     = test_grid[max(1, length(test_grid) ÷ 2)]
 @printf("gate slate: %s, %d fixtures, %d instants, comparing at %s\n",
-        big.day, length(big.fixtures), length(test_grid), t_mid)
+        big_slate.day, length(big_slate.fixtures), length(test_grid), t_mid)
 
 sys = PF.PortfolioSystem(
     PF.BookSpec(markets = DD.MarketConfig(DD.AbstractMarket[
@@ -158,7 +168,7 @@ end
     @test d.worst == 0.0
 
     # and the vacuity of the inherited helper is pinned, so a future reader does not trust it
-    ok, worst, col = latents_invariant(test_spec, expr79, ds79, big.fixtures, t1, t2)
+    ok, worst, col = latents_invariant(test_spec, expr79, ds79, big_slate.fixtures, t1, t2)
     @test ok && col === :none            # it "passes" without comparing anything
     @printf("    latents_invariant reports %s on %s — vacuous, see l04 header\n", ok, col)
 end
@@ -167,7 +177,7 @@ end
 @testset "G3 the grid is honoured by the fixtures it serves" begin
     @test !isempty(test_grid)
     @test issorted(test_grid)
-    ko = minimum(f.kickoff for f in big.fixtures)
+    ko = minimum(f.kickoff for f in big_slate.fixtures)
     @test maximum(test_grid) <= ko                 # never sample in-play
     @test minimum(test_grid) >= ko - Minute(180)
 
@@ -180,7 +190,7 @@ end
     # slate the first tick is T-334 but the feed then goes silent for over two hours, so
     # MaxBookAge(10m) blocks every card until ~T-120. `live_lead_min` is the honest number and
     # is what the grid must be judged against.
-    cov = filter(:match_id => in(Set(f.m_id for f in big.fixtures)), c79.coverage)
+    cov = filter(:match_id => in(Set(f.m_id for f in big_slate.fixtures)), c79.coverage)
     @printf("    first-tick leads: %s\n", string(round.(Int, cov.first_lead_min)))
     @printf("    LIVE leads      : %s   (max gap %s min)\n",
             string(round.(Int, cov.live_lead_min)), string(round.(Int, cov.max_gap_min)))
@@ -194,9 +204,9 @@ end
     # lead the gate refuses to price returns ZERO legs, which in a tearsheet looks like "no edge
     # early" rather than "no book". Every instant the driver visits must be priceable for at
     # least one fixture in its slate.
-    cov = filter(:match_id => in(Set(f.m_id for f in big.fixtures)), c79.coverage)
+    cov = filter(:match_id => in(Set(f.m_id for f in big_slate.fixtures)), c79.coverage)
     deepest_live = maximum(cov.live_lead_min)
-    lead_of(t) = Dates.value(minimum(f.kickoff for f in big.fixtures) - t) / 60_000
+    lead_of(t) = Dates.value(minimum(f.kickoff for f in big_slate.fixtures) - t) / 60_000
     @printf("    grid starts at T-%.0f, deepest live lead T-%.0f\n",
             lead_of(minimum(test_grid)), deepest_live)
     @test lead_of(minimum(test_grid)) <= deepest_live
