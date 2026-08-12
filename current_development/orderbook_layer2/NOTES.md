@@ -836,3 +836,79 @@ The over-confidence is **directional and asymmetric** (fine below −5pp, bad ab
 family ranking flips sign between a 2.1-goal league and a 3.2-goal league along the totals axis.
 Both point at a **per-league level bias in λ_tot** rather than at per-market skill — which is an
 L1 question (and one the split-market-pillar stream is equipped for), not an L2 one.
+
+---
+
+## WP8 results — 2026-08-12: the full-book test
+
+WP5's `w* = 0` was measured on legs the staking layer chose, selected on `p_model > p_market` —
+the same quantity under test. This scores **every quoted selection**, staked or not. The join was
+exact: 267/267 (79) and 263/263 (718) staked legs found their counterpart, so the comparison is
+clean.
+
+### F1 — FAILED. It is not the selection rule.
+
+Pooled, 1,140 quoted selections over 76 matches:
+
+| set | n | skill | 95% CI | beats mkt | **w\*** |
+|---|---|---|---|---|---|
+| **ALL quoted** | 1140 | **−0.01017** | [−0.0220, +0.0026] | 43.8% | **0.00** |
+| STAKED only | 530 | **−0.01012** | [−0.0225, +0.0036] | 42.5% | **0.00** |
+| NOT staked | 610 | **−0.01022** | [−0.0225, +0.0029] | 44.9% | **0.00** |
+
+The three are **identical to three decimal places**. Skill on legs the model never bet is the same
+as skill on the legs it did. `w* = 0` on all three subsets, pooled and per league (79's full book
+shows `w* = 0.26` worth 0.00061 nats — inside noise; 718 is flat zero throughout).
+
+So the pre-registered world B is ruled out. **This is a Layer-1 problem.** The engine is
+uninformative across the whole book, not merely where the staking rule selected it, and no
+shrinkage rule, abstention threshold, trust weight, filter or entry clock can change that — they
+all reallocate within a book whose every leg is equally uninformative.
+
+### F2 — the curse curve is SYMMETRIC on the full book
+
+| claim (`p_model − p_market`) | n | staked | skill | beats mkt |
+|---|---|---|---|---|
+| below −5pp | 191 | 16 | **−0.0269** | 41.9% |
+| −5 .. −2pp | 220 | 68 | −0.0059 | 43.2% |
+| **within 2pp** | 325 | 164 | **+0.0028** | **55.4%** |
+| +2 .. +5pp | 212 | 118 | −0.0031 | 39.2% |
+| above +5pp | 192 | 164 | **−0.0282** | 31.8% |
+
+This corrects the WP5 reading. On the staked subset the pattern looked **asymmetric** — fine
+below −5pp, bad above +5pp — and was written up as an optimizer's-curse signature. On the full
+book it is **symmetric**: large disagreements in *either* direction score badly (−0.0269 and
+−0.0282, near-identical). The apparent asymmetry was an artefact of staking only ever selecting
+the positive side.
+
+The honest statement is therefore stronger and simpler than "the model is over-confident upward":
+
+> **The model's deviations from the de-vigged market are noise.** Its skill is concentrated
+> exactly where it agrees with the market — and agreement is worth nothing, because the market is
+> freely available.
+
+Even the agreement band's +0.0028 carries a CI of [−0.0021, +0.0081], including zero.
+
+### Why this is mechanically unsurprising
+
+`DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel` has **four likelihood pillars, two of
+which are the market**: C1 anchors `log λ_h − log λ_a` to the market's implied supremacy
+(weight 0.4) and C2 anchors the per-strike total intensity to the market-inverted smile
+(weight 0.4). With `market_on = true` the engine is a shrinkage-toward-market estimator by
+construction.
+
+Its only route to an edge is where pillars A (xG, Gamma) and B (goals, Poisson) pull it *off* the
+anchors. The curse curve measures exactly that pull, and finds it is noise in both directions.
+The market pillars are carrying the model's accuracy; the model's own contribution is not adding
+to it.
+
+### The test that follows directly
+
+Run the `market_on = false` control on the same corpus. If the unanchored engine is much worse,
+the anchoring is doing all the work and the L1 signal is weak — which is what everything above
+predicts. If it is comparable, then the anchoring is *suppressing* a signal that exists, and the
+weights (not the model) are the problem. r21's grid included such a control cell, but it was
+judged on proper scoring against held-out matches, never against an executable de-vigged close.
+
+That is an L1 question and belongs in the split-market-pillar stream. **The Layer-2 programme on
+this corpus is complete and its answer is that there is nothing here for it to allocate.**
