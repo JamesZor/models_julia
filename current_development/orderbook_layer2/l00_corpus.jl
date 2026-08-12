@@ -96,6 +96,17 @@ _dd() = BayesianFootball.Data
 Market types this stream will price. See the MARKET SCOPE note above for why `DOUBLE_CHANCE`
 and `ASIAN_HANDICAP` are absent — they are malformed in the archive, not merely unprofitable.
 """
+"""
+The staleness limit the replay's readiness gate enforces, in minutes.
+
+Kept here as well as in `replay_spec(; book_age = Minute(10))` because coverage must be measured
+against the SAME limit the pipeline will apply. A corpus that reports a fixture as covered from
+T-334 while the gate refuses to price it until T-120 is not a corpus, it is a trap: every entry
+rule aimed at the uncovered region silently returns zero legs, which reads like "the model found
+no edge early" rather than "there was no book".
+"""
+const MAX_BOOK_AGE_MIN = 10
+
 const CORPUS_MARKET_TYPES = [
     "MATCH_ODDS",
     "BOTH_TEAMS_TO_SCORE",
@@ -288,8 +299,22 @@ function _fixture_coverage(f, market_ids::Vector{String})
     matched = isempty(mm) || ismissing(mm[1, :mm]) ? NaN : Float64(mm[1, :mm]) / 10_000
     n_mm    = isempty(mm) ? 0 : Int(mm[1, :n_mm])
 
+    # LIVE lead, not FIRST lead. `first_lead_min` says when a tick first appeared; it does NOT
+    # say the book was tradeable from then on. Measured on the 2026-05-29 slate, the first tick
+    # is T-334 and then the feed goes SILENT for over two hours — so `MaxBookAge(10 minutes)`
+    # correctly blocks every card until ~T-120, and an entry rule aimed at T-180 returns nothing.
+    # `live_lead_min` walks back from the close and stops at the first gap wider than the gate,
+    # which is the only lead that answers "how early could you actually have traded".
+    lim = Float64(MAX_BOOK_AGE_MIN)
+    i = length(ts)
+    while i > 1 && (Dates.value(ts[i]) - Dates.value(ts[i - 1])) / 60_000 <= lim
+        i -= 1
+    end
+
     return (first_lead_min = maximum(lead),
+            live_lead_min  = lead[i],
             last_lead_min  = minimum(lead),
+            max_gap_min    = isempty(gaps) ? NaN : maximum(gaps),
             n_snaps_preko  = length(ts),
             cadence_min    = isempty(gaps) ? NaN : median(gaps),
             matched_close  = matched,
@@ -355,9 +380,12 @@ the book fills, runs at the collector's true cadence.
 """
 function recommend_grid(c::L2Corpus; coverage::Float64 = 0.80,
                         fine_from::Period = Minute(60), coarse_step::Period = Minute(15))
-    fl = filter(!isnan, c.coverage.first_lead_min)
+    # `live_lead_min`, NOT `first_lead_min` — see `_fixture_coverage`. A grid set from the first
+    # tick reaches into a region the readiness gate refuses to price.
+    fl = filter(!isnan, c.coverage.live_lead_min)
     isempty(fl) && return (lookback = Minute(60), fine_step = Minute(3),
-                           coarse_step = coarse_step, fine_from = fine_from, honoured = 0.0)
+                           coarse_step = coarse_step, fine_from = fine_from, honoured = 0.0,
+                           n_snaps = 0)
     lookback = Minute(Int(floor(quantile(fl, 1 - coverage))))
     fine     = measure_cadence(c).recommended_step
     return (lookback   = lookback,
@@ -365,6 +393,8 @@ function recommend_grid(c::L2Corpus; coverage::Float64 = 0.80,
             coarse_step = coarse_step,
             fine_from  = fine_from,
             honoured   = count(>=(Dates.value(lookback)), fl) / length(fl),
+            first_tick_lookback = Minute(Int(floor(quantile(
+                filter(!isnan, c.coverage.first_lead_min), 1 - coverage)))),
             n_snaps    = (Dates.value(lookback) - Dates.value(Minute(fine_from))) ÷
                              Dates.value(Minute(coarse_step)) +
                          Dates.value(Minute(fine_from)) ÷ Dates.value(Minute(fine)) + 1)

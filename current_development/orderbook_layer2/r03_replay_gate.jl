@@ -138,14 +138,29 @@ sys = PF.PortfolioSystem(
 end
 
 # -------------------------------------------------------------------
-@testset "G2 the frozen and live arms are genuinely different" begin
-    t1, t2 = test_grid[1], test_grid[end]
+@testset "G2 the latent arms, measured rather than assumed" begin
+    # This gate originally asserted the OPPOSITE: that a player-level engine must have latents
+    # moving with as_of, and that `ok = true` would mean the materialiser was inert. Measurement
+    # says otherwise — see l04's header. Serving latents here are a pure function of
+    # (fixture, split), so :live and :frozen are the same arm.
+    #
+    # It is asserted with `latent_delta`, not `latents_invariant`. The latter filters columns on
+    # `eltype <: Number` and latent cells are Vector{Float64} inside Any-eltype columns, so it
+    # compares nothing and returns "invariant" unconditionally.
+    t1, t2 = test_grid[max(1, length(test_grid) ÷ 3)], test_grid[end]
+    d = latent_delta(test_spec, expr79, ds79, t1, t2)
+    @printf("    latent_delta(%s .. %s): moved=%s worst=%.3e on %s (%d cells compared)\n",
+            t1, t2, d.moved, d.worst, d.col, d.n_compared)
+
+    # the test that makes this non-vacuous: cells must actually have been compared
+    @test d.n_compared > 0
+    @test !d.moved                       # measured 2026-08-12: bit-identical across 3,200 draws
+    @test d.worst == 0.0
+
+    # and the vacuity of the inherited helper is pinned, so a future reader does not trust it
     ok, worst, col = latents_invariant(test_spec, expr79, ds79, big.fixtures, t1, t2)
-    # PLAYER-level engine => latents MUST move with as_of. `ok = true` here would mean the
-    # ratings materialiser is inert and the decomposition measures nothing.
-    @printf("    latents_invariant(%s .. %s) = %s  (max |Δ| = %.3e on %s)\n",
-            t1, t2, ok, worst, col)
-    @test !ok || worst > 0.0
+    @test ok && col === :none            # it "passes" without comparing anything
+    @printf("    latents_invariant reports %s on %s — vacuous, see l04 header\n", ok, col)
 end
 
 # -------------------------------------------------------------------
@@ -161,10 +176,36 @@ end
     @test maximum(gaps) == 15
     @test minimum(gaps) == 3
 
-    # every fixture in this slate has a book reaching the grid's start
+    # A book reaching the grid's start is NOT the same as a book the gate will price. On this
+    # slate the first tick is T-334 but the feed then goes silent for over two hours, so
+    # MaxBookAge(10m) blocks every card until ~T-120. `live_lead_min` is the honest number and
+    # is what the grid must be judged against.
     cov = filter(:match_id => in(Set(f.m_id for f in big.fixtures)), c79.coverage)
-    @printf("    slate first-tick leads: %s\n", string(round.(Int, cov.first_lead_min)))
-    @test all(cov.first_lead_min .>= 60)
+    @printf("    first-tick leads: %s\n", string(round.(Int, cov.first_lead_min)))
+    @printf("    LIVE leads      : %s   (max gap %s min)\n",
+            string(round.(Int, cov.live_lead_min)), string(round.(Int, cov.max_gap_min)))
+    @test all(cov.live_lead_min .>= 60)
+    @test all(cov.live_lead_min .<= cov.first_lead_min)
+end
+
+# -------------------------------------------------------------------
+@testset "G3b the grid does not reach past the tradeable book" begin
+    # The failure this catches is silent and reads like a model result: an entry rule aimed at a
+    # lead the gate refuses to price returns ZERO legs, which in a tearsheet looks like "no edge
+    # early" rather than "no book". Every instant the driver visits must be priceable for at
+    # least one fixture in its slate.
+    cov = filter(:match_id => in(Set(f.m_id for f in big.fixtures)), c79.coverage)
+    deepest_live = maximum(cov.live_lead_min)
+    lead_of(t) = Dates.value(minimum(f.kickoff for f in big.fixtures) - t) / 60_000
+    @printf("    grid starts at T-%.0f, deepest live lead T-%.0f\n",
+            lead_of(minimum(test_grid)), deepest_live)
+    @test lead_of(minimum(test_grid)) <= deepest_live
+
+    # and the corpus-level recommendation must be derived from the live lead, not the first tick
+    g = recommend_grid(c79; coverage = 0.80)
+    @printf("    recommend_grid lookback %s (first-tick equivalent would be %s)\n",
+            g.lookback, g.first_tick_lookback)
+    @test g.lookback <= g.first_tick_lookback
 end
 
 # -------------------------------------------------------------------

@@ -432,3 +432,106 @@ under-dispersion is the place it bites.
 
 Registered as an observation, not a change: swapping the dispersion config is an L1 question and
 belongs in the split-market-pillar stream, not here.
+
+---
+
+## WP3 results — 2026-08-12
+
+G1 passed on the first run and that is the one that mattered: **`stake_snapshots` reproduces
+`match_day`'s sheet row for row** (30 rows, every key column and every numeric column) at the
+same instant with the same spec. The Tier-1/Tier-2 decomposition is licensed; WP5 and WP6 can
+re-stake without touching the database.
+
+Everything else on the first run was wrong, in three separate ways, and all three were wrong in
+the direction of *looking fine*.
+
+### 1. The frozen/live arms are the same arm
+
+The plan, and l04's original header, argued that `src_sup40_sw40` must have latents that move
+with `as_of` because it is player-level and `RatingsFromTracker` reacts to the announced XI.
+
+Measured, T−120 vs kick-off, 2026-05-29 slate:
+
+| | |
+|---|---|
+| columns compared | `true_xg_h/a, θ_1..3, λ_h, λ_a, λ_tot, ρ, φ` |
+| fixtures | 5 |
+| posterior draws per cell | 3,200 |
+| **max abs Δ** | **0.0 — bit-identical** |
+
+Serving latents are a pure function of `(fixture, split)`. The market pillar is a *training*-time
+regulariser and never re-enters at serve time, and `replay_spec` wires `lineups = SourceChain()`
+with no sources, so no XI is ever fetched. **Player-level in the posterior does not imply
+clock-dependent at serve time.**
+
+Consequences:
+* `:live` is pure cost. WP4 runs `:frozen` only — halves its Tier-1 bill.
+* **100% of movement in a replay is the book** — the clean reading l04's header claimed we had
+  forfeited. H1–H3 are cleaner than expected.
+* **H4 (value of team news) is retired, not tested.** `live − frozen` is identically zero by
+  construction. Testing it needs a point-in-time lineup source this archive does not contain.
+
+### 2. `latents_invariant` cannot fail
+
+`matchday_2026_08_08/l02_slate_replay.jl:229` selects columns with `eltype(col) <: Number`.
+Latent columns hold posterior draws — `Vector{Float64}` cells inside `Any`-eltype columns — so
+the filter matches nothing, the comparison loop never runs, and it returns `(true, 0.0, :none)`
+regardless of what the latents did. It reported a pass here on frames it never compared.
+
+It is replaced by `latent_delta` (l04), which compares cell contents and reports `n_compared` so
+a vacuous pass is visible. G2 now asserts `n_compared > 0` before asserting invariance, and
+additionally pins the old helper's vacuity so a future reader does not trust it.
+
+**This is worth carrying beyond this stream.** The 2026-08-08 ScottishLower replay's claim that
+its funnel engine's latents were clock-invariant rested on this helper. The claim may well be
+true — the funnel engine is team-level — but it was never actually verified.
+
+### 3. First tick ≠ tradeable book
+
+WP0 reported first-tick leads of T−334 for the 2026-05-29 slate and a median cadence of 3.0 min,
+and `recommend_grid` set the lookback from that. Both are true and together they are misleading.
+The readiness gate, at every instant of the grid:
+
+| lead | cards | quotes | passing | reason |
+|---|---|---|---|---|
+| T−180 | 5 | 85 | **0** | stale book: newest tick 2h21m before as_of (limit 10m) |
+| T−150 | 5 | 85 | **0** | stale book: newest tick 2h51m before as_of |
+| T−120 | 5 | 85 | 5 | — |
+| T−90 … KO | 5 | 85 | 5 | — |
+
+The feed produces an early isolated tick and then goes **silent for over two hours**. Median
+cadence of 3 min is a property of the dense tail, not of the window. So the tradeable book on
+this slate begins around **T−120**, not T−334.
+
+This is the failure mode that would have been hardest to catch downstream: an entry rule aimed at
+T−180 returns zero legs, and zero legs in a tearsheet reads as *"the model finds no edge early"*
+rather than *"there was no book"*. Worse, `FixedLead` snaps to the nearest snapshot, so it would
+not even have gone empty — it would have quietly reported T−120's numbers under a T−180 label.
+
+Fixed in three places:
+* `_fixture_coverage` now reports `live_lead_min` (walk back from the close, stop at the first
+  gap wider than `MAX_BOOK_AGE_MIN = 10`) and `max_gap_min` alongside `first_lead_min`.
+* `recommend_grid` derives `lookback` from `live_lead_min`, and reports what the first-tick
+  quantile *would* have said so the two can be compared.
+* r04 prints a coverage-by-lead table **before** any wealth table, and prints `med_lead` beside
+  every entry rule so two rungs that resolved to the same instant are visible as such.
+
+### 4. A widened struct field routed staking to the wrong method
+
+`L2Snapshot.fixtures` was declared `Dict{Int,Any}`. `Portfolio.stake_sheet` dispatches on
+`Dict{Int,FixtureInfo}` to reach its live-fixture method; any other type reaches the DataStore
+method, whose own docstring says it "returns an empty sheet for any fixture that has not been
+played". Widening the field silently selected the method that cannot price an unplayed fixture —
+which is the only kind of fixture this stream cares about.
+
+It threw only because a `Dict` has no `.matches`. Had the fallback been merely wrong rather than
+invalid, the replay would have returned empty sheets for exactly the fixtures under study. The
+field is now concrete and `stake_snapshots` asserts the value type before its first call.
+
+### Standing risk this leaves
+
+Three of the four defects above were *silent-by-construction*: a vacuous test, a mis-labelled
+lead, and a wrong-method dispatch. Only one threw. The pattern is that this pipeline fails by
+returning plausible empty or unchanged results rather than by erroring, so every WP from here
+reports a **precondition table** (what was priceable, how many cells were compared, which method
+was dispatched) next to every result table.

@@ -29,8 +29,17 @@
 #   H3  Because of H1, the `BestPrice` oracle gap should be almost entirely HINDSIGHT NOISE.
 #       This is the prediction that could most easily fool us, so it gets its own control:
 #       `RandomEntry` (see below). Predicted: BestPrice >> AtClose, RandomEntry ~= AtClose.
-#   H4  `live - frozen` (team news) should favour LATER entry, and more in 1X2 than in totals,
-#       because an announced XI moves supremacy more than it moves total goals.
+#
+# **H4 is RETIRED, not tested.** The plan predicted that `live - frozen` would measure the value
+# of waiting for team news. WP3 measured the two arms to be bit-identical — every latent column,
+# every fixture, all 3,200 posterior draws, max |Δ| = 0.0 (see l04's header). Serving latents for
+# this engine are a pure function of `(fixture, split)`; `as_of` and the book never enter, and
+# `replay_spec` wires no lineup source at all. So `live - frozen` is identically zero by
+# construction and would have produced a table of exact zeros that looked like a null result
+# about football rather than an identity about the code. Only the `:frozen` arm is run.
+#
+# The silver lining is the one the funnel harness had and this stream expected to lose: with
+# latents constant, **100% of the movement in this replay is the book**, so H1-H3 are clean.
 #
 # **If H1-H3 hold, the headline of this work package is a negative result**: entry time is not a
 # price lever on this corpus, only a size lever. That is worth pre-committing to, because the
@@ -126,6 +135,12 @@ The entry ladder.
 `FixedLead` rungs are placed where the WP0 measurements say something might change: dense inside
 the last hour (where spread does compress), sparse outside it (where it is flat). `AtClose` is
 the baseline; `BestPrice` is the upper bound; `RandomEntry` is the null that tells them apart.
+
+⚠️ `FixedLead` SNAPS to the nearest available snapshot, so a rung deeper than the book is live
+does not go empty — it quietly resolves to the deepest live instant and reports the same numbers
+as a shallower rung. That is why `med_lead` is printed next to every result: two rungs showing
+the same `med_lead` are the same rung, not a flat region of a curve. `reading_5_coverage` is the
+other half of that check.
 """
 entry_ladder() = AbstractEntryRule[
     AtClose(),
@@ -151,9 +166,16 @@ Tier 1 for one league and one latent arm. This is the only expensive call in the
 downstream is a `groupby` over its output.
 """
 function build_arm(corpus, expr, ds, arm::Symbol)
-    @printf("\n--- Tier 1: %s, arm :%s ---\n", corpus.name, arm)
+    # Lookback from the measured LIVE coverage, not a round number. Instants deeper than the
+    # book is continuously alive pass zero cards, so they cost a database read each and
+    # contribute nothing but a blocked-report row.
+    g = recommend_grid(corpus; coverage = 0.80)
+    @printf("\n--- Tier 1: %s, arm :%s, lookback %s (80%% of fixtures live that deep; " *
+            "first-tick would have said %s) ---\n", corpus.name, arm, g.lookback,
+            g.first_tick_lookback)
     t0 = time()
-    s = build_snapshots(corpus, expr, ds; arm = arm, lookback = Minute(180), verbose = true)
+    s = build_snapshots(corpus, expr, ds; arm = arm, lookback = g.lookback,
+                        fine_step = g.fine_step, coarse_step = g.coarse_step, verbose = true)
     @printf("    %d snapshots over %d slates in %.1f min\n",
             length(s), length(unique(x.slate_day for x in s.snaps)), (time() - t0) / 60)
     return s
@@ -295,21 +317,35 @@ function reading_4_oracle(ts::DataFrame)
 end
 
 """
-    reading_5_teamnews(frozen_ts, live_ts) -> DataFrame
+    reading_5_coverage(snaps) -> DataFrame
 
-H4. `live - frozen`, per entry rule.
+How many legs each entry rule could even have fired, by lead.
 
-The frozen arm holds latents fixed so all movement is the book; the live arm recomputes them, so
-the difference is exactly the value of having waited for the announced XI. Nothing else in the
-two runs differs.
+Not a metric — a precondition. A rule aimed at a lead the readiness gate refuses to price
+returns zero legs, and zero legs in a tearsheet is indistinguishable from "the model found no
+edge there". On the 2026-05-29 slate the first tick is T-334 but the feed then goes silent for
+two hours, so nothing is priceable before ~T-120 and `FixedLead(180m)` is empty for reasons that
+have nothing to do with betting.
+
+Read this BEFORE the wealth table, every time.
 """
-function reading_5_teamnews(fz::DataFrame, lv::DataFrame)
-    j = innerjoin(select(fz, :entry_name, :roi => :roi_frozen, :final => :final_frozen),
-                  select(lv, :entry_name, :roi => :roi_live,   :final => :final_live),
-                  on = :entry_name)
-    j.roi_delta   = j.roi_live   .- j.roi_frozen
-    j.final_ratio = j.final_live ./ j.final_frozen
-    return sort!(j, :roi_delta, rev = true)
+function reading_5_coverage(snaps::L2Snapshots)
+    rows = NamedTuple[]
+    for s in snaps.snaps
+        ko = minimum(_fixture_kickoff(fi, s) for (_, fi) in s.fixtures)
+        push!(rows, (slate_day = s.slate_day,
+                     lead_min  = Dates.value(ko - s.as_of) / 60_000,
+                     n_passed  = s.n_passed,
+                     n_blocked = nrow(unique(s.blocked, :match_id)),
+                     n_quotes  = nrow(s.odds)))
+    end
+    df = DataFrame(rows)
+    add_entry_buckets!(rename(df, :lead_min => :mins_to_ko))
+    return sort!(combine(groupby(df, :entry_bucket),
+                         nrow => :snapshots,
+                         :n_passed  => sum => :fixtures_priceable,
+                         :n_blocked => sum => :fixtures_blocked,
+                         :n_quotes  => sum => :quotes), :entry_bucket)
 end
 
 # ===================================================================
@@ -326,20 +362,20 @@ function run_league(tag::String, tid::Int, corpus_all)
     c    = subset_corpus(corpus_all, tid)
     sys  = reference_system()
 
-    fz = build_arm(c, expr, ds, :frozen)
-    lv = build_arm(c, expr, ds, :live)
-
+    # :frozen only. The :live arm is bit-identical for this engine (WP3) — running it would
+    # double the cost to reproduce the same ledger.
+    fz     = build_arm(c, expr, ds, :frozen)
     led_fz = entry_ledger(fz, sys, expr)
-    led_lv = entry_ledger(lv, sys, expr)
 
+    cover  = reading_5_coverage(fz)
     drift  = reading_1_drift(fz)
     clv    = reading_2_clv(led_fz)
     ts_fz  = reading_3_wealth(led_fz)
-    ts_lv  = reading_3_wealth(led_lv)
     oracle = reading_4_oracle(ts_fz)
-    news   = reading_5_teamnews(ts_fz, ts_lv)
 
-    println("\n[R1] PriceDrift by entry bucket — H1: expect ~0 everywhere")
+    println("\n[R5] what was even priceable, by lead — read this FIRST")
+    show(stdout, MIME"text/plain"(), cover)
+    println("\n\n[R1] PriceDrift by entry bucket — H1: expect ~0 everywhere")
     show(stdout, MIME"text/plain"(),
          select(drift, :entry_bucket, :n_quotes, :drift_mean, :drift_ci_lo, :drift_ci_hi,
                 :drift_wait_paid))
@@ -349,16 +385,13 @@ function run_league(tag::String, tid::Int, corpus_all)
                 :final, :hurdle_G_emp))
     println("\n\n[R4] oracle vs control — H3")
     show(stdout, MIME"text/plain"(), oracle)
-    println("\n\n[R5] live - frozen (team news) — H4")
-    show(stdout, MIME"text/plain"(), first(news, 8))
     println()
     pw = path_warning(ts_fz)
     isempty(pw) || println("\n", pw)
 
     mkpath(OUT_DIR)
-    res = (tag = tag, drift = drift, clv = clv, ts_frozen = ts_fz, ts_live = ts_lv,
-           oracle = oracle, teamnews = news,
-           n_snap_frozen = length(fz), n_snap_live = length(lv))
+    res = (tag = tag, coverage = cover, drift = drift, clv = clv, ts_frozen = ts_fz,
+           oracle = oracle, n_snap_frozen = length(fz))
     serialize(joinpath(OUT_DIR, "$(tag)_entry.jls"), res)
     return res
 end

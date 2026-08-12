@@ -26,25 +26,41 @@
 # optimised replica that drifts from the pipeline measures the replica.
 #
 # ---------------------------------------------------------------------------------------------
-# THE FROZEN / LIVE ARMS, AND WHY THIS ENGINE NEEDS BOTH
+# THE FROZEN / LIVE ARMS — MEASURED TO BE THE SAME ARM (2026-08-12)
 # ---------------------------------------------------------------------------------------------
 #
-# `l02_slate_replay.jl:40-50` records that its funnel engine has clock-invariant latents, so
-# 100% of the movement in its trace is the book moving — and warns that copying it to a
-# player-level engine breaks that reading.
+# This section originally argued that `src_sup40_sw40`, being player-level, must have latents
+# that move with `as_of` via `RatingsFromTracker` and the announced XI — so a single-arm trace
+# would confound model drift with market drift.
 #
-# `src_sup40_sw40` IS player-level. `RatingsFromTracker` moves with the announced XI, so its
-# latents genuinely do change with `as_of`. A single-arm trace would confound model drift with
-# market drift and there would be no way to tell them apart after the fact.
+# **That argument was wrong, and WP3 measured it wrong.** On the 2026-05-29 slate, comparing
+# latents at T-120 against latents at kick-off:
 #
-#   :frozen   latents computed ONCE per slate, at the earliest instant, and reused.
-#             All movement is the book. This is the arm that isolates a timing effect.
-#   :live     latents recomputed per snapshot. Operationally realistic.
+#     every column (true_xg_h/a, θ_1..3, λ_h, λ_a, λ_tot, ρ, φ), every fixture,
+#     all 3,200 posterior draws:  max |Δ| = 0.0    (bit-identical)
 #
-#   live - frozen  =  the measured value of waiting for team news.
+# Serving-time latents for this engine are a pure function of `(fixture, split)`. `as_of` and the
+# book do not enter: the market pillar was a TRAINING-time regulariser, and `replay_spec` wires
+# `lineups = SourceChain()` with no sources, so no XI is ever fetched. Player-level in the
+# posterior does not imply clock-dependent at serve time.
 #
-# `:frozen` is also much cheaper — it hoists `extract_parameters` out of the inner loop — which
-# is why it is the default.
+# Consequences, all of which the rest of this stream depends on:
+#
+#   * `:live` and `:frozen` produce IDENTICAL ledgers. `:live` is pure cost.
+#   * therefore 100% of movement in a replay IS the book — the clean reading the funnel harness
+#     had, which this header previously claimed we could not have.
+#   * `live - frozen` is identically zero, so it cannot measure the value of team news. Any such
+#     study needs a point-in-time lineup source that this archive does not contain.
+#
+# The arm parameter is KEPT rather than deleted. It is correct machinery, it costs nothing while
+# `:frozen` is the default, and it is the thing to reach for the moment an engine or a spec does
+# consume `as_of`. `latent_delta` below is how you re-check that, cheaply, per engine.
+#
+# ⚠️ Do NOT verify this with `latents_invariant` (`matchday_2026_08_08/l02_slate_replay.jl:229`).
+# It filters columns on `eltype(col) <: Number`, but latent columns hold POSTERIOR DRAWS —
+# `Vector{Float64}` cells in an `Any`-eltype column — so the filter matches nothing, the loop
+# body never runs, and it returns `(true, 0.0, :none)` no matter what the latents did. It is
+# vacuous for any engine of this shape, and it reported a pass here on frames it never compared.
 #
 # ---------------------------------------------------------------------------------------------
 # TWO THINGS THAT WILL BITE
@@ -98,6 +114,56 @@ function adaptive_grid(fixtures;
     return unique!(sort!(out))
 end
 
+"""
+    latent_delta(spec, expr, ds, fixtures, t1, t2) -> NamedTuple
+
+Do this engine's serving latents actually move between two instants?
+
+The replacement for `latents_invariant`, which cannot answer the question: it selects columns
+with `eltype(col) <: Number`, and a latents frame stores POSTERIOR DRAWS — each cell a
+`Vector{Float64}` (or a `Matrix` for `φ`) inside an `Any`-eltype column. Nothing matches, the
+comparison loop never executes, and it returns `(true, 0.0, :none)` unconditionally. A test that
+cannot fail is not evidence, and it reported a pass here on frames it never looked at.
+
+This version compares cell CONTENTS, so a per-draw difference of 1e-12 is still caught, and it
+gates on the cards the readiness gate actually passes — comparing a populated frame against an
+empty one is not a measurement either.
+
+Returns the worst absolute difference and the column carrying it; `moved = false` with
+`n_compared > 0` is a real invariance result rather than a vacuous one.
+"""
+function latent_delta(spec, expr, ds, t1::DateTime, t2::DateTime)
+    MD = _md()
+    function at(t)
+        cards = MD.build_cards(spec, nothing, t)
+        odds, _ = MD.price_cards(spec, cards, t)
+        for c in cards
+            c.readiness = MD.ready(spec.gate, c)
+        end
+        passed = filter(c -> MD.is_ready(c.readiness), cards)
+        isempty(passed) && return nothing
+        l, _ = MD.matchday_latents(spec, expr, ds, passed, odds, t)
+        return isempty(l) ? nothing : sort(l, :match_id)
+    end
+
+    a, b = at(t1), at(t2)
+    (a === nothing || b === nothing) &&
+        return (moved = false, worst = NaN, col = :no_passing_cards, n_compared = 0)
+    a.match_id == b.match_id ||
+        return (moved = true, worst = NaN, col = :match_id_mismatch, n_compared = 0)
+
+    worst, wcol, n = 0.0, :none, 0
+    for c in names(a)
+        c == "match_id" && continue
+        for i in 1:nrow(a)
+            d = maximum(abs.(a[i, c] .- b[i, c]))
+            n += 1
+            d > worst && (worst = d; wcol = Symbol(c))
+        end
+    end
+    return (moved = worst > 1e-10, worst = worst, col = wcol, n_compared = n)
+end
+
 "Drop the module-level card-metadata sidecar between slates. See trap T1."
 function clear_card_meta!()
     MD = _md()
@@ -129,7 +195,15 @@ struct L2Snapshot
     as_of::DateTime
     odds::DataFrame
     latents::DataFrame
-    fixtures::Dict{Int,Any}          # match_id => Portfolio.FixtureInfo
+    # MUST stay `Dict{Int,Portfolio.FixtureInfo}`, NOT widened to `Dict{Int,Any}`. `stake_sheet`
+    # dispatches on exactly this type to reach its live-fixture method
+    # (`src/Portfolio/matchday.jl:63`); anything else falls through to the DataStore method,
+    # which calls `fixture_table(ds)` and whose own docstring warns it "returns an empty sheet
+    # for any fixture that has not been played". Widening the field routed every snapshot to the
+    # wrong method. It happened to throw (a Dict has no `.matches`) — had it not, the replay
+    # would have silently returned empty sheets for exactly the unplayed fixtures we are here
+    # to price.
+    fixtures::Dict{Int,BayesianFootball.Portfolio.FixtureInfo}
     instruments::Dict{Any,Any}
     depth::DataFrame
     blocked::DataFrame
@@ -307,6 +381,16 @@ function stake_snapshots(snaps::L2Snapshots, sys, expr;
     MD, PF = _md(), _pf()
     isempty(snaps) && return Layer2Ledger(DataFrame())
     rnd = rounding === nothing ? MD.NoMinimum() : rounding
+
+    # Assert the dispatch, do not assume it. `stake_sheet`'s live method is selected by the
+    # EXACT type of this argument; every other type reaches the DataStore method, which returns
+    # an empty sheet for unplayed fixtures. That failure mode is silent by construction, so it
+    # is checked once here rather than left to be noticed in a ROI column.
+    let ft = eltype(values(first(snaps.snaps).fixtures))
+        ft === PF.FixtureInfo || error(
+            "stake_snapshots: fixtures dict has value type $ft, not Portfolio.FixtureInfo — " *
+            "stake_sheet would silently take its DataStore method and drop unplayed fixtures")
+    end
 
     parts = DataFrame[]
     for s in snaps.snaps
