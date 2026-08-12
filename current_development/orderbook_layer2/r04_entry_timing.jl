@@ -325,6 +325,16 @@ two hours, so nothing is priceable before ~T-120 and `FixedLead(180m)` is empty 
 have nothing to do with betting.
 
 Read this BEFORE the wealth table, every time.
+
+⚠️ It also exposes the second sampling trap. `adaptive_grid` anchors on the EARLIEST kick-off in
+a slate, so within a staggered slate a fixture kicking off two hours later sees leads of
+`lookback + 120` while the earliest one tops out at `lookback`. Measured on 79: lookback 136,
+deepest lead 255. **The deep entry buckets are therefore populated only by late-kick-off fixtures
+in staggered slates** — a biased subsample of the corpus, not the corpus. A per-bucket ROI
+difference between "120-180m" and "0-5m" is partly a difference between two sets of fixtures.
+
+`fixtures_priceable` per bucket is the number to sanity-check that against: where it collapses,
+the bucket is a handful of matches wearing a time label.
 """
 function reading_5_coverage(snaps::L2Snapshots)
     rows = NamedTuple[]

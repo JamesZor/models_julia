@@ -280,9 +280,23 @@ end
     # silently used midnight and produced leads around -1125 minutes. Nothing else noticed —
     # every leg simply landed in one entry bucket — and the gate passed 583/583 around it.
     @test all(df.mins_to_ko .>= 0)
-    @test maximum(df.mins_to_ko) <= Dates.value(Minute(grid_rec.lookback)) + 1
-    @printf("    leads span T-%.0f .. T-%.0f, %d entry buckets populated\n",
-            maximum(df.mins_to_ko), minimum(df.mins_to_ko), length(unique(df.entry_bucket)))
+
+    # The upper bound is NOT the lookback. `adaptive_grid` anchors on the EARLIEST kick-off in a
+    # slate (deliberately — anchoring on the latest would shrink the slate mid-trace), so a
+    # fixture kicking off later in the same slate sees leads of `lookback + its own stagger`.
+    # Measured here: lookback 136, deepest lead 255, because slates are staggered by ~2 hours.
+    #
+    # ⚠️ This is a real sampling caveat for WP4, not just an assertion detail: the DEEP entry
+    # buckets are populated only by late-kick-off fixtures in staggered slates. They are a biased
+    # subsample, not the corpus. Any per-bucket comparison has to be read with that in mind.
+    stagger = maximum(maximum(kickoff_of(snaps, f.m_id) for f in sl.fixtures) -
+                      minimum(kickoff_of(snaps, f.m_id) for f in sl.fixtures)
+                      for sl in corpus_slates(c79))
+    @test maximum(df.mins_to_ko) <=
+          Dates.value(Minute(grid_rec.lookback)) + Dates.value(Minute(stagger)) + 1
+    @printf("    leads span T-%.0f .. T-%.0f, %d entry buckets populated (slate stagger %s)\n",
+            maximum(df.mins_to_ko), minimum(df.mins_to_ko),
+            length(unique(df.entry_bucket)), stagger)
     @test length(unique(df.entry_bucket)) >= 3        # a curve needs more than one point
 
     global _snaps, _led = snaps, led
