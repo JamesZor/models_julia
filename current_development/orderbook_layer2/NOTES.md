@@ -674,3 +674,58 @@ capacity axis — the one thing the clock was supposed to buy — was never meas
 now requests it explicitly and the ledger is saved so it can be re-asked without rebuilding
 Tier 1. **Until it runs, "enter late" rests on price alone**, and the counter-argument that late
 books are deeper is untested.
+
+### H2 — capacity, and the finding that matters most
+
+`FillCost` run per entry bucket (79 / 718), on the exact rows being staked:
+
+| bucket | 79 slip@£100 | 79 unfillable@£100 | 718 slip@£100 | 718 unfillable@£100 |
+|---|---|---|---|---|
+| 0–5m | 0.80% | **54.1%** | 1.32% | 72.9% |
+| 5–15m | 1.01% | 61.8% | 1.65% | 78.1% |
+| 15–30m | 1.17% | 68.6% | 2.41% | 76.6% |
+| 30–60m | 1.42% | 80.9% | 2.44% | 91.0% |
+| 60–120m | 1.41% | 83.6% | 2.24% | 91.0% |
+| 120–180m | 1.60% | 85.1% | 2.19% | 90.0% |
+
+**H2 holds as stated** — capacity is monotone in entry time, and later is better. Slippage on a
+£100 stake roughly **doubles** from the close to T−120 in both leagues.
+
+But H2 also predicted `FillCost` would be *the only* estimator with a monotone gradient, on the
+theory that price and capacity would trade off. They do not. **Price and capacity both say enter
+at the close.** There is no interior optimum, and the plan's expected "T−120 to T−30" is wrong on
+both axes independently.
+
+#### The Irish book cannot absorb meaningful size
+
+This is the practical headline and it was not on the plan's radar at all:
+
+* **£1,000 per leg is unfillable ~100% of the time, in every bucket, in both leagues.**
+* **£100 per leg is unfillable on 54% of legs at the best moment** (79) and 73% (718).
+* **£10 per leg** still fails on 13% (79) / 21% (718) of legs at the close.
+
+Measured directly on the staked rows: top-of-book back size has a median of **£41**, a 25th
+percentile of **£11.70**, and a 5th percentile of **£1.04**. Summed across the whole visible
+ladder the median is **£193**.
+
+So the binding constraint on this stream is not the model, the trust weight, or the entry clock —
+it is that the venue does not hold enough money. WP5's staking questions are being asked about
+sizes the book cannot take.
+
+#### Correction 4 to WP0: top-of-book size
+
+WP0 (Correction 3) reported top-of-book size as "£1,906 at T−60 rising to £7,641". That is wrong
+by roughly 50×. Measured directly against `betfair_live.order_book_1m`, raw `bid_volumes[1]` has
+a median of 130,000 units, and the archive stores volumes **×10000** — i.e. **£13.00** across all
+rows and markets, and £41 median on the more liquid selections the model actually stakes. The
+earlier figure most likely summed across ladder levels and runners, or read `market_matched`
+(cumulative traded volume, a different quantity — the same column that caused Correction 2).
+
+#### Caveat that bounds the shortfall numbers
+
+`betfair_live.order_book_1m` stores **at most 3 ladder levels** (`max(array_length(bid_prices,1))
+= 3`, mean 2.87 over 526k rows). Depth beyond level 3 is not recorded, so every `short_*` figure
+above is an **upper bound** on true shortfall and every `slip_*` is an upper bound on true cost.
+The direction and the ordering across buckets are unaffected — all buckets are truncated the same
+way — but the absolute claim "£100 is unfillable on 54% of legs" should be read as "…given the
+top three levels the collector kept".
