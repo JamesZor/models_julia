@@ -729,3 +729,110 @@ above is an **upper bound** on true shortfall and every `slip_*` is an upper bou
 The direction and the ordering across buckets are unaffected — all buckets are truncated the same
 way — but the absolute claim "£100 is unfillable on 54% of legs" should be read as "…given the
 top three levels the collector kept".
+
+---
+
+## WP5 results — 2026-08-12: market curation, per-line trust, match avoidance
+
+Estimator changed, because WP4 disqualified the other two. **CLV is degenerate at the close** —
+`odds_entry == odds_close` there, so `clv = log(odds_close · fair_close)` is exactly minus the
+market's margin and carries no information about the model. WP4's per-family CLV table ranks
+*spread*, not edge; curating on it would curate toward whichever markets are tightest. ROI cannot
+separate 15 families at 267 legs. So:
+
+    skill = logscore(p_model) − logscore(fair_close)     per leg, in nats, clustered by match
+
+### C1 — per-market trust does NOT transfer. Pre-registered falsification, fired.
+
+| | derive on 79 → test 718 | derive on 718 → test 79 |
+|---|---|---|
+| family skill correlation | **r = −0.647** over 12 families | same pair |
+| sign agreement | **6 / 12** (chance) | — |
+| held-out ROI, uncurated | −2.98% | +9.29% |
+| held-out ROI, curated | −2.98% | **+6.82%** (worse) |
+
+Not merely uncorrelated — *anti*-correlated. O/U 2.5 under: +0.053 (79) → −0.099 (718).
+BTTS yes: +0.025 → −0.062. 1X2 away: −0.035 → +0.015. At market level 79 ranks
+BTTS ≻ O/U ≻ 1X2 and 718 ranks 1X2 ≻ O/U ≻ BTTS.
+
+The 79→718 direction assigned every family the default 0.25, i.e. a uniform rescale, and held-out
+ROI was **identical to 4 significant figures** (−2.98% both). That is the homogeneity property of
+`risk_factor` confirmed end-to-end on real data: a flat trust weight cannot change wealth once
+`SlateDrawdown` binds.
+
+The anti-correlation is probably not pure noise. 718 runs ~3.2 goals/match against 79's ~2.1, and
+the sign flips cluster in the totals families — unders good in 79, overs good in 718. That reads
+as a **per-league totals-level bias**, not per-market skill, and it is consistent with the standing
+note that IrelandAll pooling mis-prices 718 by −0.47 goals. Level, not market, is the axis.
+
+### C3 — the tail test. Replicated in both leagues.
+
+| claimed disagreement (`p_model − fair_close`) | 79 skill | 79 beats mkt | 718 skill | 718 beats mkt |
+|---|---|---|---|---|
+| below −5pp | +0.024 (9) | 66.7% | −0.007 (7) | 57.1% |
+| −5 .. −2pp | −0.012 (39) | 48.7% | −0.017 (29) | 37.9% |
+| **within 2pp** | **+0.0061 (80)** | **53.8%** | **+0.0046 (84)** | **59.5%** |
+| +2 .. +5pp | −0.003 (64) | 37.5% | −0.003 (54) | 38.9% |
+| **above +5pp** | **−0.0125 (75)** | **37.3%** | **−0.0468 (89)** | **21.3%** |
+
+`within 2pp` is the only positive band in either league, and it is positive in **both**, on the
+largest bins, with the tightest intervals ([−0.0007, +0.0142] and [−0.0014, +0.0111]). `above
++5pp` is the worst band in both, beating the market on only 37.3% / **21.3%** of legs.
+
+The asymmetry matters: large *downward* claims are fine, large *upward* claims are not. That is
+the optimizer's-curse signature — the book is built from positive-edge selections, so it selects
+precisely the legs where the model is most wrongly optimistic.
+
+Filtering on it moves the beat rate from ~40–45% to ~53–55% **in both leagues**. But it does not
+buy growth: ROI goes 9.29% → 10.78% on 79 and −2.98% → **−18.31%** on 718. Calibration improves,
+money does not. Both are true — log score punishes confident errors that a long price can still
+pay for — and per the standing instruction to judge on growth, this is a **calibration finding, not
+a staking rule**.
+
+### C2 — longshot: only the far tail replicates
+
+Mid-range bands disagree between leagues. The one consistent fact is the top band: odds > 6.0
+beats the market on **28.9% (79) / 14.0% (718)** of legs, negative skill in both. `odds < 6`
+improves 79's ROI (9.29 → 11.45) and worsens 718's (−2.98 → −9.12), so again: not a growth rule.
+
+### The number that settles it
+
+Fit one parameter — the weight on the model in `w·p_model + (1−w)·fair_close` — by log loss:
+
+| | n | **w\*** | LL at w\* | LL at w=0 (market) | LL at w=1 (model) |
+|---|---|---|---|---|---|
+| 79 | 267 | 0.30 | 0.52409 | 0.52491 | 0.52826 |
+| 718 | 263 | **0.00** | 0.51729 | 0.51729 | 0.53429 |
+| **pooled** | **530** | **0.00** | **0.52113** | **0.52113** | **0.53125** |
+
+**The optimal weight on the model is zero.** Pooled, the log-loss curve is monotone increasing in
+`w` — every ounce of model added to the de-vigged Betfair close makes the prediction worse. 79's
+interior optimum at w = 0.30 is worth 0.00083 nats/leg, far inside its own skill CI of
+[−0.018, +0.012].
+
+One free parameter, 530 legs, replicated in the league it was not fitted on. This is the most
+robust estimate in the entire stream and it is the one that matters:
+
+> **On these two leagues, `src_sup40_sw40` adds no information to the closing Betfair price.**
+
+### What this does and does not say
+
+It does **not** say the apparatus is broken — WP1 passes 107/107, WP3 passes 591/591 including a
+row-for-row reproduction of `match_day`, and the homogeneity property was confirmed on real data
+as a by-product. The Layer-2 system measures correctly. What it measures is that there is nothing
+for it to allocate.
+
+It does **not** say the model is bad in absolute terms — it says it is dominated *by the Betfair
+close*, which is the strongest available benchmark and one the standing notes already flagged it
+loses to narrowly on 1X2.
+
+It does mean **no Layer-2 intervention can help**: entry timing, per-market trust, skip rules and
+staking all reallocate a signal, and `w* = 0` says the signal is weakly dominated before any
+allocation happens. The binding constraint is Layer 1.
+
+### The one lead worth following
+
+The over-confidence is **directional and asymmetric** (fine below −5pp, bad above +5pp) and the
+family ranking flips sign between a 2.1-goal league and a 3.2-goal league along the totals axis.
+Both point at a **per-league level bias in λ_tot** rather than at per-market skill — which is an
+L1 question (and one the split-market-pillar stream is equipped for), not an L2 one.
