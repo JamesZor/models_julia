@@ -113,8 +113,8 @@ function run_league(tag::String, tid::Int, corpus_all)
     @printf("\nfull book: %d selections over %d matches;  staked flag set on %d;  ledger had %d\n",
             nrow(full), length(unique(full.match_id)), count(full.staked), n_staked_led)
     if count(full.staked) < n_staked_led
-        @printf("  ⚠ %d staked legs have NO counterpart in the full book — the two paths " *
-                "disagree about the book itself; the comparison below is not clean\n",
+        # single literal — @printf will not take a concatenated format string
+        @printf("  WARNING %d staked legs have NO counterpart in the full book; the two paths disagree about the book itself and the comparison below is not clean\n",
                 n_staked_led - count(full.staked))
     end
 
