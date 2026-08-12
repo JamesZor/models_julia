@@ -444,6 +444,7 @@ end
 # 4. Running an L2Config end to end
 # ===================================================================
 
+
 """
     run_l2_experiment(task) -> L2Results
 
@@ -460,8 +461,7 @@ function run_l2_experiment(task::L2Task; bankroll::Real = 1.0, expr = nothing)
     full = stake_snapshots(task.snapshots, cfg.sys, e;
                            bankroll = bankroll, policy_name = cfg.name)
     picked = apply_entry(cfg.entry, full.df)
-    cap = cfg.sys.policy.cap
-    hasproperty(cap, :c) && recap_slates!(picked, cap.c)
+    recap_slates!(picked, cap_fraction(cfg.sys.policy.cap))
     picked.entry_name = fill(entry_name(cfg.entry), nrow(picked))
 
     led = Layer2Ledger(picked)

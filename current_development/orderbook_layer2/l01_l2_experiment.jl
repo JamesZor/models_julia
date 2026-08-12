@@ -51,7 +51,7 @@
 # in those two rules -- that is inherent to picking legs across time, not a defect of the fix,
 # and it is the reason `BestPrice` is labelled an oracle rather than a strategy.
 
-using DataFrames, Dates, Statistics, Printf, JLD2, JSON3
+using DataFrames, Dates, Statistics, Printf, JLD2, JSON3, Random
 
 # ===================================================================
 # 1. The entry-time seam
@@ -169,6 +169,44 @@ function apply_entry(r::BestPrice, led::AbstractDataFrame)
 end
 
 """
+    RandomEntry(seed; max_lead = Minute(360))
+
+**Null control for the oracle, not a strategy.** Fire each leg at a uniformly random instant in
+the window.
+
+This exists because `BestPrice` is guaranteed to beat `AtClose` even when entry time carries no
+information at all. If prices are a driftless random walk, the maximum over N snapshots exceeds
+the last one purely by sampling — and that gap GROWS with N, i.e. with how densely we happened to
+sample the book. Read on its own, a large oracle gap would look like a large timing opportunity
+when it is an artefact of the grid.
+
+`RandomEntry` separates the two. Under a pure random walk it lands on the close's price in
+expectation, so:
+
+    BestPrice >> AtClose  and  RandomEntry ~ AtClose   =>  no trend; the gap is hindsight noise
+    BestPrice >> AtClose  and  RandomEntry >  AtClose   =>  a real drift toward kickoff
+
+Average several seeds — one draw is one sample of a rule that is deliberately noisy.
+"""
+struct RandomEntry <: AbstractEntryRule
+    seed::Int
+    max_lead::Period
+end
+RandomEntry(seed::Integer = 1; max_lead::Period = Minute(360)) = RandomEntry(Int(seed), max_lead)
+entry_name(r::RandomEntry) = "RandomEntry(seed=$(r.seed))"
+
+function apply_entry(r::RandomEntry, led::AbstractDataFrame)
+    isempty(led) && return copy(led)
+    lim = Dates.value(Minute(r.max_lead))
+    rng = Random.MersenneTwister(r.seed)
+    return _pick_per_leg(led, function (sub)
+        ok = findall(<=(lim), sub.mins_to_ko)
+        isempty(ok) && return nothing
+        return ok[rand(rng, 1:length(ok))]
+    end)
+end
+
+"""
     _pick_per_leg(ledger, chooser) -> DataFrame
 
 Group by leg identity and keep the one row `chooser` selects. `chooser` returns an index into
@@ -190,9 +228,30 @@ end
 # ===================================================================
 
 """
-    recap_slates!(picked, cap) -> DataFrame
+    cap_fraction(cap) -> Float64
+
+The largest slate exposure `cap` permits, as a bankroll fraction — the number `recap_slates!`
+needs.
+
+Exists because the cap types do not share a field name: `FixedCap` stores `cap`, `VolTargetCap`
+stores `ceiling` (`src/Portfolio/implementations/caps.jl:22,48`). An earlier `run_l2_experiment`
+guarded on `hasproperty(cap, :c)`, which is true of NEITHER, so the guard was silently false,
+`recap_slates!` never ran, and multi-instant entry rules kept books breaching the very constraint
+that made each of their parts legal — with no error and no column to notice it by.
+
+The fallback throws rather than guessing. A cap read wrongly here is invisible in the output,
+which is exactly the class of bug that should be loud.
+"""
+cap_fraction(c) = error("cap_fraction: no method for $(typeof(c)) — add one rather than " *
+                        "letting recap_slates! silently skip")
+cap_fraction(c::BayesianFootball.Portfolio.FixedCap)     = c.cap
+cap_fraction(c::BayesianFootball.Portfolio.VolTargetCap) = c.ceiling
+
+"""
+    recap_slates!(picked, cap_frac) -> DataFrame
 
 Re-apply the slate exposure cap after an entry rule has assembled legs from different instants.
+Take `cap_frac` from `cap_fraction(policy.cap)` rather than reaching for a field by name.
 
 See the header: the cap and the drawdown factor were solved per-snapshot, so a book assembled
 across time can breach the constraint that made each of its parts legal. Scaling the whole slate

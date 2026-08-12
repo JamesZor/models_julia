@@ -347,6 +347,51 @@ end
     end
 end
 
+# -------------------------------------------------------------------
+@testset "A14 cap_fraction reads the cap the caller actually passed" begin
+    # This test exists because of a real bug: `run_l2_experiment` guarded on
+    # `hasproperty(cap, :c)`, and NEITHER cap type has a field `c` -- `FixedCap` has `cap`,
+    # `VolTargetCap` has `ceiling`. The guard was silently false, so `recap_slates!` never ran
+    # and cross-instant entry rules kept over-exposed books with no error and no column to
+    # notice it by. Reading a cap by the wrong name must fail loudly, not quietly.
+    @test cap_fraction(PF.FixedCap(0.25)) == 0.25
+    @test cap_fraction(PF.VolTargetCap(0.1, 0.02, 0.30)) == 0.30
+    @test_throws ErrorException cap_fraction(nothing)
+
+    # the guard that was there before would have passed silently on both
+    @test !hasproperty(PF.FixedCap(0.25), :c)
+    @test !hasproperty(PF.VolTargetCap(0.1, 0.02, 0.30), :c)
+end
+
+# -------------------------------------------------------------------
+@testset "A15 RandomEntry is a null control, not a strategy" begin
+    base = led.df[1:1, :]
+    rows = DataFrame[]
+    for (mk, od) in zip([180.0, 90.0, 5.0], [3.0, 2.5, 2.0])
+        r = copy(base); r.mins_to_ko = [mk]; r.odds = [od]
+        push!(rows, r)
+    end
+    trace = add_entry_buckets!(reduce(vcat, rows))
+
+    # one row per leg, like every other rule
+    @test nrow(apply_entry(RandomEntry(1), trace)) == 1
+
+    # deterministic given a seed -- otherwise the control is not reproducible and the oracle
+    # contrast in WP4 could not be re-run
+    @test apply_entry(RandomEntry(7), trace).odds == apply_entry(RandomEntry(7), trace).odds
+
+    # and it actually varies with the seed, i.e. it is sampling rather than picking a fixed slot
+    picks = unique([apply_entry(RandomEntry(s), trace).odds[1] for s in 1:40])
+    @test length(picks) > 1
+
+    # it must never systematically land on the extremes the way AtClose and BestPrice do
+    @test any(!=(2.0), picks)     # not always the close
+    @test any(!=(3.0), picks)     # not always the best price
+
+    # respects its window: with max_lead 60 only the 5-minute row is eligible
+    @test apply_entry(RandomEntry(1; max_lead = Minute(60)), trace).mins_to_ko[1] == 5.0
+end
+
 end # testset
 
 println("\n", "="^70)
