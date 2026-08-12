@@ -103,11 +103,17 @@ function adaptive_grid(fixtures;
                        fine_step::Period   = Minute(3),
                        coarse_step::Period = Minute(15))
     ko    = minimum(f.kickoff for f in fixtures)
-    out   = DateTime[]
-    t     = ko - lookback
     fine0 = ko - fine_from
-    while t < fine0
-        push!(out, t); t += coarse_step
+    out   = DateTime[]
+
+    # The coarse leg is laid out BACKWARDS from `fine0`, not forwards from `ko - lookback`.
+    # Forwards leaves a stub: with lookback 136 and fine_from 60 the last coarse point lands at
+    # T-61 and the fine leg starts at T-60, a 1-minute gap that re-reads the same tick (the feed
+    # ticks every 3 min). Backwards, every gap is exactly `coarse_step` or `fine_step`, which is
+    # also what makes the grid's spacing assertable.
+    t = fine0 - coarse_step
+    while t >= ko - lookback
+        push!(out, t); t -= coarse_step
     end
     t = fine0
     while t <= ko

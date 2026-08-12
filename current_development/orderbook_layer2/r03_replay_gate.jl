@@ -179,10 +179,15 @@ end
     @test issorted(test_grid)
     ko = minimum(f.kickoff for f in big_slate.fixtures)
     @test maximum(test_grid) <= ko                 # never sample in-play
-    @test minimum(test_grid) >= ko - Minute(180)
+    @test minimum(test_grid) >= ko - grid_rec.lookback
 
-    # coarse far out, fine near the off
+    # Coarse far out, fine near the off — and NOTHING in between. Every gap must be exactly one
+    # of the two steps. This caught a real defect: laying the coarse leg forwards from
+    # `ko - lookback` left a 1-minute stub where it met the fine leg (lookback 136, fine_from 60
+    # => last coarse point at T-61, fine leg starting at T-60), which re-read the same 3-minute
+    # tick. `adaptive_grid` now lays the coarse leg backwards from the transition.
     gaps = Dates.value.(diff(test_grid)) .÷ 60_000
+    @test Set(gaps) ⊆ Set([15, 3])
     @test maximum(gaps) == 15
     @test minimum(gaps) == 3
 
@@ -221,7 +226,7 @@ end
 # -------------------------------------------------------------------
 @testset "G4 the stamped close is coherent" begin
     snaps = build_snapshots(c79, expr79, ds79; arm = :frozen,
-                            lookback = Minute(180), verbose = false)
+                            lookback = grid_rec.lookback, verbose = false)
     @test !isempty(snaps)
     led = stake_snapshots(snaps, sys, expr79; bankroll = 1.0, policy_name = "gate")
     @test !isempty(led)
@@ -234,11 +239,36 @@ end
     @test nrow(fin) > 0
     @test all(0 .< fin.fair_close .< 1)
 
-    # de-vigged probabilities within one market group must sum to ~1 at the close
+    # De-vigged probabilities must sum to ~1 over a COMPLETE market group. Summing them over the
+    # LEDGER is not that test and cannot pass: the ledger holds only the selections the model
+    # chose to stake, so a group where it backed one of three outcomes sums to whatever that one
+    # outcome is worth. The first version of this gate did exactly that and produced 134 failures
+    # reading 0.37, 0.48, ... — the subset, correctly de-vigged.
+    #
+    # So the coherence check runs on the QUOTES, where the group is whole, and the ledger is held
+    # to the weaker claim that a subset cannot exceed the whole.
+    last_instant = Dict{Tuple{Int,String,Float64},DateTime}()
+    for s in snaps.snaps, sub in groupby(s.odds, [:match_id, :market_name, :market_line])
+        k = (sub.match_id[1], String(sub.market_name[1]), Float64(sub.market_line[1]))
+        (!haskey(last_instant, k) || s.as_of > last_instant[k]) && (last_instant[k] = s.as_of)
+    end
+    n_groups, n_overround = 0, 0
+    for s in snaps.snaps, sub in groupby(s.odds, [:match_id, :market_name, :market_line])
+        k = (sub.match_id[1], String(sub.market_name[1]), Float64(sub.market_line[1]))
+        (last_instant[k] == s.as_of && nrow(sub) >= 2) || continue
+        ov = sum(1.0 ./ Float64.(sub.odds_close))
+        n_groups += 1
+        ov > 1.0 && (n_overround += 1)
+        @test sum((1.0 ./ Float64.(sub.odds_close)) ./ ov) ≈ 1.0 atol = 1e-9
+    end
+    @printf("    %d/%d complete closing groups carry a positive overround\n",
+            n_overround, n_groups)
+    @test n_groups > 0
+    @test n_overround == n_groups          # a book that sums under 1.0 is arbitrage, not a book
+
+    # the ledger's subset can only ever be a part of that whole
     for sub in groupby(fin, [:match_id, :group, :line])
-        nrow(sub) >= 2 || continue
-        s = sum(unique(sub, :selection).fair_close)
-        @test 0.5 < s <= 1.0 + 1e-6
+        @test sum(unique(sub, :selection).fair_close) <= 1.0 + 1e-6
     end
 
     # units: :stake must be the bankroll FRACTION, not currency
