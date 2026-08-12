@@ -275,6 +275,16 @@ end
     @test all(0 .<= df.stake .<= 1)
     @test df.pnl ≈ df.stake .* df.payoff
 
+    # The entry-time axis must point the right way. This is asserted because it once did not:
+    # `FixtureInfo` carries a Date and no kick-off time, so a `hasproperty(fi, :kickoff)` fallback
+    # silently used midnight and produced leads around -1125 minutes. Nothing else noticed —
+    # every leg simply landed in one entry bucket — and the gate passed 583/583 around it.
+    @test all(df.mins_to_ko .>= 0)
+    @test maximum(df.mins_to_ko) <= Dates.value(Minute(grid_rec.lookback)) + 1
+    @printf("    leads span T-%.0f .. T-%.0f, %d entry buckets populated\n",
+            maximum(df.mins_to_ko), minimum(df.mins_to_ko), length(unique(df.entry_bucket)))
+    @test length(unique(df.entry_bucket)) >= 3        # a curve needs more than one point
+
     global _snaps, _led = snaps, led
 end
 
@@ -288,7 +298,12 @@ end
         @test nrow(picked) <= nrow(df)
         @printf("    %-24s %4d legs, median lead %.0f min\n", entry_name(rule), nrow(picked),
                 isempty(picked) ? NaN : median(picked.mins_to_ko))
+        isempty(picked) || @test all(picked.mins_to_ko .>= 0)
     end
+
+    # the clock rules must actually order themselves on the clock
+    @test median(apply_entry(AtClose(), df).mins_to_ko) <
+          median(apply_entry(FixedLead(Minute(90)), df).mins_to_ko)
 
     # the oracle can never be beaten on price by a real rule
     orc = apply_entry(BestPrice(), df)

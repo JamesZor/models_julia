@@ -239,12 +239,9 @@ function reading_1_drift(snaps::L2Snapshots)
     end
     q = reduce(vcat, rows; cols = :union)
 
-    ko = Dict{Int,DateTime}()
-    for s in snaps.snaps, (mid, fi) in s.fixtures
-        haskey(ko, mid) || (ko[mid] = _fixture_kickoff(fi, s))
-    end
-    q = filter(r -> haskey(ko, r.match_id), q)
-    q.mins_to_ko = [Dates.value(ko[m] - a) / 60_000 for (m, a) in zip(q.match_id, q.as_of)]
+    q = filter(r -> haskey(snaps.kickoffs, r.match_id), q)
+    q.mins_to_ko = [Dates.value(kickoff_of(snaps, m) - a) / 60_000
+                    for (m, a) in zip(q.match_id, q.as_of)]
     add_entry_buckets!(q)
 
     # stamp the close the same way the ledger does, so the two readings cannot disagree
@@ -332,7 +329,7 @@ Read this BEFORE the wealth table, every time.
 function reading_5_coverage(snaps::L2Snapshots)
     rows = NamedTuple[]
     for s in snaps.snaps
-        ko = minimum(_fixture_kickoff(fi, s) for (_, fi) in s.fixtures)
+        ko = minimum(kickoff_of(snaps, mid) for mid in keys(s.fixtures))
         push!(rows, (slate_day = s.slate_day,
                      lead_min  = Dates.value(ko - s.as_of) / 60_000,
                      n_passed  = s.n_passed,

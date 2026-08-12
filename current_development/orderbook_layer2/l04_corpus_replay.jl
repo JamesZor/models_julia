@@ -225,6 +225,15 @@ end
 A whole league's replay, one `L2Snapshot` per (slate, instant), plus the frozen results.
 
 This is Tier 1. Build it once; stake it as many times as you like.
+
+`kickoffs` is carried explicitly, from the corpus's own `Fixture` objects. It has to be: the
+per-snapshot `fixtures` dict holds `Portfolio.FixtureInfo`, which is
+`@NamedTuple{date::Date, score}` and has **no kickoff time**. An earlier version fell back to
+`DateTime(slate_day)` — midnight — so every `mins_to_ko` in the ledger was measured from midnight
+rather than from the actual 18:45 kick-off, and came out around −1125. Negative leads, one bucket
+for the entire corpus, and `FixedLead` snapping against a target measured from the wrong origin:
+the whole entry-time axis, silently wrong, through a gate that passed 583/583 because nothing
+asserted the sign.
 """
 struct L2Snapshots
     corpus_name::String
@@ -232,8 +241,21 @@ struct L2Snapshots
     arm::Symbol
     snaps::Vector{L2Snapshot}
     results::Dict{Int,Tuple{Int,Int}}
+    kickoffs::Dict{Int,DateTime}
     grid::NamedTuple
     built_at::DateTime
+end
+
+"""
+    kickoff_of(snaps, match_id) -> DateTime
+
+The fixture's kick-off. Throws rather than defaulting: a missing kick-off makes every lead in
+that fixture's rows wrong by hours, and a default is indistinguishable from a correct answer once
+it reaches a tearsheet.
+"""
+kickoff_of(s::L2Snapshots, mid::Integer) = get(s.kickoffs, Int(mid)) do
+    error("kickoff_of: no kick-off for match $mid — the corpus and the snapshots disagree " *
+          "about which fixtures exist; every lead computed for it would be wrong")
 end
 
 Base.length(s::L2Snapshots) = length(s.snaps)
@@ -335,8 +357,10 @@ function build_snapshots(corpus, expr, ds;
     # concatenate in SLATE ORDER, so the result does not depend on completion order
     snaps = reduce(vcat, buffers)
 
+    kickoffs = Dict{Int,DateTime}(Int(f.m_id) => f.kickoff for f in corpus.fixtures)
+
     return L2Snapshots(corpus.name, corpus.tournament_ids[1], arm, snaps, corpus.results,
-                       (; lookback, fine_from, fine_step, coarse_step), now())
+                       kickoffs, (; lookback, fine_from, fine_step, coarse_step), now())
 end
 
 """
@@ -484,12 +508,21 @@ function stake_snapshots(snaps::L2Snapshots, sys, expr;
 
     led = reduce(vcat, parts; cols = :union)
 
-    # minutes to kickoff, from the corpus's own kickoff times
-    ko = Dict{Int,DateTime}()
-    for s in snaps.snaps, (mid, fi) in s.fixtures
-        haskey(ko, mid) || (ko[mid] = _fixture_kickoff(fi, s))
+    # Minutes to kickoff, from the CORPUS's kick-off times — never from `FixtureInfo`, which
+    # carries only a Date. See the note on `L2Snapshots.kickoffs`.
+    led.mins_to_ko = [Dates.value(kickoff_of(snaps, m) - a) / 60_000
+                      for (m, a) in zip(led.match_id, led.as_of)]
+
+    # A negative lead means a bet placed after kick-off, which this pipeline cannot produce: the
+    # grid stops at `ko` and `ExplicitFixtures` drops a fixture once `as_of > kickoff`. So a
+    # negative value is always a wrong ORIGIN, not a late bet — and it is invisible downstream,
+    # where it just moves every leg into one entry bucket.
+    if any(<(0), led.mins_to_ko)
+        bad = count(<(0), led.mins_to_ko)
+        error("stake_snapshots: $bad of $(nrow(led)) legs have a negative lead " *
+              "(min $(minimum(led.mins_to_ko)) min) — the kick-off origin is wrong, " *
+              "not the timestamps")
     end
-    led.mins_to_ko = [Dates.value(ko[m] - a) / 60_000 for (m, a) in zip(led.match_id, led.as_of)]
     add_entry_buckets!(led)
 
     grade!(led, snaps.results, sys)
@@ -512,7 +545,6 @@ function stake_snapshots(snaps::L2Snapshots, sys, expr;
     return Layer2Ledger(led)
 end
 
-_fixture_kickoff(fi, s) = hasproperty(fi, :kickoff) ? fi.kickoff : DateTime(s.slate_day)
 
 """
     _stamp_close!(ledger, snapshots)
