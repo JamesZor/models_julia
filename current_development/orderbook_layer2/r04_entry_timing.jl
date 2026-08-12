@@ -329,7 +329,8 @@ Read this BEFORE the wealth table, every time.
 ⚠️ It also exposes the second sampling trap. `adaptive_grid` anchors on the EARLIEST kick-off in
 a slate, so within a staggered slate a fixture kicking off two hours later sees leads of
 `lookback + 120` while the earliest one tops out at `lookback`. Measured on 79: lookback 136,
-deepest lead 255. **The deep entry buckets are therefore populated only by late-kick-off fixtures
+deepest lead 375 against a 4-hour slate stagger. **The deep buckets are populated only by
+late-kick-off fixtures
 in staggered slates** — a biased subsample of the corpus, not the corpus. A per-bucket ROI
 difference between "120-180m" and "0-5m" is partly a difference between two sets of fixtures.
 
@@ -346,8 +347,12 @@ function reading_5_coverage(snaps::L2Snapshots)
                      n_blocked = nrow(unique(s.blocked, :match_id)),
                      n_quotes  = nrow(s.odds)))
     end
+    # `rename!`, not `rename` — the latter returns a copy, so `add_entry_buckets!` would have
+    # written `:entry_bucket` onto a temporary and the groupby below would fail on a column that
+    # was never added.
     df = DataFrame(rows)
-    add_entry_buckets!(rename(df, :lead_min => :mins_to_ko))
+    rename!(df, :lead_min => :mins_to_ko)
+    add_entry_buckets!(df)
     return sort!(combine(groupby(df, :entry_bucket),
                          nrow => :snapshots,
                          :n_passed  => sum => :fixtures_priceable,
