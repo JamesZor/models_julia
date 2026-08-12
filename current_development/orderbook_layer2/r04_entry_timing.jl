@@ -345,8 +345,8 @@ function run_league(tag::String, tid::Int, corpus_all)
                 :drift_wait_paid))
     println("\n\n[R3] wealth by entry rule (frozen arm)")
     show(stdout, MIME"text/plain"(),
-         select(ts_fz, :entry_name, :legs, :roi, :roi_ci_lo, :roi_ci_hi, :final,
-                :hurdle_G_emp; renamecols = false))
+         select(ts_fz, :entry_name, :legs, :bets, :med_lead, :roi, :roi_ci_lo, :roi_ci_hi,
+                :final, :hurdle_G_emp))
     println("\n\n[R4] oracle vs control — H3")
     show(stdout, MIME"text/plain"(), oracle)
     println("\n\n[R5] live - frozen (team news) — H4")
