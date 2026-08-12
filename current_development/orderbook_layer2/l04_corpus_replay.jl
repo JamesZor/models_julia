@@ -66,9 +66,11 @@
 # TWO THINGS THAT WILL BITE
 # ---------------------------------------------------------------------------------------------
 #
-# T1. `_CARD_META` (`src/MatchDay/implementations/gates.jl:340`) is a module-level `IdDict` keyed
+# T1. `_CARD_META` (`src/MatchDay/implementations/gates.jl:135`) is a module-level `IdDict` keyed
 #     on mutable `FixtureCard`s and is NEVER cleared. Over ~670 snapshots it grows without bound.
-#     `clear_card_meta!` is called between slates.
+#     `clear_card_meta!` runs ONCE before the parallel region — clearing a shared Dict while
+#     other threads write to it is the very race `_META_LOCK` exists to prevent — and the gate
+#     loop that writes to it is held under that lock. See `build_snapshots`.
 #
 # T2. The corpus's DataStore must be the PINNED one from WP2. `matchday_latents` calls
 #     `select_split`, which rebuilds boundaries from whatever store it is handed; a store that
@@ -250,63 +252,132 @@ end
 Replay one league's whole corpus, caching everything up to (but not including) staking.
 
 `arm = :frozen` computes latents once per slate at its earliest instant and reuses them at every
-later instant; `:live` recomputes per instant. See the header for why this engine needs both.
+later instant; `:live` recomputes per instant. See the header for why the two are the same arm
+for this engine.
 
 `ds` **must** be the pinned DataStore from WP2 — see trap T2.
+
+## Threading
+
+Slates are independent — different fixtures, different books, no shared result — so they run on
+`Threads.@threads` with one output buffer per slate, concatenated in slate order afterwards so
+the result is deterministic and identical to the serial version.
+
+Two pieces of shared state made this non-obvious, and both were checked rather than assumed:
+
+  * **the database is fine.** `MatchDay._query` (`src/MatchDay/db.jl:26`) opens and closes its
+    own connection per call, so there is no shared handle to corrupt. It is the reason this
+    parallelises at all.
+  * **`_CARD_META` is not.** It is a module-level `IdDict` mutated through `get!`
+    (`implementations/gates.jl:135-138`), and concurrent `get!` on one Dict can corrupt it. The
+    gate loop is therefore held under `_META_LOCK`. That block is microseconds of pure dispatch;
+    the expensive work — `price_cards` (database) and `matchday_latents` (posterior extraction)
+    — stays outside the lock, so the serialised fraction is negligible.
+
+`clear_card_meta!` is called once before the parallel region rather than per slate: clearing a
+shared Dict while other threads are writing to it is exactly the race the lock exists to prevent.
+
+Set `threaded = false` to get the serial path back — worth doing once if a result ever looks
+odd, since "same answer serially" is the cheapest way to rule threading out as the cause.
 """
+const _META_LOCK = ReentrantLock()
+
 function build_snapshots(corpus, expr, ds;
                          arm::Symbol = :frozen,
                          lookback::Period = Minute(180),
                          fine_from::Period = Minute(60),
                          fine_step::Period = Minute(3),
                          coarse_step::Period = Minute(15),
+                         threaded::Bool = true,
                          verbose::Bool = true)
     arm in (:frozen, :live) || error("build_snapshots: arm must be :frozen or :live, got :$arm")
-    MD = _md()
-    snaps = L2Snapshot[]
     slates = corpus_slates(corpus)
+    clear_card_meta!()
 
-    for (si, sl) in enumerate(slates)
-        clear_card_meta!()
+    buffers = [L2Snapshot[] for _ in slates]
+    done    = Threads.Atomic{Int}(0)
+    t0      = time()
+
+    if verbose
+        @printf("build_snapshots: %d slates, arm :%s, %s\n", length(slates), arm,
+                threaded ? "$(Threads.nthreads()) threads" : "serial")
+    end
+
+    body = function (si)
+        sl = slates[si]
         grid = adaptive_grid(sl.fixtures; lookback = lookback, fine_from = fine_from,
                              fine_step = fine_step, coarse_step = coarse_step)
-        spec = replay_spec(sl.fixtures)
-
-        frozen_lat, frozen_warn = nothing, ""
-        verbose && @printf("[%2d/%2d] %s  %2d fixtures  %2d instants (%s)\n",
-                           si, length(slates), sl.day, length(sl.fixtures), length(grid), arm)
-
-        for t in grid
-            cards = MD.build_cards(spec, nothing, t)
-            isempty(cards) && continue
-            odds, insts = MD.price_cards(spec, cards, t)
-            for c in cards
-                c.readiness = MD.ready(spec.gate, c)
-            end
-            passed  = [c for c in cards if MD.is_ready(c.readiness)]
-            blocked = [c for c in cards if !MD.is_ready(c.readiness)]
-            isempty(passed) && continue
-
-            lat, warn = if arm === :live
-                l, d = MD.matchday_latents(spec, expr, ds, passed, odds, t)
-                (l, d.warning)
-            else
-                if frozen_lat === nothing
-                    l, d = MD.matchday_latents(spec, expr, ds, passed, odds, t)
-                    frozen_lat, frozen_warn = l, d.warning
-                end
-                (frozen_lat, frozen_warn)
-            end
-            isempty(lat) && continue
-
-            push!(snaps, L2Snapshot(sl.day, t, odds, lat, MD.fixture_info(passed), insts,
-                                    _depth_all_levels(spec, cards, t),
-                                    _blocked_frame(blocked, t), length(passed), warn))
+        buffers[si] = _build_slate(sl, grid, expr, ds, arm)
+        if verbose
+            n = Threads.atomic_add!(done, 1) + 1
+            @printf("  [%2d/%2d] %s  %2d fixtures  %2d instants -> %3d snapshots  (%.1fs)\n",
+                    n, length(slates), sl.day, length(sl.fixtures), length(grid),
+                    length(buffers[si]), time() - t0)
         end
     end
 
+    if threaded && Threads.nthreads() > 1
+        Threads.@threads for si in eachindex(slates)
+            body(si)
+        end
+    else
+        for si in eachindex(slates)
+            body(si)
+        end
+    end
+
+    # concatenate in SLATE ORDER, so the result does not depend on completion order
+    snaps = reduce(vcat, buffers)
+
     return L2Snapshots(corpus.name, corpus.tournament_ids[1], arm, snaps, corpus.results,
                        (; lookback, fine_from, fine_step, coarse_step), now())
+end
+
+"""
+    _build_slate(slate, grid, expr, ds, arm) -> Vector{L2Snapshot}
+
+One slate's worth of snapshots. Split out of `build_snapshots` so the parallel and serial paths
+run literally the same code — a threaded loop that duplicates its body is a threaded loop that
+will eventually disagree with the serial one.
+"""
+function _build_slate(sl, grid, expr, ds, arm::Symbol)
+    MD = _md()
+    out  = L2Snapshot[]
+    spec = replay_spec(sl.fixtures)
+    frozen_lat, frozen_warn = nothing, ""
+
+    for t in grid
+        cards = MD.build_cards(spec, nothing, t)
+        isempty(cards) && continue
+        odds, insts = MD.price_cards(spec, cards, t)
+        # `ready` writes through `_CARD_META`, a shared IdDict — see the docstring.
+        lock(_META_LOCK) do
+            for c in cards
+                c.readiness = MD.ready(spec.gate, c)
+            end
+        end
+        passed  = [c for c in cards if MD.is_ready(c.readiness)]
+        blocked = [c for c in cards if !MD.is_ready(c.readiness)]
+        isempty(passed) && continue
+
+        lat, warn = if arm === :live
+            l, d = MD.matchday_latents(spec, expr, ds, passed, odds, t)
+            (l, d.warning)
+        else
+            if frozen_lat === nothing
+                l, d = MD.matchday_latents(spec, expr, ds, passed, odds, t)
+                frozen_lat, frozen_warn = l, d.warning
+            end
+            (frozen_lat, frozen_warn)
+        end
+        isempty(lat) && continue
+
+        push!(out, L2Snapshot(sl.day, t, odds, lat, MD.fixture_info(passed), insts,
+                              _depth_all_levels(spec, cards, t),
+                              _blocked_frame(blocked, t), length(passed), warn))
+    end
+
+    return out
 end
 
 """
