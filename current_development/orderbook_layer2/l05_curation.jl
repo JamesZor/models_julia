@@ -65,6 +65,11 @@ using DataFrames, Dates, Statistics, Printf
 
 const _EPS = 1e-6
 
+"Mean of the finite entries, or NaN if there are none. `mean` has no `init` keyword."
+_fmean(v) = (f = filter(isfinite, v); isempty(f) ? NaN : mean(f))
+"Median of the finite entries, or NaN if there are none."
+_fmed(v)  = (f = filter(isfinite, v); isempty(f) ? NaN : median(f))
+
 # ===================================================================
 # 1. The per-leg score
 # ===================================================================
@@ -215,7 +220,7 @@ function match_table(df::AbstractDataFrame)
     out = combine(groupby(u, :match_id)) do sub
         stk = sum(sub.stake)
         (legs      = nrow(sub),
-         spread    = round(mean(filter(isfinite, sub.rel_spread); init = NaN), digits = 4),
+         spread    = round(_fmean(sub.rel_spread), digits = 4),
          max_claim = round(maximum(abs.(sub.claim)), digits = 4),
          longshot  = round(100 * count(>(6.0), sub.odds) / nrow(sub), digits = 1),
          skill     = round(mean(sub.skill), digits = 5),
@@ -243,7 +248,7 @@ function tercile_cut(m::DataFrame, col::Symbol)
     out = combine(groupby(d, :band),
                   nrow => :matches,
                   :legs  => sum => :legs,
-                  col    => (x -> round(median(filter(isfinite, x); init = NaN), digits = 4)) => :median,
+                  col    => (x -> round(_fmed(x), digits = 4)) => :median,
                   :skill => (x -> round(mean(x), digits = 5)) => :skill,
                   :pnl   => (x -> round(sum(x), digits = 4)) => :pnl)
     return sort!(out, :band)
