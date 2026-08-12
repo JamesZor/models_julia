@@ -93,10 +93,6 @@ _pf() = BayesianFootball.Portfolio
 _dd() = BayesianFootball.Data
 
 """
-Market types this stream will price. See the MARKET SCOPE note above for why `DOUBLE_CHANCE`
-and `ASIAN_HANDICAP` are absent — they are malformed in the archive, not merely unprofitable.
-"""
-"""
 The staleness limit the replay's readiness gate enforces, in minutes.
 
 Kept here as well as in `replay_spec(; book_age = Minute(10))` because coverage must be measured
@@ -107,6 +103,10 @@ no edge early" rather than "there was no book".
 """
 const MAX_BOOK_AGE_MIN = 10
 
+"""
+Market types this stream will price. See the MARKET SCOPE note above for why `DOUBLE_CHANCE`
+and `ASIAN_HANDICAP` are absent — they are malformed in the archive, not merely unprofitable.
+"""
 const CORPUS_MARKET_TYPES = [
     "MATCH_ODDS",
     "BOTH_TEAMS_TO_SCORE",
