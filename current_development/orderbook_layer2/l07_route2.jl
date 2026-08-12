@@ -144,7 +144,9 @@ information. WP5 measured beat rates of 28.9% / 14.0% above 6.0 on the order-boo
 struct MaxOdds <: BayesianFootball.Portfolio.AbstractSelectionFilter
     o::Float64
 end
-BayesianFootball.Portfolio.keep(f::MaxOdds, s, ::Real, ctx) = s.odds_used <= f.o
+BayesianFootball.Portfolio.keep(f::MaxOdds,
+                                s::BayesianFootball.Portfolio.Selection, ::Real,
+                                ::BayesianFootball.Portfolio.SlateContext) = s.odds_used <= f.o
 
 """
     MaxClaim(c)
@@ -158,7 +160,10 @@ skill really does fall in the upper tail.
 struct MaxClaim <: BayesianFootball.Portfolio.AbstractSelectionFilter
     c::Float64
 end
-BayesianFootball.Portfolio.keep(f::MaxClaim, s, ::Real, ctx) = (s.p_model - s.p_market) <= f.c
+BayesianFootball.Portfolio.keep(f::MaxClaim,
+                                s::BayesianFootball.Portfolio.Selection, ::Real,
+                                ::BayesianFootball.Portfolio.SlateContext) =
+    (s.p_model - s.p_market) <= f.c
 
 # ===================================================================
 # 2. The full book as a scored frame
