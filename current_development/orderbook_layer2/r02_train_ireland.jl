@@ -216,7 +216,12 @@ G-A **split count**. The queued trainer drops a split that fails NUTS initialisa
 raising, so a short `training_results` is the only symptom. Compared against the fold count the
 splitter says it should have produced.
 
-G-B **convergence**. Max R-hat across every split and parameter.
+G-B **convergence**, reported twice. `G-B(all)` is max R-hat over every split and parameter.
+`G-B(window)` restricts to the folds this study actually consumes — 2026, biweeks 8..12. The
+distinction is not cosmetic: `MatchDay.select_split` picks ONE fold per fixture by date, so a
+fold outside the corpus window is never asked for a latent and its R-hat cannot contaminate a
+single price. The window figure is the one that licenses WP3; the global figure is kept because a
+league that only converges inside its window is a fact worth carrying forward, not hiding.
 
 G-C **coverage of the order-book window**. Folds must reach the biweeks the Layer-2 corpus lives
 in (2026-05-29 .. 2026-08-09), or WP3 has latents for matches nobody can price.
@@ -235,19 +240,35 @@ function gate_experiment(res, ds, label::String)
     # walks the folds and pairs each chain with its feature set, and `check_convergence` already
     # knows to drop NaN rows. Rolling our own would be a second opinion that can disagree.
     maxr, n_par, worst = NaN, 0, ""
+    maxr_w, n_par_w, bad_folds = NaN, 0, Any[]
     try
         diag = Diagnostics.check_convergence(Diagnostics.extract_chains(ds, res)).df
         if !isempty(diag)
             maxr  = maximum(diag.rhat)
             n_par = nrow(diag)
             worst = string(diag[argmax(diag.rhat), :parameter])
+
+            bad = filter(r -> r.rhat >= 1.01, diag)
+            bad_folds = isempty(bad) ? Any[] :
+                sort(unique([(string(r.target_season), r.week) for r in eachrow(bad)]))
+
+            win = filter(r -> string(r.target_season) == "2026" && 8 <= r.week <= 12, diag)
+            if !isempty(win)
+                maxr_w  = maximum(win.rhat)
+                n_par_w = nrow(win)
+            end
         end
     catch e
         @warn "convergence extraction failed" exception = e
     end
-    gb = !isnan(maxr) && maxr < 1.01
-    @printf("G-B  max R-hat         %.4f  (n=%d, worst=%s)   %s\n", maxr, n_par, worst,
-            gb ? "PASS" : "FAIL")
+    gb_all = !isnan(maxr)   && maxr   < 1.01
+    gb     = !isnan(maxr_w) && maxr_w < 1.01     # the gate that licenses WP3
+    @printf("G-B  max R-hat (all)   %.4f  (n=%d, worst=%s)   %s\n", maxr, n_par, worst,
+            gb_all ? "PASS" : "FAIL")
+    @printf("     max R-hat (win)   %.4f  (n=%d, 2026 biweeks 8..12)   %s\n", maxr_w, n_par_w,
+            gb ? "PASS" : "FAIL  <- the corpus window itself did not converge")
+    isempty(bad_folds) || @printf("     non-converged folds (season, biweek): %s\n",
+                                  string(bad_folds))
 
     # which biweeks did the folds actually reach, in the 2026 target season?
     steps_2026 = sort(unique([md.time_step for (_, md) in bounds
@@ -261,7 +282,8 @@ function gate_experiment(res, ds, label::String)
             string(steps_2026), gc ? "PASS" : "FAIL")
 
     return (label = label, splits_kept = n_kept, splits_built = n_built,
-            max_rhat = maxr, ga = ga, gb = gb, gc = gc, pass = ga && gb && gc)
+            max_rhat = maxr, max_rhat_window = maxr_w, bad_folds = bad_folds,
+            ga = ga, gb = gb, gb_all = gb_all, gc = gc, pass = ga && gb && gc)
 end
 
 # ===================================================================

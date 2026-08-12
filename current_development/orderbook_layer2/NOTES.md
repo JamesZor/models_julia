@@ -374,3 +374,61 @@ T1). A store that grows between training and `extract_oos_predictions` makes the
 boundaries from the NEW store and zip them positionally against the OLD `training_results` —
 folds mis-pair with no error. WP2 serialises the exact stores it trained on, including the
 pillar-swapped 718, to `data/l2_ireland_engines/ds_*.jls`. **WP3 must load those, not the cache.**
+
+---
+
+## WP2 results — 2026-08-12
+
+Both engines trained: `l2_ire79_sup40_sw40_20260811_203336`, `l2_ire718_sup40_sw40_20260812_003455`.
+
+| gate | ire79 | ire718 |
+|---|---|---|
+| G-A splits kept / built | **31 / 31** | **31 / 31** |
+| G-B max R-hat, all folds | 1.6160 (`ha.σ_γ`) ✗ | **1.0099** (`kappa`) ✓ |
+| G-B max R-hat, corpus window | **1.0097** ✓ | **1.0060** ✓ |
+| G-C folds reach 2026 biweeks 8–12 | ✓ (reach 0–12) | ✓ |
+
+### G-B: the global failure does not touch this study
+
+79's 1.616 looks alarming and is not. Median R-hat is 1.0012 and **37 of 1,059 parameters (3.5%)
+exceed 1.01 — all inside three folds**: (2025, biweek 0), (2025, biweek 5), (2026, biweek 6).
+The order-book corpus lives in **2026 biweeks 8–12**, and `MatchDay.select_split` picks exactly
+one fold per fixture by date, so no non-converged fold is ever asked for a latent. Restricted to
+the 165 window parameters, **max R-hat is 1.0097 on 79 and 1.0060 on 718, with zero exceedances
+in either league**.
+
+`gate_experiment` now reports both figures. The window one is the gate; the global one is kept
+because "converges only inside its window" is a fact worth carrying, not hiding.
+
+The failing parameters are the usual hierarchical-funnel suspects — `ha.σ_γ`, `kap.σ_κ`,
+`σ_sup`, `σ_smile`, `kappa` — in the folds with the least data. On a re-run they are the ones a
+non-centred parameterisation would fix; nothing here needs fixing for WP3.
+
+### Structural finding: this engine has NO dispersion parameter
+
+`Diagnostics.extract_chains` warns `index disp.log_r not found` once per fold, for both leagues.
+The cause is not a naming drift — inspecting the chain directly, its 69 parameters are:
+
+```
+ha.γ_base, ha.γ_team_raw[], ha.σ_γ, inter.μ_base[], inter.raw_month[], inter.σ_month,
+kap.κ_base, kap.κ_team_raw[], kap.σ_κ, log_φ[], p_dyn.w_{G,Outfield}_{att,def},
+ν_xg, σ_smile, σ_sup    (+ NUTS internals)
+```
+
+There is **no dispersion variable at all**. `DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecay`
+is a pure double-Poisson on the goals side: variance is pinned to the mean, and the
+`dispersion_config = HomeAwayDispersion()` we pass — copied from the r21 winning cell — is inert.
+It is harmless but misleading, and it is worth being explicit that r21's grid never varied it.
+
+**Why this matters to Layer 2.** The 2026-08-07 live serving run recorded "model 1X2 dispersion
+half the market's", and the 2026-08-08 ScottishLower replay measured the same 0.5× ratio. That is
+now explained rather than merely observed: the engine *cannot* widen its scoreline distribution
+beyond Poisson, because it has no parameter with which to do so. The under-dispersion is
+structural, not a fitting failure — so it is not something a Layer-2 staking policy can calibrate
+away, and it is a standing reason to expect the trust/shrinkage machinery to be doing real work
+rather than correcting noise. Consistent with [[no-pregame-intensity-smile]]: pregame FT totals
+really are ~Poisson, so the constraint is closer to right than wrong on totals, and the 1X2
+under-dispersion is the place it bites.
+
+Registered as an observation, not a change: swapping the dispersion config is an L1 question and
+belongs in the split-market-pillar stream, not here.
