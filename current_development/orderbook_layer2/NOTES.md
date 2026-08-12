@@ -912,3 +912,118 @@ judged on proper scoring against held-out matches, never against an executable d
 
 That is an L1 question and belongs in the split-market-pillar stream. **The Layer-2 programme on
 this corpus is complete and its answer is that there is nothing here for it to allocate.**
+
+---
+
+## CORRECTION to WP5/WP8, and WP9 results — 2026-08-12 (Route 2)
+
+### The correction
+
+WP8 concluded "the engine is uninformative; this is a Layer-1 problem". **That was wrong, and it
+was wrong because the corpus was wrong.** Measured with r21's own metric, r21's own benchmark, and
+the experiment *this stream trained*:
+
+| set | obs | matches | model LL | market LL | diff |
+|---|---|---|---|---|---|
+| ALL OOS | 5859 | 293 | 0.42454 | 0.44231 | **−0.01778** model wins |
+| 2025, outside OB window | 3580 | 180 | 0.41880 | 0.43360 | **−0.01479** model wins |
+| 2026, outside OB window | 1789 | 92 | 0.44402 | 0.47411 | **−0.03009** model wins |
+| 2026, **inside** OB window | 490 | 21 | 0.39528 | 0.38990 | **+0.00538** model loses |
+
+The order-book window is the **only** slice where the model loses. It is 21 matches in the
+overlap, and the market's own log loss there is 0.390 against 0.474 on the rest of the same
+season — an unusually sharp market on unusually predictable fixtures. There is no decay: 2026
+*outside* the window is the model's best period anywhere.
+
+Two benchmarks were checked head-to-head on the same selections first, and they are the same
+benchmark: the de-vigged order book and `summarize_betfair_market`'s `prob_fair_close` agree to
+0.003 in probability and 0.001 in log loss. The window, not the yardstick, was the difference.
+
+**Withdrawn:** WP8's `w* = 0` verdict, and WP5's "per-market trust does not transfer" — both were
+measured where there was no edge to allocate.
+**Still standing:** the WP1/WP3 apparatus (107/107, 591/591), WP4's entry-timing and depth results
+(market facts, independent of model quality).
+
+### R1 — there is an edge, and w* is positive
+
+| | n | **w\*** | gain vs market |
+|---|---|---|---|
+| 79 | 3480 | **0.32** | 0.00143 nats |
+| pooled | 5332 | **0.28** | 0.00107 nats |
+| 2025 | 2170 | 0.40 | 0.00227 |
+| 2026 | 1310 | 0.18 | 0.00037 |
+
+Not zero. The model is individually *worse* than the market (skill −0.0038) yet earns a **0.28–0.32
+blend weight** — the signature of a weaker forecaster carrying independent information.
+
+### R5 — homogeneity, confirmed on re-simulated policies
+
+| FlatTrust | binding (`SlateDrawdown`+cap) | slack (`NoRisk`+cap 0.05) |
+|---|---|---|
+| 0.10 | 1.4796 | 1.0869 |
+| 0.25 | 1.5187 | 0.9940 |
+| 0.50 | 1.5163 | 0.9347 |
+| 1.00 | 1.5163 | 0.8928 |
+
+Flat under the binding risk model — 0.5 and 1.0 identical to four decimals — and **monotone
+decreasing** under the slack one. `risk_factor` is homogeneous of degree 0 exactly as
+`stake.jl:5-18` says, now measured through a real `simulate` rather than a rescale.
+
+### R2/R2-applied — THE SKILL CURVE AND GROWTH DISAGREE, AND GROWTH WINS
+
+The curse curve reproduces on Route 2, pooled over 5,332 selections — symmetric, worst in both
+tails (−0.0139 below −5pp, −0.0106 above +5pp), best near agreement. So the *shape* is a real
+property of the engine, not an artefact of the no-edge window.
+
+**But acting on it destroys money, in both leagues:**
+
+| policy | 79 final | 79 growth | 718 final | 718 growth |
+|---|---|---|---|---|
+| no filter | 1.5187 | 0.00418 | 1.2363 | 0.00262 |
+| MaxOdds(6.0) | 1.0280 | 0.00028 | 1.0976 | 0.00115 |
+| MaxClaim(0.05) | 0.9975 | −0.00003 | 0.8209 | −0.00244 |
+| MaxClaim(0.02) | 1.0005 | 0.0 | 0.8366 | −0.00220 |
+| both | 1.0249 | 0.00025 | 0.8219 | −0.00242 |
+| **MinEdge(0.02)** — the OPPOSITE | **1.5188** | **0.00418** | **1.4713** | **0.00477** |
+
+Every filter derived from the skill curve loses. `MinEdge`, which keeps *precisely the legs
+`MaxClaim` discards*, is the best arm in both leagues and lifts 718 from 1.2363 to 1.4713
+(growth 0.00262 → 0.00477, ROI 6.5% → 13.8%) while cutting drawdown 22.1% → 18.4%.
+
+**This is why the standing instruction is to judge on growth, not log loss.** Both measurements
+are correct and they are not in conflict: the model is *miscalibrated* — over-confident, so log
+score punishes it in the tails — while being *directionally right often enough that at the offered
+price the tail bets are +EV*. Log score asks "is the probability right"; Kelly asks "is the
+probability on the right side of the price". Only the second pays.
+
+It also vindicates [[calibrate-centre-edge-in-tails]] as written: per-line expectation should sit
+on the market, and the edge is the per-match deviation. My WP5 recommendation to shrink the tails
+was the opposite of that and was wrong.
+
+### R3 — curation still not derivable
+
+Deriving per-selection trust on 2025 (180 books) and testing on 2026: **every family fell back to
+the default weight** — nothing cleared a match-clustered sign test at ≥20 legs. Not a
+transfer failure this time, simply not enough per-family signal to act on. Curation stays
+unproven; `MinEdge` is the intervention that works, and it is claim-based, not market-based.
+
+### R4 — open vs close is a wash on allocation
+
+| | open final | close final | open growth | close growth |
+|---|---|---|---|---|
+| 79 | 1.5302 | 1.5187 | 0.00425 | 0.00418 |
+| 718 | 1.2214 | 1.2363 | 0.00247 | 0.00262 |
+
+Opposite signs between leagues, differences far inside the CIs. On this coarse two-point contrast
+entry time does not matter for allocation — consistent with WP4, where the close won on
+*execution* cost (spread and fill), which this path cannot see.
+
+### Headline
+
+Reference policy, no curation, 293 matches over ~1.5 seasons:
+
+* **79: ×1.52, ROI +7.3% [−8.2, +23.2], growth +0.0042/slate over 100 slates**
+* **718: ×1.24, ROI +6.5% [−12.0, +26.7]** — and **×1.47 with `MinEdge(0.02)`**
+
+Positive in both leagues, neither significant on its own. The honest summary is a small positive
+edge that survives execution on this path, plus one intervention (`MinEdge`) that replicates.
