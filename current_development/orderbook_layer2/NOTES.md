@@ -535,3 +535,62 @@ lead, and a wrong-method dispatch. Only one threw. The pattern is that this pipe
 returning plausible empty or unchanged results rather than by erroring, so every WP from here
 reports a **precondition table** (what was priceable, how many cells were compared, which method
 was dispatched) next to every result table.
+
+### 5. Every lead was measured from midnight
+
+Found only because G5 printed medians and they were **negative**: `AtClose −1125 min`.
+
+`Portfolio.FixtureInfo` is `@NamedTuple{date::Date, score}` — it has no kick-off time. The lead
+calculation used `hasproperty(fi, :kickoff) ? fi.kickoff : DateTime(slate_day)`, so the fallback
+fired on every row and the origin was **midnight** rather than the actual 18:45 kick-off.
+
+Nothing downstream complained. Negative leads simply put every leg in one entry bucket and made
+`FixedLead` snap against a target measured from the wrong origin — the entire WP4 entry-time axis
+would have been wrong, through a gate that passed 583/583 around it.
+
+`L2Snapshots` now carries `kickoffs` from the corpus's own `Fixture` objects, `kickoff_of` throws
+rather than defaulting, and `stake_snapshots` refuses a ledger containing a negative lead. After
+the fix: leads span **T−375 … T−0** across 7 buckets, with `AtClose` at 0, `FixedLead(90m)` at 90
+and `FirstQualifying(0.02)` at 135 — correctly ordered.
+
+### 6. Deep entry buckets are a biased subsample
+
+`adaptive_grid` anchors on the **earliest** kick-off in a slate, deliberately: anchoring on the
+latest would let `ExplicitFixtures` shrink the slate mid-trace. But 79's slates are staggered by
+up to **4 hours**, so a late fixture sees leads of `lookback + 240` while the earliest tops out
+at `lookback` — hence a deepest lead of 375 against a 136-minute lookback.
+
+So the deep buckets contain only late-kick-off fixtures. **A per-bucket ROI difference between
+"120–180m" and "0–5m" is partly a difference between two sets of matches.** `reading_5_coverage`
+prints `fixtures_priceable` per bucket so this is visible where it bites.
+
+### WP3 gate: 591/591
+
+| gate | result |
+|---|---|
+| G1 decomposition reproduces `match_day` row for row | **28/28 rows** |
+| G2 latent arms, `n_compared > 0` asserted first | invariant, 50 cells compared |
+| G3 grid spacing is exactly {15, 3} min | pass |
+| G3b grid does not reach past the tradeable book | T−135 start vs T−143 deepest live |
+| G4 closing coherence, 304 complete groups | all overround > 1 |
+| G5 entry rules on real data | pass, correctly ordered |
+
+Carried forward for WP4: the oracle beats the close on **144/267 legs, mean gain 2.04%**. That is
+the number `RandomEntry` has to be subtracted from.
+
+### Threading
+
+Tier 1 was a serial loop and took ~23 min per league. Slates are independent, so `build_snapshots`
+now runs them under `Threads.@threads` (16 threads on the server) with one buffer per slate,
+concatenated in slate order so the result is deterministic. **23 min → 5m50s** for the full gate;
+the remaining serial part is the corpus build and G1/G2 prologue.
+
+Two pieces of shared state, both checked rather than assumed:
+* `MatchDay._query` opens and closes its own connection per call (`db.jl:26`) — no shared handle,
+  which is why this parallelises at all.
+* `_CARD_META` is a module-level `IdDict` mutated through `get!`, so concurrent access can corrupt
+  it. The gate loop is held under a `ReentrantLock`; `price_cards` and `matchday_latents` — the
+  actual cost — stay outside it. `clear_card_meta!` moved to once *before* the parallel region.
+
+`threaded = false` restores the serial path, which is the cheapest way to rule threading out if a
+result ever looks odd.
