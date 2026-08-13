@@ -151,11 +151,16 @@ sn3_config = Experiments.ExperimentConfig(
 
 # Show the folds BEFORE spending on them — a mis-set window is cheap to catch here and expensive
 # to discover 40 minutes later.
+# NB the splitter always emits an extra time_step-0 fold with an EMPTY target set alongside the
+# steps in [warmup_period, end_dynamics]. It trains but predicts nothing. Kept rather than
+# filtered out, because production runs carry it too and dropping it here would make this a
+# different pipeline from the one being validated.
 sn3_bounds = Data.create_id_boundaries(sn3_ds, sn3_splitter)
 println("\nFolds to train (", length(sn3_bounds), "):")
-for (ids, md) in sn3_bounds
-    @printf("  season %s  biweek %2d   train ids %d\n",
-            string(md.target_season), md.time_step, length(ids))
+for (b, md) in sn3_bounds
+    @printf("  season %s  biweek %2d   history %4d matches   target %3d\n",
+            string(md.target_season), md.time_step,
+            length(b.history_match_ids), length(b.target_match_ids))
 end
 isempty(sn3_bounds) && error("r03: splitter produced no folds — check warmup_period/end_dynamics")
 
