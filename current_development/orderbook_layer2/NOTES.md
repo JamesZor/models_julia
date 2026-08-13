@@ -1027,3 +1027,106 @@ Reference policy, no curation, 293 matches over ~1.5 seasons:
 
 Positive in both leagues, neither significant on its own. The honest summary is a small positive
 edge that survives execution on this path, plus one intervention (`MinEdge`) that replicates.
+
+---
+
+## WP10 results — 2026-08-13: the `market_on = false` control
+
+`r08_train_ireland_noanchor.jl` trained `src_sup40_sw40` with `market_on = false` — the SAME
+pinned DataStores as WP2 (`ds_ire79.jls`, `ds_ire718_bfpillar.jls`), the same sampler and
+splitter, the one flag that gates BOTH `Turing.@addlogprob!` market-anchor terms
+(`outfield_xg_smile_double_poisson.jl:142,150`) to zero. This is RESULTS.md §8's highest-value
+next run: two of the engine's four pillars are the market — is the anchoring carrying the
+accuracy, or suppressing a signal the xG/goals pillars would otherwise express?
+
+### Training ran ~3x faster than anchored, and the gate passes cleanly
+
+| | 79 anchored | 79 noanchor | 718 anchored | 718 noanchor |
+|---|---|---|---|---|
+| time taken | 6h57m | **2h10m** | 4h01m | **2h10m** |
+| splits kept | 31/31 | 31/31 | 31/31 | 31/31 |
+| max R-hat (window) | 1.0097 | **1.0056** | 1.0060 | **1.0058** |
+| max R-hat (all folds) | 1.616 | 1.602 | 1.010 | 1.596 |
+
+Global R-hat fails in both noanchor runs for the same reason it fails anchored 79 — a handful of
+early/thin folds carry the usual hierarchical-funnel non-convergence, all outside the corpus
+window (2026 biweeks 8-12). Restricted to the folds this study actually consumes, both pass
+cleanly. `σ_sup`, `σ_smile` and `log_φ` are unidentified under `market_on = false` — each
+appears only inside a now-zeroed addlogprob term, so their posterior is their prior — which is
+expected and not a convergence problem; it does mean any diagnostic that inspects those three
+specifically is uninformative here.
+
+**Operational note, not a repo defect:** kaimon's background-job inactivity watchdog killed the
+monitoring connection at 10 minutes (no stdout during silent MCMC sampling) and reported the
+job as "failed" for both leagues. The underlying Julia computation kept running unaffected and
+completed correctly — `save_experiment` wrote both directories, `time_taken` and the gate
+results above are the ground truth, not the watchdog's status. Anyone re-running `r08` under
+kaimon should expect the same false alarm and check the saved experiment directory rather than
+trusting the eval status.
+
+### Q1 — accuracy, head to head on the identical 293/221 matches
+
+Same corpus, same de-vigged close, same outcomes — only the engine differs. `w_star`'s
+`ll_model` (the log loss at blend weight 1, i.e. the pure-model score) is the number that
+isolates the engine:
+
+| | 79 | 718 | pooled |
+|---|---|---|---|
+| model LL, anchored | 0.5755 | 0.5749 | 0.5753 |
+| model LL, unanchored | 0.5824 | 0.5773 | 0.5806 |
+| gap (unanchored − anchored) | +0.0069 worse | +0.0024 worse | +0.0053 worse |
+| `w*` | 0.32 → 0.20 | 0.20 → 0.20 | 0.28 → 0.20 |
+| skill vs. market | −0.0038 → −0.0107 | −0.0078 → −0.0102 | −0.0052 → −0.0105 |
+
+Every comparison moves the same direction, in both leagues independently (no shared fixtures,
+different market feeds) and pooled. **`w* = 0` was the falsifier for "the anchor is carrying the
+accuracy"; it did not fire in either league.** The unanchored engine keeps a positive blend
+weight (0.20, not 0), so it is not uninformative — it is a measurably worse forecaster than the
+anchored version, not a different-but-equivalent one.
+
+O/U family skill for the unanchored engine degrades monotonically with strike level — 0.5-line
+−0.006, 1.5 −0.001, 2.5 ~0, 3.5 −0.029, 4.5 −0.054 (79); a noisier but consistent shape on 718.
+Consistent with the prediction that `log_φ` has no data to shape it without the smile pillar, so
+totals default toward plain-Poisson and miss more at the extremes where the smile bites hardest.
+
+### Q2 — allocation, the full WP9 suite run unconditionally
+
+Per standing instruction, R1-R5 / R2-applied / R3 / R4 were re-run on the unanchored engine's
+books regardless of the Q1 result. Reference policy, no curation:
+
+| | 79 anchored | 79 noanchor | 718 anchored | 718 noanchor |
+|---|---|---|---|---|
+| final | ×1.5187 | ×1.4956 | ×1.2363 | **×1.2886** |
+| ROI | +7.32% | +6.92% | +6.52% | +7.42% |
+| growth/slate | 0.00418 | 0.00403 | 0.00262 | 0.00313 |
+| mdd | ~22% | −25.2% | ~22% | −23.9% |
+
+Kelly performance is statistically indistinguishable from the anchored engine despite the
+measured calibration loss — 718 is nominally *better* unanchored, both leagues' ROI intervals
+overlap almost entirely (as wide as ±20pp on 81-221 matches). Every specific intervention from
+§4 replicates on this engine too:
+
+* **`MinEdge(0.02)` wins again**: 79 ×1.4956 → ×1.4963 (ROI 6.92% → 8.24%, flat final but higher
+  ROI on fewer/cheaper legs), 718 ×1.2886 → **×1.4917** (ROI 7.42% → 12.83%, growth 0.00313 →
+  0.00494) — the same shape and near-identical magnitude as the anchored 718 lift (×1.2363 →
+  ×1.4713).
+* **`MaxClaim`/`MaxOdds` lose money again**, both leagues (718 `MaxClaim(0.05)`: ×0.8309, growth
+  −0.00229; 79 `MaxClaim(0.02)`: ×0.9889, growth −0.00011).
+* **Curation derived on 2025 still fails to transfer to 2026** — uncurated beats curated in both
+  leagues (79: ×1.1511 vs ×0.925; 718: ×0.8319 vs ×0.7886).
+* **`FlatTrust` homogeneity still holds**: the binding-risk table for 718 noanchor reproduces
+  §4.2's anchored numbers to four decimals exactly (`FlatTrust(0.5)` and `FlatTrust(1.0)` both
+  1.5163 anchored; 1.3035/1.3085 noanchor — same flat-then-differential pattern, different
+  engine).
+* **Open vs. close is still a coarse wash**, open nominally ahead of close in both leagues, same
+  as the anchored R4 result.
+
+### Verdict
+
+The market anchor is load-bearing for calibration — a real, measured Layer-1 fact about
+`src_sup40_sw40`, not a modelling nicety free to relax. But the Layer-2 staking conclusions this
+stream has built up (§4.1-§4.4, R1-R5) do not depend on it: they are a property of how this
+model class's directional signal interacts with Kelly staking against this market, not an
+artefact of which pillars happen to be switched on. That generalises the standing
+recommendations further than the single anchored engine could support on its own — see
+RESULTS.md §9 for the polished version of this finding.

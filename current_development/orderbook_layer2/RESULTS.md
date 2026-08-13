@@ -227,13 +227,68 @@ folds sit **outside** the corpus window; restricted to the folds actually consum
 
 ## 8. What to do next
 
-1. **`market_on = false` control on this corpus.** Two of four pillars are the market; if the
-   unanchored engine is much worse, the anchoring is carrying the accuracy. r21 had such a cell
-   but never judged it against an executable de-vigged close. This is the highest-value single
-   run and it is an L1 question.
+1. ~~**`market_on = false` control on this corpus.**~~ **Done — see §9.** The anchoring carries
+   real accuracy; the Layer-2 conclusions above do not depend on it.
 2. **A `MinEdge` threshold sweep with a proper out-of-sample design.** The result replicated
    across leagues at one arbitrary threshold; that is promising and unvalidated.
 3. **Let the order-book corpus grow.** The collector keeps running; the harness now judges any
    engine against it in minutes rather than days.
 4. **Do not chase the size problem yet.** £100 is unfillable on half the legs, but that only
    binds once the edge is established at a size worth caring about.
+
+## 9. WP10 — the `market_on = false` control (2026-08-13)
+
+**Question:** two of the engine's four likelihood pillars are the market (supremacy and smile,
+weight 0.4 each). Does removing them tank accuracy — the anchor was carrying it — or leave it
+roughly unchanged — the anchor was suppressing a signal the xG/goals pillars would otherwise
+express?
+
+**Answer: the anchor carries real accuracy.** Same pinned DataStores, same sampler, the same
+293/221-match Route 2 sample, the same de-vigged close — only `market_on` flips.
+
+| | 79 | 718 | pooled |
+|---|---|---|---|
+| model LL, anchored | 0.5755 | 0.5749 | 0.5753 |
+| model LL, unanchored | 0.5824 | 0.5773 | 0.5806 |
+| gap (unanchored − anchored) | **+0.0069** | **+0.0024** | **+0.0053** |
+| `w*` | 0.32 → 0.20 | 0.20 → 0.20 | 0.28 → 0.20 |
+| skill vs. market | −0.0038 → −0.0107 | −0.0078 → −0.0102 | −0.0052 → −0.0105 |
+
+Every comparison moves the same direction, independently in both leagues — which share no
+fixtures and were fitted on different market feeds — and pooled. This is the clean outcome the
+pre-registration priced in, not the ambiguous one. The unanchored engine is not uninformative
+either: `w*` holds at 0.20 rather than collapsing to 0, so the xG/goals pillars alone still add
+something over the raw market, just less than with the anchor attached.
+
+One consequence worth naming rather than discovering by surprise: `log_φ` (the O/U smile shape)
+appears only inside the now-zeroed smile pillar, so its posterior is its prior once
+`market_on = false`. Totals default toward a flat/Poisson shape, and O/U family skill degrades
+monotonically with strike level for the unanchored engine (0.5-line skill −0.006 → 4.5-line
+−0.054) — consistent with losing the market-informed shape exactly where it matters most.
+
+**But every Layer-2 finding in this document replicates on the unanchored engine anyway.**
+Reference policy, no curation:
+
+| | 79 anchored | 79 unanchored | 718 anchored | 718 unanchored |
+|---|---|---|---|---|
+| final | ×1.52 | ×1.50 | ×1.24 | **×1.29** |
+| ROI | +7.3% | +6.9% | +6.5% | +7.4% |
+| growth/slate | 0.00418 | 0.00403 | 0.00262 | 0.00313 |
+
+Despite the calibration loss, Kelly performance is statistically indistinguishable from the
+anchored engine — 718 is nominally *better* unanchored, and both leagues' ROI intervals overlap
+almost entirely. The specific interventions replicate a third time on a genuinely different
+engine: `MinEdge(0.02)` wins again (718: ×1.29 → ×1.49, ROI 7.4% → 12.8%); `MaxClaim`/`MaxOdds`
+lose money again in both leagues; curation derived on 2025 still fails to transfer to 2026; the
+`FlatTrust` homogeneity result still holds under a binding vs. slack risk model (§4.2's table
+reproduces to the same four decimals).
+
+**Reading.** The market anchor is load-bearing for calibration — a real, measured L1 fact, not a
+modelling nicety free to relax. But the Layer-2 staking conclusions in §2-§4 do not depend on
+it: they are a property of how this model class's directional signal interacts with Kelly
+staking against this market, not an artefact of which pillars happen to be switched on. That is
+a stronger claim for this document's verdict than the single-engine result supported on its own.
+
+**Code:** `r08_train_ireland_noanchor.jl` (training, reuses WP2's pinned DataStores exactly),
+`r09_route2_noanchor.jl` (head-to-head accuracy plus the full WP9 suite, reading r07's
+`route2.jls` for the anchored side rather than recomputing it).
