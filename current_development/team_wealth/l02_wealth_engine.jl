@@ -201,10 +201,10 @@ function PreGame.build_turing_model(
 
     n_teams   = Int(data[:n_teams])
     n_seasons = Int(data[:n_seasons])
-    n_months  = Int(data[:n_rounds])
+    n_months  = 12
 
-    # Time weights for decay
-    match_weights = get(data, :match_time_weights, ones(Float64, length(data[:flat_home_ids])))
+    date_deltas   = Vector{Int}(data[:dates])
+    match_weights = 0.5 .^ (date_deltas ./ config.player_dynamics_config.days_half_life)
 
     home_ids   = Vector{Int}(data[:flat_home_ids])
     away_ids   = Vector{Int}(data[:flat_away_ids])
