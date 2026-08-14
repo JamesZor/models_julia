@@ -21,6 +21,7 @@ include(joinpath(@__DIR__, "l01_wealth_data.jl"))
 include(joinpath(@__DIR__, "l02_wealth_engine.jl"))
 include(joinpath(@__DIR__, "l03_wealth_predict.jl"))
 
+include(joinpath(dirname(@__DIR__), "orderbook_layer2", "l00_corpus.jl"))
 include(joinpath(dirname(@__DIR__), "orderbook_layer2", "l01_l2_experiment.jl"))
 include(joinpath(dirname(@__DIR__), "orderbook_layer2", "l02_l2_ledger.jl"))
 include(joinpath(dirname(@__DIR__), "orderbook_layer2", "l03_l2_metrics.jl"))
