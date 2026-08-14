@@ -43,16 +43,15 @@ println("✓ Loaded pinned DataStore for Ireland 79 ($(nrow(ds.matches)) matches
 # ==============================================================================
 
 function make_wealth_engine()
-    return PreGame.DynamicSmileDoublePoissonXGWealthPlayerTimeDecayModel(
+    return DynamicSmileDoublePoissonXGWealthPlayerTimeDecayModel(
         interception_config    = PreGame.HierarchicalMonthlyInterception(),
         player_dynamics_config = PreGame.OutfieldPlayerDynamicsConfig(days_half_life = 60.0),
-        dispersion_config      = PreGame.HomeAwayDispersion(),
         homeadvantage_config   = PreGame.HierarchicalTeamHomeAdvantage(),
         kappa_config           = PreGame.HierarchicalTeamKappa(),
         player_ratings_feature = Features.PlayerRatingsFeature(
                                      Features.BayesianTracker(6.5, 1.0, 0.5, 0.01)),
-        team_wealth_feature    = TeamWealthFeature(
-                                     wealth_weight_prior = Distributions.Truncated(Distributions.Normal(0.105, 0.05), 0.0, Inf)),
+        wealth_feature         = TeamWealthFeature(),
+        w_wealth_prior         = truncated(Normal(0.105, 0.05), lower=0.0),
         market_feature_config  = Features.DoublePoissonMarketFeature(),
         smile_feature          = Features.MarketSmileFeature(Kmax = 4),
         market_on              = false,        # Unanchored control
