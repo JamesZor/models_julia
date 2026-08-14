@@ -93,11 +93,11 @@ arm_anchored = process_arm(ds, exp_anchored, "3. Market Anchored (sup40)")
 banner("[METRIC 1] SUPREMACY DISPERSION & EXPANSION RATIO (ρ)")
 
 function compute_supremacy_dispersion(arm)
-    f = filter(r -> r.family == "1X2" && r.selection in ("Home", "Away"), arm.frame)
+    f = filter(r -> r.market == "1X2" && Symbol(r.selection) in (:home, :away), arm.frame)
     # Group by match to get home / away probs
     matches_df = combine(groupby(f, :match_id)) do sub
-        h_row = filter(r -> r.selection == "Home", sub)
-        a_row = filter(r -> r.selection == "Away", sub)
+        h_row = filter(r -> Symbol(r.selection) == :home, sub)
+        a_row = filter(r -> Symbol(r.selection) == :away, sub)
         if nrow(h_row) == 1 && nrow(a_row) == 1
             p_h_mod, p_a_mod = h_row.p_model[1], a_row.p_model[1]
             p_h_mkt, p_a_mkt = h_row.p_market[1], a_row.p_market[1]
@@ -135,7 +135,7 @@ function compute_oos_accuracy(arm)
     b_res = book_skill(arm.frame, arm.label)
     
     # 1X2 subset accuracy
-    f1x2 = filter(r -> r.family == "1X2", arm.frame)
+    f1x2 = filter(r -> r.market == "1X2", arm.frame)
     w_1x2 = isempty(f1x2) ? (ll_model = NaN, ll_market = NaN, w = NaN) : w_star(f1x2)
     
     # Brier Score on 1X2
