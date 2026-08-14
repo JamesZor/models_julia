@@ -167,6 +167,22 @@ sn5_eff_N = sum(sn5_w)
 
 _sn5_ok(x) = !ismissing(x) && !isnan(Float64(x)) && Float64(x) > 0
 
+# A SANITY GATE ON THE CONDITIONING MEAN, added after the first run.
+#
+# `:flat_market_λ_home` on the 718 pin carries a small number of impossible values — the first run
+# found λ_home = 357.15 and λ_home = 0.001 against a median of 1.496. Three rows out of the 276
+# with market coverage. That is 1.1% of the data, and it is enough to destroy the test: a single
+# observation at λ = 357 contributes (y-λ)²/λ ≈ 355 to a sum of n = 276, adding ~1.3 to D on its
+# own. The first run reported D_home = 9.14, which is an artefact of those rows and nothing else.
+#
+# The `calib` guard caught it — home calib came back 0.387 against away's 0.993 — which is exactly
+# what it is for. The gate below makes the test robust rather than merely self-invalidating.
+# Both the raw and gated statistics are reported, so the contamination stays visible.
+#
+# 0.2 .. 5.0 goals is deliberately loose: it admits every plausible football scoreline mean and
+# excludes only values that cannot be a per-team goal expectation.
+_sn5_sane(x) = _sn5_ok(x) && 0.2 <= Float64(x) <= 5.0
+
 function sn5_dispersion_index(y::Vector{Int}, λ::Vector{Float64}, w::Vector{Float64})
     n  = length(y)
     n == 0 && return (n = 0, D = NaN, p = NaN, calib = NaN, D_w = NaN, r_mom = NaN, λ̄ = NaN)
@@ -182,38 +198,45 @@ function sn5_dispersion_index(y::Vector{Int}, λ::Vector{Float64}, w::Vector{Flo
     return (n = n, D = D, p = p, calib = mean(y) / λ̄, D_w = Dw, r_mom = r_mom, λ̄ = λ̄)
 end
 
-sn5_free = let d = sn5_fs.data
+function sn5_free_stats(d, pick)
     yh, ya = Vector{Int}(d[:flat_home_goals]), Vector{Int}(d[:flat_away_goals])
     mh, ma = d[:flat_market_λ_home], d[:flat_market_λ_away]
-    keep = findall(i -> _sn5_ok(mh[i]) && _sn5_ok(ma[i]), eachindex(yh))
-    cov  = length(keep) / length(yh)
+    keep = findall(i -> pick(mh[i]) && pick(ma[i]), eachindex(yh))
     y = vcat(yh[keep], ya[keep])
     λ = vcat(Float64.(mh[keep]), Float64.(ma[keep]))
     w = vcat(sn5_w[keep], sn5_w[keep])
-    (coverage = cov,
-     home  = sn5_dispersion_index(yh[keep], Float64.(mh[keep]), sn5_w[keep]),
-     away  = sn5_dispersion_index(ya[keep], Float64.(ma[keep]), sn5_w[keep]),
-     both  = sn5_dispersion_index(y, λ, w),
+    (n_rows = length(keep), coverage = length(keep) / length(yh),
+     home = sn5_dispersion_index(yh[keep], Float64.(mh[keep]), sn5_w[keep]),
+     away = sn5_dispersion_index(ya[keep], Float64.(ma[keep]), sn5_w[keep]),
+     both = sn5_dispersion_index(y, λ, w),
      # the marginal V/M r04 reported, on the SAME rows, so the two are directly comparable
      marg_VM = var(y) / mean(y))
 end
 
+sn5_free_raw = sn5_free_stats(sn5_fs.data, _sn5_ok)     # every row with a market λ present
+sn5_free     = sn5_free_stats(sn5_fs.data, _sn5_sane)   # ... minus the impossible ones
+sn5_n_bad    = sn5_free_raw.n_rows - sn5_free.n_rows
+
 open(SN5_FREE_LOG, "w") do io
     println(io, "smile_negbin r05 — model-free dispersion, Ireland 718, 2026 biweek $SN5_STEP")
     println(io, "run at ", now())
-    @printf(io, "history %d matches, market λ coverage %.1f%%, goals-pillar effective N %.1f\n\n",
-            length(sn5_fs.data[:dates]), 100 * sn5_free.coverage, sn5_eff_N)
+    @printf(io, "history %d matches, market λ present on %.1f%%, %d row(s) dropped as impossible, " *
+                "goals-pillar effective N %.1f\n\n",
+            length(sn5_fs.data[:dates]), 100 * sn5_free_raw.coverage, sn5_n_bad, sn5_eff_N)
     println(io, "Pearson dispersion index D = mean((y-λ)²/λ) against the MARKET's λ.")
     println(io, "Poisson => D = 1.  NegBin => D = 1 + λ/r.  p = P(χ²_n ≥ nD).\n")
-    for (nm, s) in (("home", sn5_free.home), ("away", sn5_free.away), ("both", sn5_free.both))
-        @printf(io, "  %-5s n %4d   D %.4f   D_weighted %.4f   p %.4f   calib %.4f   r̂_mom %s\n",
-                nm, s.n, s.D, s.D_w, s.p, s.calib,
-                isinf(s.r_mom) ? "Inf (at/below Poisson)" : @sprintf("%.1f", s.r_mom))
+    for (tag, blk) in (("GATED (0.2 <= λ <= 5)", sn5_free), ("RAW (all present)", sn5_free_raw))
+        println(io, "  ", tag)
+        for (nm, s) in (("home", blk.home), ("away", blk.away), ("both", blk.both))
+            @printf(io, "    %-5s n %4d   D %.4f   D_weighted %.4f   p %.4f   calib %.4f   r̂_mom %s\n",
+                    nm, s.n, s.D, s.D_w, s.p, s.calib,
+                    isinf(s.r_mom) ? "Inf (at/below Poisson)" : @sprintf("%.1f", s.r_mom))
+        end
     end
-    @printf(io, "\n  marginal V/M on the same rows: %.4f  (upper bound on the conditional D)\n",
+    @printf(io, "\n  marginal V/M on the gated rows: %.4f  (upper bound on the conditional D)\n",
             sn5_free.marg_VM)
     println(io, "\n  calib = mean(y)/mean(λ); far from 1.00 means the market λ is biased and D is " *
-                "not a clean dispersion test.")
+                "not a clean dispersion test. Compare RAW vs GATED calib to see the contamination.")
 end
 
 # ===================================================================
