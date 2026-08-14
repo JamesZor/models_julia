@@ -235,13 +235,15 @@ now applies a `0.2 ≤ λ ≤ 5.0` gate and reports raw and gated side by side.
 
 Two things worth carrying out of this stream regardless of the NegBin question:
 
-- **these rows feed the production supremacy pillar.** `l01` takes `log(λ_market)`, so λ = 357.15
-  enters as +5.88 against a typical +0.41, and the pillar pulls at weight 0.4. It is 1.1% of the
-  covered rows on 718, but it is a live input to the shipped engine, not just to this diagnostic.
-- **718's market coverage is 55.8%** (276 of 495 rows) against 79's **100%** (494 of 494). The
-  anchoring pillars are therefore silent on nearly half of 718's history.
-
-Neither was on this stream's agenda; both are logged here rather than lost.
+- ~~these rows feed the production supremacy pillar.~~ **Wrong — corrected 2026-08-14.** Both
+  `l01` (line 274) and the shipped `outfield_xg_smile_double_poisson.jl` (line 201) already gate
+  the market pillar with `_mok(x) = 0.02 < x < 20.0`, and the comment there names the λ ≈ 357 case
+  explicitly. All three rows are masked out of the supremacy and smile pillars. The contamination
+  is real in the *feature set* and it broke the r05 dispersion index, which reads the raw column —
+  but it never reached the likelihood, in this engine or in production.
+- **718's market coverage is 55.2%** (273 of 495 rows pass the engine's own `_mok` gate) against
+  79's **100%** (494 of 494). The anchoring pillars are silent on nearly half of 718's history.
+  This one stands, and it is the better explanation for 718's behaviour in r06 below.
 
 ### The redirection this implies
 
@@ -271,3 +273,97 @@ The extra warmup and chains materially improved convergence over r03: max R-hat 
 (warmup 800, 4–6 chains) against 1.022 there (warmup 250, 4 chains), with `disp.log_r` at R-hat
 ≈ 1.000 and ESS 1947–3351 on every rung. The clamp-plateau contamination guarded against in r04's
 header did not materialise (0.1% of draws at the clamp on rung B, 0 elsewhere).
+
+---
+
+## r06 — the λ-spread diagnostic: the premise was wrong (2026-08-14)
+
+Zero new sampling. r04's and r05's chains were still bound in the session, so both halves of this
+ran off work already paid for. `r06_lambda_spread.jl`; preconditions in its header.
+
+### Which priors are actually binding?
+
+A prior is only worth loosening if it is **both** tight (`ratio = post_sd/prior_sd → 1`) **and**
+pushing (`shift = (post_m − prior_m)/prior_sd` large). Rung C (flat dispersion), 6 chains:
+
+| param | prior | 79 ratio | 79 shift | 718 ratio | 718 shift |
+|---|---|---|---|---|---|
+| `p_dyn.w_Outfield_att` | N(0.08, 0.05) | 0.29 | +0.11 | 0.41 | +0.20 |
+| `p_dyn.w_Outfield_def` | N(−0.08, 0.05) | 0.29 | −0.20 | 0.37 | +0.31 |
+| `p_dyn.w_G_att` | N(0, 0.2) | 0.29 | −0.34 | 0.55 | −0.86 |
+| `ha.γ_base` | N(0.2, 0.2) | 0.25 | +0.18 | 0.37 | +0.44 |
+| `ha.σ_γ` | half-N(0.1) | 0.34 | **−0.87** | 0.87 | +0.06 |
+| `kap.κ_base` | tN(1.0, 0.2) | 0.61 | **−1.78** | 0.60 | **−1.95** |
+| `kap.σ_κ` | half-N(0.1) | 0.60 | **+1.00** | 0.81 | −0.23 |
+| `σ_sup` | tN(0.10, 0.10) | 0.42 | **+2.68** | 0.53 | **+2.62** |
+| `σ_smile` | tN(0.15, 0.10) | 0.06 | −0.88 | 0.52 | +0.17 |
+
+**The player-weight priors are not binding.** `w_Outfield_att` posts 0.086 ± 0.014 (79) and
+0.090 ± 0.020 (718) against a prior sd of 0.05 — the likelihood is 2.5–3.5× tighter than the
+prior and lands within a fifth of a prior-sd of its mean. Widening N(0.08, 0.05) to N(0.08, 0.15)
+would move the posterior essentially nowhere. Same for `ha.σ_γ`, which on 79 is pulled *down*
+0.87 prior-sd (0.027 ± 0.020 against a prior mean of 0.080): the data wants **less** team-varying
+home advantage, so loosening that prior shrinks it further.
+
+**What is binding is elsewhere.** `σ_sup` sits **+2.7 and +2.6 prior-sd** above its prior mean in
+both leagues — by far the largest prior–data conflict in the engine. The prior is centred at 0.10
+and the data wants ≈ 0.365; it is trying to force a tighter market anchor than the residuals
+support. `kap.κ_base` is dragged −1.8/−2.0 prior-sd below 1.0 in both leagues, and `kap.σ_κ` on
+79 is +1.0 prior-sd (the data wants more team-level rate spread than half-N(0.1) allows). Those
+three, not the player weights, are where the priors are doing work.
+
+### Is the spread actually too narrow?
+
+The bare ratio is not the test. A predictor correlating ρ with the truth **should** have
+sd = ρ·sd_truth — that is what shrinking by the right amount looks like. The diagnostic number is
+`over = sd_model / (ρ · sd_mkt)`.
+
+| | 79 sup | 79 tot | 718 sup | 718 tot |
+|---|---|---|---|---|
+| sd model | 0.288 | 0.065 | 0.390 | 0.090 |
+| sd market | 0.513 | 0.105 | 0.516 | 0.112 |
+| ratio | 0.56 | 0.62 | 0.76 | 0.81 |
+| **ρ** | 0.565 | 0.585 | 0.497 | **0.109** |
+| sd optimal | 0.290 | 0.061 | 0.257 | 0.012 |
+| **over** | **0.99** | **1.06** | **1.52** | **7.39** |
+
+**79 is shrunk almost exactly right on both quantities.** The apparent compression — 56% of the
+market's supremacy spread — is not a prior artefact. It is the correct response to a model that
+only achieves ρ ≈ 0.57. Widening priors would push `over` past 1 and cost calibration, which is
+precisely what WP10's `market_on = false` control measured when it removed the anchor entirely
+(log-loss +0.0069 on 79, +0.0024 on 718, both directions consistent).
+
+**718 has the opposite problem.** It is 1.5× over-spread on supremacy and **7.4× over-spread on
+totals against a correlation of 0.11** — it emits 81% of the market's total-goals variation while
+tracking essentially none of it. That is noise wearing the costume of conviction. It also prices
++18% more goals than the market on average (3.13 vs 2.64; 79 is +11%, 2.82 vs 2.55).
+
+The likeliest cause is the coverage gap corrected above: the anchoring pillars see 273 of 495
+rows on 718 (55.2%) against 494 of 494 on 79. Half of 718's history is fitted with no market
+pillar at all, and `σ_smile` reflects it — 0.062 and superbly determined on 79 (ratio 0.06),
+0.167 and barely moved off its prior on 718 (ratio 0.52).
+
+### Reading
+
+WP2's "1X2 dispersion is half the market's" is a real measurement, but **"the model needs more
+spread" does not follow from it**, and on this fold it is false. On 79 the spread is already
+optimal for the skill behind it; the deficit is ρ, not sd. On 718 the spread is already too wide
+for the skill behind it. Loosening priors would make 79 worse and 718 much worse.
+
+That kills the prior-widening programme for `p_dyn.*` and `ha.σ_γ` outright. What survives is not
+a spread question at all:
+
+1. **718's 55% market coverage** — the concrete, mechanical defect. Fix the feed before tuning
+   anything fitted on top of it.
+2. **`σ_sup`'s prior** — the one genuinely binding anchor prior, +2.7 prior-sd off. Worth
+   recentring on measured residual scale, but note the direction: a looser anchor is what the
+   data wants, and WP10 already showed a *removed* anchor costs accuracy. This is a calibration
+   fix, not a spread fix.
+3. **ρ itself** — the 60-day half-life at effective N ≈ 60 (r05) is the only one of the four
+   original candidates still standing, and it belongs to the skill question, not the spread one.
+
+### Correction carried from r05
+
+r05's claim that the contaminated `λ = 357` rows reach the production supremacy pillar was wrong.
+Both engines gate the market pillar at `0.02 < λ < 20.0` before it enters the likelihood. See the
+struck-through bullet above.
