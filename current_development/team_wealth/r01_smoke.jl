@@ -139,9 +139,9 @@ try
         season = [1, 1, 1, 1, 1]
     )
     extracted = PreGame.extract_parameters(model_cfg, mock_df, feature_set, chain)
-    tw_check(nrow(extracted) == 5, "extract_parameters produced valid predictions DataFrame")
-    tw_check(all(all.(isfinite, extracted.λ_h)), "λ_h predictions are finite and valid")
-    tw_check(all(all.(isfinite, extracted.λ_a)), "λ_a predictions are finite and valid")
+    tw_check(length(extracted) == 5, "extract_parameters produced valid predictions Dict")
+    tw_check(all(all.(isfinite, [r.λ_h for r in values(extracted)])), "λ_h predictions are finite and valid")
+    tw_check(all(all.(isfinite, [r.λ_a for r in values(extracted)])), "λ_a predictions are finite and valid")
 catch e
     @printf("  AD Compilation Error: %s\n", sprint(showerror, e))
     tw_check(false, "AutoReverseDiff failed")

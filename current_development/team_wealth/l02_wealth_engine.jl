@@ -272,62 +272,66 @@ function PreGame.extract_parameters(
     kap_mat  = PreGame.extract_kappa(chain, model.kappa_config, n_teams)
     p_dyn_nt = PreGame.extract_dynamics(chain, model.player_dynamics_config, "p_dyn", n_teams)
 
-    w_wealth_samples = :w_wealth in keys(chain) ? vec(Array(chain[:w_wealth])) : zeros(Float64, size(chain, 1) * size(chain, 3))
-
     n_samples = size(chain, 1) * size(chain, 3)
     base_r = hasproperty(model.player_ratings_feature.tracker, :prior_mean) ? model.player_ratings_feature.tracker.prior_mean : 6.0
 
+    w_wealth_samples = :w_wealth in keys(chain) ? vec(Array(chain[:w_wealth])) : zeros(Float64, n_samples)
+
+    # Global smile shape φ(K): [n_samples × nK]
     φ_mat = Matrix{Float64}(undef, n_samples, nK)
     for k in 1:nK
         sym = Symbol("log_φ[$k]")
         φ_mat[:, k] = (sym in keys(chain)) ? exp.(vec(Array(chain[sym]))) : ones(n_samples)
     end
 
-    n_rows = nrow(df)
-    result_df = DataFrame(
-        match_id = df.match_id,
-        λ_h      = Vector{Vector{Float64}}(undef, n_rows),
-        λ_a      = Vector{Vector{Float64}}(undef, n_rows),
-        λ_tot    = Vector{Vector{Float64}}(undef, n_rows),
-        φ        = [φ_mat for _ in 1:n_rows]
-    )
-
-    get_r(m_id, side, pos) = get(get(ratings_map, m_id, Dict()), (side, pos), base_r)
-
-    for i in 1:n_rows
-        row = df[i, :]
+    results = Dict{Int, NamedTuple}()
+    for row in eachrow(df)
         m_id = Int(row.match_id)
-        h_idx = team_map[row.home_team]
-        a_idx = team_map[row.away_team]
+        h_id = get(team_map, row.home_team, -1)
+        a_id = get(team_map, row.away_team, -1)
 
-        hG = get_r(m_id, "home", "G") - base_r
-        hO = (get_r(m_id, "home", "D") + get_r(m_id, "home", "M") + get_r(m_id, "home", "F")) - 10.0 * base_r
-        aG = get_r(m_id, "away", "G") - base_r
-        aO = (get_r(m_id, "away", "D") + get_r(m_id, "away", "M") + get_r(m_id, "away", "F")) - 10.0 * base_r
+        m_ratings = get(ratings_map, m_id, Dict())
+        h_G = get(m_ratings, ("home","G"), 0.0); h_D = get(m_ratings, ("home","D"), 0.0)
+        h_M = get(m_ratings, ("home","M"), 0.0); h_F = get(m_ratings, ("home","F"), 0.0)
+        a_G = get(m_ratings, ("away","G"), 0.0); a_D = get(m_ratings, ("away","D"), 0.0)
+        a_M = get(m_ratings, ("away","M"), 0.0); a_F = get(m_ratings, ("away","F"), 0.0)
 
-        att_h = (p_dyn_nt.w_G_att .* hG) .+ (p_dyn_nt.w_Outfield_att .* hO)
-        def_h = (p_dyn_nt.w_G_def .* hG) .+ (p_dyn_nt.w_Outfield_def .* hO)
-        att_a = (p_dyn_nt.w_G_att .* aG) .+ (p_dyn_nt.w_Outfield_att .* aO)
-        def_a = (p_dyn_nt.w_G_def .* aG) .+ (p_dyn_nt.w_Outfield_def .* aO)
+        h_G_c = h_G - base_r; h_O_c = (h_D + h_M + h_F) - (10.0 * base_r)
+        a_G_c = a_G - base_r; a_O_c = (a_D + a_M + a_F) - (10.0 * base_r)
 
-        ha_h = ha_mat[:, h_idx]
-        kap_h = kap_mat[:, h_idx]
-        kap_a = kap_mat[:, a_idx]
+        att_h = (p_dyn_nt.w_G_att .* h_G_c) .+ (p_dyn_nt.w_Outfield_att .* h_O_c)
+        def_h = (p_dyn_nt.w_G_def .* h_G_c) .+ (p_dyn_nt.w_Outfield_def .* h_O_c)
+        att_a = (p_dyn_nt.w_G_att .* a_G_c) .+ (p_dyn_nt.w_Outfield_att .* a_O_c)
+        def_a = (p_dyn_nt.w_G_def .* a_G_c) .+ (p_dyn_nt.w_Outfield_def .* a_O_c)
+
+        γ_h = h_id > 0 ? ha_mat[:, h_id] : zeros(n_samples)
+        κ_h = h_id > 0 ? kap_mat[:, h_id] : ones(n_samples)
+        κ_a = a_id > 0 ? kap_mat[:, a_id] : ones(n_samples)
+
+        s_idx = hasproperty(row, :season_idx) ? Int(row.season_idx) : n_seasons
+        m_idx = hasproperty(row, :month_idx) ? Int(row.month_idx) : 1
+        
+        μ_s = (s_idx <= size(inter_nt.μ_base, 2)) ? inter_nt.μ_base[:, s_idx] : inter_nt.μ_base[:, end]
+        δ_m = (hasproperty(inter_nt, :δ_month) && m_idx <= size(inter_nt.δ_month, 2)) ? inter_nt.δ_month[:, m_idx] : zeros(n_samples)
+        μ_v = μ_s .+ δ_m
 
         dw = get(wealth_map, m_id, 0.0)
         w_shift = w_wealth_samples .* dw
 
-        # Baseline linear predictors
-        log_λ_h = inter_nt.μ_base .+ ha_h .+ att_h .+ def_a .+ w_shift
-        log_λ_a = inter_nt.μ_base        .+ att_a .+ def_h .- w_shift
+        log_λ_h = clamp.(μ_v .+ γ_h .+ att_h .+ def_a .+ w_shift, -20.0, 20.0)
+        log_λ_a = clamp.(μ_v        .+ att_a .+ def_h .- w_shift, -20.0, 20.0)
 
-        λ_h = kap_h .* exp.(log_λ_h)
-        λ_a = kap_a .* exp.(log_λ_a)
+        λ_h = κ_h .* exp.(log_λ_h) .+ 1e-6
+        λ_a = κ_a .* exp.(log_λ_a) .+ 1e-6
 
-        result_df.λ_h[i]   = λ_h
-        result_df.λ_a[i]   = λ_a
-        result_df.λ_tot[i] = λ_h .+ λ_a
+        results[m_id] = (;
+            λ_h, λ_a,
+            λ_tot = λ_h .+ λ_a,
+            φ = φ_mat,
+            θ_1 = log.(λ_h), θ_2 = log.(λ_a), θ_3 = zeros(n_samples), ρ = zeros(n_samples),
+            true_xg_h = exp.(log_λ_h), true_xg_a = exp.(log_λ_a),
+        )
     end
 
-    return result_df
+    return results
 end
