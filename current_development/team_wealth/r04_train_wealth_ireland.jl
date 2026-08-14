@@ -51,7 +51,7 @@ function make_wealth_engine()
         kappa_config           = PreGame.HierarchicalTeamKappa(),
         player_ratings_feature = Features.PlayerRatingsFeature(
                                      Features.BayesianTracker(6.5, 1.0, 0.5, 0.01)),
-        team_wealth_feature    = Features.TeamWealthFeature(
+        team_wealth_feature    = TeamWealthFeature(
                                      wealth_weight_prior = Distributions.Truncated(Distributions.Normal(0.105, 0.05), 0.0, Inf)),
         market_feature_config  = Features.DoublePoissonMarketFeature(),
         smile_feature          = Features.MarketSmileFeature(Kmax = 4),
