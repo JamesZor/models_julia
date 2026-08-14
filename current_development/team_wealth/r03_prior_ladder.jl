@@ -27,6 +27,11 @@
 
 using BayesianFootball
 using DataFrames, Dates, Distributions, Statistics, Printf, Serialization
+using ThreadPinning
+
+# Pin OS threads to physical cores to avoid hyperthread collision
+pinthreads(:cores)
+println("ThreadPinning: $(Threads.nthreads()) threads pinned across physical cores.")
 
 include(joinpath(@__DIR__, "l01_wealth_data.jl"))
 include(joinpath(@__DIR__, "l02_wealth_engine.jl"))
