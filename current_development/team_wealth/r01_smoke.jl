@@ -161,16 +161,16 @@ tw_check(S isa Pred.SmileScoreMatrix, "compute_score_matrix returns Pred.SmileSc
 
 prob_1x2 = Pred.compute_market_probs(S, Pred.Market1X2())
 if prob_1x2 isa Dict
-    p_tot = prob_1x2[:home] .+ prob_1x2[:draw] .+ prob_1x2[:away]
-    tw_check(isapprox(p_tot[1], 1.0, atol=1e-5), "Market1X2 probabilities sum to 1.0")
+    p_tot = sum([v[1] for v in values(prob_1x2)])
+    tw_check(isapprox(p_tot, 1.0, atol=1e-5), "Market1X2 probabilities sum to 1.0")
 else
     tw_check(isapprox(sum(prob_1x2[1, :]), 1.0, atol=1e-5), "Market1X2 probabilities sum to 1.0")
 end
 
 prob_ou = Pred.compute_market_probs(S, Pred.MarketOverUnder(2.5))
 if prob_ou isa Dict
-    p_tot_ou = prob_ou[:over] .+ prob_ou[:under]
-    tw_check(isapprox(p_tot_ou[1], 1.0, atol=1e-5), "MarketOverUnder probabilities sum to 1.0")
+    p_tot_ou = sum([v[1] for v in values(prob_ou)])
+    tw_check(isapprox(p_tot_ou, 1.0, atol=1e-5), "MarketOverUnder probabilities sum to 1.0")
 else
     tw_check(isapprox(sum(prob_ou[1, :]), 1.0, atol=1e-5), "MarketOverUnder probabilities sum to 1.0")
 end

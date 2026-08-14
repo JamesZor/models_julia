@@ -280,7 +280,7 @@ function PreGame.extract_parameters(
     φ_mat = Matrix{Float64}(undef, n_samples, nK)
     for k in 1:nK
         sym = Symbol("log_φ[$k]")
-        φ_mat[:, k] = haskey(chain, sym) ? exp.(vec(Array(chain[sym]))) : ones(n_samples)
+        φ_mat[:, k] = (sym in keys(chain)) ? exp.(vec(Array(chain[sym]))) : ones(n_samples)
     end
 
     n_rows = nrow(df)
