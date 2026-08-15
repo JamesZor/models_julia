@@ -201,7 +201,7 @@ function PreGame.build_turing_model(
     a_G_c = get(F, :away_G_centered, zeros(Float64, n_matches))
     a_O_c = get(F, :away_O_centered, zeros(Float64, n_matches))
 
-    wealth_diff = get(F, :wealth_diff, zeros(Float64, n_matches))
+    wealth_diff = get(F, :flat_wealth_diff, get(F, :wealth_diff, zeros(Float64, n_matches)))
     pace_sum    = get(F, :pace_sum, zeros(Float64, n_matches))
 
     market_sup     = get(F, :market_supremacy, zeros(Float64, n_matches))

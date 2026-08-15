@@ -90,7 +90,7 @@ feature_set = Features.create_features(boundary, smoke_ds, model, :season)
 println("✓ Feature set built successfully:")
 println("  - Matches    : $(length(feature_set.data[:flat_home_ids]))")
 println("  - Teams      : $(feature_set.data[:n_teams])")
-println("  - Wealth diff: $(length(feature_set.data[:wealth_diff]))")
+println("  - Wealth diff: $(length(feature_set.data[:flat_wealth_diff]))")
 println("  - Pace sum   : $(length(feature_set.data[:pace_sum])) (mean = $(round(mean(feature_set.data[:pace_sum]), digits=4)))")
 
 # 5. Turing Model Instantiation & AD Tape Compilation
