@@ -74,7 +74,7 @@ end
 # 2. Training Task
 # ==============================================================================
 
-const TARGET_SEASONS = ["2024", "2025", "2026"]
+const TARGET_SEASONS = ["2025", "2026"]
 const DYNAMICS_COL   = :match_biweek
 const SAMPLES, WARMUP, CHAINS, MAX_DEPTH = 800, 300, 4, 10
 
