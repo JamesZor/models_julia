@@ -34,10 +34,10 @@ mkpath(OUT_DIR)
 
 banner(s) = (println("\n", "="^95); println(s); println("="^95))
 
-function find_newest_experiment(prefix::String)
-    dirs = filter(d -> startswith(basename(d), prefix),
+function find_newest_experiment(pattern::Regex)
+    dirs = filter(d -> occursin(pattern, basename(d)),
                   [joinpath(ENGINE_DIR, d) for d in readdir(ENGINE_DIR) if isdir(joinpath(ENGINE_DIR, d))])
-    isempty(dirs) && error("r09: No experiment matching prefix '$prefix' found in $ENGINE_DIR")
+    isempty(dirs) && error("r09: No experiment matching pattern '$pattern' found in $ENGINE_DIR")
     sorted = sort(dirs, by = mtime, rev = true)
     return Experiments.load_experiment(sorted[1])
 end
@@ -47,10 +47,10 @@ banner("1. LOADING DATASTORE & EXPERIMENTS")
 const PIN_PATH = joinpath(ENGINE_DIR, "ds_ire79.jls")
 ds = isfile(PIN_PATH) ? deserialize(PIN_PATH) : Data.load_datastore_cached(Data.IrelandPremier())
 
-exp_noanchor       = find_newest_experiment("l2_ire79_noanchor")
-exp_wealth         = find_newest_experiment("l2_ire79_wealth")
-exp_anchored       = find_newest_experiment("l2_ire79_sup40_sw40")
-exp_wealth_anchor  = find_newest_experiment("l2_ire79_wealth_sup40_sw40")
+exp_noanchor       = find_newest_experiment(r"^l2_ire79_noanchor_\d+")
+exp_wealth         = find_newest_experiment(r"^l2_ire79_wealth_\d+")
+exp_anchored       = find_newest_experiment(r"^l2_ire79_sup40_sw40_\d+")
+exp_wealth_anchor  = find_newest_experiment(r"^l2_ire79_wealth_sup40_sw40_\d+")
 
 experiments = [exp_noanchor, exp_wealth, exp_anchored, exp_wealth_anchor]
 

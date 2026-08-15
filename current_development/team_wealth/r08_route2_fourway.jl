@@ -39,10 +39,10 @@ shw(t, d; n = 30) = (println("\n", t);
 
 const WEALTH_METRICS = [BT.CumulativeWealth(), BT.SharpeRatio(), BT.CalmarRatio(), BT.SortinoRatio()]
 
-function find_newest_experiment(prefix::String)
-    dirs = filter(d -> startswith(basename(d), prefix),
+function find_newest_experiment(pattern::Regex)
+    dirs = filter(d -> occursin(pattern, basename(d)),
                   [joinpath(ENGINE_DIR, d) for d in readdir(ENGINE_DIR) if isdir(joinpath(ENGINE_DIR, d))])
-    isempty(dirs) && error("r08: No experiment matching prefix '$prefix' found in $ENGINE_DIR")
+    isempty(dirs) && error("r08: No experiment matching pattern '$pattern' found in $ENGINE_DIR")
     sorted = sort(dirs, by = mtime, rev = true)
     return EE.load_experiment(sorted[1])
 end
@@ -52,10 +52,10 @@ banner("4-WAY ROUTE 2 BENCHMARK: LOADING ENGINES")
 const PIN_PATH = joinpath(ENGINE_DIR, "ds_ire79.jls")
 ds = isfile(PIN_PATH) ? deserialize(PIN_PATH) : DD.load_datastore_cached(DD.IrelandPremier())
 
-exp_noanchor       = find_newest_experiment("l2_ire79_noanchor")
-exp_wealth         = find_newest_experiment("l2_ire79_wealth")
-exp_anchored       = find_newest_experiment("l2_ire79_sup40_sw40")
-exp_wealth_anchor  = find_newest_experiment("l2_ire79_wealth_sup40_sw40")
+exp_noanchor       = find_newest_experiment(r"^l2_ire79_noanchor_\d+")
+exp_wealth         = find_newest_experiment(r"^l2_ire79_wealth_\d+")
+exp_anchored       = find_newest_experiment(r"^l2_ire79_sup40_sw40_\d+")
+exp_wealth_anchor  = find_newest_experiment(r"^l2_ire79_wealth_sup40_sw40_\d+")
 
 println("✓ Loaded DataStore (Ireland 79, $(nrow(ds.matches)) matches)")
 println("✓ Loaded [1] Baseline Unanchored      : $(exp_noanchor.config.name)")
