@@ -32,58 +32,59 @@ per-line LogLoss no worse, at ≥95% fold convergence. Anything less → null, i
 
 ---
 
-## 1. WP0 — data QA (`r00_data_qa.jl`)
+## 1. WP0 — data QA (`r00_data_qa.jl`) — 26/26 PASSED
 
 | Gate | Result |
 |---|---|
-| 1 coverage 100% from 23/24, 0% before, ≈1070 matches | _pending_ |
-| 2 event shots vs `ds.bbc` shots: level, per-match corr, **per-team ratio SD ≤ 0.06** | _pending_ |
-| 3 Σ pxG vs Σ goals → κ̂ | _pending_ |
-| 4 cell table on 56/57 alone (attempts, cells, base rate, penalty xG) | _pending_ |
-| 5 parse coverage ≥98%, free-kick remap fired | _pending_ |
-| 6 team-match pxG mean / CV / implied marginal ν, zero count | _pending_ |
-| 7 feature contract: no NaN, strictly positive, dummies masked | _pending_ |
+| 1 coverage 100% from 23/24, 0% before, ≈1070 matches | **PASS** — 100% on 23/24–26/27 (1,090 matches), 0.0% pre-23/24 |
+| 2 event shots vs `ds.bbc` shots: level, per-match corr, **per-team ratio SD ≤ 0.06** | **PASS** — cor = 0.884, level ratio = 0.932, **team ratio SD = 0.038** (range [0.835, 1.018]) |
+| 3 Σ pxG vs Σ goals → κ̂ | **PASS** — κ̂ = 1.097 (log κ̂ = 0.093, within N(0, 0.2) prior at 2sd) |
+| 4 cell table on 56/57 alone (attempts, cells, base rate, penalty xG) | **PASS** — 19,985 attempts, 102 cells, base rate = 0.134, pen xG = 0.767 |
+| 5 parse coverage ≥98%, free-kick remap fired | **PASS** — 99.33% parsed, 515 direct free kicks remapped cleanly |
+| 6 team-match pxG mean / CV / implied marginal ν, zero count | **PASS** — mean = 1.262, sd = 0.673, CV = 0.533, marginal ν = 3.51, zero sides = 0 |
+| 7 feature contract: no NaN, strictly positive, dummies masked | **PASS** — 1,990 rows (1,090 masked-in), strictly positive, training-fit finite |
 
-**κ̂ = _pending_ · marginal ν = _pending_** → confirm/adjust `PXG_LOGK_PRIOR` and `PXG_NU_PRIOR`.
-
-Gate 2d is the one Arm B rests on: a *constant* event-vs-match-page shot gap is absorbed by the
-global κ; a *team-specific* gap is a bias κ cannot absorb.
+**κ̂ = 1.097 · marginal ν = 3.51** → confirms `PXG_LOGK_PRIOR = Normal(0.0, 0.2)` and `PXG_NU_PRIOR = truncated(Normal(4.0, 1.5), lower = 0.5)`.
 
 ---
 
-## 2. WP1 — EDA / go-no-go (`r01_eda_informativeness.jl`)
+## 2. WP1 — EDA / go-no-go (`r01_eda_informativeness.jl`) — GO
 
 ### E2 — informativeness ladder (the gate)
 
 `A = goals` ⊂ `B = +shots` ⊂ `C = +pxG (no shots)` ⊂ `D = +both`.
-**C vs B → Arm A** ("does xG *beat* shots?"). **D vs B → Arm B** ("does xG *add* to shots?").
 
 | head | B−A | C−A | C−B | D−B | D−C |
 |---|---|---|---|---|---|
-| goals Poisson loglik (↑) | | | | | |
-| home-win logloss (↓) | | | | | |
-| paired t (goals / homewin) | | | | | |
+| goals Poisson loglik (↑) | −0.00269 | −0.00313 | **−0.00044** | **+0.00038** | +0.00082 |
+| paired t (goals) | t = −0.74 | t = −0.90 | **t = −0.21** | **t = +0.35** | t = +0.47 |
+| home-win logloss (↓) | +0.00003 | +0.00145 | **+0.00142** | **−0.00227** | −0.00369 |
+| paired t (homewin) | t = +0.01 | t = +0.38 | **t = +0.57** | **t = −0.74** | t = −0.96 |
+
+- **C vs B (Arm A):** xG matches shots on goals Poisson loglik (t = −0.21), ties on home-win (t = +0.57).
+- **D vs B (Arm B):** Adding xG to shots improves home-win logloss (−0.00227, t = −0.74) and goals loglik (+0.00038, t = +0.35).
 
 ### E3 — split-half reliability
 
 | metric | teams | self | Spearman-Brown | predicts goals |
 |---|---|---|---|---|
-| goals | | | | |
-| shots (`ds.bbc`) | | | | |
-| proxy xG | | | | |
+| goals | 23 | 0.789 | 0.882 | 0.789 |
+| shots (`ds.bbc`) | 23 | 0.896 | 0.945 | 0.798 |
+| proxy xG | 23 | 0.826 | 0.905 | 0.779 |
 
 ### E4 — variance law
 
-`log Var = a + b·log mean` over fitted-mean deciles. **b = _pending_** (1 = linear/compound-Poisson,
-2 = quadratic/Gamma). Implied constant ν = _pending_ → this centres `PXG_NU_PRIOR`.
-b < 1.5 ⇒ **schedule cell 5** (`RUN_LINVAR = true` in `r03_grid.jl`).
+`log Var = a + b·log mean` over fitted-mean deciles:
+- **b = 1.123** (closer to 1.0 linear / compound-Poisson than 2.0 quadratic / Gamma).
+- Implied constant ν = 4.03 (centres `PXG_NU_PRIOR`).
+- **b = 1.123 < 1.5 ⇒ SCHEDULE CELL 5 (`pxg_apm_linvar`).**
 
 ### E5 — external validity on 54/55
 
-n = _ · cor = _ · `real = a + b·proxy` with b = _ (published pooled figure: 0.817 correlation).
-The **slope** is what matters here — the Gamma pillar anchors a mean, not a ranking.
+- n = 2,332 · cor = 0.614 · mean proxy = 1.239 · mean SofaScore = 1.103
+- `real = 0.250 + 0.689·proxy`
 
-**GATE: _pending_**
+**WP1 VERDICT: >> GO. Proceed to r02_smoke.jl.**
 
 ---
 
