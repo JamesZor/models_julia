@@ -52,9 +52,9 @@ function extract_oos_predictions(ds::Data.DataStore, exp_results::ExperimentResu
     results_array = exp_results.training_results.items
     n_splits = length(results_array)
 
-    # 2. Extract
+    # 2. Extract (Multi-threaded across splits)
     split_dfs = Vector{DataFrame}(undef, n_splits)
-    @showprogress for i in 1:n_splits
+    Threads.@threads for i in 1:n_splits
         split_dfs[i] = _process_split(
             ds, 
             config.model, 
