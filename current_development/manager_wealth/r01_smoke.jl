@@ -134,7 +134,8 @@ println("\n" * "="^80)
 println("6. CONVERGENCE & PARAMETER CHECKS")
 println("="^80)
 
-println(chain[[:w_wealth, Symbol("mgr_pace.σ_pace"), Symbol("mgr_qual.σ_mgr"), Symbol("ha.σ_γ"), Symbol("kap.σ_κ")]])
+summary_df = describe(chain[[:w_wealth, Symbol("mgr_pace.σ_pace"), Symbol("mgr_qual.σ_mgr"), Symbol("ha.σ_γ"), Symbol("kap.σ_κ")]])[1]
+println(summary_df)
 
 # 8. Test Parameter Extraction & Prediction Pipeline
 println("\n" * "="^80)
@@ -148,7 +149,7 @@ first_match = first(smoke_matches)
 first_params = param_dict[first_match.match_id]
 score_matrix = Pred.compute_score_matrix(model, first_params; max_goals=12)
 
-prob_grid = score_matrix.matrix.matrix # 12 x 12 x n_samples
+prob_grid = score_matrix.grid.matrix # 12 x 12 x n_samples
 prob_sums = vec(sum(prob_grid, dims=(1, 2)))
 println("✓ Probabilities sum test: Mean = $(mean(prob_sums)), Min = $(minimum(prob_sums)), Max = $(maximum(prob_sums))")
 @assert all(abs.(prob_sums .- 1.0) .< 1e-5) "Score probabilities do not sum to 1.0!"
