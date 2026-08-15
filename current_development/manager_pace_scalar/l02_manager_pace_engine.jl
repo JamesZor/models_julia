@@ -34,7 +34,7 @@ include(joinpath(@__DIR__, "l01_manager_pace_data.jl"))
 
 Base.@kwdef struct DynamicSmileDoublePoissonXGWealthManagerPaceModel{
     I, P, D, H, K, PR, W, MP, MF, SM, WP
-} <: PreGame.AbstractDoublePoissonPlayerModels
+} <: PreGame.AbstractTimeDecayPlayerModel
     interception_config::I    = PreGame.HierarchicalMonthlyInterception()
     player_dynamics_config::P = PreGame.OutfieldPlayerDynamicsConfig(days_half_life = 60.0)
     dispersion_config::D      = PreGame.HomeAwayDispersion()
