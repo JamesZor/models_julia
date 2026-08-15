@@ -73,12 +73,15 @@ println("="^80)
 # Fast slice of matches for rapid smoke testing (first 150 matches)
 smoke_matches = first(ds.matches, 150)
 smoke_ds = Data.DataStore(
+    ds.segment,
     smoke_matches,
-    filter(r -> r.match_id in smoke_matches.match_id, ds.odds),
-    filter(r -> r.match_id in smoke_matches.match_id, ds.betfair_odds),
     filter(r -> r.match_id in smoke_matches.match_id, ds.statistics),
+    filter(r -> r.match_id in smoke_matches.match_id, ds.odds),
     filter(r -> r.match_id in smoke_matches.match_id, ds.lineups),
-    filter(r -> r.match_id in smoke_matches.match_id, ds.incidents)
+    filter(r -> r.match_id in smoke_matches.match_id, ds.incidents),
+    filter(r -> r.match_id in smoke_matches.match_id, ds.betfair_odds),
+    ds.bbc,
+    ds.bbc_events
 )
 
 feature_set = Features.build_feature_set(model, smoke_ds)
