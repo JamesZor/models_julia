@@ -19,6 +19,8 @@ using Distributions
 using DataFrames
 using Serialization
 using Printf
+using ThreadPinning
+pinthreads(:cores)
 
 const PreGame     = BayesianFootball.Models.PreGame
 const Features    = BayesianFootball.Features
