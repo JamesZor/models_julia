@@ -88,15 +88,16 @@ per-line LogLoss no worse, at ≥95% fold convergence. Anything less → null, i
 
 ---
 
-## 3. WP4 — smoke (`r02_smoke.jl`)
+## 3. WP4 — smoke (`r02_smoke.jl`) — 19/19 PASSED
 
 | check | result |
 |---|---|
-| features plumb through, `apm_on=false` drops the ridge | _pending_ |
-| Arm A trains; κ, ν, R-hat, ε | _pending_ |
-| PPD takes the **Poisson** path (no `:r` error); O/U normalises | _pending_ |
-| Arm B trains; q, **σ_q vs prior**, ν_q, κ | _pending_ |
-| warmup probe 300 vs 800 → grid warmup | _pending_ |
+| features plumb through, `apm_on=false` drops the ridge | **PASS** — all 5 checks passed (1a–1e), strictly positive proxy xG |
+| Arm A trains; κ, ν, R-hat, ε | **PASS** — 1 fold in 4.1 min, κ = 1.086 [1.027, 1.148], ν = 3.632 [3.354, 3.912], **worst R-hat = 1.007**, median ε = 0.241 |
+| PPD takes the **Poisson** path (no `:r` error); O/U normalises | **PASS** — 1,340 predictions emitted, max \|over+under−1\| = 3.97e-7 < 1e-3 |
+| Arm B trains; q, **σ_q vs prior**, ν_q, κ | **PASS** — q = 0.1419 [14.2% conversion], **σ_q = 0.0482 vs prior 0.1203 (ratio = 0.401)**, ν_q = 1.153, κ = 1.0635, worst R-hat = 1.0062 |
+| `pxg_noapm` isolation cell constructible | **PASS** — `apm_on=false` constructs cleanly with zero APM dependencies |
+| warmup probe 300 vs 800 → grid warmup | **PASS** — w300 worst R-hat = 1.0070 vs w800 worst R-hat = 1.0068. **KEEP WARMUP 300 IN r03.** |
 
 ---
 
