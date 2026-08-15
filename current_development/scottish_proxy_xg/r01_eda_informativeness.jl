@@ -224,7 +224,7 @@ println("""
 function split_half(df, col; min_matches::Int = 30)
     rows = NamedTuple[]
     for g in groupby(sort(df, [:kickoff, :match_id]), :team)
-        gg = dropmissing(g, [col, :goals])
+        gg = dropmissing(g, unique([col, :goals]))
         nrow(gg) < min_matches && continue
         odd  = 1:2:nrow(gg); even = 2:2:nrow(gg)
         push!(rows, (team = gg.team[1], n = nrow(gg),
