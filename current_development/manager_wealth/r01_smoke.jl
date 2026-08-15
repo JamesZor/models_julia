@@ -115,11 +115,16 @@ println("\n" * "="^80)
 println("5. FAST NUTS SAMPLING (100 samples, 4 chains)")
 println("="^80)
 
-Turing.setadbackend(:reversediff)
-Turing.setrdcache(true)
-
 sampler = NUTS(50, 0.65)
-chain = sample(turing_model, sampler, MCMCThreads(), 100, 4; progress=true)
+chain = sample(
+    turing_model,
+    sampler,
+    MCMCThreads(),
+    100,
+    4;
+    progress = true,
+    adtype = AutoReverseDiff(compile = true)
+)
 println("✓ Sampling complete!")
 
 # 7. Check Sampled Values for Key Hierarchical Parameters
