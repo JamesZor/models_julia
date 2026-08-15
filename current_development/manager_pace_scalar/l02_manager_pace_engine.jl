@@ -56,16 +56,18 @@ end
 const DynamicSmileDoublePoissonXGWealthManagerPacePlayerTimeDecayModel = DynamicSmileDoublePoissonXGWealthManagerPaceModel
 
 function Features.required_features(model::DynamicSmileDoublePoissonXGWealthManagerPaceModel)
-    return [
-        model.interception_config,
-        model.dispersion_config,
-        model.homeadvantage_config,
-        model.kappa_config,
+    return Features.AbstractFeatureConfig[
+        Features.TeamIDsFeature(),
+        Features.GoalsFeature(),
+        Features.DatesFeature(),
+        Features.MonthFeature(),
+        Features.XGFeature(),
+        model.market_feature_config,
+        model.smile_feature,
         model.player_ratings_feature,
         model.wealth_feature,
         model.manager_pace_feature,
-        model.market_feature_config,
-        model.smile_feature
+        Features.TimeIndicesFeature()
     ]
 end
 
