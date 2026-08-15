@@ -152,8 +152,8 @@ _mark("3e. step size healthy (eps > 1e-3) — the r07 spurious-basin signature i
 println("\n", "="^68, "\nCHECK 4 — PPD end-to-end (the `:r` NegBin gotcha)\n", "="^68)
 ok_ppd = false; ok_norm = false; worst_norm = NaN
 try
-    ppd = Predictions.model_inference(ds, resA)
-    ok_ppd = ppd isa Predictions.PPD && nrow(ppd) > 0
+    global ppd = Predictions.model_inference(ds, resA)
+    global ok_ppd = ppd isa Predictions.PPD && nrow(ppd) > 0
     latents = Experiments.extract_oos_predictions(ds, resA)
     devs = Float64[]
     for row in first(eachrow(latents.df), 25)
@@ -162,8 +162,8 @@ try
         p = Predictions.compute_market_probs(S, mkt)
         push!(devs, abs(mean(p[o.over]) + mean(p[o.under]) - 1.0))
     end
-    worst_norm = isempty(devs) ? NaN : maximum(devs)
-    ok_norm = !isnan(worst_norm) && worst_norm < 1e-3
+    global worst_norm = isempty(devs) ? NaN : maximum(devs)
+    global ok_norm = !isnan(worst_norm) && worst_norm < 1e-3
 catch e
     @error "PPD phase failed" exception = (e, catch_backtrace())
 end
@@ -203,10 +203,10 @@ println("\n", "="^68, "\nCHECK 6 — pxg_noapm isolation cell\n", "="^68)
 ok6 = false
 try
     fs = Features.create_features(ds, mA0, collect(Int.(ds.matches.match_id)))
-    ok6 = fs isa Features.FeatureSet
+    global ok6 = fs isa Features.FeatureSet
 catch e
     try   # signature differs across versions; the point is only that the pillar-off path builds
-        ok6 = !any(f -> f isa Features.AbstractPlusMinusFeature, Features.required_features(mA0))
+        global ok6 = !any(f -> f isa Features.AbstractPlusMinusFeature, Features.required_features(mA0))
     catch
     end
 end
