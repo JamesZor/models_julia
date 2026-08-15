@@ -1,5 +1,5 @@
 using BayesianFootball
-using DataFrames, Dates, Distributions, Statistics, Printf, Serialization
+using DataFrames, Dates, Distributions, Statistics, Printf, Serialization, Turing, ReverseDiff
 
 include("l01_manager_pace_data.jl")
 include("l02_manager_pace_engine.jl")
@@ -36,28 +36,34 @@ function make_manager_pace_scalar_engine()
 end
 
 model = make_manager_pace_scalar_engine()
-task = Experiments.create_experiment_task(
-    ds, model, "test_split", OUT_DIR;
-    target_seasons        = ["2025", "2026"],
-    history_seasons       = 2,
-    warmup_period         = 0,
-    dynamics_col          = :match_biweek,
-    samples               = 50,
-    warmup                = 20,
-    chains                = 2,
-    use_queue             = true,
-    max_concurrent_tasks  = 2,
+cv_config = Data.GroupedCVConfig(
+    tournament_groups = [Data.tournament_ids(ds.segment)],
+    target_seasons    = ["2025", "2026"],
+    history_seasons   = 2,
+    dynamics_col      = :match_biweek,
+    warmup_period     = 0,
+    stop_early        = false
 )
+splits = Data.create_id_boundaries(ds, cv_config)
+println("Split 1: ", length(splits[1][1].history_match_ids), " train, ", length(splits[1][1].target_match_ids), " test")
 
-println("Running test task...")
+b, meta = splits[1]
+fset = Features.create_features(b, ds, model, :match_biweek)
+println("Built features. Building turing model...")
+turing_mod = PreGame.build_turing_model(model, fset)
+
+println("Testing sample with AutoReverseDiff...")
 try
-    res = Experiments.run_experiment(task)
-    println("Completed! Splits saved: ", length(res.training_results.items))
-    if length(res.training_results.items) > 0 && !isnothing(res.training_results.items[1])
-        println("Split 1 item type: ", typeof(res.training_results.items[1]))
-    else
-        println("Split 1 item is NOTHING!")
-    end
+    ch = sample(
+        turing_mod,
+        NUTS(20, 0.65),
+        20;
+        progress = false,
+        adtype = AutoReverseDiff(compile=true),
+        initial_params = Turing.InitFromUniform(-2.0, 2.0)
+    )
+    println("SUCCESS! Chain: ", size(ch))
 catch e
-    @error "Task failed" exception=(e, catch_backtrace())
+    println("\n!!! EXCEPTION CAUGHT !!!")
+    println(sprint(showerror, e, catch_backtrace()))
 end
