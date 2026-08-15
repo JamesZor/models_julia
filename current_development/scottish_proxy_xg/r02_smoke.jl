@@ -82,7 +82,8 @@ function _train(model, name; warmup = WARMUP)
         target_seasons  = [TARGET], history_seasons = HS,
         warmup_period   = WARMUP_PERIOD, dynamics_col = :match_biweek,
         samples = SAMPLES, warmup = warmup, chains = CHAINS,
-        use_queue = true, max_depth = 10)
+        use_queue = true, max_depth = 10,
+        max_concurrent_tasks = 8)
     t0 = time()
     res = Experiments.run_experiment(task)
     Experiments.save_experiment(res)
