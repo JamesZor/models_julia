@@ -265,29 +265,32 @@ function PreGame.extract_parameters(
 )
     F = feature_set.data
     n_samples = size(chain, 1) * size(chain, 3)
-    team_map  = feature_set.metadata[:team_map]
+    n_teams   = Int(F[:n_teams])
+    n_seasons = Int(F[:n_seasons])
+    team_map  = F[:team_map]
 
-    inter_nt = PreGame.extract_interception(model.interception_config, chain, feature_set)
-    ha_mat   = PreGame.extract_home_advantage(model.homeadvantage_config, chain, feature_set)
-    kap_mat  = PreGame.extract_kappa(model.kappa_config, chain, feature_set)
-    p_dyn_nt = PreGame.extract_player_dynamics(model.player_dynamics_config, chain, feature_set)
+    inter_nt = PreGame.extract_interception(chain, model.interception_config, n_seasons)
+    ha_mat   = PreGame.extract_home_advantage(chain, model.homeadvantage_config, n_teams)
+    kap_mat  = PreGame.extract_kappa(chain, model.kappa_config, n_teams)
+    p_dyn_nt = PreGame.extract_dynamics(chain, model.player_dynamics_config, "p_dyn", n_teams)
 
     # Global slopes
-    w_wealth_samples = haskey(chain, :w_wealth) ? vec(Array(chain[:w_wealth])) : fill(0.105, n_samples)
-    w_pace_samples   = haskey(chain, :w_pace) ? vec(Array(chain[:w_pace])) : fill(0.05, n_samples)
+    w_wealth_samples = :w_wealth in keys(chain) ? vec(Array(chain[:w_wealth])) : fill(0.105, n_samples)
+    w_pace_samples   = :w_pace in keys(chain) ? vec(Array(chain[:w_pace])) : fill(0.05, n_samples)
 
-    φ_mat = if haskey(chain, :log_φ)
-        exp.(Array(chain[:log_φ]))
-    else
-        ones(n_samples, 4)
+    nK = haskey(F, :smile_Kmax) ? Int(F[:smile_Kmax]) + 1 : 4
+    φ_mat = Matrix{Float64}(undef, n_samples, nK)
+    for k in 1:nK
+        sym = Symbol("log_φ[$k]")
+        φ_mat[:, k] = (sym in keys(chain)) ? exp.(vec(Array(chain[sym]))) : ones(n_samples)
     end
 
-    ratings_map    = get(F, :match_ratings, Dict())
-    wealth_map     = get(F, :match_wealth_diff, Dict())
-    manager_z_map  = get(F, :manager_z_map, Dict())
-    match_managers = get(F, :match_managers, Dict())
+    ratings_map    = get(F, :player_ratings_map, Dict())
+    wealth_map     = get(F, :wealth_lookup_map, Dict{Int, Float64}())
+    manager_z_map  = get(F, :manager_z_map, Dict{String, Float64}())
+    match_managers = get(F, :match_managers, Dict{Int, Tuple{String, String}}())
     fallback_mgr   = get(F, :fallback_manager, "Unknown Manager")
-    base_r         = 6.0
+    base_r         = hasproperty(model.player_ratings_feature.tracker, :prior_mean) ? model.player_ratings_feature.tracker.prior_mean : 6.0
 
     n_seasons = size(inter_nt.μ_base, 2)
     results = Dict{Int, Any}()
