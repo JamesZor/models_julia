@@ -45,7 +45,7 @@ _r(x, d = 4) = (x isa Number && isnan(x)) ? NaN : round(x, digits = d)
 println("[INFO] Loading ScottishLower DataStore...")
 ds = Data.load_datastore_cached(Data.ScottishLower())
 save_dir = joinpath(ROOT, "data/scottish_pxg_smoke/"); mkpath(save_dir)
-TARGET = last(sort(unique(String.(ds.matches.season))))
+TARGET = "25/26"
 println("[INFO] target season = $TARGET  (history = $HS seasons, fully covered)")
 
 dyn = PreGame.TimeDecayDynamics(days_half_life = HL)
