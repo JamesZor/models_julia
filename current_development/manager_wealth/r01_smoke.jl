@@ -84,7 +84,11 @@ smoke_ds = Data.DataStore(
     ds.bbc_events
 )
 
-feature_set = Features.build_feature_set(model, smoke_ds)
+boundary = Data.SplitBoundary(
+    Vector{Int}(smoke_matches.match_id[1:100]),
+    Vector{Int}(smoke_matches.match_id[101:150])
+)
+feature_set = Features.create_features(boundary, smoke_ds, model, :season)
 println("✓ Feature set built successfully:")
 println("  - Matches    : $(length(feature_set.data[:flat_home_ids]))")
 println("  - Teams      : $(feature_set.data[:n_teams])")
