@@ -134,8 +134,7 @@ println("\n" * "="^80)
 println("6. CONVERGENCE & PARAMETER CHECKS")
 println("="^80)
 
-summary_df = describe(chain[[:w_wealth, Symbol("mgr_pace.σ_pace"), Symbol("mgr_qual.σ_mgr"), Symbol("ha.σ_γ"), Symbol("kap.σ_κ")]])[1]
-println(summary_df)
+describe(chain[[:w_wealth, Symbol("mgr_pace.σ_pace"), Symbol("mgr_qual.σ_mgr"), Symbol("ha.σ_γ"), Symbol("kap.σ_κ")]])
 
 # 8. Test Parameter Extraction & Prediction Pipeline
 println("\n" * "="^80)
