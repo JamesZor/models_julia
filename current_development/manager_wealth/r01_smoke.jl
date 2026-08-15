@@ -85,6 +85,7 @@ smoke_ds = Data.DataStore(
 )
 
 boundary = Data.SplitBoundary(
+    1, 1,
     Vector{Int}(smoke_matches.match_id[1:100]),
     Vector{Int}(smoke_matches.match_id[101:150])
 )
