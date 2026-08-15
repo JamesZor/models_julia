@@ -1,5 +1,5 @@
 using BayesianFootball
-using DataFrames, Dates, Distributions, Statistics, Printf, Serialization, Turing, ReverseDiff
+using DataFrames, Dates, Distributions, Statistics, Printf, Serialization
 
 include("l01_manager_pace_data.jl")
 include("l02_manager_pace_engine.jl")
@@ -36,34 +36,23 @@ function make_manager_pace_scalar_engine()
 end
 
 model = make_manager_pace_scalar_engine()
-cv_config = Data.GroupedCVConfig(
-    tournament_groups = [Data.tournament_ids(ds.segment)],
-    target_seasons    = ["2025", "2026"],
-    history_seasons   = 2,
-    dynamics_col      = :match_biweek,
-    warmup_period     = 0,
-    stop_early        = false
+task = Experiments.create_experiment_task(
+    ds, model, "test_split", OUT_DIR;
+    target_seasons        = ["2025", "2026"],
+    history_seasons       = 2,
+    warmup_period         = 0,
+    dynamics_col          = :match_biweek,
+    samples               = 50,
+    warmup                = 20,
+    chains                = 2,
+    use_queue             = true,
+    max_concurrent_tasks  = 4,
 )
-splits = Data.create_id_boundaries(ds, cv_config)
-println("Split 1: ", length(splits[1][1].history_match_ids), " train, ", length(splits[1][1].target_match_ids), " test")
 
-b, meta = splits[1]
-fset = Features.create_features(b, ds, model, :match_biweek)
-println("Built features. Building turing model...")
-turing_mod = PreGame.build_turing_model(model, fset)
-
-println("Testing sample with AutoReverseDiff...")
-try
-    ch = sample(
-        turing_mod,
-        NUTS(20, 0.65),
-        20;
-        progress = false,
-        adtype = AutoReverseDiff(compile=true),
-        initial_params = Turing.InitFromUniform(-2.0, 2.0)
-    )
-    println("SUCCESS! Chain: ", size(ch))
-catch e
-    println("\n!!! EXCEPTION CAUGHT !!!")
-    println(sprint(showerror, e, catch_backtrace()))
+println("Running 2-split test...")
+res = Experiments.run_experiment(task)
+println("✓ Finished! Total splits in results: ", length(res.training_results.items))
+for (i, item) in enumerate(res.training_results.items)
+    println("  Split $i: $(typeof(item[1])) with $(size(item[1]))")
+    break
 end
