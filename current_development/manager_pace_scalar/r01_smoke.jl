@@ -129,7 +129,7 @@ println("\n" * "="^80)
 println("6. CONVERGENCE & PARAMETER CHECKS")
 println("="^80)
 
-describe(chain[[:w_wealth, :w_pace, :σ_γ, :σ_κ, :φ_h, :φ_a]])
+describe(chain[[:w_wealth, :w_pace, Symbol("ha.σ_γ"), Symbol("kap.σ_κ")]])
 
 # 8. Test Parameter Extraction & Prediction Pipeline
 println("\n" * "="^80)
