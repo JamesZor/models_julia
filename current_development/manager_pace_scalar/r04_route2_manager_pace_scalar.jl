@@ -160,40 +160,39 @@ shw("Out-of-Sample Accuracy & Skill Comparison:", acc_df)
 
 banner("2. OUT-OF-SAMPLE KELLY COMPOUNDING SIMULATION (SLATE DRAWDOWN)")
 
-pol_bind_1 = run_policy(arm1.st.books, PF.BindingSlateConstraint(); label = "1. Baseline Unanchored [Binding]", metrics = WEALTH_METRICS)
-pol_slak_1 = run_policy(arm1.st.books, PF.SlackSlateConstraint(); label = "1. Baseline Unanchored [Slack]", metrics = WEALTH_METRICS)
+function run_portfolio_suite(arm)
+    binding_policy = reference_policy(trust = PF.FlatTrust(0.25), risk = PF.SlateDrawdown(23.0), cap = PF.FixedCap(0.25))
+    slack_policy   = reference_policy(trust = PF.FlatTrust(0.25), risk = PF.NoRisk(), cap = PF.FixedCap(0.05))
+    
+    r_bind = run_policy(arm.books, binding_policy; label = "$(arm.label) [Binding Drawdown(23)]", metrics = WEALTH_METRICS)
+    r_slack = run_policy(arm.books, slack_policy; label = "$(arm.label) [Slack FixedCap(0.05)]", metrics = WEALTH_METRICS)
+    
+    return [
+        (arm = r_bind.label, slates = r_bind.n_slates, bets = r_bind.n_bets,
+         final = r_bind.final, roi = r_bind.roi, roi_lo = r_bind.roi_lo, roi_hi = r_bind.roi_hi,
+         growth = r_bind.growth, mdd = r_bind.mdd),
+        (arm = r_slack.label, slates = r_slack.n_slates, bets = r_slack.n_bets,
+         final = r_slack.final, roi = r_slack.roi, roi_lo = r_slack.roi_lo, roi_hi = r_slack.roi_hi,
+         growth = r_slack.growth, mdd = r_slack.mdd)
+    ]
+end
 
-pol_bind_2 = run_policy(arm2.st.books, PF.BindingSlateConstraint(); label = "2. Team Wealth Unanchored [Binding]", metrics = WEALTH_METRICS)
-pol_slak_2 = run_policy(arm2.st.books, PF.SlackSlateConstraint(); label = "2. Team Wealth Unanchored [Slack]", metrics = WEALTH_METRICS)
-
-pol_bind_3 = run_policy(arm3.st.books, PF.BindingSlateConstraint(); label = "3. Market Anchored (sup40) [Binding]", metrics = WEALTH_METRICS)
-pol_slak_3 = run_policy(arm3.st.books, PF.SlackSlateConstraint(); label = "3. Market Anchored (sup40) [Slack]", metrics = WEALTH_METRICS)
-
-pol_bind_4 = run_policy(arm4.st.books, PF.BindingSlateConstraint(); label = "4. Team Wealth + Anchored [Binding]", metrics = WEALTH_METRICS)
-pol_slak_4 = run_policy(arm4.st.books, PF.SlackSlateConstraint(); label = "4. Team Wealth + Anchored [Slack]", metrics = WEALTH_METRICS)
-
-pol_bind_5 = run_policy(arm5.st.books, PF.BindingSlateConstraint(); label = "5. Manager + Wealth (38-param) [Binding]", metrics = WEALTH_METRICS)
-pol_slak_5 = run_policy(arm5.st.books, PF.SlackSlateConstraint(); label = "5. Manager + Wealth (38-param) [Slack]", metrics = WEALTH_METRICS)
-
-pol_bind_6 = run_policy(arm6.st.books, PF.BindingSlateConstraint(); label = "6. Scalar Manager Pace (1-param) [Binding]", metrics = WEALTH_METRICS)
-pol_slak_6 = run_policy(arm6.st.books, PF.SlackSlateConstraint(); label = "6. Scalar Manager Pace (1-param) [Slack]", metrics = WEALTH_METRICS)
-
-all_policies = [
-    pol_bind_1, pol_slak_1,
-    pol_bind_2, pol_slak_2,
-    pol_bind_3, pol_slak_3,
-    pol_bind_4, pol_slak_4,
-    pol_bind_5, pol_slak_5,
-    pol_bind_6, pol_slak_6
-]
-
-port_comp = portfolio_comparison_table(all_policies)
-shw("Comparative Out-of-Sample Kelly Compounding Results:", port_comp; n = 40)
+port_rows = vcat(
+    run_portfolio_suite(arm1),
+    run_portfolio_suite(arm2),
+    run_portfolio_suite(arm3),
+    run_portfolio_suite(arm4),
+    run_portfolio_suite(arm5),
+    run_portfolio_suite(arm6)
+)
+port_df = DataFrame(port_rows)
+shw("Comparative Out-of-Sample Kelly Compounding Results:", port_df; n = 40)
 
 # Save artifact
 res_bundle = (;
+    disp_df,
     acc_df,
-    port_comp,
+    port_df,
     arm1 = (; frame = arm1.frame, st = arm1.st),
     arm2 = (; frame = arm2.frame, st = arm2.st),
     arm3 = (; frame = arm3.frame, st = arm3.st),
