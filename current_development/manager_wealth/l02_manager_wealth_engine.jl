@@ -338,10 +338,14 @@ function PreGame.extract_parameters(
         a_id = get(team_map, row.away_team, -1)
 
         m_ratings = get(ratings_map, m_id, Dict())
-        h_G = get(m_ratings, ("home","G"), 0.0); h_D = get(m_ratings, ("home","D"), 0.0)
-        h_M = get(m_ratings, ("home","M"), 0.0); h_F = get(m_ratings, ("home","F"), 0.0)
-        a_G = get(m_ratings, ("away","G"), 0.0); a_D = get(m_ratings, ("away","D"), 0.0)
-        a_M = get(m_ratings, ("away","M"), 0.0); a_F = get(m_ratings, ("away","F"), 0.0)
+        h_G = get(m_ratings, ("home","G"), base_r)
+        h_D = get(m_ratings, ("home","D"), 4.0 * base_r)
+        h_M = get(m_ratings, ("home","M"), 3.0 * base_r)
+        h_F = get(m_ratings, ("home","F"), 3.0 * base_r)
+        a_G = get(m_ratings, ("away","G"), base_r)
+        a_D = get(m_ratings, ("away","D"), 4.0 * base_r)
+        a_M = get(m_ratings, ("away","M"), 3.0 * base_r)
+        a_F = get(m_ratings, ("away","F"), 3.0 * base_r)
 
         h_G_c = h_G - base_r; h_O_c = (h_D + h_M + h_F) - (10.0 * base_r)
         a_G_c = a_G - base_r; a_O_c = (a_D + a_M + a_F) - (10.0 * base_r)

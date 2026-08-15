@@ -25,13 +25,23 @@ function _smile_poisson_grid_mgr_wealth(λ_h, λ_a; max_goals::Int=12)
     p_h = zeros(Float64, max_goals); p_a = zeros(Float64, max_goals)
     goals = 0:(max_goals-1)
     @inbounds for k in 1:n
-        @. p_h = pdf(Poisson(λ_h[k]), goals)
-        @. p_a = pdf(Poisson(λ_a[k]), goals)
+        lh = clamp(coalesce(λ_h[k], 1.2), 1e-4, 15.0)
+        la = clamp(coalesce(λ_a[k], 1.0), 1e-4, 15.0)
+        @. p_h = pdf(Poisson(lh), goals)
+        @. p_a = pdf(Poisson(la), goals)
+        sum_p = 0.0
         for j in 1:max_goals
             pj = p_a[j]
             for i in 1:max_goals
-                S[i, j, k] = p_h[i] * pj
+                p_val = p_h[i] * pj
+                S[i, j, k] = p_val
+                sum_p += p_val
             end
+        end
+        if sum_p > 0.0
+            S[:, :, k] ./= sum_p
+        else
+            S[1, 1, k] = 1.0
         end
     end
     return Pred.ScoreMatrix(S)
