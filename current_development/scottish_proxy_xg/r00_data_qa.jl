@@ -42,14 +42,14 @@ end
 cov = DataFrame(cov_rows)
 show(cov; allrows = true, allcols = true); println()
 
-modern = filter(r -> r.season in ("23/24", "24/25", "25/26"), cov)
-legacy = filter(r -> !(r.season in ("23/24", "24/25", "25/26")), cov)
+modern = filter(r -> r.season >= "23/24", cov)
+legacy = filter(r -> r.season < "23/24", cov)
 _mark("1a. every 23/24+ season is 100% covered",
       nrow(modern) > 0 && all(modern.pct .>= 99.9))
 _mark("1b. every pre-23/24 season is 0% covered",
       nrow(legacy) == 0 || all(legacy.pct .<= 0.1))
-_mark("1c. covered match count ≈ 1070 (=$(length(covered)))",
-      1000 <= length(covered) <= 1100)
+_mark("1c. covered match count ≈ 1070+ (=$(length(covered)))",
+      length(covered) >= 1000)
 
 println("\n", "="^72,
         "\nGATE 2 — SHOT-COUNT RECONCILIATION (commentary events vs ds.bbc match pages)\n", "="^72)
