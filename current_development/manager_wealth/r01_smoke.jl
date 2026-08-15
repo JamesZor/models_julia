@@ -112,9 +112,9 @@ logp = DynamicPPL.logjoint(turing_model, DynamicPPL.VarInfo(turing_model))
 println("✓ Logjoint initial evaluation: $logp (finite = $(isfinite(logp)))")
 @assert isfinite(logp) "Initial logjoint is not finite!"
 
-# 6. Fast NUTS MCMC Sampling (4 Chains x 100 Samples)
+# 6. Fast NUTS MCMC Sampling (4 Chains x 50 Samples)
 println("\n" * "="^80)
-println("5. FAST NUTS SAMPLING (100 samples, 4 chains)")
+println("5. FAST NUTS SAMPLING (50 samples, 4 chains)")
 println("="^80)
 
 sampler = NUTS(50, 0.65)
@@ -122,7 +122,7 @@ chain = sample(
     turing_model,
     sampler,
     MCMCThreads(),
-    100,
+    50,
     4;
     progress = true,
     adtype = AutoReverseDiff(compile = true)
@@ -148,7 +148,7 @@ first_match = first(smoke_matches)
 first_params = param_dict[first_match.match_id]
 score_matrix = Pred.compute_score_matrix(model, first_params; max_goals=12)
 
-prob_grid = score_matrix.grid.matrix # 12 x 12 x n_samples
+prob_grid = score_matrix.grid.data # (max_goals+1) x (max_goals+1) x n_samples
 prob_sums = vec(sum(prob_grid, dims=(1, 2)))
 println("✓ Probabilities sum test: Mean = $(mean(prob_sums)), Min = $(minimum(prob_sums)), Max = $(maximum(prob_sums))")
 @assert all(abs.(prob_sums .- 1.0) .< 1e-5) "Score probabilities do not sum to 1.0!"
