@@ -46,32 +46,19 @@ println("2. CONFIGURING UNANCHORED MANAGER + WEALTH MODEL")
 println("="^80)
 
 model = DynamicSmileDoublePoissonXGWealthManagerModel(
-    interception_config = PreGame.HierarchicalMonthSeasonInterception(
-        μ_base = Normal(0.2, 0.2),
-        σ_month = truncated(Normal(0.0, 0.1), lower=0.0)
-    ),
-    player_dynamics_config = PreGame.OutfieldPlayerDynamicsConfig(
-        days_half_life = 365.0,
-        w_G_att_prior = Normal(0.0, 0.5),
-        w_G_def_prior = Normal(0.0, 0.5),
-        w_Outfield_att_prior = Normal(0.0, 0.5),
-        w_Outfield_def_prior = Normal(0.0, 0.5)
-    ),
-    homeadvantage_config = PreGame.HierarchicalTeamHomeAdvantage(
-        γ_base = Normal(0.2, 0.2),
-        σ_γ = truncated(Normal(0.0, 0.1), lower=0.0)
-    ),
-    kappa_config = PreGame.HierarchicalTeamKappa(
-        κ_base = Normal(1.0, 0.1),
-        σ_κ = truncated(Normal(0.0, 0.1), lower=0.0)
-    ),
+    interception_config = PreGame.HierarchicalMonthlyInterception(),
+    player_dynamics_config = PreGame.OutfieldPlayerDynamicsConfig(days_half_life = 60.0),
+    homeadvantage_config = PreGame.HierarchicalTeamHomeAdvantage(),
+    kappa_config = PreGame.HierarchicalTeamKappa(),
     manager_pace_config = HierarchicalManagerPace(
         σ_pace = truncated(Normal(0.0, 0.15), lower=0.0)
     ),
     manager_quality_config = HierarchicalManagerQuality(
         σ_mgr = truncated(Normal(0.0, 0.15), lower=0.0)
     ),
-    player_ratings_feature = Features.OutfieldPlayerRatingsFeature(),
+    player_ratings_feature = Features.PlayerRatingsFeature(
+        Features.BayesianTracker(6.5, 1.0, 0.5, 0.01)
+    ),
     wealth_feature = TeamWealthFeature(),
     manager_feature = ManagerFeature(),
     w_wealth_prior = truncated(Normal(0.105, 0.05), lower=0.0),
