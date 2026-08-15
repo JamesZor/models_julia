@@ -85,37 +85,78 @@ function process_arm(ds, expr, label::String)
     st = route2_setup(ds, expr; price = :close)
     frame = books_frame(st.books, st.ds1)
     base_policy = run_policy(st.books, reference_policy(); label = label, metrics = WEALTH_METRICS)
-    
-    rho = round(st.summary.market_dispersion_rho, digits = 4)
-    w_star = round(st.summary.optimal_blend_w, digits = 3)
-    p_auc = round(st.summary.pure_auc, digits = 4)
-    b_auc = round(st.summary.blend_auc, digits = 4)
-    
-    acc_row = (
-        arm = label,
-        n_matches = length(st.books),
-        market_dispersion_rho = rho,
-        optimal_blend_w = w_star,
-        pure_auc = p_auc,
-        blend_auc = b_auc,
-        pure_logloss = round(st.summary.pure_logloss, digits = 5),
-        blend_logloss = round(st.summary.blend_logloss, digits = 5)
-    )
-    
-    return (; st, frame, base_policy, acc_row)
+    return (label = label, expr = expr, st = st, books = st.books, frame = frame, base = base_policy)
 end
 
-arm1 = process_arm(ds, exp_noanchor, "1. Baseline Unanchored")
-arm2 = process_arm(ds, exp_wealth, "2. Team Wealth Unanchored")
-arm3 = process_arm(ds, exp_anchored, "3. Market Anchored (sup40)")
-arm4 = process_arm(ds, exp_wealth_anchor, "4. Team Wealth + Anchored")
-arm5 = process_arm(ds, exp_mgr_wealth, "5. Manager + Wealth (38-param)")
+arm1 = process_arm(ds, exp_noanchor,        "1. Baseline Unanchored")
+arm2 = process_arm(ds, exp_wealth,          "2. Team Wealth Unanchored")
+arm3 = process_arm(ds, exp_anchored,        "3. Market Anchored (sup40)")
+arm4 = process_arm(ds, exp_wealth_anchor,   "4. Team Wealth + Anchored")
+arm5 = process_arm(ds, exp_mgr_wealth,      "5. Manager + Wealth (38-param)")
 arm6 = process_arm(ds, exp_mgr_pace_scalar, "6. Scalar Manager Pace (1-param)")
 
-banner("1. SUMMARY: ACCURACY & DISPERSION ACROSS CANDIDATE ARMS")
+banner("[METRIC 1] SUPREMACY DISPERSION & EXPANSION RATIO (ρ)")
 
-acc_df = DataFrame([arm1.acc_row, arm2.acc_row, arm3.acc_row, arm4.acc_row, arm5.acc_row, arm6.acc_row])
-shw("Model Accuracy & Market Divergence Summary:", acc_df)
+function compute_supremacy_dispersion(arm)
+    f = filter(r -> r.market == "1X2" && Symbol(r.selection) in (:home, :away), arm.frame)
+    matches_df = combine(groupby(f, :match_id)) do sub
+        h_row = filter(r -> Symbol(r.selection) == :home, sub)
+        a_row = filter(r -> Symbol(r.selection) == :away, sub)
+        if nrow(h_row) == 1 && nrow(a_row) == 1
+            p_h_mod, p_a_mod = h_row.p_model[1], a_row.p_model[1]
+            p_h_mkt, p_a_mkt = h_row.p_market[1], a_row.p_market[1]
+            sup_mod = log(max(p_h_mod, 1e-6)) - log(max(p_a_mod, 1e-6))
+            sup_mkt = log(max(p_h_mkt, 1e-6)) - log(max(p_a_mkt, 1e-6))
+            return (sup_mod = sup_mod, sup_mkt = sup_mkt)
+        else
+            return (sup_mod = NaN, sup_mkt = NaN)
+        end
+    end
+    matches_df = filter(r -> !isnan(r.sup_mod), matches_df)
+    sd_mod = std(matches_df.sup_mod)
+    sd_mkt = std(matches_df.sup_mkt)
+    rho = sd_mod / sd_mkt
+    return (arm = arm.label, n_matches = nrow(matches_df),
+            sd_model_sup = sd_mod, sd_market_sup = sd_mkt, rho_dispersion = rho)
+end
+
+disp_df = DataFrame([
+    compute_supremacy_dispersion(arm1),
+    compute_supremacy_dispersion(arm2),
+    compute_supremacy_dispersion(arm3),
+    compute_supremacy_dispersion(arm4),
+    compute_supremacy_dispersion(arm5),
+    compute_supremacy_dispersion(arm6)
+])
+shw("Supremacy Dispersion Comparison (Target: ρ ≈ 1.0)", disp_df)
+
+banner("[METRIC 2] OUT-OF-SAMPLE ACCURACY & MARKET BLEND (w*)")
+
+function compute_oos_accuracy(arm)
+    w_res = w_star(arm.frame)
+    b_res = book_skill(arm.frame, arm.label)
+    
+    f1x2 = filter(r -> r.market == "1X2", arm.frame)
+    w_1x2 = isempty(f1x2) ? (ll_model = NaN, ll_market = NaN, w = NaN) : w_star(f1x2)
+    brier_mod = isempty(f1x2) ? NaN : mean((f1x2.p_model .- Float64.(f1x2.is_winner)).^2)
+    brier_mkt = isempty(f1x2) ? NaN : mean((f1x2.p_market .- Float64.(f1x2.is_winner)).^2)
+
+    return (arm = arm.label, n_selections = nrow(arm.frame),
+            ll_model_all = w_res.ll_model, ll_market_all = w_res.ll_market,
+            w_star_all = w_res.w, skill_all = b_res.skill,
+            ll_model_1x2 = w_1x2.ll_model, brier_model_1x2 = brier_mod,
+            brier_market_1x2 = brier_mkt, w_star_1x2 = w_1x2.w)
+end
+
+acc_df = DataFrame([
+    compute_oos_accuracy(arm1),
+    compute_oos_accuracy(arm2),
+    compute_oos_accuracy(arm3),
+    compute_oos_accuracy(arm4),
+    compute_oos_accuracy(arm5),
+    compute_oos_accuracy(arm6)
+])
+shw("Out-of-Sample Accuracy & Skill Comparison:", acc_df)
 
 banner("2. OUT-OF-SAMPLE KELLY COMPOUNDING SIMULATION (SLATE DRAWDOWN)")
 
