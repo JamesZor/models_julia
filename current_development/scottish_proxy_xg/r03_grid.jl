@@ -48,7 +48,7 @@ const DYN_COL = :match_biweek  # ~40 folds
 const SAMPLES = 1200
 const WARMUP  = 300            # ⚠ SET FROM r02 CHECK 7
 const CHAINS  = 3
-const RUN_LINVAR = false       # ⚠ SET FROM r01 E4 (slope < 1.5 => true)
+const RUN_LINVAR = true        # ⚠ SET FROM r01 E4 (slope = 1.123 < 1.5 => true)
 
 println("[INFO] Loading ScottishLower DataStore...")
 ds = Data.load_datastore_cached(Data.ScottishLower())
@@ -119,6 +119,7 @@ for (name, model) in specs
             chains          = CHAINS,
             use_queue       = true,
             max_depth       = 10,           # never cap depth on this data
+            max_concurrent_tasks = 16,
         )
         res = Experiments.run_experiment(task)
         Experiments.save_experiment(res)
