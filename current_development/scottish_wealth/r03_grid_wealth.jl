@@ -44,19 +44,10 @@ dyn  = PreGame.TimeDecayDynamics(days_half_life = HL)
 _tag = "hl$(Int(HL))_hs$(HS)"
 
 specs = Tuple{String, Any}[
-    # Control 1 vs Wealth 1 (Baseline Goals Funnel)
-    ("funnel_apm_ctl_$(_tag)",
-     PreGame.DynamicFunnelPlusMinusGoalsLeagueTimeDecayModel(dynamics_config = dyn)),
-    
-    # Control 2 vs Wealth 2 (Arm A Proxy xG)
-    ("pxg_apm_$(_tag)",
-     TeamPxGGoalsAPMModel(dynamics_config = dyn)),
+    # Wealth Models to Train (Controls are already saved in data/scottish_pxg_grid/)
     ("pxg_apm_wealth_$(_tag)",
      TeamPxGGoalsAPMWealthModel(dynamics_config = dyn)),
 
-    # Control 3 vs Wealth 3 (Arm B Champion 3-Layer)
-    ("funnel_pxg_apm_$(_tag)",
-     TeamFunnelPxGGoalsAPMModel(dynamics_config = dyn)),
     ("funnel_pxg_apm_wealth_$(_tag)",
      TeamFunnelPxGGoalsAPMWealthModel(dynamics_config = dyn)),
 ]
