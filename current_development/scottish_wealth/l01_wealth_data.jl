@@ -217,7 +217,7 @@ AD-Safe hook that adds `flat_wealth_diff::Vector{Float64}` to the feature dictio
 function Features.add_feature!(
     F_data::Dict, 
     config::ScottishTeamWealthFeature, 
-    ordered_ids, 
+    ordered_ids::Vector{Int}, 
     team_map::Dict, 
     ds::Data.DataStore
 )
@@ -248,5 +248,14 @@ function Features.add_feature!(
     @assert !any(isinf, flat_diffs) "flat_wealth_diff contains Inf values!"
     
     F_data[:flat_wealth_diff] = flat_diffs
-    return F_data
+end
+
+function Features.add_feature!(
+    F_data::Dict, 
+    config::ScottishTeamWealthFeature, 
+    ordered_ids, 
+    team_map::Dict, 
+    ds::Data.DataStore
+)
+    Features.add_feature!(F_data, config, collect(Int.(ordered_ids)), team_map, ds)
 end
