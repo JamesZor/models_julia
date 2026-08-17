@@ -68,13 +68,14 @@ else
     # Format ticket
     ticket = DataFrame(
         Fixture     = sheet.fixture,
-        Market      = sheet.market,
+        Family      = sheet.family,
         Selection   = string.(sheet.selection),
-        BookOdds    = round.(sheet.p_market, digits = 3),
+        BookOdds    = round.(sheet.odds_quoted, digits = 2),
         ModelProb   = round.(sheet.p_model, digits = 3),
-        EdgePct     = round.((sheet.p_model .- sheet.p_market) .* 100, digits = 1),
+        MktProb     = round.(sheet.p_market, digits = 3),
+        EdgePct     = round.(sheet.edge .* 100, digits = 1),
         Stake_GBP   = round.(sheet.stake, digits = 2),
-        BankrollPct = round.((sheet.stake ./ BANKROLL) .* 100, digits = 2)
+        BankrollPct = round.(sheet.frac .* 100, digits = 2)
     )
     
     # Filter to placed bets (stake > 0.01)
