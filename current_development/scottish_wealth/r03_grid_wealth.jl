@@ -101,7 +101,7 @@ for (name, model) in specs
             chains          = CHAINS,
             use_queue       = true,
             max_depth       = 9,
-            max_concurrent_tasks = 12,
+            max_concurrent_tasks = 15,
         )
         res = Experiments.run_experiment(task)
         Experiments.save_experiment(res)
