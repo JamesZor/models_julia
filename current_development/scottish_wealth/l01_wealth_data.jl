@@ -217,8 +217,8 @@ AD-Safe hook that adds `flat_wealth_diff::Vector{Float64}` to the feature dictio
 function Features.add_feature!(
     F_data::Dict, 
     config::ScottishTeamWealthFeature, 
-    ordered_ids::Vector{Int}, 
-    team_map::Any, 
+    ordered_ids, 
+    team_map::Dict, 
     ds::Data.DataStore
 )
     # Check if catalog is cached locally or needs fetching
