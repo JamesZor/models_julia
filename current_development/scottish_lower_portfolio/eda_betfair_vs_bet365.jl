@@ -36,7 +36,7 @@ println("SECTION 1: SEASON-BY-SEASON MATCH & MARKET COVERAGE")
 println("="^95)
 
 # Attach season label to matches
-function _season_label(dt::DateTime)
+function _season_label(dt::TimeType)
     y = year(dt)
     m = month(dt)
     return m >= 7 ? "$(y % 100)/$((y+1) % 100)" : "$((y-1) % 100)/$(y % 100)"
