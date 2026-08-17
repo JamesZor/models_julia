@@ -47,7 +47,7 @@ _have = Set(latents_df.match_id)
 _by_date = Dict{Date, Vector{Int}}()
 for r in eachrow(ds.matches)
     r.match_id in _have || continue
-    push!(get!(_by_date, Date(r.kickoff_time), Int[]), r.match_id)
+    push!(get!(_by_date, Date(r.match_date), Int[]), r.match_id)
 end
 
 # Pick the date with the maximum simultaneous matches
