@@ -69,3 +69,42 @@ For players without individual market valuations in `ds.lineups` (semi-pro playe
   $$\log W_{\text{XI}} = \frac{1}{11} \sum_{i=1}^{11} \log(\tilde{v}_i)$$
 - **Standardized Wealth Metric:**
   $$w_{h,z} = \frac{\log W_{\text{XI},h} - \bar{\mu}_w}{\sigma_w}, \quad \Delta W = w_{h,z} - w_{a,z}$$
+
+---
+
+## 5. Phase 4 Smoke Test & Sampler Diagnostics (Executed on `mcmc-beast`)
+
+Both wealth-augmented architectures were smoke tested on target season `25/26` with 3 chains $\times$ 400 samples (NUTS) using the queued multi-threaded execution strategy.
+
+### A. Turing AD Performance Guide Compliance
+Both models strictly adhere to [docs/turing_ad_performance_guide.md](file:///home/james/bet_project/BayesianFootball/docs/turing_ad_performance_guide.md):
+- **Pure Vectorization:** No scalar loops, no branching or conditionals inside `@model`.
+- **Precomputed Sufficient Statistics:** Proxy xG (Gamma) and Goals (Poisson) log-likelihoods evaluate via matrix-vector SIMD products.
+- **Compiled Gradient Tape:** ReverseDiff initialized with smooth step size search ($\epsilon = 0.00625$ for Arm A, $\epsilon = 0.003125$ for Arm B).
+- **Zero Allocations & Dynamic Safety:** Clamped log-rates $(-10.0, 10.0)$ with branch-free AD-safe rejection.
+
+### B. Empirical Smoke Posteriors
+
+| Model Architecture | Sampler Time | $w_{\text{wealth}}$ Mean $\pm$ Std | $90\%$ Credible Interval | $P(w_{\text{wealth}} > 0)$ | Convergence ($R\text{-hat}$) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Arm A (`TeamPxGGoalsAPMWealthModel`)** | 2.0 min | **$+0.0297 \pm 0.0122$** | $[+0.0091, +0.0502]$ | **$99.5\%$** | $\le 1.01$ ✅ |
+| **Arm B Champion (`TeamFunnelPxGGoalsAPMWealthModel`)** | 7.2 min | **$+0.0202 \pm 0.0098$** | $[+0.0048, +0.0376]$ | **$99.4\%$** | $\le 1.01$ ✅ |
+
+### Key Finding:
+In both model formulations, the posterior distribution of $w_{\text{wealth}}$ is **strictly positive with $>99.4\%$ certainty**. A 1-standard-deviation starting-XI squad wealth advantage reliably lifts the team's underlying shot/goal creation rate by $+2.0\%\text{--}+3.0\%$ per match!
+
+---
+
+## 6. Phase 5: 40-Fold Cross-Validation Grid Setup (`r03_grid_wealth.jl`)
+
+The full multi-season grouped cross-validation benchmark evaluates the incremental benefit of team wealth over 40 folds (seasons `24/25` and `25/26`) comparing 3 head-to-head pairs:
+
+1. **Baseline Goals Funnel:** `funnel_apm_ctl` vs `funnel_apm_wealth`
+2. **Arm A (Proxy xG + RAPM):** `pxg_apm` vs `pxg_apm_wealth`
+3. **Arm B (Champion 3-Layer):** `funnel_pxg_apm` vs `funnel_pxg_apm_wealth`
+
+Execution command on `mcmc-beast`:
+```bash
+julia> include("current_development/scottish_wealth/r03_grid_wealth.jl")
+```
+
