@@ -2,12 +2,12 @@
 #
 # LOADER: High-Performance Scottish Lower Wealth-Augmented Bayesian Engines
 #
-# Embeds `ScottishTeamWealthFeature` (Starting-XI wealth delta ΔW) into the 3 Scottish models:
-# 1. Baseline: DynamicFunnelPlusMinusWealthModel
-# 2. Arm A:    TeamPxGGoalsAPMWealthModel
-# 3. Arm B:    TeamFunnelPxGGoalsAPMWealthModel (Champion 3-Layer)
+# Embeds `ScottishTeamWealthFeature` (Starting-XI wealth delta ΔW) into the Scottish models:
+# 1. Arm A: TeamPxGGoalsAPMWealthModel
+# 2. Arm B: TeamFunnelPxGGoalsAPMWealthModel (Champion 3-Layer)
 
 using Turing
+using DynamicPPL: to_submodel
 using Distributions
 using DataFrames
 using Dates
@@ -94,13 +94,14 @@ Base.@kwdef struct TeamPxGGoalsAPMWealthModel{
 end
 
 function Features.required_features(model::TeamPxGGoalsAPMWealthModel)
-    base = Features.required_features(PreGame.DynamicGoalsPlusMinusLeagueTimeDecayModel(
-        interception_config    = model.interception_config,
-        dynamics_config        = model.dynamics_config,
-        homeadvantage_config   = model.homeadvantage_config,
-        player_ratings_feature = model.player_ratings_feature,
-    ))
-    return vcat(base, [model.proxy_feature, model.wealth_feature])
+    fs = Features.AbstractFeatureConfig[
+        Features.TeamIDsFeature(), Features.GoalsFeature(), Features.DatesFeature(),
+        Features.MonthFeature(), Features.LeagueFeature(),
+        model.proxy_feature, model.wealth_feature,
+        Features.TimeIndicesFeature(),
+    ]
+    model.apm_on && push!(fs, model.player_ratings_feature)
+    return fs
 end
 
 function _pxg_suff(xg::Vector{Float64}, mask::Vector{Float64}, goals::Vector{Int}, w::Vector{Float64})
@@ -112,7 +113,7 @@ function _pxg_suff(xg::Vector{Float64}, mask::Vector{Float64}, goals::Vector{Int
         c_x      = c_x,
         c_m      = wm,
         S_m      = sum(wm),
-        S_mlogx  = sum(c_mlogx),
+        S_logx   = sum(c_mlogx),
         c_g_lin  = c_g_lin,
         S_g      = sum(c_g_lin),
         c_g_rate = w
@@ -120,74 +121,93 @@ function _pxg_suff(xg::Vector{Float64}, mask::Vector{Float64}, goals::Vector{Int
 end
 
 @model function build_pxg_goals_apm_wealth_engine(
-    c, ratings, suff_h, suff_a,
-    config::TeamPxGGoalsAPMWealthModel,
-    n_obs::Int
+    home_ids::Vector{Int}, away_ids::Vector{Int},
+    season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
+    rat_h::Vector{Float64}, rat_a::Vector{Float64},
+    wealth_diff::Vector{Float64},
+    sx_h::NamedTuple, sx_a::NamedTuple,
+    n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
+    league_ha_active::Float64, apm_active::Float64,
+    config
 )
-    # Interception, HA, Dynamics, League components
-    inter   = Turing.@submodel PreGame.build_interception_component(config.interception_config, c.n_seasons, c.n_months)
-    ha      = Turing.@submodel PreGame.build_home_advantage_component(config.homeadvantage_config, c.n_teams)
-    tdyn_a  = Turing.@submodel PreGame.build_dynamics(config.dynamics_config, c.n_teams)
-    tdyn_d  = Turing.@submodel PreGame.build_dynamics(config.dynamics_config, c.n_teams)
-    
-    raw_δ_lg ~ filldist(Normal(0.0, 1.0), c.n_leagues)
-    δ_lg = (raw_δ_lg .- mean(raw_δ_lg)) .* config.league_offset_sd
-    
+    # Components
+    inter ~ to_submodel(PreGame.build_interception(config.interception_config, n_seasons, n_months))
+    ha    ~ to_submodel(PreGame.build_home_advantage(config.homeadvantage_config, n_teams))
+    dyn   ~ to_submodel(PreGame.build_dynamics(config.dynamics_config, n_teams))
+
     w_att ~ config.w_att_prior
     w_def ~ config.w_def_prior
-    
+
     # Wealth Prior
     w_wealth ~ config.w_wealth_prior
 
-    log_kappa ~ config.log_κ_prior
-    kappa = exp(log_kappa)
-    nu ~ config.ν_prior
+    δ_league_raw ~ filldist(Normal(0.0, config.league_offset_sd), n_leagues)
+    γ_league_raw ~ filldist(Normal(0.0, config.league_ha_sd), n_leagues)
+    δ_league = δ_league_raw .- mean(δ_league_raw)
+    γ_league = league_ha_active .* (γ_league_raw .- mean(γ_league_raw))
 
-    # Linear Predictor
-    int_m = view(inter.μ_base, c.season_idx) .+ view(inter.δ_month, c.month_idx)
-    lg_m  = view(δ_lg, c.league_idx)
-    ha_m  = view(ha, c.home_ids)
-    
-    (R_h, R_a) = ratings
-    att_h = w_att .* R_h
-    def_a = w_def .* R_a
-    att_a = w_att .* R_a
-    def_h = w_def .* R_h
-    
-    w_shift = w_wealth .* c.wealth_diff
-    
-    log_μ_h = clamp.(int_m .+ lg_m .+ ha_m .+ view(tdyn_a, c.home_ids) .- view(tdyn_d, c.away_ids) .+ att_h .- def_a .+ w_shift, -15.0, 15.0)
-    log_μ_a = clamp.(int_m .+ lg_m        .+ view(tdyn_a, c.away_ids) .- view(tdyn_d, c.home_ids) .+ att_a .- def_h .- w_shift, -15.0, 15.0)
-    
+    ν_xg  ~ config.ν_prior
+    log_κ ~ config.log_κ_prior
+
+    int_m = view(inter.μ_base, season_idx) .+ view(inter.δ_month, month_idx)
+    lg    = view(δ_league, league_idx)
+    γ_lg  = view(γ_league, league_idx)
+
+    pillar_h = apm_active .* (w_att .* rat_h .- w_def .* rat_a)
+    pillar_a = apm_active .* (w_att .* rat_a .- w_def .* rat_h)
+
+    w_shift = w_wealth .* wealth_diff
+
+    log_μ_h = clamp.(int_m .+ lg .+ view(ha, home_ids) .+ γ_lg .+
+                     view(dyn.α, home_ids) .+ view(dyn.β, away_ids) .+ pillar_h .+ w_shift, -10.0, 10.0)
+    log_μ_a = clamp.(int_m .+ lg .+
+                     view(dyn.α, away_ids) .+ view(dyn.β, home_ids) .+ pillar_a .- w_shift, -10.0, 10.0)
+
+    # AD-safe rejection
+    bad_h = isnan.(log_μ_h)
+    bad_a = isnan.(log_μ_a)
+    is_bad = any(bad_h) || any(bad_a) || isnan(ν_xg) || isnan(log_κ)
+    log_μ_h = ifelse.(bad_h, zero.(log_μ_h), log_μ_h)
+    log_μ_a = ifelse.(bad_a, zero.(log_μ_a), log_μ_a)
+    Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
+
     μ_h = exp.(log_μ_h)
     μ_a = exp.(log_μ_a)
-    
-    # Pillar A: Proxy xG (Gamma)
-    ll_xg_h = (nu - 1.0)*suff_h.S_mlogx - nu*sum(suff_h.c_x ./ μ_h) - nu*sum(suff_h.c_m .* log_μ_h) + suff_h.S_m*(nu*log(nu) - loggamma(nu))
-    ll_xg_a = (nu - 1.0)*suff_a.S_mlogx - nu*sum(suff_a.c_x ./ μ_a) - nu*sum(suff_a.c_m .* log_μ_a) + suff_a.S_m*(nu*log(nu) - loggamma(nu))
-    
-    # Pillar B: Goals (Poisson)
-    ll_g_h = suff_h.S_g*log_kappa + sum(suff_h.c_g_lin .* log_μ_h) - kappa*sum(suff_h.c_g_rate .* μ_h)
-    ll_g_a = suff_a.S_g*log_kappa + sum(suff_a.c_g_lin .* log_μ_a) - kappa*sum(suff_a.c_g_rate .* μ_a)
-    
-    Turing.@addlogprob! ll_xg_h + ll_xg_a + ll_g_h + ll_g_a
+    κ   = exp(log_κ)
+
+    # 1. Proxy xG Likelihood
+    ll_x_h = (ν_xg - 1.0) * sx_h.S_logx - ν_xg * sum(sx_h.c_x ./ μ_h) - ν_xg * sum(sx_h.c_m .* log_μ_h) + sx_h.S_m * (ν_xg * log(ν_xg) - loggamma(ν_xg))
+    ll_x_a = (ν_xg - 1.0) * sx_a.S_logx - ν_xg * sum(sx_a.c_x ./ μ_a) - ν_xg * sum(sx_a.c_m .* log_μ_a) + sx_a.S_m * (ν_xg * log(ν_xg) - loggamma(ν_xg))
+
+    # 2. Goals Likelihood
+    ll_g_h = sx_h.S_g * log_κ + sum(sx_h.c_g_lin .* log_μ_h) - κ * sum(sx_h.c_g_rate .* μ_h)
+    ll_g_a = sx_a.S_g * log_κ + sum(sx_a.c_g_lin .* log_μ_a) - κ * sum(sx_a.c_g_rate .* μ_a)
+
+    Turing.@addlogprob! ll_x_h + ll_x_a + ll_g_h + ll_g_a
 end
 
-function PreGame.build_turing_model(config::TeamPxGGoalsAPMWealthModel, feature_set::Features.FeatureSet)
-    d = feature_set.data
-    c = _pxg_core_wealth(d, config)
-    n = length(c.home_goals)
-    ratings = _pxg_ratings_wealth(d, config, n)
-    
-    xg_h = Vector{Float64}(d[:flat_home_pxg])
-    xg_a = Vector{Float64}(d[:flat_away_pxg])
-    m_h  = Vector{Float64}(d[:flat_home_pxg_mask])
-    m_a  = Vector{Float64}(d[:flat_away_pxg_mask])
-    
-    suff_h = _pxg_suff(xg_h, m_h, c.home_goals, c.w)
-    suff_a = _pxg_suff(xg_a, m_a, c.away_goals, c.w)
-    
-    return build_pxg_goals_apm_wealth_engine(c, ratings, suff_h, suff_a, config, n)
+function PreGame.build_turing_model(config::TeamPxGGoalsAPMWealthModel, feature_set)
+    data = feature_set.data
+    d    = _pxg_core_wealth(data, config)
+    n    = length(d.home_ids)
+    rat_h, rat_a = _pxg_ratings_wealth(data, config, n)
+    sx_h = _pxg_suff(Vector{Float64}(data[:flat_home_pxg]),
+                     Vector{Float64}(data[:flat_home_pxg_mask]),
+                     d.home_goals, d.w)
+    sx_a = _pxg_suff(Vector{Float64}(data[:flat_away_pxg]),
+                     Vector{Float64}(data[:flat_away_pxg_mask]),
+                     d.away_goals, d.w)
+    return build_pxg_goals_apm_wealth_engine(
+        d.home_ids, d.away_ids,
+        d.season_idx, d.month_idx, d.league_idx,
+        rat_h, rat_a,
+        d.wealth_diff,
+        sx_h, sx_a,
+        d.n_teams, d.n_seasons, d.n_months, d.n_leagues,
+        _pxg_active(config.league_ha_on),
+        _pxg_active(config.apm_on),
+        config
+    )
 end
 
 # ==============================================================================
@@ -223,13 +243,14 @@ Base.@kwdef struct TeamFunnelPxGGoalsAPMWealthModel{
 end
 
 function Features.required_features(model::TeamFunnelPxGGoalsAPMWealthModel)
-    base = Features.required_features(PreGame.DynamicFunnelPlusMinusGoalsLeagueTimeDecayModel(
-        interception_config    = model.interception_config,
-        dynamics_config        = model.dynamics_config,
-        homeadvantage_config   = model.homeadvantage_config,
-        player_ratings_feature = model.player_ratings_feature,
-    ))
-    return vcat(base, [model.proxy_feature, model.wealth_feature])
+    fs = Features.AbstractFeatureConfig[
+        Features.TeamIDsFeature(), Features.GoalsFeature(), Features.DatesFeature(),
+        Features.MonthFeature(), Features.LeagueFeature(),
+        Features.ShotsFunnelFeature(), model.proxy_feature, model.wealth_feature,
+        Features.TimeIndicesFeature(),
+    ]
+    model.apm_on && push!(fs, model.player_ratings_feature)
+    return fs
 end
 
 function _pxg_funnel_suff(shots_bbc::Vector{Int}, mask_s::Vector{Float64},
@@ -250,7 +271,7 @@ function _pxg_funnel_suff(shots_bbc::Vector{Int}, mask_s::Vector{Float64},
         n_ev     = n_safe,
         S_Slogx  = sum(cq_S .* logx),
         S_logx   = sum(wx .* logx),
-        S_m      = sum(wx),
+        S_cq_S   = sum(cq_S),
         c_g_lin  = c_g_lin,
         S_g      = sum(c_g_lin),
         c_g_rate = w
@@ -258,107 +279,132 @@ function _pxg_funnel_suff(shots_bbc::Vector{Int}, mask_s::Vector{Float64},
 end
 
 @model function build_funnel_pxg_goals_apm_wealth_engine(
-    c, ratings, suff_h, suff_a,
-    config::TeamFunnelPxGGoalsAPMWealthModel,
-    n_obs::Int
+    home_ids::Vector{Int}, away_ids::Vector{Int},
+    season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
+    rat_h::Vector{Float64}, rat_a::Vector{Float64},
+    wealth_diff::Vector{Float64},
+    sf_h::NamedTuple, sf_a::NamedTuple,
+    n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
+    shot_scale::Float64,
+    league_ha_active::Float64, apm_active::Float64, quality_active::Float64,
+    config
 )
-    inter   = Turing.@submodel PreGame.build_interception_component(config.interception_config, c.n_seasons, c.n_months)
-    ha      = Turing.@submodel PreGame.build_home_advantage_component(config.homeadvantage_config, c.n_teams)
-    tdyn_a  = Turing.@submodel PreGame.build_dynamics(config.dynamics_config, c.n_teams)
-    tdyn_d  = Turing.@submodel PreGame.build_dynamics(config.dynamics_config, c.n_teams)
-    
-    raw_δ_lg ~ filldist(Normal(0.0, 1.0), c.n_leagues)
-    δ_lg = (raw_δ_lg .- mean(raw_δ_lg)) .* config.league_offset_sd
-    
+    inter ~ to_submodel(PreGame.build_interception(config.interception_config, n_seasons, n_months))
+    ha    ~ to_submodel(PreGame.build_home_advantage(config.homeadvantage_config, n_teams))
+    dyn   ~ to_submodel(PreGame.build_dynamics(config.dynamics_config, n_teams))
+
     w_att ~ config.w_att_prior
     w_def ~ config.w_def_prior
-    
+
     # Wealth Prior
     w_wealth ~ config.w_wealth_prior
 
-    log_kappa ~ config.log_κ_prior
-    kappa = exp(log_kappa)
-    
+    δ_league_raw ~ filldist(Normal(0.0, config.league_offset_sd), n_leagues)
+    γ_league_raw ~ filldist(Normal(0.0, config.league_ha_sd), n_leagues)
+    δ_league = δ_league_raw .- mean(δ_league_raw)
+    γ_league = league_ha_active .* (γ_league_raw .- mean(γ_league_raw))
+
+    ν_q   ~ config.ν_prior
+    log_κ ~ config.log_κ_prior
     q_raw ~ config.q_prior
     σ_q   ~ config.σ_q_prior
-    ν_q   ~ config.ν_prior
-    
-    raw_aq ~ filldist(Normal(0.0, 1.0), c.n_teams)
-    raw_dq ~ filldist(Normal(0.0, 1.0), c.n_teams)
-    aq = (raw_aq .- mean(raw_aq)) .* σ_q
-    dq = (raw_dq .- mean(raw_dq)) .* σ_q
 
-    int_m = view(inter.μ_base, c.season_idx) .+ view(inter.δ_month, c.month_idx)
-    lg_m  = view(δ_lg, c.league_idx)
-    ha_m  = view(ha, c.home_ids)
-    
-    (R_h, R_a) = ratings
-    att_h = w_att .* R_h
-    def_a = w_def .* R_a
-    att_a = w_att .* R_a
-    def_h = w_def .* R_h
-    
-    w_shift = w_wealth .* c.wealth_diff
-    
-    log_λ_s_h = config.shot_scale .+ int_m .+ lg_m .+ ha_m .+ view(tdyn_a, c.home_ids) .- view(tdyn_d, c.away_ids) .+ att_h .- def_a .+ w_shift
-    log_λ_s_a = config.shot_scale .+ int_m .+ lg_m        .+ view(tdyn_a, c.away_ids) .- view(tdyn_d, c.home_ids) .+ att_a .- def_h .- w_shift
-    
-    λ_s_h = exp.(clamp.(log_λ_s_h, -15.0, 15.0))
-    λ_s_a = exp.(clamp.(log_λ_s_a, -15.0, 15.0))
+    raw_aq ~ filldist(Normal(0.0, 1.0), n_teams)
+    raw_dq ~ filldist(Normal(0.0, 1.0), n_teams)
+    aq = quality_active .* (raw_aq .* σ_q); aq = aq .- mean(aq)
+    dq = quality_active .* (raw_dq .* σ_q); dq = dq .- mean(dq)
+
+    int_m = shot_scale .+ view(inter.μ_base, season_idx) .+ view(inter.δ_month, month_idx)
+    lg    = view(δ_league, league_idx)
+    γ_lg  = view(γ_league, league_idx)
+
+    pillar_h = apm_active .* (w_att .* rat_h .- w_def .* rat_a)
+    pillar_a = apm_active .* (w_att .* rat_a .- w_def .* rat_h)
+
+    w_shift = w_wealth .* wealth_diff
+
+    log_λ_h = clamp.(int_m .+ lg .+ view(ha, home_ids) .+ γ_lg .+
+                     view(dyn.α, home_ids) .+ view(dyn.β, away_ids) .+ pillar_h .+ w_shift, -10.0, 10.0)
+    log_λ_a = clamp.(int_m .+ lg .+
+                     view(dyn.α, away_ids) .+ view(dyn.β, home_ids) .+ pillar_a .- w_shift, -10.0, 10.0)
 
     # Quality Pillar
-    logit_q_h = q_raw .+ view(aq, c.home_ids) .- view(dq, c.away_ids)
-    logit_q_a = q_raw .+ view(aq, c.away_ids) .- view(dq, c.home_ids)
-    
-    log_q_h = -log1pexp.(-logit_q_h)
-    log_q_a = -log1pexp.(-logit_q_a)
-    inv_q_h = 1.0 .+ exp.(-logit_q_h)
-    inv_q_a = 1.0 .+ exp.(-logit_q_a)
-    
+    qlin_h  = q_raw .+ view(aq, home_ids) .- view(dq, away_ids)
+    qlin_a  = q_raw .+ view(aq, away_ids) .- view(dq, home_ids)
+    log_q_h = .-log1pexp.(.-qlin_h)
+    log_q_a = .-log1pexp.(.-qlin_a)
+
+    bad_h  = isnan.(log_λ_h) .| isnan.(log_q_h)
+    bad_a  = isnan.(log_λ_a) .| isnan.(log_q_a)
+    is_bad = any(bad_h) || any(bad_a) || isnan(ν_q) || isnan(log_κ)
+    log_λ_h = ifelse.(bad_h, zero.(log_λ_h), log_λ_h)
+    log_λ_a = ifelse.(bad_a, zero.(log_λ_a), log_λ_a)
+    log_q_h = ifelse.(bad_h, zero.(log_q_h), log_q_h)
+    log_q_a = ifelse.(bad_a, zero.(log_q_a), log_q_a)
+    Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
+
+    λ_h     = exp.(log_λ_h);   λ_a     = exp.(log_λ_a)
+    q_h     = exp.(log_q_h);   q_a     = exp.(log_q_a)
+    inv_q_h = exp.(.-log_q_h); inv_q_a = exp.(.-log_q_a)
+
+    κ   = exp(log_κ)
+    lνq = log(ν_q)
+
     # 1. Volume Likelihood
-    ll_vol_h = sum(suff_h.c_s_lin .* log_λ_s_h) - sum(suff_h.c_s_rate .* λ_s_h)
-    ll_vol_a = sum(suff_a.c_s_lin .* log_λ_s_a) - sum(suff_a.c_s_rate .* λ_s_a)
+    ll_s_h = sum(sf_h.c_s_lin .* log_λ_h) - sum(sf_h.c_s_rate .* λ_h)
+    ll_s_a = sum(sf_a.c_s_lin .* log_λ_a) - sum(sf_a.c_s_rate .* λ_a)
 
     # 2. Quality Likelihood
-    ll_q_h = ν_q * suff_h.S_Slogx - suff_h.S_logx - ν_q*sum(suff_h.cq_x .* inv_q_h) - ν_q*sum(suff_h.cq_S .* log_q_h) +
-             ν_q*log(ν_q)*sum(suff_h.cq_S) - sum(suff_h.cq_m .* loggamma.(ν_q .* suff_h.n_ev))
-    ll_q_a = ν_q * suff_a.S_Slogx - suff_a.S_logx - ν_q*sum(suff_a.cq_x .* inv_q_a) - ν_q*sum(suff_a.cq_S .* log_q_a) +
-             ν_q*log(ν_q)*sum(suff_a.cq_S) - sum(suff_a.cq_m .* loggamma.(ν_q .* suff_a.n_ev))
+    ll_q_h = ν_q * sf_h.S_Slogx - sf_h.S_logx -
+             ν_q * sum(sf_h.cq_x .* inv_q_h) -
+             ν_q * sum(sf_h.cq_S .* log_q_h) +
+             ν_q * lνq * sf_h.S_cq_S -
+             sum(sf_h.cq_m .* loggamma.(ν_q .* sf_h.n_ev))
+    ll_q_a = ν_q * sf_a.S_Slogx - sf_a.S_logx -
+             ν_q * sum(sf_a.cq_x .* inv_q_a) -
+             ν_q * sum(sf_a.cq_S .* log_q_a) +
+             ν_q * lνq * sf_a.S_cq_S -
+             sum(sf_a.cq_m .* loggamma.(ν_q .* sf_a.n_ev))
 
     # 3. Goals Likelihood
-    log_mu_h = log_λ_s_h .+ log_q_h
-    log_mu_a = log_λ_s_a .+ log_q_a
-    mu_h     = λ_s_h .* exp.(log_q_h)
-    mu_a     = λ_s_a .* exp.(log_q_a)
-    
-    ll_g_h = suff_h.S_g*log_kappa + sum(suff_h.c_g_lin .* log_mu_h) - kappa*sum(suff_h.c_g_rate .* mu_h)
-    ll_g_a = suff_a.S_g*log_kappa + sum(suff_a.c_g_lin .* log_mu_a) - kappa*sum(suff_a.c_g_rate .* mu_a)
+    ll_g_h = sf_h.S_g * log_κ + sum(sf_h.c_g_lin .* (log_λ_h .+ log_q_h)) -
+             κ * sum(sf_h.c_g_rate .* λ_h .* q_h)
+    ll_g_a = sf_a.S_g * log_κ + sum(sf_a.c_g_lin .* (log_λ_a .+ log_q_a)) -
+             κ * sum(sf_a.c_g_rate .* λ_a .* q_a)
 
-    Turing.@addlogprob! ll_vol_h + ll_vol_a + ll_q_h + ll_q_a + ll_g_h + ll_g_a
+    Turing.@addlogprob! ll_s_h + ll_s_a + ll_q_h + ll_q_a + ll_g_h + ll_g_a
 end
 
-function PreGame.build_turing_model(config::TeamFunnelPxGGoalsAPMWealthModel, feature_set::Features.FeatureSet)
-    d = feature_set.data
-    c = _pxg_core_wealth(d, config)
-    n = length(c.home_goals)
-    ratings = _pxg_ratings_wealth(d, config, n)
-    
-    shots_h = Vector{Int}(d[:flat_home_shots])
-    shots_a = Vector{Int}(d[:flat_away_shots])
-    m_s_h   = Vector{Float64}(d[:flat_home_shots_mask])
-    m_s_a   = Vector{Float64}(d[:flat_away_shots_mask])
-    
-    xg_h = Vector{Float64}(d[:flat_home_pxg])
-    xg_a = Vector{Float64}(d[:flat_away_pxg])
-    nev_h = Vector{Int}(d[:flat_home_pxg_events])
-    nev_a = Vector{Int}(d[:flat_away_pxg_events])
-    m_x_h = Vector{Float64}(d[:flat_home_pxg_mask])
-    m_x_a = Vector{Float64}(d[:flat_away_pxg_mask])
-    
-    suff_h = _pxg_funnel_suff(shots_h, m_s_h, xg_h, nev_h, m_x_h, c.home_goals, c.w)
-    suff_a = _pxg_funnel_suff(shots_a, m_s_a, xg_a, nev_a, m_x_a, c.away_goals, c.w)
-    
-    return build_funnel_pxg_goals_apm_wealth_engine(c, ratings, suff_h, suff_a, config, n)
+function PreGame.build_turing_model(config::TeamFunnelPxGGoalsAPMWealthModel, feature_set)
+    data = feature_set.data
+    d    = _pxg_core_wealth(data, config)
+    n    = length(d.home_ids)
+    rat_h, rat_a = _pxg_ratings_wealth(data, config, n)
+    sf_h = _pxg_funnel_suff(Vector{Int}(data[:flat_home_shots]),
+                            Vector{Float64}(data[:flat_home_shots_mask]),
+                            Vector{Float64}(data[:flat_home_pxg]),
+                            Vector{Int}(data[:flat_home_pxg_events]),
+                            Vector{Float64}(data[:flat_home_pxg_mask]),
+                            d.home_goals, d.w)
+    sf_a = _pxg_funnel_suff(Vector{Int}(data[:flat_away_shots]),
+                            Vector{Float64}(data[:flat_away_shots_mask]),
+                            Vector{Float64}(data[:flat_away_pxg]),
+                            Vector{Int}(data[:flat_away_pxg_events]),
+                            Vector{Float64}(data[:flat_away_pxg_mask]),
+                            d.away_goals, d.w)
+    return build_funnel_pxg_goals_apm_wealth_engine(
+        d.home_ids, d.away_ids,
+        d.season_idx, d.month_idx, d.league_idx,
+        rat_h, rat_a,
+        d.wealth_diff,
+        sf_h, sf_a,
+        d.n_teams, d.n_seasons, d.n_months, d.n_leagues,
+        config.shot_scale,
+        _pxg_active(config.league_ha_on),
+        _pxg_active(config.apm_on),
+        _pxg_active(config.team_quality_on),
+        config
+    )
 end
 
 # ==============================================================================
