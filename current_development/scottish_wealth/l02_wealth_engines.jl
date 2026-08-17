@@ -191,12 +191,12 @@ function PreGame.build_turing_model(config::TeamPxGGoalsAPMWealthModel, feature_
     d    = _pxg_core_wealth(data, config)
     n    = length(d.home_ids)
     rat_h, rat_a = _pxg_ratings_wealth(data, config, n)
-    sx_h = _pxg_suff(Vector{Float64}(data[:flat_home_pxg]),
-                     Vector{Float64}(data[:flat_home_pxg_mask]),
-                     d.home_goals, d.w)
-    sx_a = _pxg_suff(Vector{Float64}(data[:flat_away_pxg]),
-                     Vector{Float64}(data[:flat_away_pxg_mask]),
-                     d.away_goals, d.w)
+    xg_h   = Vector{Float64}(data[:flat_home_xg_proxy])
+    xg_a   = Vector{Float64}(data[:flat_away_xg_proxy])
+    mask_h = Vector{Float64}(data[:flat_pxg_mask_h])
+    mask_a = Vector{Float64}(data[:flat_pxg_mask_a])
+    sx_h   = _pxg_suff(xg_h, mask_h, d.home_goals, d.w)
+    sx_a   = _pxg_suff(xg_a, mask_a, d.away_goals, d.w)
     return build_pxg_goals_apm_wealth_engine(
         d.home_ids, d.away_ids,
         d.season_idx, d.month_idx, d.league_idx,
@@ -380,17 +380,17 @@ function PreGame.build_turing_model(config::TeamFunnelPxGGoalsAPMWealthModel, fe
     d    = _pxg_core_wealth(data, config)
     n    = length(d.home_ids)
     rat_h, rat_a = _pxg_ratings_wealth(data, config, n)
-    sf_h = _pxg_funnel_suff(Vector{Int}(data[:flat_home_shots]),
-                            Vector{Float64}(data[:flat_home_shots_mask]),
-                            Vector{Float64}(data[:flat_home_pxg]),
-                            Vector{Int}(data[:flat_home_pxg_events]),
-                            Vector{Float64}(data[:flat_home_pxg_mask]),
+    sf_h = _pxg_funnel_suff(Vector{Int}(data[:flat_home_shots_n]),
+                            Vector{Float64}(data[:flat_funnel_mask_h]),
+                            Vector{Float64}(data[:flat_home_xg_proxy]),
+                            Vector{Int}(data[:flat_home_pxg_shots]),
+                            Vector{Float64}(data[:flat_pxg_mask_h]),
                             d.home_goals, d.w)
-    sf_a = _pxg_funnel_suff(Vector{Int}(data[:flat_away_shots]),
-                            Vector{Float64}(data[:flat_away_shots_mask]),
-                            Vector{Float64}(data[:flat_away_pxg]),
-                            Vector{Int}(data[:flat_away_pxg_events]),
-                            Vector{Float64}(data[:flat_away_pxg_mask]),
+    sf_a = _pxg_funnel_suff(Vector{Int}(data[:flat_away_shots_n]),
+                            Vector{Float64}(data[:flat_funnel_mask_a]),
+                            Vector{Float64}(data[:flat_away_xg_proxy]),
+                            Vector{Int}(data[:flat_away_pxg_shots]),
+                            Vector{Float64}(data[:flat_pxg_mask_a]),
                             d.away_goals, d.w)
     return build_funnel_pxg_goals_apm_wealth_engine(
         d.home_ids, d.away_ids,
