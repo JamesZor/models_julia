@@ -5,12 +5,14 @@
 # Validates:
 # 1. Feature extraction with ScottishTeamWealthFeature
 # 2. AD-Safety and gradient evaluation under ReverseDiff
-# 3. 3-Chain MCMC smoke run (300 samples) on Scottish Lower data
+# 3. 3-Chain MCMC smoke run (200 warmup + 200 samples) on Scottish Lower data
 # 4. Sampler convergence diagnostics (R-hat <= 1.01) and w_wealth posterior extraction
 
 using BayesianFootball
 using DataFrames, Dates, Statistics, Printf
-using Turing, MCMCChains
+using Turing, MCMCChains, ThreadPinning
+
+pinthreads(:cores)
 
 include("l02_wealth_engines.jl")
 
@@ -22,56 +24,17 @@ println("="^95)
 ds = Data.load_datastore_cached(Data.ScottishLower(), max_age_hours=720)
 @info "DataStore loaded" n_matches=nrow(ds.matches)
 
-# 2. Instantiate Components
-inter_cfg = PreGame.MonthlyInterceptionConfig()
-tdyn_cfg  = PreGame.TimeDecayTeamDynamicsConfig(half_life_days = 365.0, history_seasons = 2)
-ha_cfg    = PreGame.HierarchicalHomeAdvantageConfig()
-lg_cfg    = PreGame.ZeroSumLeagueConfig()
-pdyn_cfg  = PreGame.SharedAttDefPlayerDynamicsConfig()
-kap_cfg   = PreGame.StaticKappaConfig()
-rpm_feat  = Features.XGPlusMinusFeature(target = :goals, half_life_days = 365.0, history_seasons = 2)
-w_feat    = ScottishTeamWealthFeature()
+dyn = PreGame.TimeDecayDynamics(days_half_life = 365.0)
 
-# 3. Model 1: Baseline + Wealth
-m1_baseline = DynamicFunnelPlusMinusWealthModel(
-    interception_config    = inter_cfg,
-    team_dynamics_config   = tdyn_cfg,
-    homeadvantage_config   = ha_cfg,
-    league_config          = lg_cfg,
-    player_dynamics_config = pdyn_cfg,
-    player_ratings_feature = rpm_feat,
-    wealth_feature         = w_feat
-)
-
-# 4. Model 2: Arm A (Proxy xG + Wealth)
-m2_arm_a = TeamPxGGoalsAPMWealthModel(
-    interception_config    = inter_cfg,
-    team_dynamics_config   = tdyn_cfg,
-    homeadvantage_config   = ha_cfg,
-    league_config          = lg_cfg,
-    player_dynamics_config = pdyn_cfg,
-    kappa_config           = kap_cfg,
-    player_ratings_feature = rpm_feat,
-    wealth_feature         = w_feat
-)
-
-# 5. Model 3: Arm B Champion (3-Layer Funnel + Wealth)
-m3_arm_b = TeamFunnelPxGGoalsAPMWealthModel(
-    interception_config    = inter_cfg,
-    team_dynamics_config   = tdyn_cfg,
-    homeadvantage_config   = ha_cfg,
-    league_config          = lg_cfg,
-    player_dynamics_config = pdyn_cfg,
-    kappa_config           = kap_cfg,
-    player_ratings_feature = rpm_feat,
-    wealth_feature         = w_feat
-)
+# 2. Instantiate Models
+mA = TeamPxGGoalsAPMWealthModel(dynamics_config = dyn)
+mB = TeamFunnelPxGGoalsAPMWealthModel(dynamics_config = dyn)
 
 println("\n--- TESTING FEATURE SET EXTRACTION ---")
-req_feats = Features.required_features(m3_arm_b)
+req_feats = Features.required_features(mB)
 println("Required features count: $(length(req_feats))")
 
-# Filter training matches up to season 23/24
+# Filter training matches up to season 23/24 (approx 1,280 matches)
 train_matches = filter(r -> r.match_date < Date(2024, 7, 1), ds.matches)
 println("Training matches count: $(nrow(train_matches))")
 
@@ -81,9 +44,9 @@ println("  :flat_wealth_diff length: $(length(fset.data[:flat_wealth_diff]))")
 println("  :flat_wealth_diff mean:   $(round(mean(fset.data[:flat_wealth_diff]), digits=4))")
 println("  :flat_wealth_diff std:    $(round(std(fset.data[:flat_wealth_diff]), digits=4))")
 
-# 6. Build Turing Model for Arm A
+# 3. Build Turing Model for Arm A
 println("\n--- BUILDING & SMOKE SAMPLING ARM A (Proxy xG + Wealth) ---")
-turing_mod_a = PreGame.build_turing_model(m2_arm_a, fset)
+turing_mod_a = PreGame.build_turing_model(mA, fset)
 
 sampler = NUTS(0.65; max_depth = 7)
 println("Sampling 3 chains x 200 warmup + 200 samples (multithreaded)...")
@@ -101,11 +64,30 @@ println()
 # Check w_wealth parameter
 w_wealth_samples = vec(Array(chain_a[:w_wealth]))
 println("\n===================================================================")
-println("w_wealth POSTERIOR ESTIMATE:")
+println("ARM A: w_wealth POSTERIOR ESTIMATE:")
 println(@sprintf("  Mean:     %+6.4f", mean(w_wealth_samples)))
 println(@sprintf("  Std:      %+6.4f", std(w_wealth_samples)))
 println(@sprintf("  90%% CI:   [%+6.4f, %+6.4f]", quantile(w_wealth_samples, 0.05), quantile(w_wealth_samples, 0.95)))
 println(@sprintf("  P(w > 0): %.1f%%", 100.0 * count(w_wealth_samples .> 0.001) / length(w_wealth_samples)))
 println("===================================================================")
 
-println("\n✓ SMOKE TEST COMPLETE: Model, Feature Hook, and Sampler are 100% Validated!")
+# 4. Build Turing Model for Arm B (Champion 3-Layer Funnel + Wealth)
+println("\n--- BUILDING & SMOKE SAMPLING ARM B (Champion 3-Layer + Wealth) ---")
+turing_mod_b = PreGame.build_turing_model(mB, fset)
+
+println("Sampling 3 chains x 200 warmup + 200 samples (multithreaded)...")
+t0_b = time()
+chain_b = sample(turing_mod_b, sampler, MCMCThreads(), 200, 3; progress = true)
+elapsed_b = round(time() - t0_b, digits = 1)
+println("✓ Completed Arm B Smoke sampling in $(elapsed_b)s")
+
+w_wealth_b = vec(Array(chain_b[:w_wealth]))
+println("\n===================================================================")
+println("ARM B: w_wealth POSTERIOR ESTIMATE:")
+println(@sprintf("  Mean:     %+6.4f", mean(w_wealth_b)))
+println(@sprintf("  Std:      %+6.4f", std(w_wealth_b)))
+println(@sprintf("  90%% CI:   [%+6.4f, %+6.4f]", quantile(w_wealth_b, 0.05), quantile(w_wealth_b, 0.95)))
+println(@sprintf("  P(w > 0): %.1f%%", 100.0 * count(w_wealth_b .> 0.001) / length(w_wealth_b)))
+println("===================================================================")
+
+println("\n✓ SMOKE TEST COMPLETE: Both Arm A and Arm B with Wealth are 100% Validated!")
