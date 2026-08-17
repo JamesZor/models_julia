@@ -218,7 +218,7 @@ function Features.add_feature!(
     F_data::Dict, 
     config::ScottishTeamWealthFeature, 
     ordered_ids::Vector{Int}, 
-    team_map::Dict{String, Int}, 
+    team_map::Any, 
     ds::Data.DataStore
 )
     # Check if catalog is cached locally or needs fetching
