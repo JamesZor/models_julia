@@ -1,23 +1,23 @@
-# current_development/scottish_lower_portfolio/r01_build_books.jl
+# current_development/scottish_lower_portfolio/r01_build_books_betfair.jl
 #
-# Builds MatchBooks for all 5 Scottish models with:
-# - RawPrice() (Bet365 quoted odds)
-# - KellyLogUtility() (Joint log-utility solver)
-# - BakerMcHale(n_draws = 800) (800 posterior draws for parameter uncertainty shrinkage)
-# - ExecutionConfig(commission = NoCommission(), max_selection_stake = 0.50, budget = 0.99)
+# Builds MatchBooks for all 5 Scottish models under BETFAIR EXCHANGE odds with:
+# - DeArb() settlement
+# - KellyLogUtility() joint solver
+# - BakerMcHale(n_draws = 800) shrinkage under parameter uncertainty
+# - ExecutionConfig(commission = PerBetCommission(0.02), max_selection_stake = 0.50, budget = 0.99)
 #
-# Caches built books to `cache/books_<model_name>.jls` so subsequent policy sweeps run in milliseconds.
+# Caches built books to `cache/books_<model_name>_betfair_bm800.jls`.
 
-include("_setup_scottish.jl")
+include("_setup_scottish_betfair.jl")
 
-# Define the production BookSpec with 800 posterior draws for Baker-McHale
+# Define the Betfair Exchange BookSpec with 2% commission and 800-draw Baker-McHale
 spec = PF.BookSpec(
     markets   = MARKETS,
-    price     = PF.RawPrice(),                    # Bet365 bookmaker settlement on quoted prices
+    price     = PF.DeArb(),                       # Exchange De-Arb settlement
     allocator = PF.KellyLogUtility(),             # Multi-market joint Kelly allocator
     shrink    = PF.BakerMcHale(n_draws = 800),    # 800 posterior draws (parameter uncertainty)
     exec      = PF.ExecutionConfig(
-                    commission = PF.NoCommission(), # Bookmaker odds (no exchange commission)
+                    commission = PF.PerBetCommission(0.02), # 2% Betfair Exchange Commission
                     max_selection_stake = 0.50,
                     budget = 0.99,
                     require_complete_markets = true
@@ -25,32 +25,32 @@ spec = PF.BookSpec(
 )
 
 println("\n", "="^80)
-println("BUILDING MATCHBOOKS (800 Baker-McHale Draws per Match)")
+println("BUILDING BETFAIR EXCHANGE MATCHBOOKS (800 Baker-McHale Draws per Match)")
 println("="^80)
-@info "BookSpec configured" price="RawPrice" shrink="BakerMcHale(800 draws)" n_markets=length(MARKETS.markets)
+@info "BookSpec configured" price="DeArb" commission="2% PerBet" shrink="BakerMcHale(800 draws)" n_markets=length(MARKETS.markets)
 
 books_map = Dict{String, Vector{PF.MatchBook}}()
 
 for (m_name, exp) in all_exprs
     m_latents = latents_map[m_name]
-    cache_file = joinpath(CACHE_DIR, "books_$(m_name)_bm800.jls")
+    cache_file = joinpath(CACHE_DIR, "books_$(m_name)_betfair_bm800.jls")
     
     if isfile(cache_file) && get(ENV, "REBUILD_BOOKS", "0") != "1"
-        @info "Reusing cached MatchBooks for: $m_name" cache_file
+        @info "Reusing cached Betfair MatchBooks for: $m_name" cache_file
         books_map[m_name] = deserialize(cache_file)
     else
-      @info "Building MatchBooks for: $m_name ($(nrow(m_latents)) matches)..."
+        @info "Building Betfair MatchBooks for: $m_name ($nrow(m_latents) matches)..."
         t0 = time()
         b = PF.build_books(spec, m_latents, exp, odds, ds)
         elapsed = round(time() - t0, digits = 1)
-        @info "Completed MatchBooks for $m_name in $(elapsed)s" n_books=length(b)
+        @info "Completed Betfair MatchBooks for $m_name in $(elapsed)s" n_books=length(b)
         serialize(cache_file, b)
         books_map[m_name] = b
     end
 end
 
 println("\n", "="^80)
-println("MATCHBOOK DIAGNOSTICS & SUMMARY")
+println("BETFAIR MATCHBOOK DIAGNOSTICS & SUMMARY")
 println("="^80)
 
 summary_df = DataFrame(
@@ -75,4 +75,4 @@ for (m_name, b_list) in books_map
 end
 
 show(summary_df; allrows = true, allcols = true, truncate = 0)
-println("\n\nAll MatchBooks built and cached successfully. Ready for policy sweeps (r02) and benchmarking (r03).")
+println("\n\nAll Betfair MatchBooks built and cached successfully.")
