@@ -51,7 +51,7 @@ for r in all_results
     println("    $(r.config.name): $(length(r.training_results.items)) folds")
 end
 
-ds = Data.load_datastore_cached(Data.ScottishLower())
+ds = Data.load_datastore_cached(Data.ScottishLower(), max_age_hours = 720)
 
 selections = [:home, :draw, :away, :btts_yes, :btts_no,
               :over_05, :under_05, :over_15, :under_15, :over_25, :under_25,
