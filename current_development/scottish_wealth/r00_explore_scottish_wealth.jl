@@ -66,8 +66,8 @@ function _season_label(dt::TimeType)
     return m >= 7 ? "$(y % 100)/$((y+1) % 100)" : "$((y-1) % 100)/$(y % 100)"
 end
 
-# Join match_date and tournament_id
-match_meta = select(ds.matches, :match_id, :match_date, :tournament_id, :home_team, :away_team, :home_score, :away_score)
+# Join match_date and teams from ds.matches
+match_meta = select(ds.matches, :match_id, :match_date, :home_team, :away_team, :home_score, :away_score)
 lineup_with_meta = leftjoin(lineup_vals, match_meta, on=:match_id)
 lineup_with_meta.season_str = _season_label.(lineup_with_meta.match_date)
 
@@ -89,7 +89,8 @@ println()
 
 # 4. Starting-XI Team Wealth Rankings
 println("\n--- 4. TEAM WEALTH RANKINGS (Mean Starting XI Valuation) ---")
-team_summary = combine(groupby(lineup_with_meta, :team_side == "home" ? :home_team : :away_team)) do sub
+lineup_with_meta.team_name = ifelse.(lineup_with_meta.team_side .== "home", lineup_with_meta.home_team, lineup_with_meta.away_team)
+team_summary = combine(groupby(lineup_with_meta, :team_name)) do sub
     (
         n_matches    = length(unique(sub.match_id)),
         mean_xi_m    = round(mean(sub.clean_value) * 11 / 1e6, digits=2),
@@ -98,7 +99,7 @@ team_summary = combine(groupby(lineup_with_meta, :team_side == "home" ? :home_te
     )
 end
 sort!(team_summary, :mean_xi_m, rev=true)
-show(first(team_summary, 20); allrows=true, allcols=true, truncate=0)
+show(team_summary; allrows=true, allcols=true, truncate=0)
 println()
 
 # 5. Match-Level Wealth Table & Correlation Analysis
