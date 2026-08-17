@@ -40,7 +40,7 @@ println("\n", "="^100)
 println("GENERATING MATCHDAY STAKE SHEET (Champion: funnel_pxg_apm)")
 println("="^100)
 @printf("Starting Bankroll: £%.2f | Max Slate Risk Cap: %.1f%% (£%.2f)\n",
-        BANKROLL, sys.policy.cap.max_slate * 100, BANKROLL * sys.policy.cap.max_slate)
+        BANKROLL, sys.policy.cap.cap * 100, BANKROLL * sys.policy.cap.cap)
 
 # Select a representative high-volume Saturday card from the dataset
 _have = Set(latents_df.match_id)
