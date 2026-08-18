@@ -595,15 +595,27 @@ function PreGame.extract_parameters(
     results = Dict{Int, NamedTuple}()
     if is_funnel
         q_raw_samples = vec(Array(chain[Symbol("q_raw")]))
-        aq = model.team_quality_on ? _pxg_league_offsets(chain, n_teams, "raw_aq") .* vec(Array(chain[Symbol("σ_q")])) : zeros(n_samples, n_teams)
-        dq = model.team_quality_on ? _pxg_league_offsets(chain, n_teams, "raw_dq") .* vec(Array(chain[Symbol("σ_q")])) : zeros(n_samples, n_teams)
+        σ_q           = vec(Array(chain[Symbol("σ_q")]))
+        qa            = _pxg_active(model.team_quality_on)
+
+        aq = zeros(n_samples, n_teams); dq = zeros(n_samples, n_teams)
+        for i in 1:n_teams
+            aq[:, i] = qa .* (vec(Array(chain[Symbol("raw_aq[$i]")])) .* σ_q)
+            dq[:, i] = qa .* (vec(Array(chain[Symbol("raw_dq[$i]")])) .* σ_q)
+        end
+        aq .-= mean(aq, dims = 2); dq .-= mean(dq, dims = 2)
 
         for (mid, c) in core
+            a_h = c.h_idx > 0 ? aq[:, c.h_idx] : zeros(n_samples)
+            d_h = c.h_idx > 0 ? dq[:, c.h_idx] : zeros(n_samples)
+            a_a = c.a_idx > 0 ? aq[:, c.a_idx] : zeros(n_samples)
+            d_a = c.a_idx > 0 ? dq[:, c.a_idx] : zeros(n_samples)
+
             log_λ_s_h = model.shot_scale .+ c.lin_h
             log_λ_s_a = model.shot_scale .+ c.lin_a
 
-            logit_q_h = clamp.(q_raw_samples .+ aq[:, c.h_idx] .- dq[:, c.a_idx], -10.0, 10.0)
-            logit_q_a = clamp.(q_raw_samples .+ aq[:, c.a_idx] .- dq[:, c.h_idx], -10.0, 10.0)
+            logit_q_h = clamp.(q_raw_samples .+ a_h .- d_a, -10.0, 10.0)
+            logit_q_a = clamp.(q_raw_samples .+ a_a .- d_h, -10.0, 10.0)
             log_q_h   = .-log.(1.0 .+ exp.(.-logit_q_h))
             log_q_a   = .-log.(1.0 .+ exp.(.-logit_q_a))
 
