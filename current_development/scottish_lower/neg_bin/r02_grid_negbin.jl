@@ -87,8 +87,7 @@ for (cell_idx, (exp_name, model)) in enumerate(specs)
         chains               = CHAINS,
         use_queue            = true,
         max_depth            = 10,
-        max_concurrent_tasks = 16,
-        force                = true
+        max_concurrent_tasks = 16
     )
 
     t0 = time()

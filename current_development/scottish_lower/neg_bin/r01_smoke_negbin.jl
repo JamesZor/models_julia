@@ -71,8 +71,7 @@ for (desc, model) in models_to_test
         chains               = 3,
         use_queue            = true,
         max_depth            = 10,
-        max_concurrent_tasks = 8,
-        force                = true
+        max_concurrent_tasks = 8
     )
 
     t0 = time()
