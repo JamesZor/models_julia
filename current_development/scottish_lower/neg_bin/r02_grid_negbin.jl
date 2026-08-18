@@ -102,11 +102,10 @@ for (cell_idx, (exp_name, model)) in enumerate(specs)
     println("="^85)
 
     sampler = Samplers.QueuedNUTSConfig(
-        n_samples     = SAMPLES,
-        n_adapts      = WARMUP,
-        target_accept = 0.85,
-        n_chains      = CHAINS,
-        max_concurrent_tasks = 16
+        n_samples   = SAMPLES,
+        n_warmup    = WARMUP,
+        accept_rate = 0.85,
+        n_chains    = CHAINS
     )
 
     splitter = Data.GroupedCVConfig(
@@ -124,7 +123,7 @@ for (cell_idx, (exp_name, model)) in enumerate(specs)
     )
 
     t0 = time()
-    res = Experiments.run_experiment(task; save = true)
+    res = Experiments.run_experiment(task; save = true, max_concurrent_tasks = 16)
     elapsed_hr = round((time() - t0) / 3600.0, digits = 2)
     println("✓ Completed and saved $exp_name in $(elapsed_hr)h")
 end

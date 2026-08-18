@@ -41,13 +41,12 @@ splitter = DD.GroupedCVConfig(
     stop_early        = true
 )
 
-# NUTS Sampling Configuration (400 samples, 200 adapt, 3 chains)
+# NUTS Sampling Configuration (400 samples, 200 warmup, 3 chains)
 sampler = SS.QueuedNUTSConfig(
-    n_samples     = 400,
-    n_adapts      = 200,
-    target_accept = 0.85,
-    n_chains      = 3,
-    max_concurrent_tasks = 3
+    n_samples   = 400,
+    n_warmup    = 200,
+    accept_rate = 0.85,
+    n_chains    = 3
 )
 
 # 3. Model Specifications to Test
@@ -109,7 +108,7 @@ for (desc, model) in models_to_test
     )
 
     t0 = time()
-    res = EE.run_experiment(exp_task; save = false)
+    res = EE.run_experiment(exp_task; save = false, max_concurrent_tasks = 3)
     elapsed = round(time() - t0, digits = 1)
     println("✓ Completed MCMC sampling in $(elapsed)s")
 
