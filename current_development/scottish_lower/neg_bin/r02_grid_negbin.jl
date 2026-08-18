@@ -62,12 +62,8 @@ specs = Tuple{String, Any}[
         dynamics_config = dyn,
         dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
         name = "pxg_apm_negbin_$(_tag)"
-    )),
-    ("funnel_pxg_apm_negbin_$(_tag)", TeamFunnelPxGGoalsAPMNegBinModel(
-        dynamics_config = dyn,
-        dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
-        name = "funnel_pxg_apm_negbin_$(_tag)"
     ))
+    # 3. Funnel Proxy xG NegBin (Arm B) deferred for daytime run
 ]
 
 println("[INFO] Running $(length(specs)) Negative Binomial model specs across 40 folds...")
