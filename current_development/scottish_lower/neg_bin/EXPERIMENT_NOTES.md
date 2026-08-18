@@ -110,4 +110,41 @@ current_development/scottish_lower/
 ### Planned Model Variants to Compare:
 1. **`goals_negbin_ctl_hl365_hs2`** vs **`funnel_apm_ctl_hl365_hs2`** (Baseline Goals-only control).
 2. **`pxg_apm_negbin_hl365_hs2`** vs **`pxg_apm_hl365_hs2`** (Arm A: Proxy xG Gamma + RAPM + Goals NegBin).
-3. **`funnel_pxg_apm_negbin_hl365_hs2`** vs **`funnel_pxg_apm_hl365_hs2`** (Arm B: Shots Volume Poisson + Proxy xG Quality Gamma + RAPM + Goals NegBin).
+3. **`funnel_pxg_apm_negbin_hl365_hs2`** vs **`funnel_pxg_apm_negbin_hl365_hs2`** (Arm B: Shots Volume Poisson + Proxy xG Quality Gamma + RAPM + Goals NegBin).
+
+---
+
+## 5. ReverseDiff AD Gradient Tape Profiling & Optimizations
+
+Using the integer-recurrence $\log\Gamma$ cancellation formula:
+$$\sum_{i=1}^N w_i \left[ \log\Gamma(k_i + r) - \log\Gamma(r) \right] = \sum_{j=0}^{K_{\max}-1} N_j \log(r + j)$$
+where $N_j = \sum_{i: k_i > j} w_i$, and collapsing the quality conditional Gamma evaluations across $\approx 20$ unique shot counts, the gradient latency on `mcmc-beast` ($N = 1,990$ matches) was profiled as follows:
+
+| Engine | Latent Dim $\theta$ | GradientTape Nodes | Compile Time | Min Grad Latency | Median Grad Latency | Memory Allocs |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1. Goals NegBin Baseline** | $93$ | $21,141$ | $0.174\text{ s}$ | **`0.686 ms`** | **`0.741 ms`** | $59,952\text{ B}$ |
+| **2. Arm A: Proxy xG NegBin** | $95$ | $18,318$ | $0.259\text{ s}$ | **`0.634 ms`** | **`0.654 ms`** | $130,704\text{ B}$ |
+| **3. Arm B: Funnel Proxy xG NegBin** | $141$ | $47,876$ | $0.342\text{ s}$ | **`1.679 ms`** | **`1.852 ms`** | $62,880\text{ B}$ |
+
+---
+
+## 6. Smoke Test Empirical Convergence & Dispersion Posteriors
+
+| Model Engine | Max $\hat{R}$ | Away Dispersion $r_a$ (90% CI) | Home Dispersion $r_h$ (90% CI) | Home Dispersion Shift $\delta_r$ | Conversion Rate $\kappa$ (90% CI) | Status |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1. Goals NegBin Baseline** | **`1.0137`** | $18.29$ $[8.76, 34.64]$ | $40.67$ $[14.53, 91.95]$ | $+0.722$ ($P(\delta_r > 0) = 94.8\%$) | N/A | **PASS ✅** |
+| **2. Arm A: Proxy xG NegBin** | **`1.0135`** | $18.45$ $[9.05, 34.18]$ | $43.33$ $[14.72, 95.33]$ | $+0.768$ ($P(\delta_r > 0) = 94.0\%$) | $1.0885$ $[1.0275, 1.1496]$ | **PASS ✅** |
+| **3. Arm B: Funnel Proxy xG NegBin** | **`1.0142`** | $18.45$ $[9.08, 33.46]$ | $41.68$ $[15.65, 90.31]$ | $+0.750$ ($P(\delta_r > 0) = 94.8\%$) | $1.0646$ $[1.0040, 1.1238]$ | **PASS ✅** |
+
+---
+
+## 7. Overnight 40-Fold MCMC Grid Execution
+
+- **Configured Grid Script**: `r02_grid_negbin.jl`
+- **Models Queued**:
+  1. `goals_negbin_ctl_hl365_hs2` (40 folds $\times$ 3 chains = 120 MCMC tasks)
+  2. `pxg_apm_negbin_hl365_hs2` (40 folds $\times$ 3 chains = 120 MCMC tasks)
+- **Parallelization**: 16 concurrent worker tasks pinned 1-to-1 to physical CPU cores.
+- **Output Directory**: `data/scottish_negbin_grid/`
+- **Next Step**: Once complete, run `r03_eval_negbin.jl` to generate the full LogLoss, RQR, GLMEdge, and Betfair multi-market portfolio evaluation.
+
