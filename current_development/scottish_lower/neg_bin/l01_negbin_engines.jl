@@ -462,7 +462,7 @@ end
     log_λ_a = clamp.(int_m .+ lg .+
                      view(dyn.α, away_ids) .+ view(dyn.β, home_ids) .+ pillar_a, -10.0, 10.0)
 
-    # 3. Quality Layer (q)
+    # 3. Quality Layer (q = 1 / (1 + exp(-z)), 1/q = 1 + exp(-z), log q = -log(1 + exp(-z)))
     logit_q_h = clamp.(q_raw .+ view(aq, home_ids) .- view(dq, away_ids), -10.0, 10.0)
     logit_q_a = clamp.(q_raw .+ view(aq, away_ids) .- view(dq, home_ids), -10.0, 10.0)
 
@@ -473,11 +473,13 @@ end
     log_λ_a = ifelse.(bad_a, zero.(log_λ_a), log_λ_a)
     Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
 
-    λ_h     = exp.(log_λ_h);   λ_a     = exp.(log_λ_a)
-    log_q_h = .-log1pexp.(.-logit_q_h)
-    log_q_a = .-log1pexp.(.-logit_q_a)
-    q_h     = exp.(log_q_h);   q_a     = exp.(log_q_a)
-    inv_q_h = exp.(.-log_q_h); inv_q_a = exp.(.-log_q_a)
+    λ_h     = exp.(log_λ_h)
+    λ_a     = exp.(log_λ_a)
+
+    inv_q_h = 1.0 .+ exp.(.-logit_q_h)
+    inv_q_a = 1.0 .+ exp.(.-logit_q_a)
+    log_q_h = .-log.(inv_q_h)
+    log_q_a = .-log.(inv_q_a)
 
     lνq     = log(ν_q)
 
