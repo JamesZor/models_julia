@@ -77,29 +77,22 @@ for (cell_idx, (exp_name, model)) in enumerate(specs)
     println("[$cell_idx/$(length(specs))] STARTING MODEL GRID: $exp_name")
     println("="^85)
 
-    sampler = Samplers.QueuedNUTSConfig(
-        n_samples   = SAMPLES,
-        n_warmup    = WARMUP,
-        accept_rate = 0.85,
-        n_chains    = CHAINS
-    )
-
-    splitter = Data.GroupedCVConfig(
-        tournament_groups = [[56, 57]],
-        target_seasons    = TARGETS,
-        history_seasons   = HS,
-        dynamics_col      = DYN_COL
-    )
-
     task = Experiments.create_experiment_task(
         ds, model, exp_name, save_dir;
-        splitter = splitter,
-        sampler  = sampler,
-        force    = true
+        target_seasons       = TARGETS,
+        history_seasons      = HS,
+        dynamics_col         = DYN_COL,
+        samples              = SAMPLES,
+        warmup               = WARMUP,
+        chains               = CHAINS,
+        use_queue            = true,
+        max_depth            = 10,
+        max_concurrent_tasks = 16,
+        force                = true
     )
 
     t0 = time()
-    res = Experiments.run_experiment(task; save = true, max_concurrent_tasks = 16)
+    res = Experiments.run_experiment(task; save = true)
     elapsed_hr = round((time() - t0) / 3600.0, digits = 2)
     println("✓ Completed and saved $exp_name in $(elapsed_hr)h")
 end

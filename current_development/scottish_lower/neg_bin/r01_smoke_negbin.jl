@@ -4,8 +4,8 @@
 #
 # Checks:
 # 1. Automatic ReverseDiff tape compilation & sub-millisecond gradient speed
-# 2. 1-Split NUTS MCMC Sampling (400 samples, 200 warmup, 3 chains)
-# 3. Parameter Convergence: R-hat <= 1.01 across all chains
+# 2. Fast NUTS MCMC Sampling on target season 25/26
+# 3. Parameter Convergence: R-hat <= 1.01 across chains
 # 4. Dispersion Parameter Posteriors: r_h, r_a, δ_r_home, log_r
 # 5. Out-of-sample Prediction & Score Matrix Generation
 
@@ -16,8 +16,6 @@ using DataFrames, Dates, Statistics, Printf, MCMCChains
 const DD = BayesianFootball.Data
 const FF = BayesianFootball.Features
 const MM = BayesianFootball.Models
-const SS = BayesianFootball.Samplers
-const TT = BayesianFootball.Training
 const EE = BayesianFootball.Experiments
 const PP = BayesianFootball.Predictions
 
@@ -30,26 +28,10 @@ println("="^95)
 
 # 1. Load DataStore
 ds = DD.load_datastore_cached(DD.ScottishLower(), max_age_hours = 10000)
+save_dir = joinpath(ROOT, "data/scottish_negbin_smoke/"); mkpath(save_dir)
 println("✓ Loaded ScottishLower DataStore: $(nrow(ds.matches)) matches")
 
-# 2. Fast 1-Split Configuration (Target Season: 25/26, stop_early=true for 1 fold)
-splitter = DD.GroupedCVConfig(
-    tournament_groups = [[56, 57]],
-    target_seasons    = ["25/26"],
-    history_seasons   = 2,
-    dynamics_col      = :match_biweek,
-    stop_early        = true
-)
-
-# NUTS Sampling Configuration (400 samples, 200 warmup, 3 chains)
-sampler = SS.QueuedNUTSConfig(
-    n_samples   = 400,
-    n_warmup    = 200,
-    accept_rate = 0.85,
-    n_chains    = 3
-)
-
-# 3. Model Specifications to Test
+# 2. Model Specifications to Test
 dyn = MM.PreGame.TimeDecayDynamics(days_half_life = 365.0)
 
 models_to_test = [
@@ -79,28 +61,40 @@ for (desc, model) in models_to_test
         ds,
         model,
         model.name,
-        joinpath(@__DIR__, "scratch_experiments");
-        splitter = splitter,
-        sampler  = sampler,
-        force    = true
+        save_dir;
+        target_seasons       = ["25/26"],
+        history_seasons      = 2,
+        warmup_period        = 20, # ~3 folds for fast smoke testing
+        dynamics_col         = :match_biweek,
+        samples              = 400,
+        warmup               = 200,
+        chains               = 3,
+        use_queue            = true,
+        max_depth            = 10,
+        max_concurrent_tasks = 8,
+        force                = true
     )
 
     t0 = time()
-    res = EE.run_experiment(exp_task; save = false, max_concurrent_tasks = 3)
+    res = EE.run_experiment(exp_task; save = false)
     elapsed = round(time() - t0, digits = 1)
-    println("✓ Completed MCMC sampling in $(elapsed)s")
+    println("✓ Completed MCMC sampling ($(length(res.training_results.items)) folds) in $(elapsed)s")
 
     chain = res.training_results.items[1].chain
     
     # 1. Convergence & R-hat Check
-    rhats = MCMCChains.rhat(chain)
-    rhat_vals = filter(!isnan, collect(values(rhats)))
+    er = DataFrame(MCMCChains.ess_rhat(chain))
+    rcol = :rhat in propertynames(er) ? :rhat : first(filter(c -> occursin("rhat", lowercase(string(c))), propertynames(er)))
+    rhat_vals = collect(skipmissing(replace(er[!, rcol], NaN => missing)))
     max_rhat = isempty(rhat_vals) ? 1.0 : maximum(rhat_vals)
     @printf("  • Convergence Check : Max R-hat = %.4f -> %s\n",
             max_rhat, max_rhat <= 1.02 ? "CONVERGED (PASS ✅)" : "WARN (R-hat > 1.02)")
 
     # 2. Dispersion Parameters Posteriors
-    if Symbol("disp.log_r") in names(chain)
+    disp_keys = filter(k -> occursin("disp", string(k)) || occursin("log_r", string(k)), keys(chain))
+    println("  • Dispersion parameters found: ", disp_keys)
+
+    if Symbol("disp.log_r") in keys(chain)
         log_r_arr = vec(Array(chain[Symbol("disp.log_r")]))
         δ_r_arr   = vec(Array(chain[Symbol("disp.δ_r_home")]))
         r_a_arr   = exp.(log_r_arr)
@@ -114,7 +108,7 @@ for (desc, model) in models_to_test
                 mean(δ_r_arr), quantile(δ_r_arr, 0.05), quantile(δ_r_arr, 0.95), 100 * mean(δ_r_arr .> 0))
     end
 
-    if Symbol("log_κ") in names(chain)
+    if Symbol("log_κ") in keys(chain)
         κ_arr = exp.(vec(Array(chain[Symbol("log_κ")])))
         @printf("  • Kappa Conversion  : Mean = %6.4f, 90%% CI = [%5.4f, %5.4f]\n",
                 mean(κ_arr), quantile(κ_arr, 0.05), quantile(κ_arr, 0.95))
