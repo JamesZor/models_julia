@@ -474,7 +474,7 @@ const ScottishNegBinModelUnion = Union{
 function PreGame.extract_parameters(
     model::ScottishNegBinModelUnion,
     df::DataFrame,
-    feature_set,
+    feature_set::Features.FeatureSet,
     chain::MCMCChains.Chains
 )
     n_matches = nrow(df)
@@ -541,6 +541,9 @@ function PreGame.extract_parameters(
         "κ"   => fill(κ_samples, n_matches)
     )
 end
+
+PreGame.extract_parameters(model::ScottishNegBinModelUnion, df::DataFrame, feature_tuple::Tuple, chain::MCMCChains.Chains) =
+    PreGame.extract_parameters(model, df, feature_tuple[1], chain)
 
 Pred.extract_params(::ScottishNegBinModelUnion, row) = (
     λ_h = row.λ_h,
