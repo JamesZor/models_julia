@@ -11,7 +11,7 @@
 
 using Revise
 using BayesianFootball
-using DataFrames, Dates, Statistics, Printf, MCMCChains
+using DataFrames, Dates, Statistics, Printf, MCMCChains, LinearAlgebra
 
 const DD = BayesianFootball.Data
 const FF = BayesianFootball.Features
