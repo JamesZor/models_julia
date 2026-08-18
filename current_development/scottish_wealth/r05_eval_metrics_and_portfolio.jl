@@ -85,19 +85,24 @@ eval_df = Evaluation.evaluate_experiments(metrics, experiments, ds)
 
 banner("3. EVALUATION METRIC TABLES")
 
-# A. RQR Summary
+# A. RQR Summary (Randomized Quantile Residuals: Mean ~ 0.0, Std ~ 1.0)
 println("\n" * "="^85)
-println("📈 RELATIVE QUADRATIC RATE (RQR / Calibration - Lower is Better)")
+println("📈 RANDOMIZED QUANTILE RESIDUALS (RQR Calibration: Mean ~ 0.0, Std ~ 1.0)")
 println("="^85)
-if "rqr_rqr" in names(eval_df)
+if "rqr_all_mean" in names(eval_df)
     rqr_df = DataFrame(
-        model = eval_df.model,
-        rqr   = eval_df.rqr_rqr
+        model       = eval_df.model,
+        mean_all    = [round(v, digits = 4) for v in eval_df.rqr_all_mean],
+        std_all     = [round(v, digits = 4) for v in eval_df.rqr_all_std],
+        mean_home   = [round(v, digits = 4) for v in eval_df.rqr_home_mean],
+        std_home    = [round(v, digits = 4) for v in eval_df.rqr_home_std],
+        mean_away   = [round(v, digits = 4) for v in eval_df.rqr_away_mean],
+        std_away    = [round(v, digits = 4) for v in eval_df.rqr_away_std]
     )
     show(rqr_df; allrows = true, allcols = true, truncate = 0); println()
 end
 
-# B. Family-Pooled GLMEdge Summary (Positive = Model has edge over market close)
+# B. Family-Pooled GLMEdge Summary (Spread Fair Coef: Positive = Model edge over market close)
 fam = Dict(
     :x12    => [:home, :draw, :away],
     :btts   => [:btts_yes, :btts_no],
@@ -113,12 +118,12 @@ end
 present_models = unique(eval_df.model)
 
 println("\n" * "="^85)
-println("🎯 GLMEDGE (Market Bias Pathology / Edge vs Close - Positive is Better)")
+println("🎯 GLMEDGE: MARKET SPREAD FAIR COEF (Positive = Structural Edge over Close)")
 println("="^85)
 glm_df = DataFrame(model = present_models)
 for (fname, sels) in fam
     glm_df[!, fname] = [round(mean(filter(!isnan,
-        [_col(eval_df, mm, "glmedge_$(s)_overall_edge") for s in sels])), digits = 4)
+        [_col(eval_df, mm, "glmedge_$(s)_spread_fair_coef") for s in sels])), digits = 4)
         for mm in present_models]
 end
 show(glm_df; allrows = true, allcols = true, truncate = 0); println()
