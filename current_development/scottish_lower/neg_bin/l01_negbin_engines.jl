@@ -69,30 +69,49 @@ Base.@kwdef struct TeamGoalsNegBinModel{
 end
 
 """
-Algebraically exact, SIMD-vectorized Robust Negative Binomial log-likelihood:
-log p(k | r, λ) = logΓ(k+r) - logΓ(r) + r*log(r) - (k+r)*log(r+λ) + k*log(λ) [+ const]
-
-Computes the entire N-match likelihood in 4 SIMD instructions without allocating TrackedReal objects.
+Precomputes sufficient statistics and integer goal count weights for 0-allocation Negative Binomial AD.
+Uses the Gamma function recurrence identity:
+logΓ(k + r) - logΓ(r) = sum_{j=0}^{k-1} log(r + j)
+to eliminate all loggamma calls and Array{TrackedReal} allocations on the tape.
 """
+function _negbin_precompute(goals::Vector{Int}, w::Vector{Float64})
+    max_k = isempty(goals) ? 0 : maximum(goals)
+    if max_k > 0
+        N_j = Float64[sum(w[goals .> j]) for j in 0:(max_k - 1)]
+        j_offsets = Float64.(0:(max_k - 1))
+    else
+        N_j = Float64[]
+        j_offsets = Float64[]
+    end
+    return (
+        w = w,
+        c_g_lin = w .* goals,
+        S_w = sum(w),
+        N_j = N_j,
+        j_offsets = j_offsets
+    )
+end
+
 @inline function _negbin_vector_loglik(
     goals::Vector{Int},
     log_λ::AbstractVector,
     r::Real,
-    w::Vector{Float64},
-    c_g_lin::Vector{Float64},
-    S_w::Real
+    nb::NamedTuple
 )
     lr = log(max(r, 1e-6))
     λ  = exp.(log_λ)
 
-    # 1. Scalar r-block
-    ll_r = S_w * (r * lr - loggamma(r))
-    # 2. Vector loggamma(k + r)
-    ll_gamma = sum(w .* loggamma.(goals .+ r))
+    # 1. Scalar r*log(r) block
+    ll_r = nb.S_w * r * lr
+
+    # 2. Integer recurrence log(r + j) terms (O(max_goals), zero loggamma, zero allocations)
+    ll_gamma = isempty(nb.N_j) ? 0.0 : sum(nb.N_j .* log.(r .+ nb.j_offsets))
+
     # 3. Vector (k + r) * log(r + λ)
-    ll_denom = sum(w .* (goals .+ r) .* log.(r .+ λ))
+    ll_denom = sum(nb.w .* (goals .+ r) .* log.(r .+ λ))
+
     # 4. Vector k * log(λ)
-    ll_numer = sum(c_g_lin .* log_λ)
+    ll_numer = sum(nb.c_g_lin .* log_λ)
 
     return ll_r + ll_gamma + ll_numer - ll_denom
 end
@@ -101,8 +120,8 @@ end
     home_ids::Vector{Int}, away_ids::Vector{Int},
     season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
     rat_h::Vector{Float64}, rat_a::Vector{Float64},
-    home_goals::Vector{Int}, away_goals::Vector{Int}, weights::Vector{Float64},
-    c_gh_lin::Vector{Float64}, c_ga_lin::Vector{Float64}, S_w::Float64,
+    home_goals::Vector{Int}, away_goals::Vector{Int},
+    nb_h::NamedTuple, nb_a::NamedTuple,
     n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
     league_ha_active::Float64, apm_active::Float64,
     config
@@ -145,8 +164,8 @@ end
     r_a = disp.a
 
     # 3. Vectorized SIMD Robust Negative Binomial Likelihood
-    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_h, r_h, weights, c_gh_lin, S_w)
-    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_a, r_a, weights, c_ga_lin, S_w)
+    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_h, r_h, nb_h)
+    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_a, r_a, nb_a)
 
     Turing.@addlogprob! ifelse(isnan(r_h) || isnan(r_a) || isnan(ll_g_h) || isnan(ll_g_a), -Inf, 0.0)
     Turing.@addlogprob! ll_g_h + ll_g_a
@@ -168,16 +187,15 @@ function PreGame.build_turing_model(config::TeamGoalsNegBinModel, feature_set)
     n    = length(d.home_ids)
     rat_h, rat_a = _pxg_ratings(data, config, n)
 
-    c_gh_lin = d.w .* d.home_goals
-    c_ga_lin = d.w .* d.away_goals
-    S_w      = sum(d.w)
+    nb_h = _negbin_precompute(d.home_goals, d.w)
+    nb_a = _negbin_precompute(d.away_goals, d.w)
 
     return build_goals_negbin_engine(
         d.home_ids, d.away_ids,
         d.season_idx, d.month_idx, d.league_idx,
         rat_h, rat_a,
-        d.home_goals, d.away_goals, d.w,
-        c_gh_lin, c_ga_lin, S_w,
+        d.home_goals, d.away_goals,
+        nb_h, nb_a,
         d.n_teams, d.n_seasons, d.n_months, d.n_leagues,
         _pxg_active(config.league_ha_on), _pxg_active(config.apm_on),
         config
@@ -217,7 +235,8 @@ end
     season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
     rat_h::Vector{Float64}, rat_a::Vector{Float64},
     sx_h::NamedTuple, sx_a::NamedTuple,
-    home_goals::Vector{Int}, away_goals::Vector{Int}, weights::Vector{Float64}, S_w::Float64,
+    home_goals::Vector{Int}, away_goals::Vector{Int},
+    nb_h::NamedTuple, nb_a::NamedTuple,
     n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
     league_ha_active::Float64, apm_active::Float64,
     config
@@ -275,8 +294,8 @@ end
     # 4. Pillar B: Goals (Robust Negative Binomial, SIMD vectorized)
     log_λ_gh = log_κ .+ log_μ_h
     log_λ_ga = log_κ .+ log_μ_a
-    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_gh, r_h, weights, sx_h.c_g_lin, S_w)
-    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_ga, r_a, weights, sx_a.c_g_lin, S_w)
+    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_gh, r_h, nb_h)
+    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_ga, r_a, nb_a)
 
     Turing.@addlogprob! ifelse(isnan(ll_xg_h) || isnan(ll_xg_a) || isnan(r_h) || isnan(r_a) || isnan(ll_g_h) || isnan(ll_g_a), -Inf, 0.0)
     Turing.@addlogprob! ll_xg_h + ll_xg_a + ll_g_h + ll_g_a
@@ -303,12 +322,16 @@ function PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinModel, feature_
     mask_h = Vector{Float64}(data[:flat_pxg_mask_h])
     mask_a = Vector{Float64}(data[:flat_pxg_mask_a])
 
+    nb_h = _negbin_precompute(d.home_goals, d.w)
+    nb_a = _negbin_precompute(d.away_goals, d.w)
+
     return build_pxg_goals_apm_negbin_engine(
         d.home_ids, d.away_ids, d.season_idx, d.month_idx, d.league_idx,
         rat_h, rat_a,
         _pxg_suff(xg_h, mask_h, d.home_goals, d.w),
         _pxg_suff(xg_a, mask_a, d.away_goals, d.w),
-        d.home_goals, d.away_goals, d.w, sum(d.w),
+        d.home_goals, d.away_goals,
+        nb_h, nb_a,
         d.n_teams, d.n_seasons, d.n_months, d.n_leagues,
         _pxg_active(config.league_ha_on), _pxg_active(config.apm_on),
         config
@@ -352,7 +375,8 @@ end
     season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
     rat_h::Vector{Float64}, rat_a::Vector{Float64},
     sf_h::NamedTuple, sf_a::NamedTuple,
-    home_goals::Vector{Int}, away_goals::Vector{Int}, weights::Vector{Float64}, S_w::Float64,
+    home_goals::Vector{Int}, away_goals::Vector{Int},
+    nb_h::NamedTuple, nb_a::NamedTuple,
     shot_scale::Float64,
     n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
     league_ha_active::Float64, apm_active::Float64, quality_active::Float64,
@@ -436,8 +460,8 @@ end
     # 6. Goals Robust Negative Binomial Likelihood (SIMD vectorized)
     log_λ_gh = log_κ .+ log_λ_h .+ log_q_h
     log_λ_ga = log_κ .+ log_λ_a .+ log_q_a
-    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_gh, r_h, weights, sf_h.c_g_lin, S_w)
-    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_ga, r_a, weights, sf_a.c_g_lin, S_w)
+    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_gh, r_h, nb_h)
+    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_ga, r_a, nb_a)
 
     Turing.@addlogprob! ifelse(isnan(ll_s_h) || isnan(ll_s_a) || isnan(ll_q_h) || isnan(ll_q_a) || isnan(r_h) || isnan(r_a) || isnan(ll_g_h) || isnan(ll_g_a), -Inf, 0.0)
     Turing.@addlogprob! ll_s_h + ll_s_a + ll_q_h + ll_q_a + ll_g_h + ll_g_a
@@ -460,6 +484,9 @@ function PreGame.build_turing_model(config::TeamFunnelPxGGoalsAPMNegBinModel, fe
     n    = length(d.home_ids)
     rat_h, rat_a = _pxg_ratings(data, config, n)
 
+    nb_h = _negbin_precompute(d.home_goals, d.w)
+    nb_a = _negbin_precompute(d.away_goals, d.w)
+
     return build_funnel_pxg_goals_apm_negbin_engine(
         d.home_ids, d.away_ids, d.season_idx, d.month_idx, d.league_idx,
         rat_h, rat_a,
@@ -475,7 +502,8 @@ function PreGame.build_turing_model(config::TeamFunnelPxGGoalsAPMNegBinModel, fe
                          Vector{Int}(data[:flat_away_pxg_shots]),
                          Vector{Float64}(data[:flat_pxg_mask_a]),
                          d.away_goals, d.w),
-        d.home_goals, d.away_goals, d.w, sum(d.w),
+        d.home_goals, d.away_goals,
+        nb_h, nb_a,
         config.shot_scale,
         d.n_teams, d.n_seasons, d.n_months, d.n_leagues,
         _pxg_active(config.league_ha_on), _pxg_active(config.apm_on),
