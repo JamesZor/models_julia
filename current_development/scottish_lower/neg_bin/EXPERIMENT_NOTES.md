@@ -17,36 +17,45 @@ where $r > 0$ is the dispersion (shape) parameter. As $r \to \infty$, the distri
 
 ---
 
-## 2. Statistical Exploratory Data Analysis & Overdispersion Tests
+## 2. Statistical Exploratory Data Analysis & Overdispersion Tests (Stage-A Playbook)
 
-Results computed over the complete Scottish Lower historical match dataset ($N = 1,990$ matches across Scottish League One and League Two):
+Results computed over the complete Scottish Lower historical match dataset ($N = 1,990$ matches across Scottish League One #56 and League Two #57) following the standard `STAGE_A_EDA_PLAYBOOK.md` ladder:
 
-### A. Summary Moments & Dispersion Index ($\text{VMR} = \sigma^2 / \mu$)
+### A. Marginal Moments & Dispersion Index ($\text{VMR} = \sigma^2 / \mu$)
 
-| Market Pillar | Sample Size | Mean ($\mu$) | Variance ($\sigma^2$) | Dispersion Index ($\text{VMR}$) | Statistical Status |
+| Market Pillar | Sample Size ($N$) | Mean ($\mu$) | Variance ($\sigma^2$) | Dispersion Index ($\text{VMR}$) | Poisson Status |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Home Goals** | $1,990$ | $1.4633$ | $1.5580$ | **`1.0647`** | **Overdispersed ($+6.5\%$ excess variance)** |
 | **Away Goals** | $1,990$ | $1.2879$ | $1.4641$ | **`1.1367`** | **Strongly Overdispersed ($+13.7\%$ excess variance)** |
-| **Total Goals** | $1,990$ | $2.7513$ | $2.6133$ | $0.9499$ | Slight negative correlation |
-
-#### Breakdown by Division:
-- **Scottish League One (#56, N=995):**
-  - Home Goals: $\mu = 1.486, \sigma^2 = 1.634 \implies \mathbf{\text{VMR} = 1.100}$
-  - Away Goals: $\mu = 1.324, \sigma^2 = 1.497 \implies \mathbf{\text{VMR} = 1.131}$
-- **Scottish League Two (#57, N=995):**
-  - Home Goals: $\mu = 1.440, \sigma^2 = 1.482 \implies \mathbf{\text{VMR} = 1.029}$
-  - Away Goals: $\mu = 1.252, \sigma^2 = 1.430 \implies \mathbf{\text{VMR} = 1.142}$
+| **Pooled (H+A)** | $3,980$ | $1.3756$ | $1.5195$ | **`1.1046`** | **Overdispersed ($+10.5\%$ excess variance)** |
+| **Total Goals** | $1,990$ | $2.7513$ | $2.6133$ | $0.9499$ | Slight cross-team negative covariance |
 
 ---
 
-### B. Formal Hypothesis Tests
+### B. Distribution Fit Ladder & Information Criteria (MLE)
+
+| Market Pillar | Model | Fitted Parameters | Log-Likelihood | AIC | $\Delta\text{AIC}$ | BIC | Chi² GOF $p$-value | Verdict |
+| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Home Goals** | Poisson | $\lambda = 1.463$ | $-3,066.97$ | $6,135.93$ | $+1.74$ | $6,141.53$ | $0.0009$ (Rejected) | Poisson fails |
+| | **Robust NegBin (NB2)** | **$r = 23.66, \mu = 1.463$** | **$-3,065.10$** | **`6,134.19`** | **`0.00`** | $6,145.39$ | **`0.0034`** | **NB2 WINS** 🏆 |
+| **Away Goals** | Poisson | $\lambda = 1.288$ | $-2,963.10$ | $5,928.19$ | $+14.77$ | $5,933.79$ | $0.0010$ (Rejected) | Severe failure |
+| | **Robust NegBin (NB2)** | **$r = 9.25, \mu = 1.288$** | **$-2,954.71$** | **`5,913.42`** | **`0.00`** | **`5,924.61`** | **`0.8035` (Ideal Fit)** | **NB2 WINS** 🏆 |
+| **Pooled (H+A)**| Poisson | $\lambda = 1.376$ | $-6,041.19$ | $12,084.40$ | $+17.38$ | $12,090.70$ | $0.0000$ (Rejected) | Poisson fails |
+| | **Robust NegBin (NB2)** | **$r = 13.37, \mu = 1.376$** | **$-6,031.50$** | **`12,067.00`** | **`0.00`** | **`12,079.60`** | **`0.1889`** | **NB2 WINS** 🏆 |
+
+---
+
+### C. Formal Overdispersion Hypothesis Tests
 
 1. **Dean-Lawless (1989) Lagrange Multiplier Score Test:**
-   - **Home Goals:** $T = 2.045$, $p = 0.0204$ $\implies$ **Reject $H_0$ Poisson ($p < 0.05$)**
-   - **Away Goals:** $T = 4.312$, $p = 8.08 \times 10^{-6}$ $\implies$ **Reject $H_0$ Poisson ($p < 0.0001$)**
+   - **Home Goals:** $T = 2.024, p = 0.0215 \implies$ **Reject Poisson ($p < 0.05$)**
+   - **Away Goals:** $T = 4.295, p = 8.72 \times 10^{-6} \implies$ **Decisive Rejection of Poisson ($p < 0.0001$)**
 2. **Cameron-Trivedi (1990) Auxiliary Regression Test:**
-   - **Home Goals:** $\hat{\alpha} = +0.0442$ ($t = 2.05, p = 0.020$)
-   - **Away Goals:** $\hat{\alpha} = +0.1062$ ($t = 4.31, p < 0.0001$)
+   - **Home Goals:** $\hat{\alpha} = +0.0438$ ($SE = 0.0245, t = 1.79, p = 0.0369$)
+   - **Away Goals:** $\hat{\alpha} = +0.1057$ ($SE = 0.0275, t = 3.85, p = 5.98 \times 10^{-5}$)
+3. **Bivariate Low-Score Dependence (Dixon-Coles $\rho$):**
+   - $\lambda_h = 1.4634, \mu_a = 1.2876, \rho = -0.0265$ ($\text{LRT} = 0.91, p = 0.3403$).
+   - Confirms that independent Negative Binomial marginals are structurally sufficient (no bivariate low-score correction is required).
 
 ---
 
