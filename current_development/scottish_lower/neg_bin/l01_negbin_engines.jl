@@ -581,69 +581,63 @@ function PreGame.extract_parameters(
     feature_set::Features.FeatureSet,
     chain::MCMCChains.Chains
 )
-    n_matches = nrow(df)
-    n_samples = size(chain, 1) * size(chain, 3)
+    core, n_samples, n_teams = _pxg_extract_core(model, df, feature_set, chain)
 
-    # Extract common linear components via _pxg_extract_core
-    c = _pxg_extract_core(model, df, feature_set, chain)
-
-    # Extract Dispersion (r_h, r_a)
     disp = PreGame.extract_dispersion(chain, model.dispersion_config)
     r_h_samples = disp.h
     r_a_samples = disp.a
 
     has_kappa = Symbol("log_κ") in keys(chain)
-    κ_samples = has_kappa ? exp.(vec(Array(chain[Symbol("log_κ")]))) : ones(Float64, n_samples)
+    κ = has_kappa ? exp.(vec(Array(chain[Symbol("log_κ")]))) : ones(Float64, n_samples)
 
     is_funnel = model isa TeamFunnelPxGGoalsAPMNegBinModel
-    
-    λ_h_mat = zeros(Float64, n_matches, n_samples)
-    λ_a_mat = zeros(Float64, n_matches, n_samples)
-    r_h_mat = zeros(Float64, n_matches, n_samples)
-    r_a_mat = zeros(Float64, n_matches, n_samples)
 
+    results = Dict{Int, NamedTuple}()
     if is_funnel
         q_raw_samples = vec(Array(chain[Symbol("q_raw")]))
-        aq = model.team_quality_on ? _pxg_league_offsets(chain, c.n_teams, "raw_aq") .* vec(Array(chain[Symbol("σ_q")])) : zeros(n_samples, c.n_teams)
-        dq = model.team_quality_on ? _pxg_league_offsets(chain, c.n_teams, "raw_dq") .* vec(Array(chain[Symbol("σ_q")])) : zeros(n_samples, c.n_teams)
+        aq = model.team_quality_on ? _pxg_league_offsets(chain, n_teams, "raw_aq") .* vec(Array(chain[Symbol("σ_q")])) : zeros(n_samples, n_teams)
+        dq = model.team_quality_on ? _pxg_league_offsets(chain, n_teams, "raw_dq") .* vec(Array(chain[Symbol("σ_q")])) : zeros(n_samples, n_teams)
 
-        for i in 1:n_matches
-            hid = c.home_ids[i]; aid = c.away_ids[i]
-            log_λ_h = model.shot_scale .+ c.core_h[i, :]
-            log_λ_a = model.shot_scale .+ c.core_a[i, :]
+        for (mid, c) in core
+            log_λ_s_h = model.shot_scale .+ c.lin_h
+            log_λ_s_a = model.shot_scale .+ c.lin_a
 
-            logit_q_h = clamp.(q_raw_samples .+ aq[:, hid] .- dq[:, aid], -10.0, 10.0)
-            logit_q_a = clamp.(q_raw_samples .+ aq[:, aid] .- dq[:, hid], -10.0, 10.0)
-            log_q_h   = .-log1pexp.(.-logit_q_h)
-            log_q_a   = .-log1pexp.(.-logit_q_a)
+            logit_q_h = clamp.(q_raw_samples .+ aq[:, c.h_idx] .- dq[:, c.a_idx], -10.0, 10.0)
+            logit_q_a = clamp.(q_raw_samples .+ aq[:, c.a_idx] .- dq[:, c.h_idx], -10.0, 10.0)
+            log_q_h   = .-log.(1.0 .+ exp.(.-logit_q_h))
+            log_q_a   = .-log.(1.0 .+ exp.(.-logit_q_a))
 
-            μ_h = exp.(log_λ_h .+ log_q_h)
-            μ_a = exp.(log_λ_a .+ log_q_a)
+            μ_h = exp.(log_λ_s_h .+ log_q_h)
+            μ_a = exp.(log_λ_s_a .+ log_q_a)
 
-            λ_h_mat[i, :] = κ_samples .* μ_h
-            λ_a_mat[i, :] = κ_samples .* μ_a
-            r_h_mat[i, :] = r_h_samples
-            r_a_mat[i, :] = r_a_samples
+            results[mid] = (;
+                λ_h = κ .* μ_h,
+                λ_a = κ .* μ_a,
+                r_h = r_h_samples,
+                r_a = r_a_samples,
+                true_xg_h = μ_h,
+                true_xg_a = μ_a,
+                κ   = κ
+            )
         end
     else
-        for i in 1:n_matches
-            μ_h = exp.(c.core_h[i, :])
-            μ_a = exp.(c.core_a[i, :])
+        for (mid, c) in core
+            μ_h = exp.(c.lin_h)
+            μ_a = exp.(c.lin_a)
 
-            λ_h_mat[i, :] = κ_samples .* μ_h
-            λ_a_mat[i, :] = κ_samples .* μ_a
-            r_h_mat[i, :] = r_h_samples
-            r_a_mat[i, :] = r_a_samples
+            results[mid] = (;
+                λ_h = κ .* μ_h,
+                λ_a = κ .* μ_a,
+                r_h = r_h_samples,
+                r_a = r_a_samples,
+                true_xg_h = μ_h,
+                true_xg_a = μ_a,
+                κ   = κ
+            )
         end
     end
 
-    return Dict{String, Any}(
-        "λ_h" => [λ_h_mat[i, :] for i in 1:n_matches],
-        "λ_a" => [λ_a_mat[i, :] for i in 1:n_matches],
-        "r_h" => [r_h_mat[i, :] for i in 1:n_matches],
-        "r_a" => [r_a_mat[i, :] for i in 1:n_matches],
-        "κ"   => fill(κ_samples, n_matches)
-    )
+    return results
 end
 
 PreGame.extract_parameters(model::ScottishNegBinModelUnion, df::DataFrame, feature_tuple::Tuple, chain::MCMCChains.Chains) =
