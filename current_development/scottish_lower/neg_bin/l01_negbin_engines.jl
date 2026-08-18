@@ -38,6 +38,11 @@ const SCOTTISH_HOMEAWAY_DISPERSION = PreGame.HomeAwayDispersion(
     δ_r_home  = Normal(0.6, 0.5)
 )
 
+_pxg_get_data(fs::Dict) = fs
+_pxg_get_data(fs::Features.FeatureSet) = fs.data
+_pxg_get_data(fs::Tuple) = _pxg_get_data(first(fs))
+_pxg_get_data(fs) = hasproperty(fs, :data) ? fs.data : fs
+
 # ==============================================================================
 # 1. MODEL 1: BASELINE GOALS-ONLY NEGATIVE BINOMIAL MODEL
 # ==============================================================================
@@ -132,7 +137,7 @@ function Features.required_features(model::TeamGoalsNegBinModel)
 end
 
 function PreGame.build_turing_model(config::TeamGoalsNegBinModel, feature_set)
-    data = feature_set.data
+    data = _pxg_get_data(feature_set)
     d    = _pxg_core(data, config)
     n    = length(d.home_ids)
     rat_h, rat_a = _pxg_ratings(data, config, n)
@@ -259,7 +264,7 @@ function Features.required_features(model::TeamPxGGoalsAPMNegBinModel)
 end
 
 function PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinModel, feature_set)
-    data = feature_set.data
+    data = _pxg_get_data(feature_set)
     d    = _pxg_core(data, config)
     n    = length(d.home_ids)
     rat_h, rat_a = _pxg_ratings(data, config, n)
@@ -422,7 +427,7 @@ function Features.required_features(model::TeamFunnelPxGGoalsAPMNegBinModel)
 end
 
 function PreGame.build_turing_model(config::TeamFunnelPxGGoalsAPMNegBinModel, feature_set)
-    data = feature_set.data
+    data = _pxg_get_data(feature_set)
     d    = _pxg_core(data, config)
     n    = length(d.home_ids)
     rat_h, rat_a = _pxg_ratings(data, config, n)
