@@ -79,7 +79,7 @@ for (desc, model) in models_to_test
     elapsed = round(time() - t0, digits = 1)
     println("✓ Completed MCMC sampling ($(length(res.training_results.items)) folds) in $(elapsed)s")
 
-    chain = res.training_results.items[1].chain
+    chain = res.training_results.items[1][1]
     
     # 1. Convergence & R-hat Check
     er = DataFrame(MCMCChains.ess_rhat(chain))
