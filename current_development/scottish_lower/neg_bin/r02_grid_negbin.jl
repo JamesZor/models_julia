@@ -91,7 +91,8 @@ for (cell_idx, (exp_name, model)) in enumerate(specs)
     )
 
     t0 = time()
-    res = Experiments.run_experiment(task; save = true)
+    res = Experiments.run_experiment(task)
+    Experiments.save_experiment(res)
     elapsed_hr = round((time() - t0) / 3600.0, digits = 2)
     println("✓ Completed and saved $exp_name in $(elapsed_hr)h")
 end

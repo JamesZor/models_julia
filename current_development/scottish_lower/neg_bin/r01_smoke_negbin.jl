@@ -75,7 +75,7 @@ for (desc, model) in models_to_test
     )
 
     t0 = time()
-    res = EE.run_experiment(exp_task; save = false)
+    res = EE.run_experiment(exp_task)
     elapsed = round(time() - t0, digits = 1)
     println("✓ Completed MCMC sampling ($(length(res.training_results.items)) folds) in $(elapsed)s")
 
