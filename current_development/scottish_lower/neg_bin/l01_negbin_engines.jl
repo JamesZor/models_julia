@@ -2,17 +2,12 @@
 #
 # LOADER: Robust Negative Binomial (NB2) Goals Likelihood Engines for Scottish Lower (56/57)
 #
-# Models implemented:
 # 1. TeamGoalsNegBinModel               (Baseline Goals-Only NegBin Control)
 # 2. TeamPxGGoalsAPMNegBinModel         (Arm A: Proxy xG Gamma + RAPM + NegBin Goals)
 # 3. TeamFunnelPxGGoalsAPMNegBinModel   (Arm B: Shots Volume Poisson + Proxy xG Quality Gamma + RAPM + NegBin Goals)
 #
-# Mathematical Foundation:
-# - Decouples goal outcome variance from mean intensity: Var(G) = μ + μ²/r.
-# - Uses HomeAwayDispersion (r_a = exp(log_r), r_h = exp(log_r + δ_r_home)) to capture
-#   the empirical asymmetry discovered in Stage-A EDA (r_away ≈ 9.25 vs r_home ≈ 23.66).
-# - Retains exact ReverseDiff SIMD broadcasting (logpdf.(RobustNegativeBinomial.(r, λ), g))
-#   with 1-node GradientTape execution adhering to docs/turing_ad_performance_guide.md.
+# Dispersion: Uses HomeAwayDispersion (r_a = exp(log_r), r_h = exp(log_r + δ_r_home))
+# capturing the empirical Scottish Lower asymmetry (r_away ≈ 9.25 vs r_home ≈ 23.66).
 
 using Turing
 using Distributions
@@ -38,8 +33,6 @@ include(joinpath(ROOT, "current_development/scottish_lower/proxy_xg/l02_pxg_engi
 # 0. SHARED DISPERSION DEFAULT & PRIORS
 # ==============================================================================
 
-# Scottish Lower empirical EDA: r_away ≈ 9.25 (log r ≈ 2.22), r_home ≈ 23.66 (log r ≈ 3.16)
-# Default prior centred on log_r ≈ 2.5 (r ≈ 12.2) and δ_r_home ≈ 0.6 (r_h/r_a ≈ 1.82)
 const SCOTTISH_HOMEAWAY_DISPERSION = PreGame.HomeAwayDispersion(
     log_r     = Normal(2.6, 0.5),
     δ_r_home  = Normal(0.6, 0.5)
@@ -51,86 +44,81 @@ const SCOTTISH_HOMEAWAY_DISPERSION = PreGame.HomeAwayDispersion(
 
 Base.@kwdef struct TeamGoalsNegBinModel{
     I<:PreGame.AbstractInterceptionConfig,
-    D<:PreGame.AbstractDynamicsConfig,
+    T<:PreGame.AbstractDynamicsConfig,
     H<:PreGame.AbstractHomeAdvantageConfig,
-    DISP<:PreGame.AbstractDispersionConfig,
-    R<:Features.AbstractFeatureConfig
+    D<:PreGame.AbstractDispersionConfig,
+    P<:Features.AbstractPlusMinusFeature
 } <: PreGame.AbstractTimeDecayPlayerModel
-    interception_config::I
-    dynamics_config::D
-    homeadvantage_config::H
-    dispersion_config::DISP              = SCOTTISH_HOMEAWAY_DISPERSION
-    player_ratings_feature::R            = Features.XGPlusMinusFeature()
-    w_att_prior::ContinuousUnivariateDistribution = truncated(Normal(0.05, 0.05), lower = 0.0)
-    w_def_prior::ContinuousUnivariateDistribution = truncated(Normal(0.05, 0.05), lower = 0.0)
-    league_split::Bool                   = true
-    time_decay::Bool                     = true
-    name::String                         = "team_goals_negbin"
+    interception_config::I    = PreGame.HierarchicalMonthlyInterception(prior_μ_base = Normal(0.0, 0.3))
+    dynamics_config::T        = PreGame.TimeDecayDynamics()
+    homeadvantage_config::H   = PreGame.HierarchicalTeamHomeAdvantage()
+    dispersion_config::D      = SCOTTISH_HOMEAWAY_DISPERSION
+    player_ratings_feature::P = Features.XGPlusMinusFeature()
+    w_att_prior::Distribution = Normal(0.0, 0.3)
+    w_def_prior::Distribution = Normal(0.0, 0.3)
+    apm_on::Bool              = true
+    league_offset_sd::Float64 = 0.1
+    league_ha_sd::Float64     = 0.1
+    league_ha_on::Bool        = false
+    name::String              = "team_goals_negbin"
 end
 
-@model function _team_goals_negbin_turing(
-    core,
-    ratings_h,
-    ratings_a,
-    config::TeamGoalsNegBinModel
+@model function build_goals_negbin_engine(
+    home_ids::Vector{Int}, away_ids::Vector{Int},
+    season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
+    rat_h::Vector{Float64}, rat_a::Vector{Float64},
+    home_goals::Vector{Int}, away_goals::Vector{Int}, weights::Vector{Float64},
+    n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
+    league_ha_active::Float64, apm_active::Float64,
+    config
 )
-    # 1. Global Interception & Season/Month/League Dynamics
-    μ_base ~ config.interception_config.μ_base
-    σ_month ~ config.interception_config.σ_month
-    d_month ~ filldist(Normal(0, σ_month), core.n_seasons * 12)
+    # 1. Submodels
+    inter ~ to_submodel(PreGame.build_interception(config.interception_config, n_seasons, n_months))
+    ha    ~ to_submodel(PreGame.build_home_advantage(config.homeadvantage_config, n_teams))
+    dyn   ~ to_submodel(PreGame.build_dynamics(config.dynamics_config, n_teams))
+    disp  ~ to_submodel(PreGame.build_dispersion(config.dispersion_config, n_teams, n_months))
 
-    d_league = zeros(typeof(μ_base), core.n_teams)
-    if config.league_split
-        σ_league ~ Normal(0.0, 0.3)
-        league_raw ~ filldist(Normal(0, 1), 2)
-        league_offset = (league_raw .- mean(league_raw)) .* σ_league
-        d_league = league_offset[core.league_idx]
-    end
-
-    # 2. Team Home Advantage & Attack/Defense Strengths
-    ha_global ~ config.homeadvantage_config.ha_global
-    σ_ha ~ config.homeadvantage_config.σ_ha
-    ha_raw ~ filldist(Normal(0, 1), core.n_teams)
-    ha_team = ha_global .+ ha_raw .* σ_ha
-
-    σ_att ~ Normal(0.0, 0.4)
-    σ_def ~ Normal(0.0, 0.4)
-    att_raw ~ filldist(Normal(0, 1), core.n_teams)
-    def_raw ~ filldist(Normal(0, 1), core.n_teams)
-    att_team = att_raw .* σ_att
-    def_team = def_raw .* σ_def
-
-    # 3. Player RAPM Pillar
     w_att ~ config.w_att_prior
     w_def ~ config.w_def_prior
-    pm_h = w_att .* ratings_h.att .- w_def .* ratings_a.def
-    pm_a = w_att .* ratings_a.att .- w_def .* ratings_h.def
 
-    # 4. Expected Goal Intensities
-    log_λ_h = μ_base .+ d_month[core.month_idx] .+ d_league .+ ha_team[core.home_ids] .+
-              att_team[core.home_ids] .- def_team[core.away_ids] .+ pm_h
-    log_λ_a = μ_base .+ d_month[core.month_idx] .+ d_league .+
-              att_team[core.away_ids] .- def_team[core.home_ids] .+ pm_a
+    δ_league_raw ~ filldist(Normal(0.0, config.league_offset_sd), n_leagues)
+    γ_league_raw ~ filldist(Normal(0.0, config.league_ha_sd), n_leagues)
+    δ_league = δ_league_raw .- mean(δ_league_raw)
+    γ_league = league_ha_active .* (γ_league_raw .- mean(γ_league_raw))
 
-    λ_h = exp.(clamp.(log_λ_h, -5.0, 4.0))
-    λ_a = exp.(clamp.(log_λ_a, -5.0, 4.0))
+    # 2. Linear Predictor
+    int_m = view(inter.μ_base, season_idx) .+ view(inter.δ_month, month_idx)
+    lg    = view(δ_league, league_idx)
+    γ_lg  = view(γ_league, league_idx)
 
-    # 5. Robust Negative Binomial Dispersion
-    disp = PreGame.build_dispersion(config.dispersion_config)
+    pillar_h = apm_active .* (w_att .* rat_h .- w_def .* rat_a)
+    pillar_a = apm_active .* (w_att .* rat_a .- w_def .* rat_h)
+
+    log_λ_h = clamp.(int_m .+ lg .+ view(ha, home_ids) .+ γ_lg .+
+                     view(dyn.α, home_ids) .+ view(dyn.β, away_ids) .+ pillar_h, -10.0, 10.0)
+    log_λ_a = clamp.(int_m .+ lg .+
+                     view(dyn.α, away_ids) .+ view(dyn.β, home_ids) .+ pillar_a, -10.0, 10.0)
+
+    bad_h  = isnan.(log_λ_h)
+    bad_a  = isnan.(log_λ_a)
+    is_bad = any(bad_h) || any(bad_a)
+    log_λ_h = ifelse.(bad_h, zero.(log_λ_h), log_λ_h)
+    log_λ_a = ifelse.(bad_a, zero.(log_λ_a), log_λ_a)
+    Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
+
+    λ_h = exp.(log_λ_h)
+    λ_a = exp.(log_λ_a)
+
     r_h = disp.h
     r_a = disp.a
 
-    # 6. Goals Likelihood
-    log_lik_g_h = logpdf.(RobustNegativeBinomial.(r_h, λ_h), core.home_goals)
-    log_lik_g_a = logpdf.(RobustNegativeBinomial.(r_a, λ_a), core.away_goals)
+    # 3. Robust Negative Binomial Likelihood
+    ll_g_h = logpdf.(RobustNegativeBinomial.(r_h, λ_h), home_goals)
+    ll_g_a = logpdf.(RobustNegativeBinomial.(r_a, λ_a), away_goals)
 
-    if config.time_decay
-        Turing.@addlogprob! sum(core.w .* log_lik_g_h)
-        Turing.@addlogprob! sum(core.w .* log_lik_g_a)
-    else
-        Turing.@addlogprob! sum(log_lik_g_h)
-        Turing.@addlogprob! sum(log_lik_g_a)
-    end
+    Turing.@addlogprob! ifelse(isnan(r_h) || isnan(r_a), -Inf, 0.0)
+    Turing.@addlogprob! sum(weights .* ll_g_h)
+    Turing.@addlogprob! sum(weights .* ll_g_a)
 end
 
 # ==============================================================================
@@ -139,117 +127,98 @@ end
 
 Base.@kwdef struct TeamPxGGoalsAPMNegBinModel{
     I<:PreGame.AbstractInterceptionConfig,
-    D<:PreGame.AbstractDynamicsConfig,
+    T<:PreGame.AbstractDynamicsConfig,
     H<:PreGame.AbstractHomeAdvantageConfig,
-    K<:PreGame.AbstractKappaConfig,
-    DISP<:PreGame.AbstractDispersionConfig,
-    R<:Features.AbstractFeatureConfig,
-    PXG<:Features.AbstractFeatureConfig
+    D<:PreGame.AbstractDispersionConfig,
+    P<:Features.AbstractPlusMinusFeature
 } <: PreGame.AbstractTimeDecayPlayerModel
-    interception_config::I
-    dynamics_config::D
-    homeadvantage_config::H
-    kappa_config::K                      = PreGame.GlobalKappa(log_κ = PXG_LOGK_PRIOR)
-    dispersion_config::DISP              = SCOTTISH_HOMEAWAY_DISPERSION
-    player_ratings_feature::R            = Features.XGPlusMinusFeature()
-    pxg_feature::PXG                     = Features.ScottishProxyXGFeature()
-    w_att_prior::ContinuousUnivariateDistribution = truncated(Normal(0.05, 0.05), lower = 0.0)
-    w_def_prior::ContinuousUnivariateDistribution = truncated(Normal(0.05, 0.05), lower = 0.0)
-    ν_xg_prior::ContinuousUnivariateDistribution  = PXG_NU_PRIOR
-    league_split::Bool                   = true
-    time_decay::Bool                     = true
-    name::String                         = "team_pxg_goals_apm_negbin"
+    interception_config::I    = PreGame.HierarchicalMonthlyInterception(prior_μ_base = Normal(0.0, 0.3))
+    dynamics_config::T        = PreGame.TimeDecayDynamics()
+    homeadvantage_config::H   = PreGame.HierarchicalTeamHomeAdvantage()
+    dispersion_config::D      = SCOTTISH_HOMEAWAY_DISPERSION
+    player_ratings_feature::P = Features.XGPlusMinusFeature()
+    proxy_feature::ProxyXGFeature = ProxyXGFeature()
+    ν_prior::Distribution     = PXG_NU_PRIOR
+    log_κ_prior::Distribution = PXG_LOGK_PRIOR
+    w_att_prior::Distribution = Normal(0.0, 0.3)
+    w_def_prior::Distribution = Normal(0.0, 0.3)
+    apm_on::Bool              = true
+    league_offset_sd::Float64 = 0.1
+    league_ha_sd::Float64     = 0.1
+    league_ha_on::Bool        = false
+    name::String              = "team_pxg_goals_apm_negbin"
 end
 
-@model function _team_pxg_goals_apm_negbin_turing(
-    core,
-    ratings_h,
-    ratings_a,
-    pxg,
-    config::TeamPxGGoalsAPMNegBinModel
+@model function build_pxg_goals_apm_negbin_engine(
+    home_ids::Vector{Int}, away_ids::Vector{Int},
+    season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
+    rat_h::Vector{Float64}, rat_a::Vector{Float64},
+    sx_h::NamedTuple, sx_a::NamedTuple,
+    home_goals::Vector{Int}, away_goals::Vector{Int}, weights::Vector{Float64},
+    n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
+    league_ha_active::Float64, apm_active::Float64,
+    config
 )
-    # 1. Global Interception & Season/Month/League Dynamics
-    μ_base ~ config.interception_config.μ_base
-    σ_month ~ config.interception_config.σ_month
-    d_month ~ filldist(Normal(0, σ_month), core.n_seasons * 12)
+    # 1. Submodels
+    inter ~ to_submodel(PreGame.build_interception(config.interception_config, n_seasons, n_months))
+    ha    ~ to_submodel(PreGame.build_home_advantage(config.homeadvantage_config, n_teams))
+    dyn   ~ to_submodel(PreGame.build_dynamics(config.dynamics_config, n_teams))
+    disp  ~ to_submodel(PreGame.build_dispersion(config.dispersion_config, n_teams, n_months))
 
-    d_league = zeros(typeof(μ_base), core.n_teams)
-    if config.league_split
-        σ_league ~ Normal(0.0, 0.3)
-        league_raw ~ filldist(Normal(0, 1), 2)
-        league_offset = (league_raw .- mean(league_raw)) .* σ_league
-        d_league = league_offset[core.league_idx]
-    end
-
-    # 2. Team Home Advantage & Strengths
-    ha_global ~ config.homeadvantage_config.ha_global
-    σ_ha ~ config.homeadvantage_config.σ_ha
-    ha_raw ~ filldist(Normal(0, 1), core.n_teams)
-    ha_team = ha_global .+ ha_raw .* σ_ha
-
-    σ_att ~ Normal(0.0, 0.4)
-    σ_def ~ Normal(0.0, 0.4)
-    att_raw ~ filldist(Normal(0, 1), core.n_teams)
-    def_raw ~ filldist(Normal(0, 1), core.n_teams)
-    att_team = att_raw .* σ_att
-    def_team = def_raw .* σ_def
-
-    # 3. Player RAPM Pillar
     w_att ~ config.w_att_prior
     w_def ~ config.w_def_prior
-    pm_h = w_att .* ratings_h.att .- w_def .* ratings_a.def
-    pm_a = w_att .* ratings_a.att .- w_def .* ratings_h.def
 
-    # 4. Underlying True Scoring Intensity (μ)
-    log_μ_h = μ_base .+ d_month[core.month_idx] .+ d_league .+ ha_team[core.home_ids] .+
-              att_team[core.home_ids] .- def_team[core.away_ids] .+ pm_h
-    log_μ_a = μ_base .+ d_month[core.month_idx] .+ d_league .+
-              att_team[core.away_ids] .- def_team[core.home_ids] .+ pm_a
+    δ_league_raw ~ filldist(Normal(0.0, config.league_offset_sd), n_leagues)
+    γ_league_raw ~ filldist(Normal(0.0, config.league_ha_sd), n_leagues)
+    δ_league = δ_league_raw .- mean(δ_league_raw)
+    γ_league = league_ha_active .* (γ_league_raw .- mean(γ_league_raw))
 
-    μ_h = exp.(clamp.(log_μ_h, -5.0, 4.0))
-    μ_a = exp.(clamp.(log_μ_a, -5.0, 4.0))
+    ν_xg  ~ config.ν_prior
+    log_κ ~ config.log_κ_prior
 
-    # 5. Finishing Conversion (κ) & Dispersion (r_h, r_a)
-    log_κ ~ config.kappa_config.log_κ
-    κ = exp(clamp(log_κ, -1.0, 1.0))
-    λ_goals_h = κ .* μ_h
-    λ_goals_a = κ .* μ_a
+    # 2. Expected Scoring Intensity
+    int_m = view(inter.μ_base, season_idx) .+ view(inter.δ_month, month_idx)
+    lg    = view(δ_league, league_idx)
+    γ_lg  = view(γ_league, league_idx)
 
-    disp = PreGame.build_dispersion(config.dispersion_config)
+    pillar_h = apm_active .* (w_att .* rat_h .- w_def .* rat_a)
+    pillar_a = apm_active .* (w_att .* rat_a .- w_def .* rat_h)
+
+    log_μ_h = clamp.(int_m .+ lg .+ view(ha, home_ids) .+ γ_lg .+
+                     view(dyn.α, home_ids) .+ view(dyn.β, away_ids) .+ pillar_h, -10.0, 10.0)
+    log_μ_a = clamp.(int_m .+ lg .+
+                     view(dyn.α, away_ids) .+ view(dyn.β, home_ids) .+ pillar_a, -10.0, 10.0)
+
+    bad_h  = isnan.(log_μ_h)
+    bad_a  = isnan.(log_μ_a)
+    is_bad = any(bad_h) || any(bad_a) || isnan(log_κ)
+    log_μ_h = ifelse.(bad_h, zero.(log_μ_h), log_μ_h)
+    log_μ_a = ifelse.(bad_a, zero.(log_μ_a), log_μ_a)
+    Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
+
+    μ_h     = exp.(log_μ_h);   μ_a     = exp.(log_μ_a)
+    inv_μ_h = exp.(.-log_μ_h); inv_μ_a = exp.(.-log_μ_a)
+    κ       = exp(log_κ)
+
     r_h = disp.h
     r_a = disp.a
 
-    # 6. Proxy xG Gamma Pillar (Co-training)
-    ν ~ config.ν_xg_prior
-    shape_h = ν
-    scale_h = μ_h ./ ν
-    shape_a = ν
-    scale_a = μ_a ./ ν
+    # 3. Pillar A: Proxy xG (Gamma)
+    cν = ν_xg * log(ν_xg) - loggamma(ν_xg)
+    ll_xg_h = (ν_xg - 1.0) * sx_h.S_logx - ν_xg * sum(sx_h.c_x .* inv_μ_h) -
+              ν_xg * sum(sx_h.c_m .* log_μ_h) + cν * sx_h.S_m
+    ll_xg_a = (ν_xg - 1.0) * sx_a.S_logx - ν_xg * sum(sx_a.c_x .* inv_μ_a) -
+              ν_xg * sum(sx_a.c_m .* log_μ_a) + cν * sx_a.S_m
 
-    log_lik_xg_h = pxg.mask_h .* (
-        (shape_h - 1.0) .* pxg.log_xg_h .- pxg.xg_h ./ scale_h .-
-        shape_h .* log.(scale_h) .- loggamma(shape_h)
-    )
-    log_lik_xg_a = pxg.mask_a .* (
-        (shape_a - 1.0) .* pxg.log_xg_a .- pxg.xg_a ./ scale_a .-
-        shape_a .* log.(scale_a) .- loggamma(shape_a)
-    )
+    # 4. Pillar B: Goals (Robust Negative Binomial)
+    ll_g_h = logpdf.(RobustNegativeBinomial.(r_h, κ .* μ_h), home_goals)
+    ll_g_a = logpdf.(RobustNegativeBinomial.(r_a, κ .* μ_a), away_goals)
 
-    # 7. Goals Robust Negative Binomial Pillar
-    log_lik_g_h = logpdf.(RobustNegativeBinomial.(r_h, λ_goals_h), core.home_goals)
-    log_lik_g_a = logpdf.(RobustNegativeBinomial.(r_a, λ_goals_a), core.away_goals)
-
-    if config.time_decay
-        Turing.@addlogprob! sum(core.w .* log_lik_xg_h)
-        Turing.@addlogprob! sum(core.w .* log_lik_xg_a)
-        Turing.@addlogprob! sum(core.w .* log_lik_g_h)
-        Turing.@addlogprob! sum(core.w .* log_lik_g_a)
-    else
-        Turing.@addlogprob! sum(log_lik_xg_h)
-        Turing.@addlogprob! sum(log_lik_xg_a)
-        Turing.@addlogprob! sum(log_lik_g_h)
-        Turing.@addlogprob! sum(log_lik_g_a)
-    end
+    Turing.@addlogprob! ifelse(isnan(ll_xg_h) || isnan(ll_xg_a) || isnan(r_h) || isnan(r_a), -Inf, 0.0)
+    Turing.@addlogprob! ll_xg_h
+    Turing.@addlogprob! ll_xg_a
+    Turing.@addlogprob! sum(weights .* ll_g_h)
+    Turing.@addlogprob! sum(weights .* ll_g_a)
 end
 
 # ==============================================================================
@@ -258,152 +227,132 @@ end
 
 Base.@kwdef struct TeamFunnelPxGGoalsAPMNegBinModel{
     I<:PreGame.AbstractInterceptionConfig,
-    D<:PreGame.AbstractDynamicsConfig,
+    T<:PreGame.AbstractDynamicsConfig,
     H<:PreGame.AbstractHomeAdvantageConfig,
-    K<:PreGame.AbstractKappaConfig,
-    DISP<:PreGame.AbstractDispersionConfig,
-    R<:Features.AbstractFeatureConfig,
-    PXG<:Features.AbstractFeatureConfig
+    D<:PreGame.AbstractDispersionConfig,
+    P<:Features.AbstractPlusMinusFeature
 } <: PreGame.AbstractTimeDecayPlayerModel
-    interception_config::I
-    dynamics_config::D
-    homeadvantage_config::H
-    kappa_config::K                      = PreGame.GlobalKappa(log_κ = PXG_LOGK_PRIOR)
-    dispersion_config::DISP              = SCOTTISH_HOMEAWAY_DISPERSION
-    player_ratings_feature::R            = Features.XGPlusMinusFeature()
-    pxg_feature::PXG                     = Features.ScottishProxyXGFeature()
-    shot_scale::Float64                  = 2.2
-    q_prior::ContinuousUnivariateDistribution     = PXG_Q_PRIOR
-    σ_q_prior::ContinuousUnivariateDistribution   = PXG_SIGQ_PRIOR
-    ν_q_prior::ContinuousUnivariateDistribution   = PXG_NU_PRIOR
-    w_att_prior::ContinuousUnivariateDistribution = truncated(Normal(0.05, 0.05), lower = 0.0)
-    w_def_prior::ContinuousUnivariateDistribution = truncated(Normal(0.05, 0.05), lower = 0.0)
-    league_split::Bool                   = true
-    time_decay::Bool                     = true
-    name::String                         = "team_funnel_pxg_goals_apm_negbin"
+    interception_config::I    = PreGame.HierarchicalMonthlyInterception(prior_μ_base = Normal(0.0, 0.3))
+    dynamics_config::T        = PreGame.TimeDecayDynamics()
+    homeadvantage_config::H   = PreGame.HierarchicalTeamHomeAdvantage()
+    dispersion_config::D      = SCOTTISH_HOMEAWAY_DISPERSION
+    player_ratings_feature::P = Features.XGPlusMinusFeature()
+    proxy_feature::ProxyXGFeature = ProxyXGFeature()
+    shot_scale::Float64       = 2.2
+    q_prior::Distribution     = PXG_Q_PRIOR
+    σ_q_prior::Distribution   = PXG_SIGQ_PRIOR
+    ν_q_prior::Distribution   = PXG_NU_PRIOR
+    log_κ_prior::Distribution = PXG_LOGK_PRIOR
+    w_att_prior::Distribution = Normal(0.0, 0.3)
+    w_def_prior::Distribution = Normal(0.0, 0.3)
+    apm_on::Bool              = true
+    league_offset_sd::Float64 = 0.1
+    league_ha_sd::Float64     = 0.1
+    league_ha_on::Bool        = false
+    name::String              = "team_funnel_pxg_goals_apm_negbin"
 end
 
-@model function _team_funnel_pxg_goals_apm_negbin_turing(
-    core,
-    ratings_h,
-    ratings_a,
-    pxg,
-    shots_h,
-    shots_a,
-    shots_mask,
-    config::TeamFunnelPxGGoalsAPMNegBinModel
+@model function build_funnel_pxg_goals_apm_negbin_engine(
+    home_ids::Vector{Int}, away_ids::Vector{Int},
+    season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
+    rat_h::Vector{Float64}, rat_a::Vector{Float64},
+    sx_h::NamedTuple, sx_a::NamedTuple,
+    sq_h::NamedTuple, sq_a::NamedTuple,
+    shots_h::Vector{Float64}, shots_a::Vector{Float64}, shots_mask::Vector{Float64},
+    home_goals::Vector{Int}, away_goals::Vector{Int}, weights::Vector{Float64},
+    n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
+    league_ha_active::Float64, apm_active::Float64,
+    config
 )
-    # 1. Global Interception & Season/Month/League Dynamics
-    μ_base ~ config.interception_config.μ_base
-    σ_month ~ config.interception_config.σ_month
-    d_month ~ filldist(Normal(0, σ_month), core.n_seasons * 12)
+    # 1. Submodels
+    inter ~ to_submodel(PreGame.build_interception(config.interception_config, n_seasons, n_months))
+    ha    ~ to_submodel(PreGame.build_home_advantage(config.homeadvantage_config, n_teams))
+    dyn   ~ to_submodel(PreGame.build_dynamics(config.dynamics_config, n_teams))
+    disp  ~ to_submodel(PreGame.build_dispersion(config.dispersion_config, n_teams, n_months))
 
-    d_league = zeros(typeof(μ_base), core.n_teams)
-    if config.league_split
-        σ_league ~ Normal(0.0, 0.3)
-        league_raw ~ filldist(Normal(0, 1), 2)
-        league_offset = (league_raw .- mean(league_raw)) .* σ_league
-        d_league = league_offset[core.league_idx]
-    end
-
-    # 2. Team Home Advantage & Volume Ratings
-    ha_global ~ config.homeadvantage_config.ha_global
-    σ_ha ~ config.homeadvantage_config.σ_ha
-    ha_raw ~ filldist(Normal(0, 1), core.n_teams)
-    ha_team = ha_global .+ ha_raw .* σ_ha
-
-    σ_att ~ Normal(0.0, 0.4)
-    σ_def ~ Normal(0.0, 0.4)
-    att_raw ~ filldist(Normal(0, 1), core.n_teams)
-    def_raw ~ filldist(Normal(0, 1), core.n_teams)
-    att_team = att_raw .* σ_att
-    def_team = def_raw .* σ_def
-
-    # 3. Player RAPM Pillar
     w_att ~ config.w_att_prior
     w_def ~ config.w_def_prior
-    pm_h = w_att .* ratings_h.att .- w_def .* ratings_a.def
-    pm_a = w_att .* ratings_a.att .- w_def .* ratings_h.def
 
-    # 4. Volume Layer (Expected Shots λ_s)
-    log_λ_s_h = config.shot_scale .+ μ_base .+ d_month[core.month_idx] .+ d_league .+
-                ha_team[core.home_ids] .+ att_team[core.home_ids] .- def_team[core.away_ids] .+ pm_h
-    log_λ_s_a = config.shot_scale .+ μ_base .+ d_month[core.month_idx] .+ d_league .+
-                att_team[core.away_ids] .- def_team[core.home_ids] .+ pm_a
+    δ_league_raw ~ filldist(Normal(0.0, config.league_offset_sd), n_leagues)
+    γ_league_raw ~ filldist(Normal(0.0, config.league_ha_sd), n_leagues)
+    δ_league = δ_league_raw .- mean(δ_league_raw)
+    γ_league = league_ha_active .* (γ_league_raw .- mean(γ_league_raw))
 
-    λ_s_h = exp.(clamp.(log_λ_s_h, -2.0, 4.5))
-    λ_s_a = exp.(clamp.(log_λ_s_a, -2.0, 4.5))
-
-    # 5. Quality Layer (Shot Quality q = xG / Shot)
     q_base ~ config.q_prior
-    σ_q ~ config.σ_q_prior
-    q_att_raw ~ filldist(Normal(0, 1), core.n_teams)
-    q_def_raw ~ filldist(Normal(0, 1), core.n_teams)
+    σ_q    ~ config.σ_q_prior
+    q_att_raw ~ filldist(Normal(0.0, 1.0), n_teams)
+    q_def_raw ~ filldist(Normal(0.0, 1.0), n_teams)
     q_att = q_att_raw .* σ_q
     q_def = q_def_raw .* σ_q
 
-    logit_q_h = q_base .+ q_att[core.home_ids] .- q_def[core.away_ids]
-    logit_q_a = q_base .+ q_att[core.away_ids] .- q_def[core.home_ids]
-    q_h = 1.0 ./ (1.0 .+ exp.(-clamp.(logit_q_h, -4.0, 1.0)))
-    q_a = 1.0 ./ (1.0 .+ exp.(-clamp.(logit_q_a, -4.0, 1.0)))
+    ν_q   ~ config.ν_q_prior
+    log_κ ~ config.log_κ_prior
 
-    # 6. Compound Expected Goals (μ = λ_s · q)
-    μ_h = λ_s_h .* q_h
-    μ_a = λ_s_a .* q_a
+    # 2. Volume Layer (λ_s)
+    int_m = view(inter.μ_base, season_idx) .+ view(inter.δ_month, month_idx)
+    lg    = view(δ_league, league_idx)
+    γ_lg  = view(γ_league, league_idx)
 
-    # 7. Finishing Conversion (κ) & Dispersion (r_h, r_a)
-    log_κ ~ config.kappa_config.log_κ
-    κ = exp(clamp(log_κ, -1.0, 1.0))
-    λ_goals_h = κ .* μ_h
-    λ_goals_a = κ .* μ_a
+    pillar_h = apm_active .* (w_att .* rat_h .- w_def .* rat_a)
+    pillar_a = apm_active .* (w_att .* rat_a .- w_def .* rat_h)
 
-    disp = PreGame.build_dispersion(config.dispersion_config)
+    log_λ_s_h = clamp.(config.shot_scale .+ int_m .+ lg .+ view(ha, home_ids) .+ γ_lg .+
+                       view(dyn.α, home_ids) .+ view(dyn.β, away_ids) .+ pillar_h, -10.0, 10.0)
+    log_λ_s_a = clamp.(config.shot_scale .+ int_m .+ lg .+
+                       view(dyn.α, away_ids) .+ view(dyn.β, home_ids) .+ pillar_a, -10.0, 10.0)
+
+    # 3. Quality Layer (q)
+    logit_q_h = clamp.(q_base .+ view(q_att, home_ids) .- view(q_def, away_ids), -10.0, 10.0)
+    logit_q_a = clamp.(q_base .+ view(q_att, away_ids) .- view(q_def, home_ids), -10.0, 10.0)
+    q_h = 1.0 ./ (1.0 .+ exp.(.-logit_q_h))
+    q_a = 1.0 ./ (1.0 .+ exp.(.-logit_q_a))
+
+    log_q_h = .-log1pexp.(.-logit_q_h)
+    log_q_a = .-log1pexp.(.-logit_q_a)
+
+    log_μ_h = log_λ_s_h .+ log_q_h
+    log_μ_a = log_λ_s_a .+ log_q_a
+
+    bad_h  = isnan.(log_μ_h)
+    bad_a  = isnan.(log_μ_a)
+    is_bad = any(bad_h) || any(bad_a) || isnan(log_κ) || isnan(q_base) || isnan(σ_q)
+    log_μ_h = ifelse.(bad_h, zero.(log_μ_h), log_μ_h)
+    log_μ_a = ifelse.(bad_a, zero.(log_μ_a), log_μ_a)
+    Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
+
+    λ_s_h = exp.(log_λ_s_h); λ_s_a = exp.(log_λ_s_a)
+    μ_h   = exp.(log_μ_h);   μ_a   = exp.(log_μ_a)
+    κ     = exp(log_κ)
+
     r_h = disp.h
     r_a = disp.a
 
-    # 8. Likelihood Layer 1: Shots Volume (Poisson)
+    # 4. Layer 1: Shots Volume (Poisson)
     suff_s_h = loggamma.(shots_h .+ 1.0)
     suff_s_a = loggamma.(shots_a .+ 1.0)
-    log_lik_s_h = shots_mask .* ((shots_h .* log.(λ_s_h)) .- λ_s_h .- suff_s_h)
-    log_lik_s_a = shots_mask .* ((shots_a .* log.(λ_s_a)) .- λ_s_a .- suff_s_a)
+    ll_s_h = sum(shots_mask .* ((shots_h .* log_λ_s_h) .- λ_s_h .- suff_s_h))
+    ll_s_a = sum(shots_mask .* ((shots_a .* log_λ_s_a) .- λ_s_a .- suff_s_a))
 
-    # 9. Likelihood Layer 2: Quality Gamma (Conditional on Commentary Shots)
-    ν_q ~ config.ν_q_prior
-    S_cond_h = pxg.shots_comm_h
-    S_cond_a = pxg.shots_comm_a
-    shape_q_h = ν_q .* S_cond_h
-    scale_q_h = q_h ./ ν_q
-    shape_q_a = ν_q .* S_cond_a
-    scale_q_a = q_a ./ ν_q
+    # 5. Layer 2: Quality Gamma (Conditional on Event Shots)
+    α_q_h = ν_q .* sq_h.c_S
+    α_q_a = ν_q .* sq_a.c_S
+    lν    = log(ν_q)
+    ll_q_h = sum(α_q_h .* sq_h.c_mlogx) - sq_h.S_logx - ν_q * sum(sq_h.c_x ./ q_h) -
+             sum(α_q_h .* (log_q_h .- lν)) - sum(sq_h.mask .* loggamma.(α_q_h))
+    ll_q_a = sum(α_q_a .* sq_a.c_mlogx) - sq_a.S_logx - ν_q * sum(sq_a.c_x ./ q_a) -
+             sum(α_q_a .* (log_q_a .- lν)) - sum(sq_a.mask .* loggamma.(α_q_a))
 
-    log_lik_q_h = pxg.mask_h .* (
-        (shape_q_h .- 1.0) .* pxg.log_xg_h .- pxg.xg_h ./ scale_q_h .-
-        shape_q_h .* log.(scale_q_h) .- loggamma.(shape_q_h)
-    )
-    log_lik_q_a = pxg.mask_a .* (
-        (shape_q_a .- 1.0) .* pxg.log_xg_a .- pxg.xg_a ./ scale_q_a .-
-        shape_q_a .* log.(scale_q_a) .- loggamma.(shape_q_a)
-    )
+    # 6. Layer 3: Goals Robust Negative Binomial
+    ll_g_h = logpdf.(RobustNegativeBinomial.(r_h, κ .* μ_h), home_goals)
+    ll_g_a = logpdf.(RobustNegativeBinomial.(r_a, κ .* μ_a), away_goals)
 
-    # 10. Likelihood Layer 3: Goals Robust Negative Binomial
-    log_lik_g_h = logpdf.(RobustNegativeBinomial.(r_h, λ_goals_h), core.home_goals)
-    log_lik_g_a = logpdf.(RobustNegativeBinomial.(r_a, λ_goals_a), core.away_goals)
-
-    if config.time_decay
-        Turing.@addlogprob! sum(core.w .* log_lik_s_h)
-        Turing.@addlogprob! sum(core.w .* log_lik_s_a)
-        Turing.@addlogprob! sum(core.w .* log_lik_q_h)
-        Turing.@addlogprob! sum(core.w .* log_lik_q_a)
-        Turing.@addlogprob! sum(core.w .* log_lik_g_h)
-        Turing.@addlogprob! sum(core.w .* log_lik_g_a)
-    else
-        Turing.@addlogprob! sum(log_lik_s_h)
-        Turing.@addlogprob! sum(log_lik_s_a)
-        Turing.@addlogprob! sum(log_lik_q_h)
-        Turing.@addlogprob! sum(log_lik_q_a)
-        Turing.@addlogprob! sum(log_lik_g_h)
-        Turing.@addlogprob! sum(log_lik_g_a)
-    end
+    Turing.@addlogprob! ifelse(isnan(ll_s_h) || isnan(ll_s_a) || isnan(ll_q_h) || isnan(ll_q_a) || isnan(r_h) || isnan(r_a), -Inf, 0.0)
+    Turing.@addlogprob! ll_s_h
+    Turing.@addlogprob! ll_s_a
+    Turing.@addlogprob! ll_q_h
+    Turing.@addlogprob! ll_q_a
+    Turing.@addlogprob! sum(weights .* ll_g_h)
+    Turing.@addlogprob! sum(weights .* ll_g_a)
 end
 
 # ==============================================================================
@@ -413,27 +362,80 @@ end
 function PreGame.build_turing_model(model::TeamGoalsNegBinModel, feature_set::Features.FeatureSet)
     data = feature_set.features
     core = _pxg_core(data, model)
-    ratings_h, ratings_a = _pxg_ratings(data)
-    return _team_goals_negbin_turing(core, ratings_h, ratings_a, model)
+    n = length(core.home_ids)
+    rat_h, rat_a = _pxg_ratings(data, model, n)
+
+    return build_goals_negbin_engine(
+        core.home_ids, core.away_ids,
+        core.season_idx, core.month_idx, core.league_idx,
+        rat_h, rat_a,
+        core.home_goals, core.away_goals, core.w,
+        core.n_teams, core.n_seasons, core.n_months, core.n_leagues,
+        _pxg_active(model.league_ha_on), _pxg_active(model.apm_on),
+        model
+    )
 end
 
 function PreGame.build_turing_model(model::TeamPxGGoalsAPMNegBinModel, feature_set::Features.FeatureSet)
     data = feature_set.features
     core = _pxg_core(data, model)
-    ratings_h, ratings_a = _pxg_ratings(data)
-    pxg = _pxg_tensors(data)
-    return _team_pxg_goals_apm_negbin_turing(core, ratings_h, ratings_a, pxg, model)
+    n = length(core.home_ids)
+    rat_h, rat_a = _pxg_ratings(data, model, n)
+
+    xg_h   = Vector{Float64}(data[:proxy_xg_home])
+    xg_a   = Vector{Float64}(data[:proxy_xg_away])
+    mask_h = Vector{Float64}(data[:proxy_xg_mask_home])
+    mask_a = Vector{Float64}(data[:proxy_xg_mask_away])
+
+    sx_h = _pxg_suff(xg_h, mask_h, core.home_goals, core.w)
+    sx_a = _pxg_suff(xg_a, mask_a, core.away_goals, core.w)
+
+    return build_pxg_goals_apm_negbin_engine(
+        core.home_ids, core.away_ids,
+        core.season_idx, core.month_idx, core.league_idx,
+        rat_h, rat_a,
+        sx_h, sx_a,
+        core.home_goals, core.away_goals, core.w,
+        core.n_teams, core.n_seasons, core.n_months, core.n_leagues,
+        _pxg_active(model.league_ha_on), _pxg_active(model.apm_on),
+        model
+    )
 end
 
 function PreGame.build_turing_model(model::TeamFunnelPxGGoalsAPMNegBinModel, feature_set::Features.FeatureSet)
     data = feature_set.features
     core = _pxg_core(data, model)
-    ratings_h, ratings_a = _pxg_ratings(data)
-    pxg = _pxg_tensors(data)
+    n = length(core.home_ids)
+    rat_h, rat_a = _pxg_ratings(data, model, n)
+
+    xg_h   = Vector{Float64}(data[:proxy_xg_home])
+    xg_a   = Vector{Float64}(data[:proxy_xg_away])
+    mask_h = Vector{Float64}(data[:proxy_xg_mask_home])
+    mask_a = Vector{Float64}(data[:proxy_xg_mask_away])
+    S_h    = Vector{Float64}(data[:proxy_xg_shots_home])
+    S_a    = Vector{Float64}(data[:proxy_xg_shots_away])
+
     shots_h = Vector{Float64}(data[:bbc_shots_home])
     shots_a = Vector{Float64}(data[:bbc_shots_away])
     shots_mask = Vector{Float64}(data[:bbc_shots_mask])
-    return _team_funnel_pxg_goals_apm_negbin_turing(core, ratings_h, ratings_a, pxg, shots_h, shots_a, shots_mask, model)
+
+    sx_h = _pxg_suff(xg_h, mask_h, core.home_goals, core.w)
+    sx_a = _pxg_suff(xg_a, mask_a, core.away_goals, core.w)
+    sq_h = _funnel_quality_suff(xg_h, mask_h, S_h)
+    sq_a = _funnel_quality_suff(xg_a, mask_a, S_a)
+
+    return build_funnel_pxg_goals_apm_negbin_engine(
+        core.home_ids, core.away_ids,
+        core.season_idx, core.month_idx, core.league_idx,
+        rat_h, rat_a,
+        sx_h, sx_a,
+        sq_h, sq_a,
+        shots_h, shots_a, shots_mask,
+        core.home_goals, core.away_goals, core.w,
+        core.n_teams, core.n_seasons, core.n_months, core.n_leagues,
+        _pxg_active(model.league_ha_on), _pxg_active(model.apm_on),
+        model
+    )
 end
 
 # ==============================================================================
@@ -453,48 +455,45 @@ function PreGame.extract_parameters(
     chain::MCMCChains.Chains
 )
     n_matches = nrow(df)
-    n_samples = length(chain)
+    n_samples = size(chain, 1) * size(chain, 3)
     data = feature_set.features
 
-    μ_base = vec(Array(chain[Symbol("μ_base")]))
-    d_month_arr = Array(chain[Symbol("d_month")])
-    σ_month = vec(Array(chain[Symbol("σ_month")]))
+    μ_base = PreGame.extract_interception(chain, model.interception_config, 1).μ_base
+    n_seasons = size(μ_base, 2)
+    inter_ext = PreGame.extract_interception(chain, model.interception_config, n_seasons)
+    μ_base_samples = inter_ext.μ_base
+    δ_month_samples = inter_ext.δ_month
 
-    ha_global = vec(Array(chain[Symbol("ha_global")]))
-    ha_raw_arr = Array(chain[Symbol("ha_raw")])
-    σ_ha = vec(Array(chain[Symbol("σ_ha")]))
+    ha_samples = PreGame.extract_home_advantage(chain, model.homeadvantage_config)
+    dyn_samples = PreGame.extract_dynamics(chain, model.dynamics_config)
 
-    att_raw_arr = Array(chain[Symbol("att_raw")])
-    def_raw_arr = Array(chain[Symbol("def_raw")])
-    σ_att = vec(Array(chain[Symbol("σ_att")]))
-    σ_def = vec(Array(chain[Symbol("σ_def")]))
+    n_leagues = Int(data[:n_leagues])
+    δ_league = _pxg_league_offsets(chain, n_leagues, "δ_league_raw")
+    γ_league = model.league_ha_on ? _pxg_league_offsets(chain, n_leagues, "γ_league_raw") : zeros(n_samples, n_leagues)
 
-    w_att = vec(Array(chain[Symbol("w_att")]))
-    w_def = vec(Array(chain[Symbol("w_def")]))
+    w_att = model.apm_on ? vec(Array(chain[Symbol("w_att")])) : zeros(n_samples)
+    w_def = model.apm_on ? vec(Array(chain[Symbol("w_def")])) : zeros(n_samples)
 
-    # Extract Dispersion (r_h, r_a)
     disp = PreGame.extract_dispersion(chain, model.dispersion_config)
     r_h_samples = disp.h
     r_a_samples = disp.a
 
-    has_kappa = hasproperty(model, :kappa_config) && Symbol("log_κ") in names(chain)
+    has_kappa = hasproperty(model, :log_κ_prior) && Symbol("log_κ") in names(chain)
     κ_samples = has_kappa ? exp.(vec(Array(chain[Symbol("log_κ")]))) : ones(Float64, n_samples)
 
     is_funnel = model isa TeamFunnelPxGGoalsAPMNegBinModel
-    q_base = is_funnel ? vec(Array(chain[Symbol("q_base")])) : zeros(Float64, n_samples)
-    σ_q = is_funnel ? vec(Array(chain[Symbol("σ_q")])) : zeros(Float64, n_samples)
-    q_att_arr = is_funnel ? Array(chain[Symbol("q_att_raw")]) : zeros(Float64, n_samples, 1)
-    q_def_arr = is_funnel ? Array(chain[Symbol("q_def_raw")]) : zeros(Float64, n_samples, 1)
+    q_base = is_funnel ? vec(Array(chain[Symbol("q_base")])) : zeros(n_samples)
+    σ_q = is_funnel ? vec(Array(chain[Symbol("σ_q")])) : zeros(n_samples)
+    q_att_arr = is_funnel ? Array(chain[Symbol("q_att_raw")]) : zeros(n_samples, 1)
+    q_def_arr = is_funnel ? Array(chain[Symbol("q_def_raw")]) : zeros(n_samples, 1)
 
-    ratings_h, ratings_a = _pxg_ratings(data)
-    flat_home = Vector{Int}(data[:flat_home_ids])
-    flat_away = Vector{Int}(data[:flat_away_ids])
-    flat_months = Vector{Int}(data[:flat_months])
-    flat_leagues = Vector{Int}(data[:flat_league_ids])
+    home_ids = Vector{Int}(data[:flat_home_ids])
+    away_ids = Vector{Int}(data[:flat_away_ids])
+    season_idx = Vector{Int}(data[:season_indices])
+    month_idx = Vector{Int}(data[:flat_months])
+    league_idx = Vector{Int}(data[:flat_league_ids])
 
-    has_league = model.league_split && Symbol("σ_league") in names(chain)
-    σ_league = has_league ? vec(Array(chain[Symbol("σ_league")])) : zeros(Float64, n_samples)
-    league_raw_arr = has_league ? Array(chain[Symbol("league_raw")]) : zeros(Float64, n_samples, 2)
+    rat_h, rat_a = _pxg_ratings(data, model, n_matches)
 
     λ_h_mat = zeros(Float64, n_matches, n_samples)
     λ_a_mat = zeros(Float64, n_matches, n_samples)
@@ -502,48 +501,38 @@ function PreGame.extract_parameters(
     r_a_mat = zeros(Float64, n_matches, n_samples)
 
     for i in 1:n_matches
-        h_id = flat_home[i]
-        a_id = flat_away[i]
-        m_idx = flat_months[i]
-        l_idx = flat_leagues[i]
+        h_id = home_ids[i]; a_id = away_ids[i]
+        s_id = season_idx[i]; m_id = month_idx[i]; l_id = league_idx[i]
 
-        rh_att = ratings_h.att[i]; rh_def = ratings_h.def[i]
-        ra_att = ratings_a.att[i]; ra_def = ratings_a.def[i]
+        int_m = μ_base_samples[:, s_id] .+ δ_month_samples[:, m_id]
+        lg    = δ_league[:, l_id]
+        γ_lg  = γ_league[:, l_id]
 
-        d_m = m_idx <= size(d_month_arr, 2) ? d_month_arr[:, m_idx] : randn(n_samples) .* σ_month
-        ha_h = ha_global .+ ha_raw_arr[:, h_id] .* σ_ha
-        att_h = att_raw_arr[:, h_id] .* σ_att
-        def_a = def_raw_arr[:, a_id] .* σ_def
-        att_a = att_raw_arr[:, a_id] .* σ_att
-        def_h = def_raw_arr[:, h_id] .* σ_def
+        ha_h  = ha_samples[:, h_id]
+        att_h = dyn_samples.α[:, h_id]; def_a = dyn_samples.β[:, a_id]
+        att_a = dyn_samples.α[:, a_id]; def_h = dyn_samples.β[:, h_id]
 
-        d_l = zeros(Float64, n_samples)
-        if has_league
-            l_mean = (league_raw_arr[:, 1] .+ league_raw_arr[:, 2]) ./ 2.0
-            d_l = (league_raw_arr[:, l_idx] .- l_mean) .* σ_league
-        end
-
-        pm_h = w_att .* rh_att .- w_def .* ra_def
-        pm_a = w_att .* ra_att .- w_def .* rh_def
+        pm_h = w_att .* rat_h[i] .- w_def .* rat_a[i]
+        pm_a = w_att .* rat_a[i] .- w_def .* rat_h[i]
 
         if is_funnel
-            log_λ_s_h = model.shot_scale .+ μ_base .+ d_m .+ d_l .+ ha_h .+ att_h .- def_a .+ pm_h
-            log_λ_s_a = model.shot_scale .+ μ_base .+ d_m .+ d_l .+ att_a .- def_h .+ pm_a
-            λ_s_h = exp.(clamp.(log_λ_s_h, -2.0, 4.5))
-            λ_s_a = exp.(clamp.(log_λ_s_a, -2.0, 4.5))
+            log_λ_s_h = model.shot_scale .+ int_m .+ lg .+ ha_h .+ γ_lg .+ att_h .+ def_a .+ pm_h
+            log_λ_s_a = model.shot_scale .+ int_m .+ lg .+ att_a .+ def_h .+ pm_a
+            λ_s_h = exp.(clamp.(log_λ_s_h, -10.0, 10.0))
+            λ_s_a = exp.(clamp.(log_λ_s_a, -10.0, 10.0))
 
             logit_q_h = q_base .+ q_att_arr[:, h_id] .* σ_q .- q_def_arr[:, a_id] .* σ_q
             logit_q_a = q_base .+ q_att_arr[:, a_id] .* σ_q .- q_def_arr[:, h_id] .* σ_q
-            q_h = 1.0 ./ (1.0 .+ exp.(-clamp.(logit_q_h, -4.0, 1.0)))
-            q_a = 1.0 ./ (1.0 .+ exp.(-clamp.(logit_q_a, -4.0, 1.0)))
+            q_h = 1.0 ./ (1.0 .+ exp.(.-clamp.(logit_q_h, -10.0, 10.0)))
+            q_a = 1.0 ./ (1.0 .+ exp.(.-clamp.(logit_q_a, -10.0, 10.0)))
 
             μ_h = λ_s_h .* q_h
             μ_a = λ_s_a .* q_a
         else
-            log_μ_h = μ_base .+ d_m .+ d_l .+ ha_h .+ att_h .- def_a .+ pm_h
-            log_μ_a = μ_base .+ d_m .+ d_l .+ att_a .- def_h .+ pm_a
-            μ_h = exp.(clamp.(log_μ_h, -5.0, 4.0))
-            μ_a = exp.(clamp.(log_μ_a, -5.0, 4.0))
+            log_μ_h = int_m .+ lg .+ ha_h .+ γ_lg .+ att_h .+ def_a .+ pm_h
+            log_μ_a = int_m .+ lg .+ att_a .+ def_h .+ pm_a
+            μ_h = exp.(clamp.(log_μ_h, -10.0, 10.0))
+            μ_a = exp.(clamp.(log_μ_a, -10.0, 10.0))
         end
 
         λ_h_mat[i, :] = κ_samples .* μ_h
@@ -561,7 +550,6 @@ function PreGame.extract_parameters(
     )
 end
 
-# Dispatch overrides for Prediction Layer
 Pred.extract_params(::ScottishNegBinModelUnion, row) = (
     λ_h = row.λ_h,
     λ_a = row.λ_a,

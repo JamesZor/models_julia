@@ -54,43 +54,19 @@ _tag = "hl$(Int(HL))_hs$(HS)"
 
 specs = Tuple{String, Any}[
     ("goals_negbin_ctl_$(_tag)", TeamGoalsNegBinModel(
-        interception_config  = PreGame.MonthlyInterception(μ_base = Normal(0.25, 0.2), σ_month = Normal(0.0, 0.1)),
-        dynamics_config      = dyn,
-        homeadvantage_config = PreGame.HierarchicalHomeAdvantage(ha_global = Normal(0.25, 0.1), σ_ha = Normal(0.0, 0.1)),
-        dispersion_config    = SCOTTISH_HOMEAWAY_DISPERSION,
-        player_ratings_feature = Features.XGPlusMinusFeature(days_half_life = HL, position_structure = :outfield_only),
-        w_att_prior          = truncated(Normal(0.05, 0.05), lower = 0.0),
-        w_def_prior          = truncated(Normal(0.05, 0.05), lower = 0.0),
-        name                 = "goals_negbin_ctl_$(_tag)"
+        dynamics_config = dyn,
+        dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
+        name = "goals_negbin_ctl_$(_tag)"
     )),
     ("pxg_apm_negbin_$(_tag)", TeamPxGGoalsAPMNegBinModel(
-        interception_config  = PreGame.MonthlyInterception(μ_base = Normal(0.25, 0.2), σ_month = Normal(0.0, 0.1)),
-        dynamics_config      = dyn,
-        homeadvantage_config = PreGame.HierarchicalHomeAdvantage(ha_global = Normal(0.25, 0.1), σ_ha = Normal(0.0, 0.1)),
-        kappa_config         = PreGame.GlobalKappa(log_κ = PXG_LOGK_PRIOR),
-        dispersion_config    = SCOTTISH_HOMEAWAY_DISPERSION,
-        player_ratings_feature = Features.XGPlusMinusFeature(days_half_life = HL, position_structure = :outfield_only),
-        pxg_feature          = Features.ScottishProxyXGFeature(),
-        w_att_prior          = truncated(Normal(0.05, 0.05), lower = 0.0),
-        w_def_prior          = truncated(Normal(0.05, 0.05), lower = 0.0),
-        ν_xg_prior           = PXG_NU_PRIOR,
-        name                 = "pxg_apm_negbin_$(_tag)"
+        dynamics_config = dyn,
+        dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
+        name = "pxg_apm_negbin_$(_tag)"
     )),
     ("funnel_pxg_apm_negbin_$(_tag)", TeamFunnelPxGGoalsAPMNegBinModel(
-        interception_config  = PreGame.MonthlyInterception(μ_base = Normal(0.25, 0.2), σ_month = Normal(0.0, 0.1)),
-        dynamics_config      = dyn,
-        homeadvantage_config = PreGame.HierarchicalHomeAdvantage(ha_global = Normal(0.25, 0.1), σ_ha = Normal(0.0, 0.1)),
-        kappa_config         = PreGame.GlobalKappa(log_κ = PXG_LOGK_PRIOR),
-        dispersion_config    = SCOTTISH_HOMEAWAY_DISPERSION,
-        player_ratings_feature = Features.XGPlusMinusFeature(days_half_life = HL, position_structure = :outfield_only),
-        pxg_feature          = Features.ScottishProxyXGFeature(),
-        shot_scale           = 2.2,
-        q_prior              = PXG_Q_PRIOR,
-        σ_q_prior            = PXG_SIGQ_PRIOR,
-        ν_q_prior            = PXG_NU_PRIOR,
-        w_att_prior          = truncated(Normal(0.05, 0.05), lower = 0.0),
-        w_def_prior          = truncated(Normal(0.05, 0.05), lower = 0.0),
-        name                 = "funnel_pxg_apm_negbin_$(_tag)"
+        dynamics_config = dyn,
+        dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
+        name = "funnel_pxg_apm_negbin_$(_tag)"
     ))
 ]
 
