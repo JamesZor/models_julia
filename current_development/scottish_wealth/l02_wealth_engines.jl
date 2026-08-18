@@ -408,23 +408,153 @@ function PreGame.build_turing_model(config::TeamFunnelPxGGoalsAPMWealthModel, fe
 end
 
 # ==============================================================================
-# 3. PREDICTION DISPATCH (Poisson score matrix override)
+# 3. PREDICTION & PARAMETER EXTRACTION DISPATCH
 # ==============================================================================
 
-const ScottishWealthModelUnion = Union{
-    TeamPxGGoalsAPMWealthModel,
-    TeamFunnelPxGGoalsAPMWealthModel
-}
+function _pxg_league_offsets_wealth(chain, n_leagues, prefix)
+    n_samples = size(chain, 1) * size(chain, 3)
+    out = zeros(n_samples, n_leagues)
+    for i in 1:n_leagues
+        s = Symbol("$(prefix)[$i]")
+        s in keys(chain) && (out[:, i] = vec(Array(chain[s])))
+    end
+    return out
+end
 
-function Pred.extract_params(model::ScottishWealthModelUnion, chain::MCMCChains.Chains, split)
-    df = DataFrame(chain)
-    return (
-        chain_df = df,
-        w_att = mean(df[!, "w_att"]),
-        w_def = mean(df[!, "w_def"]),
-        w_wealth = hasproperty(df, :w_wealth) ? mean(df[!, :w_wealth]) : 0.0,
-        log_kappa = hasproperty(df, :log_kappa) ? mean(df[!, :log_kappa]) : 0.0
-    )
+function _get_or_build_wealth_map(data, df)
+    if haskey(data, :wealth_map)
+        return data[:wealth_map]
+    end
+    # Fallback reconstruction
+    cache_path = joinpath(@__DIR__, "cache", "scottish_val_catalog.jls")
+    if isfile(cache_path)
+        val_cat = deserialize(cache_path)
+    else
+        conn = wealth_db_connect()
+        val_cat = fetch_scottish_player_valuations(conn, tournament_ids=[56, 57])
+        close(conn)
+    end
+    # Build match wealth table directly
+    ds = Data.load_datastore_cached(Data.ScottishLower(), max_age_hours = 720)
+    lineup_vals = fetch_match_lineup_values(ds, val_cat)
+    wealth_df   = build_match_wealth_table(lineup_vals)
+    return Dict(r.match_id => Float64(r.delta_w) for r in eachrow(wealth_df))
+end
+
+function _pxg_extract_core_wealth(model, df, feature_set, chain)
+    data      = feature_set.data
+    n_teams   = Int(data[:n_teams])
+    n_seasons = Int(data[:n_seasons])
+    n_leagues = Int(data[:n_leagues])
+    team_map  = data[:team_map]
+    league_lookup = data[:league_lookup]
+    ratings_map   = get(data, :player_ratings_map, Dict{Int, Dict{Tuple{String, String}, Float64}}())
+    wealth_map    = _get_or_build_wealth_map(data, df)
+
+    inter_nt = PreGame.extract_interception(chain, model.interception_config, n_seasons)
+    ha_mat   = PreGame.extract_home_advantage(chain, model.homeadvantage_config, n_teams)
+    dyn_nt   = PreGame.extract_dynamics(chain, model.dynamics_config, "dyn", n_teams)
+    δ_mat    = _pxg_league_offsets_wealth(chain, n_leagues, "δ_league_raw")
+
+    n_samples = size(chain, 1) * size(chain, 3)
+    γ_mat = model.league_ha_on ? _pxg_league_offsets_wealth(chain, n_leagues, "γ_league_raw") :
+                                 zeros(n_samples, n_leagues)
+
+    w_att = vec(Array(chain[:w_att]))
+    w_def = vec(Array(chain[:w_def]))
+    w_wealth = vec(Array(chain[:w_wealth]))
+    apm_a = _pxg_active(model.apm_on)
+    base  = Features.rating_base(model.player_ratings_feature)
+
+    out = Dict{Int, NamedTuple}()
+    for row in eachrow(df)
+        mid   = Int(row.match_id)
+        h_idx = get(team_map, row.home_team, -1)
+        a_idx = get(team_map, row.away_team, -1)
+        l_idx = get(league_lookup, mid, 0)
+
+        α_h = h_idx > 0 ? dyn_nt.α[:, h_idx] : zeros(n_samples)
+        β_h = h_idx > 0 ? dyn_nt.β[:, h_idx] : zeros(n_samples)
+        α_a = a_idx > 0 ? dyn_nt.α[:, a_idx] : zeros(n_samples)
+        β_a = a_idx > 0 ? dyn_nt.β[:, a_idx] : zeros(n_samples)
+        γ_h = h_idx > 0 ? ha_mat[:, h_idx] : zeros(n_samples)
+        lg  = l_idx > 0 ? δ_mat[:, l_idx] : zeros(n_samples)
+        γlg = l_idx > 0 ? γ_mat[:, l_idx] : zeros(n_samples)
+
+        m_r = get(ratings_map, mid, Dict{Tuple{String, String}, Float64}())
+        r_h = (get(m_r, ("home", "D"), 0.0) + get(m_r, ("home", "M"), 0.0) +
+               get(m_r, ("home", "F"), 0.0)) - 10.0 * base
+        r_a = (get(m_r, ("away", "D"), 0.0) + get(m_r, ("away", "M"), 0.0) +
+               get(m_r, ("away", "F"), 0.0)) - 10.0 * base
+
+        pillar_h = apm_a .* (w_att .* r_h .- w_def .* r_a)
+        pillar_a = apm_a .* (w_att .* r_a .- w_def .* r_h)
+
+        # Starting-XI wealth differential shift
+        w_diff = get(wealth_map, mid, 0.0)
+        w_shift = w_wealth .* w_diff
+
+        s_idx = hasproperty(row, :season_idx) ? Int(row.season_idx) : n_seasons
+        m_idx = month(row.match_date)
+        int_v = inter_nt.μ_base[:, s_idx] .+ inter_nt.δ_month[:, m_idx]
+
+        out[mid] = (;
+            h_idx, a_idx, n_samples,
+            lin_h = clamp.(int_v .+ lg .+ γ_h .+ γlg .+ α_h .+ β_a .+ pillar_h .+ w_shift, -10.0, 10.0),
+            lin_a = clamp.(int_v .+ lg .+               α_a .+ β_h .+ pillar_a .- w_shift, -10.0, 10.0),
+        )
+    end
+    return out, n_samples, n_teams
+end
+
+function PreGame.extract_parameters(model::TeamPxGGoalsAPMWealthModel, df, feature_set, chain)
+    core, _, _ = _pxg_extract_core_wealth(model, df, feature_set, chain)
+    κ = exp.(vec(Array(chain[:log_κ])))
+    xg_shape = vec(Array(chain[:ν_xg]))
+
+    results = Dict{Int, NamedTuple}()
+    for (mid, c) in core
+        μ_h = exp.(c.lin_h); μ_a = exp.(c.lin_a)
+        results[mid] = (; λ_h = κ .* μ_h, λ_a = κ .* μ_a,
+                          true_xg_h = μ_h, true_xg_a = μ_a, κ = κ, xg_shape = xg_shape)
+    end
+    return results
+end
+
+function PreGame.extract_parameters(model::TeamFunnelPxGGoalsAPMWealthModel, df, feature_set, chain)
+    core, n_samples, n_teams = _pxg_extract_core_wealth(model, df, feature_set, chain)
+    κ     = exp.(vec(Array(chain[:log_κ])))
+    q_raw = vec(Array(chain[:q_raw]))
+    σ_q   = vec(Array(chain[:σ_q]))
+    qa    = _pxg_active(model.team_quality_on)
+
+    aq = zeros(n_samples, n_teams); dq = zeros(n_samples, n_teams)
+    for i in 1:n_teams
+        aq[:, i] = qa .* (vec(Array(chain[Symbol("raw_aq[$i]")])) .* σ_q)
+        dq[:, i] = qa .* (vec(Array(chain[Symbol("raw_dq[$i]")])) .* σ_q)
+    end
+    aq .-= mean(aq, dims = 2); dq .-= mean(dq, dims = 2)
+
+    results = Dict{Int, NamedTuple}()
+    for (mid, c) in core
+        a_h = c.h_idx > 0 ? aq[:, c.h_idx] : zeros(n_samples)
+        d_h = c.h_idx > 0 ? dq[:, c.h_idx] : zeros(n_samples)
+        a_a = c.a_idx > 0 ? aq[:, c.a_idx] : zeros(n_samples)
+        d_a = c.a_idx > 0 ? dq[:, c.a_idx] : zeros(n_samples)
+
+        log_q_h = clamp.(q_raw .+ a_h .- d_a, -10.0, 10.0)
+        log_q_a = clamp.(q_raw .+ a_a .- d_h, -10.0, 10.0)
+        q_h     = exp.(log_q_h); q_a = exp.(log_q_a)
+        λ_s_h   = exp.(c.lin_h) ./ model.shot_scale
+        λ_s_a   = exp.(c.lin_a) ./ model.shot_scale
+
+        results[mid] = (; λ_h = κ .* λ_s_h .* q_h, λ_a = κ .* λ_s_a .* q_a,
+                          true_xg_h = λ_s_h .* q_h, true_xg_a = λ_s_a .* q_a,
+                          shots_h = λ_s_h, shots_a = λ_s_a,
+                          quality_h = q_h, quality_a = q_a, κ = κ)
+    end
+    return results
 end
 
 @info "Scottish Lower Wealth-Augmented Models defined successfully"
+

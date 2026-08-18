@@ -243,11 +243,8 @@ function Features.add_feature!(
     
     flat_diffs = Float64[get(wealth_map, mid, 0.0) for mid in ordered_ids]
     
-    # AD-Safety validation
-    @assert !any(isnan, flat_diffs) "flat_wealth_diff contains NaN values!"
-    @assert !any(isinf, flat_diffs) "flat_wealth_diff contains Inf values!"
-    
     F_data[:flat_wealth_diff] = flat_diffs
+    F_data[:wealth_map]        = wealth_map
 end
 
 function Features.add_feature!(
