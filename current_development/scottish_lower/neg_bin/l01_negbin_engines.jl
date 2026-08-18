@@ -370,6 +370,49 @@ Base.@kwdef struct TeamFunnelPxGGoalsAPMNegBinModel{
     name::String              = "team_funnel_pxg_goals_apm_negbin"
 end
 
+function _funnel_suff_opt(shots_bbc::Vector{Int}, mask_s::Vector{Float64},
+                          xg::Vector{Float64}, n_ev::Vector{Int}, mask_x::Vector{Float64},
+                          goals::Vector{Int}, w::Vector{Float64})
+    ws      = w .* mask_s
+    wx      = w .* mask_x
+    logx    = log.(xg)
+    n_safe  = [mask_x[i] > 0 && n_ev[i] > 0 ? Float64(n_ev[i]) : 1.0 for i in eachindex(n_ev)]
+    cq_S    = wx .* n_safe
+    c_g_lin = w .* goals
+
+    # Collapse distinct non-zero shot counts for loggamma evaluation
+    # sum_i wx_i * logΓ(ν_q * S_i) == sum_k W_k * logΓ(ν_q * s_k)
+    active_idx = findall(i -> mask_x[i] > 0 && n_ev[i] > 0, eachindex(n_ev))
+    if !isempty(active_idx)
+        unique_shots = sort(unique(n_ev[active_idx]))
+        shot_weights = [sum(wx[i] for i in active_idx if n_ev[i] == s) for s in unique_shots]
+        u_shots_f64  = Float64.(unique_shots)
+    else
+        unique_shots = Int[]
+        shot_weights = Float64[]
+        u_shots_f64  = Float64[]
+    end
+
+    return (
+        # volume
+        c_s_lin  = ws .* shots_bbc,
+        c_s_rate = ws,
+        # quality (conditional Gamma)
+        cq_S     = cq_S,                     # multiplies log q
+        cq_x     = wx .* xg,                 # multiplies 1/q
+        S_Slogx  = sum(cq_S .* logx),        # multiplies nu_q
+        S_logx   = sum(wx .* logx),          # multiplies -1
+        S_cq_S   = sum(cq_S),                # multiplies nu_q*log nu_q
+        # collapsed loggamma terms:
+        shot_weights = shot_weights,
+        u_shots_f64  = u_shots_f64,
+        # goals
+        c_g_lin  = c_g_lin,
+        c_g_rate = w,
+        S_g      = sum(c_g_lin),
+    )
+end
+
 @model function build_funnel_pxg_goals_apm_negbin_engine(
     home_ids::Vector{Int}, away_ids::Vector{Int},
     season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
@@ -445,17 +488,20 @@ end
     ll_s_h = sum(sf_h.c_s_lin .* log_λ_h) - sum(sf_h.c_s_rate .* λ_h)
     ll_s_a = sum(sf_a.c_s_lin .* log_λ_a) - sum(sf_a.c_s_rate .* λ_a)
 
-    # 5. Quality Likelihood
+    # 5. Quality Likelihood (Collapsed loggamma across ~20 unique shot counts)
+    ll_gamma_q_h = isempty(sf_h.u_shots_f64) ? 0.0 : sum(sf_h.shot_weights .* loggamma.(ν_q .* sf_h.u_shots_f64))
+    ll_gamma_q_a = isempty(sf_a.u_shots_f64) ? 0.0 : sum(sf_a.shot_weights .* loggamma.(ν_q .* sf_a.u_shots_f64))
+
     ll_q_h = ν_q * sf_h.S_Slogx - sf_h.S_logx -
              ν_q * sum(sf_h.cq_x .* inv_q_h) -
              ν_q * sum(sf_h.cq_S .* log_q_h) +
              ν_q * lνq * sf_h.S_cq_S -
-             sum(sf_h.cq_m .* loggamma.(ν_q .* sf_h.n_ev))
+             ll_gamma_q_h
     ll_q_a = ν_q * sf_a.S_Slogx - sf_a.S_logx -
              ν_q * sum(sf_a.cq_x .* inv_q_a) -
              ν_q * sum(sf_a.cq_S .* log_q_a) +
              ν_q * lνq * sf_a.S_cq_S -
-             sum(sf_a.cq_m .* loggamma.(ν_q .* sf_a.n_ev))
+             ll_gamma_q_a
 
     # 6. Goals Robust Negative Binomial Likelihood (SIMD vectorized)
     log_λ_gh = log_κ .+ log_λ_h .+ log_q_h
@@ -490,13 +536,13 @@ function PreGame.build_turing_model(config::TeamFunnelPxGGoalsAPMNegBinModel, fe
     return build_funnel_pxg_goals_apm_negbin_engine(
         d.home_ids, d.away_ids, d.season_idx, d.month_idx, d.league_idx,
         rat_h, rat_a,
-        _pxg_funnel_suff(Vector{Int}(data[:flat_home_shots_n]),
+        _funnel_suff_opt(Vector{Int}(data[:flat_home_shots_n]),
                          Vector{Float64}(data[:flat_funnel_mask_h]),
                          Vector{Float64}(data[:flat_home_xg_proxy]),
                          Vector{Int}(data[:flat_home_pxg_shots]),
                          Vector{Float64}(data[:flat_pxg_mask_h]),
                          d.home_goals, d.w),
-        _pxg_funnel_suff(Vector{Int}(data[:flat_away_shots_n]),
+        _funnel_suff_opt(Vector{Int}(data[:flat_away_shots_n]),
                          Vector{Float64}(data[:flat_funnel_mask_a]),
                          Vector{Float64}(data[:flat_away_xg_proxy]),
                          Vector{Int}(data[:flat_away_pxg_shots]),
