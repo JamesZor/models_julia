@@ -32,13 +32,13 @@ println("="^95)
 ds = DD.load_datastore_cached(DD.ScottishLower(), max_age_hours = 10000)
 println("✓ Loaded ScottishLower DataStore: $(nrow(ds.matches)) matches")
 
-# 2. Fast 1-Split Configuration (Target Season: 2025/2026)
-test_seasons = ["2025/2026"]
-splitter = TT.GroupedCVConfig(
-    split_column = :season,
-    test_groups  = [[s] for s in test_seasons],
-    history_mode = :rolling,
-    window_size  = 2
+# 2. Fast 1-Split Configuration (Target Season: 25/26, stop_early=true for 1 fold)
+splitter = DD.GroupedCVConfig(
+    tournament_groups = [[56, 57]],
+    target_seasons    = ["25/26"],
+    history_seasons   = 2,
+    dynamics_col      = :match_biweek,
+    stop_early        = true
 )
 
 # NUTS Sampling Configuration (400 samples, 200 adapt, 3 chains)

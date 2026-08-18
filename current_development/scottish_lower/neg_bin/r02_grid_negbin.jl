@@ -109,14 +109,11 @@ for (cell_idx, (exp_name, model)) in enumerate(specs)
         max_concurrent_tasks = 16
     )
 
-    splitter = Training.GroupedCVConfig(
-        split_column   = DYN_COL,
-        history_column = :season,
-        test_groups    = Training.generate_temporal_splits(ds.matches;
-                            split_column = DYN_COL,
-                            target_seasons = TARGETS),
-        history_mode   = :rolling,
-        window_size    = HS
+    splitter = Data.GroupedCVConfig(
+        tournament_groups = [[56, 57]],
+        target_seasons    = TARGETS,
+        history_seasons   = HS,
+        dynamics_col      = DYN_COL
     )
 
     task = Experiments.create_experiment_task(
