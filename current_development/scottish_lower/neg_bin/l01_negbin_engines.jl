@@ -456,6 +456,11 @@ function PreGame.build_turing_model(config::TeamFunnelPxGGoalsAPMNegBinModel, fe
     )
 end
 
+# Explicit FeatureSet overrides to cleanly overwrite old REPL method tables
+PreGame.build_turing_model(config::TeamGoalsNegBinModel, fs::Features.FeatureSet) = PreGame.build_turing_model(config, fs.data)
+PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinModel, fs::Features.FeatureSet) = PreGame.build_turing_model(config, fs.data)
+PreGame.build_turing_model(config::TeamFunnelPxGGoalsAPMNegBinModel, fs::Features.FeatureSet) = PreGame.build_turing_model(config, fs.data)
+
 # ==============================================================================
 # 5. PARAMETER EXTRACTORS & PREDICTIVE SCORE MATRICES
 # ==============================================================================
