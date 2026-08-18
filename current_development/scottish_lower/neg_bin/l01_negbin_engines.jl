@@ -68,11 +68,41 @@ Base.@kwdef struct TeamGoalsNegBinModel{
     name::String              = "team_goals_negbin"
 end
 
+"""
+Algebraically exact, SIMD-vectorized Robust Negative Binomial log-likelihood:
+log p(k | r, λ) = logΓ(k+r) - logΓ(r) + r*log(r) - (k+r)*log(r+λ) + k*log(λ) [+ const]
+
+Computes the entire N-match likelihood in 4 SIMD instructions without allocating TrackedReal objects.
+"""
+@inline function _negbin_vector_loglik(
+    goals::Vector{Int},
+    log_λ::AbstractVector,
+    r::Real,
+    w::Vector{Float64},
+    c_g_lin::Vector{Float64},
+    S_w::Real
+)
+    lr = log(max(r, 1e-6))
+    λ  = exp.(log_λ)
+
+    # 1. Scalar r-block
+    ll_r = S_w * (r * lr - loggamma(r))
+    # 2. Vector loggamma(k + r)
+    ll_gamma = sum(w .* loggamma.(goals .+ r))
+    # 3. Vector (k + r) * log(r + λ)
+    ll_denom = sum(w .* (goals .+ r) .* log.(r .+ λ))
+    # 4. Vector k * log(λ)
+    ll_numer = sum(c_g_lin .* log_λ)
+
+    return ll_r + ll_gamma + ll_numer - ll_denom
+end
+
 @model function build_goals_negbin_engine(
     home_ids::Vector{Int}, away_ids::Vector{Int},
     season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
     rat_h::Vector{Float64}, rat_a::Vector{Float64},
     home_goals::Vector{Int}, away_goals::Vector{Int}, weights::Vector{Float64},
+    c_gh_lin::Vector{Float64}, c_ga_lin::Vector{Float64}, S_w::Float64,
     n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
     league_ha_active::Float64, apm_active::Float64,
     config
@@ -111,19 +141,15 @@ end
     log_λ_a = ifelse.(bad_a, zero.(log_λ_a), log_λ_a)
     Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
 
-    λ_h = exp.(log_λ_h)
-    λ_a = exp.(log_λ_a)
-
     r_h = disp.h
     r_a = disp.a
 
-    # 3. Robust Negative Binomial Likelihood
-    ll_g_h = logpdf.(RobustNegativeBinomial.(r_h, λ_h), home_goals)
-    ll_g_a = logpdf.(RobustNegativeBinomial.(r_a, λ_a), away_goals)
+    # 3. Vectorized SIMD Robust Negative Binomial Likelihood
+    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_h, r_h, weights, c_gh_lin, S_w)
+    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_a, r_a, weights, c_ga_lin, S_w)
 
-    Turing.@addlogprob! ifelse(isnan(r_h) || isnan(r_a), -Inf, 0.0)
-    Turing.@addlogprob! sum(weights .* ll_g_h)
-    Turing.@addlogprob! sum(weights .* ll_g_a)
+    Turing.@addlogprob! ifelse(isnan(r_h) || isnan(r_a) || isnan(ll_g_h) || isnan(ll_g_a), -Inf, 0.0)
+    Turing.@addlogprob! ll_g_h + ll_g_a
 end
 
 function Features.required_features(model::TeamGoalsNegBinModel)
@@ -142,11 +168,16 @@ function PreGame.build_turing_model(config::TeamGoalsNegBinModel, feature_set)
     n    = length(d.home_ids)
     rat_h, rat_a = _pxg_ratings(data, config, n)
 
+    c_gh_lin = d.w .* d.home_goals
+    c_ga_lin = d.w .* d.away_goals
+    S_w      = sum(d.w)
+
     return build_goals_negbin_engine(
         d.home_ids, d.away_ids,
         d.season_idx, d.month_idx, d.league_idx,
         rat_h, rat_a,
         d.home_goals, d.away_goals, d.w,
+        c_gh_lin, c_ga_lin, S_w,
         d.n_teams, d.n_seasons, d.n_months, d.n_leagues,
         _pxg_active(config.league_ha_on), _pxg_active(config.apm_on),
         config
@@ -186,7 +217,7 @@ end
     season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
     rat_h::Vector{Float64}, rat_a::Vector{Float64},
     sx_h::NamedTuple, sx_a::NamedTuple,
-    home_goals::Vector{Int}, away_goals::Vector{Int}, weights::Vector{Float64},
+    home_goals::Vector{Int}, away_goals::Vector{Int}, weights::Vector{Float64}, S_w::Float64,
     n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
     league_ha_active::Float64, apm_active::Float64,
     config
@@ -230,7 +261,6 @@ end
 
     μ_h     = exp.(log_μ_h);   μ_a     = exp.(log_μ_a)
     inv_μ_h = exp.(.-log_μ_h); inv_μ_a = exp.(.-log_μ_a)
-    κ       = exp(log_κ)
 
     r_h = disp.h
     r_a = disp.a
@@ -242,15 +272,14 @@ end
     ll_xg_a = (ν_xg - 1.0) * sx_a.S_logx - ν_xg * sum(sx_a.c_x .* inv_μ_a) -
               ν_xg * sum(sx_a.c_m .* log_μ_a) + cν * sx_a.S_m
 
-    # 4. Pillar B: Goals (Robust Negative Binomial)
-    ll_g_h = logpdf.(RobustNegativeBinomial.(r_h, κ .* μ_h), home_goals)
-    ll_g_a = logpdf.(RobustNegativeBinomial.(r_a, κ .* μ_a), away_goals)
+    # 4. Pillar B: Goals (Robust Negative Binomial, SIMD vectorized)
+    log_λ_gh = log_κ .+ log_μ_h
+    log_λ_ga = log_κ .+ log_μ_a
+    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_gh, r_h, weights, sx_h.c_g_lin, S_w)
+    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_ga, r_a, weights, sx_a.c_g_lin, S_w)
 
-    Turing.@addlogprob! ifelse(isnan(ll_xg_h) || isnan(ll_xg_a) || isnan(r_h) || isnan(r_a), -Inf, 0.0)
-    Turing.@addlogprob! ll_xg_h
-    Turing.@addlogprob! ll_xg_a
-    Turing.@addlogprob! sum(weights .* ll_g_h)
-    Turing.@addlogprob! sum(weights .* ll_g_a)
+    Turing.@addlogprob! ifelse(isnan(ll_xg_h) || isnan(ll_xg_a) || isnan(r_h) || isnan(r_a) || isnan(ll_g_h) || isnan(ll_g_a), -Inf, 0.0)
+    Turing.@addlogprob! ll_xg_h + ll_xg_a + ll_g_h + ll_g_a
 end
 
 function Features.required_features(model::TeamPxGGoalsAPMNegBinModel)
@@ -279,7 +308,7 @@ function PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinModel, feature_
         rat_h, rat_a,
         _pxg_suff(xg_h, mask_h, d.home_goals, d.w),
         _pxg_suff(xg_a, mask_a, d.away_goals, d.w),
-        d.home_goals, d.away_goals, d.w,
+        d.home_goals, d.away_goals, d.w, sum(d.w),
         d.n_teams, d.n_seasons, d.n_months, d.n_leagues,
         _pxg_active(config.league_ha_on), _pxg_active(config.apm_on),
         config
@@ -323,7 +352,7 @@ end
     season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
     rat_h::Vector{Float64}, rat_a::Vector{Float64},
     sf_h::NamedTuple, sf_a::NamedTuple,
-    home_goals::Vector{Int}, away_goals::Vector{Int}, weights::Vector{Float64},
+    home_goals::Vector{Int}, away_goals::Vector{Int}, weights::Vector{Float64}, S_w::Float64,
     shot_scale::Float64,
     n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
     league_ha_active::Float64, apm_active::Float64, quality_active::Float64,
@@ -383,7 +412,6 @@ end
     q_h     = exp.(log_q_h);   q_a     = exp.(log_q_a)
     inv_q_h = exp.(.-log_q_h); inv_q_a = exp.(.-log_q_a)
 
-    κ       = exp(log_κ)
     lνq     = log(ν_q)
 
     r_h = disp.h
@@ -405,14 +433,14 @@ end
              ν_q * lνq * sf_a.S_cq_S -
              sum(sf_a.cq_m .* loggamma.(ν_q .* sf_a.n_ev))
 
-    # 6. Goals Robust Negative Binomial Likelihood
-    ll_g_h = logpdf.(RobustNegativeBinomial.(r_h, κ .* λ_h .* q_h), home_goals)
-    ll_g_a = logpdf.(RobustNegativeBinomial.(r_a, κ .* λ_a .* q_a), away_goals)
+    # 6. Goals Robust Negative Binomial Likelihood (SIMD vectorized)
+    log_λ_gh = log_κ .+ log_λ_h .+ log_q_h
+    log_λ_ga = log_κ .+ log_λ_a .+ log_q_a
+    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_gh, r_h, weights, sf_h.c_g_lin, S_w)
+    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_ga, r_a, weights, sf_a.c_g_lin, S_w)
 
-    Turing.@addlogprob! ifelse(isnan(ll_s_h) || isnan(ll_s_a) || isnan(ll_q_h) || isnan(ll_q_a) || isnan(r_h) || isnan(r_a), -Inf, 0.0)
-    Turing.@addlogprob! ll_s_h + ll_s_a + ll_q_h + ll_q_a
-    Turing.@addlogprob! sum(weights .* ll_g_h)
-    Turing.@addlogprob! sum(weights .* ll_g_a)
+    Turing.@addlogprob! ifelse(isnan(ll_s_h) || isnan(ll_s_a) || isnan(ll_q_h) || isnan(ll_q_a) || isnan(r_h) || isnan(r_a) || isnan(ll_g_h) || isnan(ll_g_a), -Inf, 0.0)
+    Turing.@addlogprob! ll_s_h + ll_s_a + ll_q_h + ll_q_a + ll_g_h + ll_g_a
 end
 
 function Features.required_features(model::TeamFunnelPxGGoalsAPMNegBinModel)
@@ -447,7 +475,7 @@ function PreGame.build_turing_model(config::TeamFunnelPxGGoalsAPMNegBinModel, fe
                          Vector{Int}(data[:flat_away_pxg_shots]),
                          Vector{Float64}(data[:flat_pxg_mask_a]),
                          d.away_goals, d.w),
-        d.home_goals, d.away_goals, d.w,
+        d.home_goals, d.away_goals, d.w, sum(d.w),
         config.shot_scale,
         d.n_teams, d.n_seasons, d.n_months, d.n_leagues,
         _pxg_active(config.league_ha_on), _pxg_active(config.apm_on),
