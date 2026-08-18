@@ -542,19 +542,27 @@ function PreGame.extract_parameters(model::TeamFunnelPxGGoalsAPMWealthModel, df,
         a_a = c.a_idx > 0 ? aq[:, c.a_idx] : zeros(n_samples)
         d_a = c.a_idx > 0 ? dq[:, c.a_idx] : zeros(n_samples)
 
-        log_q_h = clamp.(q_raw .+ a_h .- d_a, -10.0, 10.0)
-        log_q_a = clamp.(q_raw .+ a_a .- d_h, -10.0, 10.0)
-        q_h     = exp.(log_q_h); q_a = exp.(log_q_a)
-        λ_s_h   = exp.(c.lin_h) ./ model.shot_scale
-        λ_s_a   = exp.(c.lin_a) ./ model.shot_scale
+        q_h = 1 ./ (1 .+ exp.(.-(q_raw .+ a_h .- d_a)))
+        q_a = 1 ./ (1 .+ exp.(.-(q_raw .+ a_a .- d_h)))
+        λ_s_h = exp.(model.shot_scale .+ c.lin_h)
+        λ_s_a = exp.(model.shot_scale .+ c.lin_a)
+        μ_h = λ_s_h .* q_h; μ_a = λ_s_a .* q_a
 
-        results[mid] = (; λ_h = κ .* λ_s_h .* q_h, λ_a = κ .* λ_s_a .* q_a,
-                          true_xg_h = λ_s_h .* q_h, true_xg_a = λ_s_a .* q_a,
-                          shots_h = λ_s_h, shots_a = λ_s_a,
-                          quality_h = q_h, quality_a = q_a, κ = κ)
+        results[mid] = (; λ_h = κ .* μ_h, λ_a = κ .* μ_a,
+                          λ_s_h, λ_s_a, q_h, q_a,
+                          true_xg_h = μ_h, true_xg_a = μ_a, κ = κ)
     end
     return results
 end
+
+const ScottishWealthModelUnion = Union{
+    TeamPxGGoalsAPMWealthModel,
+    TeamFunnelPxGGoalsAPMWealthModel
+}
+
+Pred.extract_params(::ScottishWealthModelUnion, row) = (λ_h = row.λ_h, λ_a = row.λ_a)
+Pred.compute_score_matrix(::ScottishWealthModelUnion, params; max_goals::Int = 12) =
+    _pxg_poisson_score(params.λ_h, params.λ_a; max_goals)
 
 @info "Scottish Lower Wealth-Augmented Models defined successfully"
 
