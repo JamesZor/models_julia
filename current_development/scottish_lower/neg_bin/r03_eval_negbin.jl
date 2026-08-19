@@ -254,7 +254,7 @@ for (pol_name, pol) in policies
         sh = length(ret_series) > 1 && std(ret_series) > 1e-6 ? (mean(ret_series) / std(ret_series)) * sqrt(35) : 0.0
         calm = m.mdd > 0.0 ? (m.final - 1.0) / (m.mdd / 100.0) : 0.0
         
-        total_bets = sum(sum(b.a_kelly .> 1e-5) for b in books_map[m_name])
+        total_bets = isempty(books_map[m_name]) ? 0 : sum(sum(b.a_kelly .> 1e-5) for b in books_map[m_name]; init = 0)
         
         push!(port_df, (
             m_name,

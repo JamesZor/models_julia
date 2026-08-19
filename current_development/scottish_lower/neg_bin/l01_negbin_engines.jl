@@ -671,13 +671,14 @@ function Pred.compute_score_matrix(
     r_h, r_a = params.r_h, params.r_a
     n_samples = length(λ_h)
 
-    outcomes_grid = [[h, a] for h in 0:max_goals-1, a in 0:max_goals-1]
     S = zeros(Float64, max_goals, max_goals, n_samples)
 
     @inbounds for k in 1:n_samples
-        dist = DoubleNegativeBinomial(Float64(λ_h[k]), Float64(λ_a[k]), Float64(r_h[k]), Float64(r_a[k]))
-        S_k = pdf.(Ref(dist), outcomes_grid)
-        S[:, :, k] = S_k
+        dist_h = RobustNegativeBinomial(max(Float64(r_h[k]), 1e-4), max(Float64(λ_h[k]), 1e-4))
+        dist_a = RobustNegativeBinomial(max(Float64(r_a[k]), 1e-4), max(Float64(λ_a[k]), 1e-4))
+        p_h = [pdf(dist_h, i) for i in 0:max_goals-1]
+        p_a = [pdf(dist_a, j) for j in 0:max_goals-1]
+        S[:, :, k] = p_h .* transpose(p_a)
     end
 
     return Pred.ScoreMatrix(S)
