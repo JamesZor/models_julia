@@ -2,7 +2,7 @@
 #
 # RUNNER: 40-Fold MCMC Rolling Grid for Scottish NegBin + Wealth Models
 #
-# Runs Queued NUTS MCMC (16 concurrent worker tasks, 3 chains x 500 samples)
+# Runs Queued NUTS MCMC (16 concurrent worker tasks, 3 chains x 1200 samples)
 # across 40 rolling out-of-sample splits on Scottish Lower leagues (56, 57).
 #
 # Grid Architectures:
@@ -16,107 +16,78 @@ using Turing
 using Dates
 using Printf
 
-const Data        = BayesianFootball.Data
 const PreGame     = BayesianFootball.Models.PreGame
-const Samplers    = BayesianFootball.Samplers
 const Experiments = BayesianFootball.Experiments
+const Training    = BayesianFootball.Training
+const Data        = BayesianFootball.Data
 
+const ROOT = pkgdir(BayesianFootball)
 include("l02_negbin_wealth_engines.jl")
 
-println("==================================================================")
-println(" SCOTTISH LOWER NEGBIN + WEALTH 40-FOLD MCMC ROLLING GRID")
-println("==================================================================")
+# --- Canonical Scottish Lower Spec ---
+const HL      = 365.0
+const HS      = 2
+const TARGETS = ["24/25", "25/26"]
+const DYN_COL = :match_biweek
+const SAMPLES = 1200
+const WARMUP  = 300
+const CHAINS  = 3
 
-# 1. Load DataStore
-ds = Data.load_datastore_cached(Data.ScottishLower())
-println("✓ Loaded Scottish Lower DataStore (", length(ds.matches.match_id), " matches)")
+println("\n", "="^95)
+println("STARTING 40-FOLD MCMC GRID: NEGBIN + SQUAD WEALTH MODELS (SCOTTISH LOWER)")
+println("="^95)
 
-# 2. Configure 40-Fold Rolling Splitter
-splitter = Data.GroupedCVConfig(
-    group_by = :date,
-    n_splits = 40,
-    min_train_size = 500,
-    test_size = 15,
-    step_size = 10,
-    window_strategy = :expanding
-)
+ds = Data.load_datastore_cached(Data.ScottishLower(), max_age_hours = 10000)
+save_dir = joinpath(ROOT, "data/scottish_negbin_wealth_grid/"); mkpath(save_dir)
 
-# 3. High-Performance Queued NUTS Sampler
-sampler_cfg = Samplers.QueuedNUTSConfig(
-    n_samples            = 500,
-    n_adapts             = 500,
-    target_accept        = 0.85,
-    n_chains             = 3,
-    max_concurrent_tasks = 16
-)
+dyn  = PreGame.TimeDecayDynamics(days_half_life = HL)
+_tag = "hl$(Int(HL))_hs$(HS)"
 
-# 4. Grid Models
-grid_configs = [
-    (
-        name = "goals_negbin_wealth_hl365_hs2",
-        model = TeamGoalsNegBinWealthModel(
-            dynamics_config = PreGame.TimeDecayDynamics(days_half_life = 365.0),
-            homeadvantage_config = PreGame.HierarchicalTeamHomeAdvantage(),
-            dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
-            apm_on = true,
-            league_ha_on = true
-        )
-    ),
-    (
-        name = "pxg_apm_negbin_wealth_hl365_hs2",
-        model = TeamPxGGoalsAPMNegBinWealthModel(
-            dynamics_config = PreGame.TimeDecayDynamics(days_half_life = 365.0),
-            homeadvantage_config = PreGame.HierarchicalTeamHomeAdvantage(),
-            dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
-            apm_on = true,
-            league_ha_on = true
-        )
-    ),
-    (
-        name = "funnel_pxg_apm_negbin_wealth_hl365_hs2",
-        model = TeamFunnelPxGGoalsAPMNegBinWealthModel(
-            dynamics_config = PreGame.TimeDecayDynamics(days_half_life = 365.0),
-            homeadvantage_config = PreGame.HierarchicalTeamHomeAdvantage(),
-            dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
-            apm_on = true,
-            team_quality_on = true,
-            league_ha_on = true
-        )
-    )
+specs = Tuple{String, Any}[
+    ("goals_negbin_wealth_$(_tag)", TeamGoalsNegBinWealthModel(
+        dynamics_config = dyn,
+        dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
+        name = "goals_negbin_wealth_$(_tag)"
+    )),
+    ("pxg_apm_negbin_wealth_$(_tag)", TeamPxGGoalsAPMNegBinWealthModel(
+        dynamics_config = dyn,
+        dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
+        name = "pxg_apm_negbin_wealth_$(_tag)"
+    )),
+    ("funnel_pxg_apm_negbin_wealth_$(_tag)", TeamFunnelPxGGoalsAPMNegBinWealthModel(
+        dynamics_config = dyn,
+        dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
+        name = "funnel_pxg_apm_negbin_wealth_$(_tag)"
+    ))
 ]
 
-save_dir = "data/scottish_negbin_wealth_grid"
-mkpath(save_dir)
+println("[INFO] Running $(length(specs)) NegBin + Wealth model specs across 40 folds (16 cores)...")
 
-# 5. Execute Grid
-for (idx, cfg) in enumerate(grid_configs)
-    println("\n==================================================================")
-    println("▶ [", idx, "/", length(grid_configs), "] Launching Grid: ", cfg.name)
-    println("==================================================================")
-    
-    t_start = time()
+for (cell_idx, (exp_name, model)) in enumerate(specs)
+    println("\n" * "="^85)
+    println("[$cell_idx/$(length(specs))] STARTING MODEL GRID: $exp_name")
+    println("="^85)
+
     task = Experiments.create_experiment_task(
-        ds,
-        cfg.model,
-        cfg.name,
-        save_dir;
-        splitter = splitter,
-        sampler_config = sampler_cfg,
-        metadata = Dict(
-            :league => "ScottishLower",
-            :tournaments => [56, 57],
-            :notes => "Scottish Lower Robust NegBin (NB2) + Starting XI Wealth Delta",
-            :created_at => Dates.now()
-        )
+        ds, model, exp_name, save_dir;
+        target_seasons       = TARGETS,
+        history_seasons      = HS,
+        dynamics_col         = DYN_COL,
+        samples              = SAMPLES,
+        warmup               = WARMUP,
+        chains               = CHAINS,
+        use_queue            = true,
+        max_depth            = 10,
+        max_concurrent_tasks = 16
     )
-    
+
+    t0 = time()
     res = Experiments.run_experiment(task)
     Experiments.save_experiment(res)
-    
-    elapsed_min = (time() - t_start) / 60.0
-    println("✓ Saved: ", cfg.name, " in ", round(elapsed_min, digits=1), " mins")
+    elapsed_hr = round((time() - t0) / 3600.0, digits = 2)
+    println("✓ Completed and saved $exp_name in $(elapsed_hr)h")
 end
 
-println("\n==================================================================")
-println("✓ 40-Fold NegBin + Wealth Grid Execution Complete!")
-println("==================================================================")
+println("\n", "="^95)
+println("✓ 40-FOLD NEGBIN + SQUAD WEALTH GRID COMPLETE!")
+println("="^95)

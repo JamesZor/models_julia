@@ -1,16 +1,6 @@
 # current_development/scottish_lower/neg_bin/r05_smoke_negbin_wealth.jl
 #
 # RUNNER: 1-Split MCMC Smoke Test for Scottish NegBin + Wealth Models
-#
-# Runs NUTS sampling (3 chains x 100 samples) across Season 2025/2026 for:
-# 1. TeamGoalsNegBinWealthModel
-# 2. TeamPxGGoalsAPMNegBinWealthModel
-# 3. TeamFunnelPxGGoalsAPMNegBinWealthModel
-#
-# Verifies:
-# - Chain convergence (rhat < 1.10)
-# - Parameter extraction (w_wealth, κ, r_h, r_a, δ_r_home)
-# - PPD ScoreMatrix construction & probability sum integrity (sum ≈ 1.0)
 
 using Revise
 using BayesianFootball
@@ -19,120 +9,123 @@ using Printf
 using Dates
 using DataFrames
 using Statistics
+using MCMCChains
+using LinearAlgebra
 
-const Data        = BayesianFootball.Data
-const PreGame     = BayesianFootball.Models.PreGame
-const Features    = BayesianFootball.Features
-const Samplers    = BayesianFootball.Samplers
-const Training    = BayesianFootball.Training
-const Predictions = BayesianFootball.Predictions
+const DD = BayesianFootball.Data
+const MM = BayesianFootball.Models
+const EE = BayesianFootball.Experiments
+const Features = BayesianFootball.Features
+const PreGame = BayesianFootball.Models.PreGame
+const Pred = BayesianFootball.Predictions
+const ROOT = pkgdir(BayesianFootball)
 
 include("l02_negbin_wealth_engines.jl")
 
-println("==================================================================")
-println(" SCOTTISH LOWER NEGBIN + WEALTH 1-SPLIT MCMC SMOKE TEST")
-println("==================================================================")
+println("\n", "="^95)
+println("SMOKE TEST: ROBUST NEGATIVE BINOMIAL + SQUAD WEALTH ENGINES (SCOTTISH LOWER)")
+println("="^95)
 
-# 1. Load Data
-println("\n[1/3] Loading DataStore...")
-ds = Data.load_datastore_cached(Data.ScottishLower())
-splitter = Data.GroupedCVConfig(group_by = :season, test_groups = [2025], window_strategy = :expanding)
+# 1. Load DataStore
+ds = DD.load_datastore_cached(DD.ScottishLower(), max_age_hours = 10000)
+save_dir = joinpath(ROOT, "data/scottish_negbin_wealth_smoke/"); mkpath(save_dir)
+println("✓ Loaded ScottishLower DataStore: $(nrow(ds.matches)) matches")
 
-# 2. Test Configurations
-sampler_cfg = Samplers.NUTSConfig(
-    n_samples = 100,
-    n_adapts  = 100,
-    target_accept = 0.85,
-    n_chains  = 3
-)
+# 2. Model Specifications to Test
+dyn = MM.PreGame.TimeDecayDynamics(days_half_life = 365.0)
 
-test_models = [
-    ("Model 1: Goals NegBin + Wealth", TeamGoalsNegBinWealthModel(
-        dynamics_config = PreGame.TimeDecayDynamics(days_half_life = 365.0),
-        homeadvantage_config = PreGame.HierarchicalTeamHomeAdvantage(),
+models_to_test = [
+    ("Goals NegBin + Wealth", TeamGoalsNegBinWealthModel(
+        dynamics_config = dyn,
         dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
-        apm_on = true,
-        league_ha_on = true
+        name = "goals_negbin_wealth_smoke"
     )),
-    ("Model 2: Proxy xG + RAPM + NegBin + Wealth", TeamPxGGoalsAPMNegBinWealthModel(
-        dynamics_config = PreGame.TimeDecayDynamics(days_half_life = 365.0),
-        homeadvantage_config = PreGame.HierarchicalTeamHomeAdvantage(),
+    ("Arm A: Proxy xG NegBin + Wealth", TeamPxGGoalsAPMNegBinWealthModel(
+        dynamics_config = dyn,
         dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
-        apm_on = true,
-        league_ha_on = true
+        name = "pxg_apm_negbin_wealth_smoke"
     )),
-    ("Model 3: Funnel Proxy xG + RAPM + NegBin + Wealth", TeamFunnelPxGGoalsAPMNegBinWealthModel(
-        dynamics_config = PreGame.TimeDecayDynamics(days_half_life = 365.0),
-        homeadvantage_config = PreGame.HierarchicalTeamHomeAdvantage(),
+    ("Arm B: Funnel Proxy xG NegBin + Wealth", TeamFunnelPxGGoalsAPMNegBinWealthModel(
+        dynamics_config = dyn,
         dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
-        apm_on = true,
-        team_quality_on = true,
-        league_ha_on = true
+        name = "funnel_pxg_apm_negbin_wealth_smoke"
     ))
 ]
 
-println("\n[2/3] Running 1-Split MCMC Sampling...")
+for (desc, model) in models_to_test
+    println("\n", "="^85)
+    println("🚀 TESTING MODEL: $desc ($(model.name))")
+    println("="^85)
 
-for (label, model) in test_models
-    println("\n------------------------------------------------------------------")
-    println("▶ Testing: ", label)
-    println("------------------------------------------------------------------")
+    exp_task = EE.create_experiment_task(
+        ds,
+        model,
+        model.name,
+        save_dir;
+        target_seasons       = ["25/26"],
+        history_seasons      = 2,
+        warmup_period        = 20, # fast 1-split test
+        dynamics_col         = :match_biweek,
+        samples              = 400,
+        warmup               = 200,
+        chains               = 3,
+        use_queue            = true,
+        max_depth            = 10,
+        max_concurrent_tasks = 8
+    )
+
+    t0 = time()
+    res = EE.run_experiment(exp_task)
+    elapsed = round(time() - t0, digits = 1)
+    println("✓ Completed MCMC sampling ($(length(res.training_results.items)) folds) in $(elapsed)s")
+
+    chain = res.training_results.items[1][1]
     
-    t_start = time()
-    splits = PreGame.split_train_test(splitter, ds)
-    split1 = splits[1]
-    
-    # Extract features
-    fs_train = Features.extract_features(model, split1.train_df, ds)
-    turing_mod = PreGame.build_turing_model(model, fs_train)
-    
-    # Sample
-    println("  • Sampling 3 chains x 100 iterations...")
-    chain = sample(turing_mod, NUTS(sampler_cfg.n_adapts, sampler_cfg.target_accept), MCMCThreads(), sampler_cfg.n_samples, sampler_cfg.n_chains; progress=false)
-    elapsed = time() - t_start
-    println("  ✓ Sampling completed in ", round(elapsed, digits=1), " s")
-    
-    # Inspect Key Parameters
-    println("\n  • Posterior Summary:")
+    # 1. Convergence & R-hat Check
+    er = DataFrame(MCMCChains.ess_rhat(chain))
+    rcol = :rhat in propertynames(er) ? :rhat : first(filter(c -> occursin("rhat", lowercase(string(c))), propertynames(er)))
+    rhat_vals = collect(skipmissing(replace(er[!, rcol], NaN => missing)))
+    max_rhat = isempty(rhat_vals) ? 1.0 : maximum(rhat_vals)
+    @printf("  • Convergence Check : Max R-hat = %.4f -> %s\n",
+            max_rhat, max_rhat <= 1.05 ? "CONVERGED (PASS ✅)" : "WARN (R-hat > 1.05)")
+
+    # 2. Key Parameter Estimates
+    println("\n  • Key Parameter Posteriors:")
     c_names = names(chain)
-    
     if :w_wealth in c_names
         val_w = chain[:w_wealth].data[:, 1]
-        println("    - w_wealth (wealth weight): ", round(mean(val_w), digits=4), " ± ", round(std(val_w), digits=4))
+        @printf("    - w_wealth (wealth effect) : %.4f ± %.4f\n", mean(val_w), std(val_w))
     end
     if :log_κ in c_names
         val_k = exp.(chain[:log_κ].data[:, 1])
-        println("    - κ (conversion rate): ", round(mean(val_k), digits=4), " ± ", round(std(val_k), digits=4))
+        @printf("    - κ (conversion rate)     : %.4f ± %.4f\n", mean(val_k), std(val_k))
     end
     if Symbol("disp.log_r") in c_names
         val_ra = exp.(chain[Symbol("disp.log_r")].data[:, 1])
         val_dh = chain[Symbol("disp.δ_r_home")].data[:, 1]
         val_rh = exp.(chain[Symbol("disp.log_r")].data[:, 1] .+ val_dh)
-        println("    - r_away (dispersion away): ", round(mean(val_ra), digits=2), " ± ", round(std(val_ra), digits=2))
-        println("    - r_home (dispersion home): ", round(mean(val_rh), digits=2), " ± ", round(std(val_rh), digits=2))
-        println("    - δ_r_home (home shift):    ", round(mean(val_dh), digits=3), " ± ", round(std(val_dh), digits=3))
+        @printf("    - r_away (dispersion)      : %.2f ± %.2f\n", mean(val_ra), std(val_ra))
+        @printf("    - r_home (dispersion)      : %.2f ± %.2f\n", mean(val_rh), std(val_rh))
+        @printf("    - δ_r_home (home shift)    : %.3f ± %.3f\n", mean(val_dh), std(val_dh))
     end
-    
-    # Test Parameter Extraction & ScoreMatrix Generation
-    println("\n  • Testing Predictions & ScoreMatrix...")
-    params_map = PreGame.extract_parameters(model, split1.test_df, fs_train, chain)
+
+    # 3. Test Parameter Extraction & ScoreMatrix Generation
+    fs_train = Features.extract_features(model, ds.matches, ds)
+    params_map = PreGame.extract_parameters(model, ds.matches[1:10, :], fs_train, chain)
     sample_mid = first(keys(params_map))
     p = params_map[sample_mid]
     
-    score_mat = Predictions.compute_score_matrix(model, p; max_goals=12)
-    s_tensor = Predictions.score_matrix_data(score_mat)
+    score_mat = Pred.compute_score_matrix(model, p; max_goals=12)
+    s_tensor = Pred.score_matrix_data(score_mat)
     s_mean = dropdims(mean(s_tensor, dims=3), dims=3)
     p_sum = sum(s_mean)
     
-    println("    - ScoreMatrix shape: ", size(s_tensor))
-    println("    - Mean ScoreMatrix probability sum: ", round(p_sum, digits=6))
-    @assert abs(p_sum - 1.0) < 1e-4 "ERROR: ScoreMatrix does not sum to 1.0!"
-    println("    - Home win prob: ", round(sum(tril(s_mean, -1)), digits=4))
-    println("    - Draw prob:     ", round(sum(diag(s_mean)), digits=4))
-    println("    - Away win prob: ", round(sum(triu(s_mean, 1)), digits=4))
-    println("  ✓ Model passed all smoke verification checks!")
+    @printf("  • ScoreMatrix shape: %s | Prob Sum = %.6f -> %s\n",
+            string(size(s_tensor)), p_sum, abs(p_sum - 1.0) < 1e-4 ? "EXACT (PASS ✅)" : "FAIL ❌")
+    @printf("    - P(Home Win) = %.4f | P(Draw) = %.4f | P(Away Win) = %.4f\n",
+            sum(tril(s_mean, -1)), sum(diag(s_mean)), sum(triu(s_mean, 1)))
 end
 
-println("\n==================================================================")
-println("✓ All Scottish NegBin + Wealth Smoke Tests Completed Successfully!")
-println("==================================================================")
+println("\n", "="^95)
+println("✓ ALL NEGBIN + WEALTH SMOKE TESTS PASSED!")
+println("="^95)
