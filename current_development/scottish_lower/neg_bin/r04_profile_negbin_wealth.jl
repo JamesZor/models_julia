@@ -36,8 +36,8 @@ println("==================================================================")
 # 1. Load DataStore & Split
 println("\n[1/3] Loading Scottish Lower DataStore...")
 ds = Data.load_datastore_cached(Data.ScottishLower())
-splitter = PreGame.GroupedCVConfig(group_by = :season, test_groups = [2025], window_strategy = :expanding)
-splits = PreGame.split_train_test(splitter, ds)
+splitter = Data.GroupedCVConfig(group_by = :season, test_groups = [2025], window_strategy = :expanding)
+splits = Data.split_train_test(splitter, ds)
 train_df, test_df = splits[1].train_df, splits[1].test_df
 println("✓ Train matches: ", nrow(train_df), " | Test matches: ", nrow(test_df))
 

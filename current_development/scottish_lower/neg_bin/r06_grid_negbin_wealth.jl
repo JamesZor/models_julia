@@ -32,7 +32,7 @@ ds = Data.load_datastore_cached(Data.ScottishLower())
 println("✓ Loaded Scottish Lower DataStore (", length(ds.matches.match_id), " matches)")
 
 # 2. Configure 40-Fold Rolling Splitter
-splitter = PreGame.GroupedCVConfig(
+splitter = Data.GroupedCVConfig(
     group_by = :date,
     n_splits = 40,
     min_train_size = 500,

@@ -36,7 +36,7 @@ println("==================================================================")
 # 1. Load Data
 println("\n[1/3] Loading DataStore...")
 ds = Data.load_datastore_cached(Data.ScottishLower())
-splitter = PreGame.GroupedCVConfig(group_by = :season, test_groups = [2025], window_strategy = :expanding)
+splitter = Data.GroupedCVConfig(group_by = :season, test_groups = [2025], window_strategy = :expanding)
 
 # 2. Test Configurations
 sampler_cfg = Samplers.NUTSConfig(
