@@ -658,18 +658,27 @@ PreGame.extract_parameters(model::ScottishNegBinModelUnion, df::DataFrame, featu
 Pred.extract_params(::ScottishNegBinModelUnion, row) = (
     λ_h = row.λ_h,
     λ_a = row.λ_a,
-    r_h = hasproperty(row, :r_h) ? row.r_h : 23.66,
-    r_a = hasproperty(row, :r_a) ? row.r_a : 9.25
+    r_h = hasproperty(row, :r_h) ? row.r_h : fill(23.66, length(row.λ_h)),
+    r_a = hasproperty(row, :r_a) ? row.r_a : fill(9.25, length(row.λ_a))
 )
 
-function _negbin_score_matrix(λ_h::Real, λ_a::Real, r_h::Real, r_a::Real; max_goals::Int = 12)
-    dist_h = RobustNegativeBinomial(max(r_h, 1e-4), max(λ_h, 1e-4))
-    dist_a = RobustNegativeBinomial(max(r_a, 1e-4), max(λ_a, 1e-4))
-    p_h = [pdf(dist_h, i) for i in 0:max_goals]
-    p_a = [pdf(dist_a, j) for j in 0:max_goals]
-    return p_h * p_a'
-end
+function Pred.compute_score_matrix(
+    model::ScottishNegBinModelUnion,
+    params;
+    max_goals::Int = 12
+)
+    λ_h, λ_a = params.λ_h, params.λ_a
+    r_h, r_a = params.r_h, params.r_a
+    n_samples = length(λ_h)
 
-function Pred.compute_score_matrix(::ScottishNegBinModelUnion, params; max_goals::Int = 12)
-    return _negbin_score_matrix(params.λ_h, params.λ_a, params.r_h, params.r_a; max_goals = max_goals)
+    outcomes_grid = [[h, a] for h in 0:max_goals-1, a in 0:max_goals-1]
+    S = zeros(Float64, max_goals, max_goals, n_samples)
+
+    @inbounds for k in 1:n_samples
+        dist = DoubleNegativeBinomial(Float64(λ_h[k]), Float64(λ_a[k]), Float64(r_h[k]), Float64(r_a[k]))
+        S_k = pdf.(Ref(dist), outcomes_grid)
+        S[:, :, k] = S_k
+    end
+
+    return Pred.ScoreMatrix(S)
 end

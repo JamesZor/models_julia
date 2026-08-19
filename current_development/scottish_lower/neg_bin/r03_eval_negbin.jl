@@ -5,10 +5,11 @@
 #         for Robust Negative Binomial (NB2) Scottish Lower Models
 #
 # Comparing:
-# 1. goals_negbin_ctl_hl365_hs2        (Baseline Goals-Only NegBin Control)
-# 2. pxg_apm_negbin_hl365_hs2          (Arm A: Proxy xG Gamma + RAPM + NegBin Goals)
-# 3. funnel_pxg_apm_negbin_hl365_hs2   (Arm B: Shots Volume Poisson + Proxy xG Quality + RAPM + NegBin Goals)
-# Against Poisson Benchmarks from scottish_pxg_grid and scottish_wealth_grid
+# 1. funnel_apm_ctl_hl365_hs2         (Poisson Goals Control)
+# 2. pxg_apm_hl365_hs2                (Poisson Proxy xG Control)
+# 3. funnel_pxg_apm_hl365_hs2         (Poisson 3-Layer Champion)
+# 4. goals_negbin_ctl_hl365_hs2        (Robust Negative Binomial Goals Baseline)
+# 5. pxg_apm_negbin_hl365_hs2          (Robust Negative Binomial Proxy xG + Goals)
 
 using Revise
 using BayesianFootball
@@ -44,8 +45,7 @@ target_models = [
     "pxg_apm_hl365_hs2",
     "funnel_pxg_apm_hl365_hs2",
     "goals_negbin_ctl_hl365_hs2",
-    "pxg_apm_negbin_hl365_hs2",
-    "funnel_pxg_apm_negbin_hl365_hs2"
+    "pxg_apm_negbin_hl365_hs2"
 ]
 
 experiments_dict = Dict{String, Any}()
@@ -106,7 +106,7 @@ end
 println("\n" * "="^85)
 println("🎯 GLMEDGE (Market Efficiency Edge: Higher is Better)")
 println("="^85)
-edge_cols = filter(n -> startswith(n, "glm_edge_"), names(eval_df))
+edge_cols = filter(n -> occursin("glm", lowercase(n)) || occursin("edge", lowercase(n)), names(eval_df))
 if !isempty(edge_cols)
     edge_df = select(eval_df, :model, edge_cols...)
     for col in edge_cols
@@ -119,7 +119,7 @@ end
 println("\n" * "="^85)
 println("📉 LOGLOSS (Predictive Information: Lower is Better)")
 println("="^85)
-ll_cols = filter(n -> startswith(n, "log_loss_"), names(eval_df))
+ll_cols = filter(n -> startswith(n, "log_loss_") || startswith(n, "logloss_"), names(eval_df))
 if !isempty(ll_cols)
     ll_df = select(eval_df, :model, ll_cols...)
     for col in ll_cols
@@ -129,33 +129,147 @@ if !isempty(ll_cols)
 end
 
 # ==============================================================================
-# 4. BETFAIR EXCHANGE MULTI-MARKET PORTFOLIO BACKTEST
+# 3. BETFAIR EXCHANGE MULTI-MARKET PORTFOLIO BENCHMARK
 # ==============================================================================
-banner("4. BETFAIR EXCHANGE MULTI-MARKET PORTFOLIO BACKTEST")
+banner("4. BETFAIR EXCHANGE MULTI-MARKET PORTFOLIO BENCHMARK")
 
-portfolio_markets = [
-    Portfolio.BetfairMarketConfig(:match_odds, [:home, :draw, :away]),
-    Portfolio.BetfairMarketConfig(:both_teams_to_score, [:btts_yes, :btts_no]),
-    Portfolio.BetfairMarketConfig(:over_under_25, [:over_25, :under_25]),
-    Portfolio.BetfairMarketConfig(:over_under_15, [:over_15, :under_15]),
-    Portfolio.BetfairMarketConfig(:over_under_35, [:over_35, :under_35])
+ODDS_CACHE = joinpath(CACHE_DIR, "betfair_summary_odds.jls")
+local betfair_odds
+if isfile(ODDS_CACHE)
+    @info "Restoring Betfair closing summary from cache" ODDS_CACHE
+    betfair_odds = deserialize(ODDS_CACHE)
+else
+    @info "Building Betfair closing summary [-20min, 0min] (cached)..."
+    betfair_odds = Data.summarize_betfair_market(ds, open_window = (-100000.0, -10.0), close_window = (-20.0, 0.0))
+    serialize(ODDS_CACHE, betfair_odds)
+end
+@info "Betfair Odds loaded" n_matches=length(unique(betfair_odds.match_id)) n_quotes=nrow(betfair_odds)
+
+LATENTS_CACHE = joinpath(CACHE_DIR, "latents_map_scottish_negbin.jls")
+local latents_map
+if isfile(LATENTS_CACHE)
+    @info "Restoring OOS latents from cache" LATENTS_CACHE
+    latents_map = deserialize(LATENTS_CACHE)
+else
+    @info "Extracting OOS predictions for all benchmark models..."
+    latents_map = Dict{String, DataFrame}()
+    for exp in experiments
+        latents_map[exp.config.name] = Experiments.extract_oos_predictions(ds, exp).df
+    end
+    serialize(LATENTS_CACHE, latents_map)
+end
+
+MARKETS = Data.MarketConfig(reduce(vcat, (
+    Data.AbstractMarket[Data.Market1X2(), Data.MarketBTTS()],
+    [Data.MarketOverUnder(i + 0.5) for i in 0:4],
+)))
+
+spec = Portfolio.BookSpec(
+    markets   = MARKETS,
+    price     = Portfolio.DeArb(),
+    allocator = Portfolio.KellyLogUtility(),
+    shrink    = Portfolio.BakerMcHale(n_draws = 800),
+    exec      = Portfolio.ExecutionConfig(
+                    commission = Portfolio.PerBetCommission(0.02),
+                    max_selection_stake = 0.50,
+                    budget = 0.99,
+                    require_complete_markets = true
+                )
+)
+
+books_map = Dict{String, Vector{Portfolio.MatchBook}}()
+for exp in experiments
+    m_name = exp.config.name
+    cache_file = joinpath(CACHE_DIR, "books_$(m_name)_betfair_bm800.jls")
+    
+    if isfile(cache_file) && get(ENV, "REBUILD_BOOKS", "0") != "1"
+        @info "Reusing cached Betfair MatchBooks for: $m_name" cache_file
+        books_map[m_name] = deserialize(cache_file)
+    else
+        @info "Building Betfair MatchBooks for: $m_name..."
+        m_latents = latents_map[m_name]
+        t0 = time()
+        b = Portfolio.build_books(spec, m_latents, exp, betfair_odds, ds)
+        elapsed = round(time() - t0, digits = 1)
+        @info "Completed MatchBooks for $m_name in $(elapsed)s" n_books=length(b)
+        serialize(cache_file, b)
+        books_map[m_name] = b
+    end
+end
+
+all_slates = Dict{String, Vector{Portfolio.Slate}}()
+for (m_name, b) in books_map
+    all_slates[m_name] = Portfolio.group(Portfolio.DailySlate(), b)
+end
+
+policies = [
+    ("Conservative (Cap 10%, λ=23)", Portfolio.PolicySpec(
+        trust    = Portfolio.FlatTrust(0.25),
+        risk     = Portfolio.SlateDrawdown(23.0),
+        cap      = Portfolio.FixedCap(0.10),
+        filter   = Portfolio.KeepAll(),
+        grouping = Portfolio.DailySlate()
+    )),
+    ("Balanced Growth (Cap 15%, λ=15)", Portfolio.PolicySpec(
+        trust    = Portfolio.FlatTrust(0.25),
+        risk     = Portfolio.SlateDrawdown(15.0),
+        cap      = Portfolio.FixedCap(0.15),
+        filter   = Portfolio.KeepAll(),
+        grouping = Portfolio.DailySlate()
+    )),
+    ("Aggressive (Cap 25%, λ=10)", Portfolio.PolicySpec(
+        trust    = Portfolio.FlatTrust(0.50),
+        risk     = Portfolio.SlateDrawdown(10.0),
+        cap      = Portfolio.FixedCap(0.25),
+        filter   = Portfolio.KeepAll(),
+        grouping = Portfolio.DailySlate()
+    ))
 ]
 
-for exp in experiments
-    println("\n" * "-"^85)
-    println("💰 PORTFOLIO BACKTEST: $(exp.config.name)")
-    println("-"^85)
+for (pol_name, pol) in policies
+    println("\n", "="^95)
+    println("BETFAIR PORTFOLIO SIMULATION: $pol_name (2% Comm, Baker-McHale 800 Draws)")
+    println("="^95)
     
-    port_config = Portfolio.BetfairPortfolioConfig(
-        markets            = portfolio_markets,
-        initial_bankroll   = 10_000.0,
-        fractional_kelly   = 0.25,
-        min_edge           = 0.025,
-        max_edge           = 0.35,
-        max_stake_fraction = 0.05,
-        commission_rate    = 0.02
+    port_df = DataFrame(
+        model = String[],
+        final_wealth = Float64[],
+        growth_slate = Float64[],
+        roi_pct = Float64[],
+        mean_expo = Float64[],
+        mdd_pct = Float64[],
+        sharpe = Float64[],
+        calmar = Float64[],
+        n_bets = Int[]
     )
-
-    port_sim = Portfolio.run_betfair_portfolio_simulation(exp, ds, port_config)
-    Portfolio.print_portfolio_summary(port_sim)
+    
+    for exp in experiments
+        m_name = exp.config.name
+        haskey(all_slates, m_name) || continue
+        slates = all_slates[m_name]
+        traj = Portfolio.simulate(pol, slates; use_shrink = true)
+        m = Portfolio.path_metrics(traj)
+        
+        ret_series = traj.slate_pl
+        sh = length(ret_series) > 1 && std(ret_series) > 1e-6 ? (mean(ret_series) / std(ret_series)) * sqrt(35) : 0.0
+        calm = m.mdd > 0.0 ? (m.final - 1.0) / (m.mdd / 100.0) : 0.0
+        
+        total_bets = sum(sum(b.a_kelly .> 1e-5) for b in books_map[m_name])
+        
+        push!(port_df, (
+            m_name,
+            round(m.final, digits = 3),
+            round(m.growth_per_slate, digits = 5),
+            round(m.roi, digits = 2),
+            round(m.mean_exposure * 100, digits = 1),
+            round(m.mdd, digits = 2),
+            round(sh, digits = 2),
+            round(calm, digits = 2),
+            total_bets
+        ))
+    end
+    
+    show(port_df; allrows = true, allcols = true, truncate = 0); println()
 end
+
+println("\n✓ Comprehensive Evaluation and Betfair Portfolio Backtest Complete!")
