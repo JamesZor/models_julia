@@ -35,6 +35,41 @@ include(joinpath(ROOT, "current_development/scottish_lower/wealth/l01_wealth_dat
 include("l01_negbin_engines.jl")
 
 # ==============================================================================
+# 0. CORE WEALTH HELPERS
+# ==============================================================================
+
+function _pxg_core_wealth(data, config)
+    date_deltas = Vector{Int}(data[:dates])
+    return (;
+        home_ids    = Vector{Int}(data[:flat_home_ids]),
+        away_ids    = Vector{Int}(data[:flat_away_ids]),
+        season_idx  = Vector{Int}(data[:season_indices]),
+        month_idx   = Vector{Int}(data[:flat_months]),
+        league_idx  = Vector{Int}(data[:flat_league_ids]),
+        home_goals  = Vector{Int}(data[:flat_home_goals]),
+        away_goals  = Vector{Int}(data[:flat_away_goals]),
+        wealth_diff = Vector{Float64}(data[:flat_wealth_diff]),
+        w           = 0.5 .^ (date_deltas ./ config.dynamics_config.days_half_life),
+        n_teams     = Int(data[:n_teams]),
+        n_seasons   = Int(data[:n_seasons]),
+        n_months    = 12,
+        n_leagues   = Int(data[:n_leagues]),
+    )
+end
+
+function _pxg_ratings_wealth(data, config, n::Int)
+    config.apm_on || return (zeros(Float64, n), zeros(Float64, n))
+    base = Features.rating_base(config.player_ratings_feature)
+    h = _pxg_outfield(Vector{Float64}(data[:flat_home_D_rating]),
+                      Vector{Float64}(data[:flat_home_M_rating]),
+                      Vector{Float64}(data[:flat_home_F_rating]), base)
+    a = _pxg_outfield(Vector{Float64}(data[:flat_away_D_rating]),
+                      Vector{Float64}(data[:flat_away_M_rating]),
+                      Vector{Float64}(data[:flat_away_F_rating]), base)
+    return (h, a)
+end
+
+# ==============================================================================
 # 1. MODEL 1: TeamGoalsNegBinWealthModel (Goals NegBin + Wealth)
 # ==============================================================================
 
