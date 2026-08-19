@@ -678,8 +678,8 @@ function PreGame.extract_parameters(
             a_a = c.a_idx > 0 ? aq[:, c.a_idx] : zeros(n_samples)
             d_a = c.a_idx > 0 ? dq[:, c.a_idx] : zeros(n_samples)
 
-            log_λ_s_h = model.shot_scale .+ c.lin_h
-            log_λ_s_a = model.shot_scale .+ c.lin_a
+            log_λ_s_h = c.lin_h
+            log_λ_s_a = c.lin_a
 
             logit_q_h = clamp.(q_raw_samples .+ a_h .- d_a, -10.0, 10.0)
             logit_q_a = clamp.(q_raw_samples .+ a_a .- d_h, -10.0, 10.0)
