@@ -110,7 +110,8 @@ for (desc, model) in models_to_test
     end
 
     # 3. Test Parameter Extraction & ScoreMatrix Generation
-    fs_train = Features.extract_features(model, ds.matches, ds)
+    boundary = Data.SplitBoundary(1, 1, Int.(ds.matches.match_id[1:100]), Int[])
+    fs_train = Features.create_features(boundary, ds, model, :match_biweek)
     params_map = PreGame.extract_parameters(model, ds.matches[1:10, :], fs_train, chain)
     sample_mid = first(keys(params_map))
     p = params_map[sample_mid]
