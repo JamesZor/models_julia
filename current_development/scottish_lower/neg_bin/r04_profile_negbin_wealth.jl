@@ -33,17 +33,11 @@ println("==================================================================")
 println(" SCOTTISH LOWER NEGBIN + WEALTH REVERSEDIFF GRADIENT PROFILER")
 println("==================================================================")
 
-# 1. Load DataStore & Split
+# 1. Load DataStore
 println("\n[1/3] Loading Scottish Lower DataStore...")
 ds = Data.load_datastore_cached(Data.ScottishLower(), max_age_hours = 10000)
-splitter = Data.GroupedCVConfig(
-    target_seasons = ["25/26"],
-    history_seasons = 2,
-    dynamics_col = :match_biweek
-)
-splits = Data.split_train_test(splitter, ds)
-train_df, test_df = splits[1].train_df, splits[1].test_df
-println("✓ Train matches: ", nrow(train_df), " | Test matches: ", nrow(test_df))
+train_df = ds.matches
+println("✓ Profiling dataset: ", nrow(train_df), " matches")
 
 # 2. Define Model Candidates
 models = [
