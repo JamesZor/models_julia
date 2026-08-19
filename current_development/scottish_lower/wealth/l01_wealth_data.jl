@@ -29,7 +29,7 @@ import BayesianFootball.Features: AbstractFeatureConfig, add_feature!, required_
 Opens a PostgreSQL connection from `BF_DB_URL` with fallback to local betdb.
 """
 function wealth_db_connect()
-    url = get(ENV, "BF_DB_URL", "postgresql://admin:CpPhGzIZ2qHtAh6cJT%2FHHFovs0CqfTx6@192.168.1.88:5433/betdb?sslmode=disable")
+    url = get(ENV, "BF_DB_URL", "postgresql://admin:CpPhGzIZ2qHtAh6cJT%2FHHFovs0CqfTx6@archpc:5433/betdb")
     return LibPQ.Connection(url)
 end
 
