@@ -383,13 +383,12 @@ end
     season_idx::Vector{Int}, month_idx::Vector{Int}, league_idx::Vector{Int},
     rat_h::Vector{Float64}, rat_a::Vector{Float64},
     wealth_diff::Vector{Float64},
-    home_shots::Vector{Int}, away_shots::Vector{Int},
-    home_goals::Vector{Int}, away_goals::Vector{Int},
     sf_h::NamedTuple, sf_a::NamedTuple,
+    home_goals::Vector{Int}, away_goals::Vector{Int},
     nb_h::NamedTuple, nb_a::NamedTuple,
+    shot_scale::Float64,
     n_teams::Int, n_seasons::Int, n_months::Int, n_leagues::Int,
     league_ha_active::Float64, apm_active::Float64, team_quality_active::Float64,
-    shot_scale::Float64,
     config
 )
     # 1. Submodels
@@ -407,19 +406,18 @@ end
     δ_league = δ_league_raw .- mean(δ_league_raw)
     γ_league = league_ha_active .* (γ_league_raw .- mean(γ_league_raw))
 
-    # Quality & Conversion Hyperparameters
-    logit_q_base ~ config.q_prior
-    σ_q_raw      ~ config.σ_q_prior
-    σ_q = team_quality_active * σ_q_raw
-    η_att_raw ~ filldist(Normal(0.0, 1.0), n_teams)
-    η_def_raw ~ filldist(Normal(0.0, 1.0), n_teams)
-    η_att = team_quality_active .* (η_att_raw .- mean(η_att_raw))
-    η_def = team_quality_active .* (η_def_raw .- mean(η_def_raw))
-
     ν_q   ~ config.ν_prior
     log_κ ~ config.log_κ_prior
+    q_raw ~ config.q_prior
+    σ_q   ~ config.σ_q_prior
 
-    # 2. Shot Volume Linear Predictor
+    # Team shot quality offsets
+    aq_raw ~ filldist(Normal(0.0, σ_q), n_teams)
+    dq_raw ~ filldist(Normal(0.0, σ_q), n_teams)
+    aq     = team_quality_active .* (aq_raw .- mean(aq_raw))
+    dq     = team_quality_active .* (dq_raw .- mean(dq_raw))
+
+    # 2. Linear Predictor (Volume)
     int_m = view(inter.μ_base, season_idx) .+ view(inter.δ_month, month_idx)
     lg    = view(δ_league, league_idx)
     γ_lg  = view(γ_league, league_idx)
@@ -429,49 +427,61 @@ end
 
     w_shift = w_wealth .* wealth_diff
 
-    log_λ_s_h = clamp.(log(shot_scale) .+ int_m .+ lg .+ view(ha, home_ids) .+ γ_lg .+
-                       view(dyn.α, home_ids) .+ view(dyn.β, away_ids) .+ pillar_h .+ w_shift, -10.0, 10.0)
-    log_λ_s_a = clamp.(log(shot_scale) .+ int_m .+ lg .+
-                       view(dyn.α, away_ids) .+ view(dyn.β, home_ids) .+ pillar_a .- w_shift, -10.0, 10.0)
+    log_λ_h = clamp.(int_m .+ lg .+ view(ha, home_ids) .+ γ_lg .+
+                     view(dyn.α, home_ids) .+ view(dyn.β, away_ids) .+ pillar_h .+ w_shift, -10.0, 10.0)
+    log_λ_a = clamp.(int_m .+ lg .+
+                     view(dyn.α, away_ids) .+ view(dyn.β, home_ids) .+ pillar_a .- w_shift, -10.0, 10.0)
 
-    # 3. Shot Quality Linear Predictor
-    logit_q_h = clamp.(logit_q_base .+ σ_q .* (view(η_att, home_ids) .- view(η_def, away_ids)), -10.0, 10.0)
-    logit_q_a = clamp.(logit_q_base .+ σ_q .* (view(η_att, away_ids) .- view(η_def, home_ids)), -10.0, 10.0)
+    # 3. Quality Layer (q = 1 / (1 + exp(-z)), 1/q = 1 + exp(-z), log q = -log(1 + exp(-z)))
+    logit_q_h = clamp.(q_raw .+ view(aq, home_ids) .- view(dq, away_ids), -10.0, 10.0)
+    logit_q_a = clamp.(q_raw .+ view(aq, away_ids) .- view(dq, home_ids), -10.0, 10.0)
 
-    # AD-safe check
-    bad = any(isnan.(log_λ_s_h)) || any(isnan.(log_λ_s_a)) || any(isnan.(logit_q_h)) || any(isnan.(logit_q_a)) || isnan(ν_q) || isnan(log_κ)
-    Turing.@addlogprob! ifelse(bad, -Inf, 0.0)
+    bad_h  = isnan.(log_λ_h)
+    bad_a  = isnan.(log_λ_a)
+    is_bad = any(bad_h) || any(bad_a) || isnan(log_κ) || isnan(q_raw) || isnan(σ_q)
+    log_λ_h = ifelse.(bad_h, zero.(log_λ_h), log_λ_h)
+    log_λ_a = ifelse.(bad_a, zero.(log_λ_a), log_λ_a)
+    Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
 
-    # 4. Layer 1: Shot Volume Poisson Likelihood
-    ll_s_h = sum(sf_h.c_s_lin .* log_λ_s_h) - sum(sf_h.c_s_rate .* exp.(log_λ_s_h))
-    ll_s_a = sum(sf_a.c_s_lin .* log_λ_s_a) - sum(sf_a.c_s_rate .* exp.(log_λ_s_a))
+    λ_h     = exp.(log_λ_h)
+    λ_a     = exp.(log_λ_a)
 
-    # 5. Layer 2: Shot Quality Gamma Likelihood (Optimized SIMD)
-    inv_q_h = 1.0 .+ exp.(-logit_q_h)
-    log_q_h = -log1pexp.(-logit_q_h)
-    inv_q_a = 1.0 .+ exp.(-logit_q_a)
-    log_q_a = -log1pexp.(-logit_q_a)
+    inv_q_h = 1.0 .+ exp.(.-logit_q_h)
+    inv_q_a = 1.0 .+ exp.(.-logit_q_a)
+    log_q_h = .-log.(inv_q_h)
+    log_q_a = .-log.(inv_q_a)
 
-    ll_q_h = (ν_q - 1.0) * sf_h.S_logx - ν_q * sum(sf_h.c_x .* inv_q_h) + ν_q * sum(sf_h.c_s_ev .* log_q_h) +
-             sf_h.S_w_ev * (ν_q * log(ν_q) - loggamma(ν_q)) - sum(sf_h.cq_m .* loggamma.(ν_q .* sf_h.cq_n))
-    ll_q_a = (ν_q - 1.0) * sf_a.S_logx - ν_q * sum(sf_a.c_x .* inv_q_a) + ν_q * sum(sf_a.c_s_ev .* log_q_a) +
-             sf_a.S_w_ev * (ν_q * log(ν_q) - loggamma(ν_q)) - sum(sf_a.cq_m .* loggamma.(ν_q .* sf_a.cq_n))
-
-    # 6. Layer 3: Goals Negative Binomial Likelihood
-    log_q_h_full = -log1pexp.(-logit_q_h)
-    log_q_a_full = -log1pexp.(-logit_q_a)
-    log_μ_h = log_λ_s_h .+ log_q_h_full
-    log_μ_a = log_λ_s_a .+ log_q_a_full
-    log_λ_g_h = log_μ_h .+ log_κ
-    log_λ_g_a = log_μ_a .+ log_κ
+    lνq     = log(ν_q)
 
     r_h = disp.h
     r_a = disp.a
 
-    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_g_h, r_h, nb_h)
-    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_g_a, r_a, nb_a)
+    # 4. Volume Likelihood
+    ll_s_h = sum(sf_h.c_s_lin .* log_λ_h) - sum(sf_h.c_s_rate .* λ_h)
+    ll_s_a = sum(sf_a.c_s_lin .* log_λ_a) - sum(sf_a.c_s_rate .* λ_a)
 
-    Turing.@addlogprob! ifelse(isnan(r_h) || isnan(r_a) || isnan(ll_g_h) || isnan(ll_g_a), -Inf, 0.0)
+    # 5. Quality Likelihood (Collapsed loggamma across ~20 unique shot counts)
+    ll_gamma_q_h = isempty(sf_h.u_shots_f64) ? 0.0 : sum(sf_h.shot_weights .* loggamma.(ν_q .* sf_h.u_shots_f64))
+    ll_gamma_q_a = isempty(sf_a.u_shots_f64) ? 0.0 : sum(sf_a.shot_weights .* loggamma.(ν_q .* sf_a.u_shots_f64))
+
+    ll_q_h = ν_q * sf_h.S_Slogx - sf_h.S_logx -
+             ν_q * sum(sf_h.cq_x .* inv_q_h) -
+             ν_q * sum(sf_h.cq_S .* log_q_h) +
+             ν_q * lνq * sf_h.S_cq_S -
+             ll_gamma_q_h
+    ll_q_a = ν_q * sf_a.S_Slogx - sf_a.S_logx -
+             ν_q * sum(sf_a.cq_x .* inv_q_a) -
+             ν_q * sum(sf_a.cq_S .* log_q_a) +
+             ν_q * lνq * sf_a.S_cq_S -
+             ll_gamma_q_a
+
+    # 6. Goals Robust Negative Binomial Likelihood (SIMD vectorized)
+    log_λ_gh = log_κ .+ log_λ_h .+ log_q_h
+    log_λ_ga = log_κ .+ log_λ_a .+ log_q_a
+    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_gh, r_h, nb_h)
+    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_ga, r_a, nb_a)
+
+    Turing.@addlogprob! ifelse(isnan(ll_s_h) || isnan(ll_s_a) || isnan(ll_q_h) || isnan(ll_q_a) || isnan(r_h) || isnan(r_a) || isnan(ll_g_h) || isnan(ll_g_a), -Inf, 0.0)
     Turing.@addlogprob! ll_s_h + ll_s_a + ll_q_h + ll_q_a + ll_g_h + ll_g_a
 end
 
@@ -480,30 +490,32 @@ function PreGame.build_turing_model(config::TeamFunnelPxGGoalsAPMNegBinWealthMod
     d    = _pxg_core_wealth(data, config)
     n    = length(d.home_ids)
     rat_h, rat_a = _pxg_ratings_wealth(data, config, n)
-    shots_h = Vector{Int}(data[:flat_home_shots])
-    shots_a = Vector{Int}(data[:flat_away_shots])
-    xg_h    = Vector{Float64}(data[:flat_home_xg_proxy])
-    xg_a    = Vector{Float64}(data[:flat_away_xg_proxy])
-    mask_h  = Vector{Float64}(data[:flat_pxg_mask_h])
-    mask_a  = Vector{Float64}(data[:flat_pxg_mask_a])
-    sf_h    = _funnel_suff_opt(shots_h, xg_h, mask_h, d.w)
-    sf_a    = _funnel_suff_opt(shots_a, xg_a, mask_a, d.w)
-    nb_h    = _negbin_precompute(d.home_goals, d.w)
-    nb_a    = _negbin_precompute(d.away_goals, d.w)
+
+    nb_h = _negbin_precompute(d.home_goals, d.w)
+    nb_a = _negbin_precompute(d.away_goals, d.w)
+
     return build_funnel_pxg_apm_negbin_wealth_engine(
-        d.home_ids, d.away_ids,
-        d.season_idx, d.month_idx, d.league_idx,
+        d.home_ids, d.away_ids, d.season_idx, d.month_idx, d.league_idx,
         rat_h, rat_a,
         d.wealth_diff,
-        shots_h, shots_a,
+        _funnel_suff_opt(Vector{Int}(data[:flat_home_shots_n]),
+                         Vector{Float64}(data[:flat_funnel_mask_h]),
+                         Vector{Float64}(data[:flat_home_xg_proxy]),
+                         Vector{Int}(data[:flat_home_pxg_shots]),
+                         Vector{Float64}(data[:flat_pxg_mask_h]),
+                         d.home_goals, d.w),
+        _funnel_suff_opt(Vector{Int}(data[:flat_away_shots_n]),
+                         Vector{Float64}(data[:flat_funnel_mask_a]),
+                         Vector{Float64}(data[:flat_away_xg_proxy]),
+                         Vector{Int}(data[:flat_away_pxg_shots]),
+                         Vector{Float64}(data[:flat_pxg_mask_a]),
+                         d.away_goals, d.w),
         d.home_goals, d.away_goals,
-        sf_h, sf_a,
         nb_h, nb_a,
-        d.n_teams, d.n_seasons, d.n_months, d.n_leagues,
-        _pxg_active(config.league_ha_on),
-        _pxg_active(config.apm_on),
-        _pxg_active(config.team_quality_on),
         config.shot_scale,
+        d.n_teams, d.n_seasons, d.n_months, d.n_leagues,
+        _pxg_active(config.league_ha_on), _pxg_active(config.apm_on),
+        _pxg_active(config.team_quality_on),
         config
     )
 end
