@@ -53,11 +53,6 @@ specs = Tuple{String, Any}[
         dynamics_config = dyn,
         dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
         name = "pxg_apm_negbin_wealth_$(_tag)"
-    )),
-    ("funnel_pxg_apm_negbin_wealth_$(_tag)", TeamFunnelPxGGoalsAPMNegBinWealthModel(
-        dynamics_config = dyn,
-        dispersion_config = SCOTTISH_HOMEAWAY_DISPERSION,
-        name = "funnel_pxg_apm_negbin_wealth_$(_tag)"
     ))
 ]
 
