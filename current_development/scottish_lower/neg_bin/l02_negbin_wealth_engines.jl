@@ -530,130 +530,188 @@ const ScottishNegBinWealthModelUnion = Union{
     TeamFunnelPxGGoalsAPMNegBinWealthModel
 }
 
+function _pxg_league_offsets_wealth(chain, n_leagues::Int, sym::String)
+    n_samples = size(chain, 1) * size(chain, 3)
+    offsets = zeros(n_samples, n_leagues)
+    for i in 1:n_leagues
+        col_sym = Symbol("$(sym)[$i]")
+        if col_sym in keys(chain)
+            offsets[:, i] = vec(Array(chain[col_sym]))
+        end
+    end
+    return offsets .- mean(offsets, dims = 2)
+end
+
+function _get_or_build_wealth_map(data, df)
+    if haskey(data, :wealth_map)
+        return data[:wealth_map]
+    end
+    cache_path = joinpath(ROOT, "current_development/scottish_lower/wealth/cache/scottish_val_catalog.jls")
+    local val_cat
+    if isfile(cache_path)
+        val_cat = deserialize(cache_path)
+    else
+        conn = wealth_db_connect()
+        val_cat = fetch_scottish_player_valuations(conn, tournament_ids=[56, 57])
+        close(conn)
+        mkpath(dirname(cache_path))
+        serialize(cache_path, val_cat)
+    end
+    ds_temp = Data.DataStore(
+        matches = df,
+        odds = DataFrame(),
+        betfair_odds = DataFrame(),
+        statistics = DataFrame(),
+        lineups = hasproperty(df, :lineups) ? df.lineups : DataFrame(),
+        incidents = DataFrame()
+    )
+    lineup_vals = fetch_match_lineup_values(ds_temp, val_cat; fallback_default=100_000.0)
+    wealth_df   = build_match_wealth_table(lineup_vals)
+    return Dict(r.match_id => Float64(r.delta_w) for r in eachrow(wealth_df))
+end
+
+function _pxg_extract_core_wealth(model, df, feature_set, chain)
+    data      = _pxg_get_data(feature_set)
+    n_teams   = Int(data[:n_teams])
+    n_seasons = Int(data[:n_seasons])
+    n_leagues = Int(data[:n_leagues])
+    team_map  = data[:team_map]
+    league_lookup = data[:league_lookup]
+    ratings_map   = get(data, :player_ratings_map, Dict{Int, Dict{Tuple{String, String}, Float64}}())
+    wealth_map    = _get_or_build_wealth_map(data, df)
+
+    inter_nt = PreGame.extract_interception(chain, model.interception_config, n_seasons)
+    ha_mat   = PreGame.extract_home_advantage(chain, model.homeadvantage_config, n_teams)
+    dyn_nt   = PreGame.extract_dynamics(chain, model.dynamics_config, "dyn", n_teams)
+    δ_mat    = _pxg_league_offsets_wealth(chain, n_leagues, "δ_league_raw")
+
+    n_samples = size(chain, 1) * size(chain, 3)
+    γ_mat = model.league_ha_on ? _pxg_league_offsets_wealth(chain, n_leagues, "γ_league_raw") :
+                                 zeros(n_samples, n_leagues)
+
+    w_att = vec(Array(chain[:w_att]))
+    w_def = vec(Array(chain[:w_def]))
+    w_wealth = vec(Array(chain[:w_wealth]))
+    apm_a = _pxg_active(model.apm_on)
+    base  = Features.rating_base(model.player_ratings_feature)
+
+    out = Dict{Int, NamedTuple}()
+    for row in eachrow(df)
+        mid   = Int(row.match_id)
+        h_idx = get(team_map, row.home_team, -1)
+        a_idx = get(team_map, row.away_team, -1)
+        l_idx = get(league_lookup, mid, 0)
+
+        α_h = h_idx > 0 ? dyn_nt.α[:, h_idx] : zeros(n_samples)
+        β_h = h_idx > 0 ? dyn_nt.β[:, h_idx] : zeros(n_samples)
+        α_a = a_idx > 0 ? dyn_nt.α[:, a_idx] : zeros(n_samples)
+        β_a = a_idx > 0 ? dyn_nt.β[:, a_idx] : zeros(n_samples)
+        γ_h = h_idx > 0 ? ha_mat[:, h_idx] : zeros(n_samples)
+        lg  = l_idx > 0 ? δ_mat[:, l_idx] : zeros(n_samples)
+        γlg = l_idx > 0 ? γ_mat[:, l_idx] : zeros(n_samples)
+
+        m_r = get(ratings_map, mid, Dict{Tuple{String, String}, Float64}())
+        r_h = (get(m_r, ("home", "D"), 0.0) + get(m_r, ("home", "M"), 0.0) +
+               get(m_r, ("home", "F"), 0.0)) - 10.0 * base
+        r_a = (get(m_r, ("away", "D"), 0.0) + get(m_r, ("away", "M"), 0.0) +
+               get(m_r, ("away", "F"), 0.0)) - 10.0 * base
+
+        pillar_h = apm_a .* (w_att .* r_h .- w_def .* r_a)
+        pillar_a = apm_a .* (w_att .* r_a .- w_def .* r_h)
+
+        # Starting-XI wealth differential shift
+        w_diff = get(wealth_map, mid, 0.0)
+        w_shift = w_wealth .* w_diff
+
+        s_idx = hasproperty(row, :season_idx) ? Int(row.season_idx) : n_seasons
+        m_idx = month(row.match_date)
+        int_v = inter_nt.μ_base[:, s_idx] .+ inter_nt.δ_month[:, m_idx]
+
+        out[mid] = (;
+            h_idx, a_idx, n_samples,
+            lin_h = clamp.(int_v .+ lg .+ γ_h .+ γlg .+ α_h .+ β_a .+ pillar_h .+ w_shift, -10.0, 10.0),
+            lin_a = clamp.(int_v .+ lg .+               α_a .+ β_h .+ pillar_a .- w_shift, -10.0, 10.0),
+        )
+    end
+    return out, n_samples, n_teams
+end
+
 function PreGame.extract_parameters(
     model::ScottishNegBinWealthModelUnion,
     df::DataFrame,
     feature_set::Features.FeatureSet,
     chain::MCMCChains.Chains
 )
-    n_samples = length(chain)
-    c_names = names(chain)
+    core, n_samples, n_teams = _pxg_extract_core_wealth(model, df, feature_set, chain)
 
-    μ_base_cols = [col for col in c_names if startswith(string(col), "inter.μ_base[")]
-    μ_base = isempty(μ_base_cols) ? zeros(n_samples) : chain[μ_base_cols[end]].data[:, 1]
+    disp = PreGame.extract_dispersion(chain, model.dispersion_config)
+    r_h_samples = disp.h
+    r_a_samples = disp.a
 
-    # Home Advantage
-    ha_samples = if any(startswith(string(col), "ha.home_advantage[") for col in c_names)
-        ha_cols = [col for col in c_names if startswith(string(col), "ha.home_advantage[")]
-        chain[ha_cols].value.data[:, :, 1]
-    elseif in(Symbol("ha.home_advantage"), c_names)
-        reshape(chain[Symbol("ha.home_advantage")].data[:, 1], n_samples, 1)
-    else
-        zeros(n_samples, 1)
-    end
+    has_kappa = Symbol("log_κ") in keys(chain)
+    κ = has_kappa ? exp.(vec(Array(chain[Symbol("log_κ")]))) : ones(Float64, n_samples)
 
-    # Team Dynamics (Attacking & Defending)
-    att_cols = [col for col in c_names if startswith(string(col), "dyn.α[")]
-    def_cols = [col for col in c_names if startswith(string(col), "dyn.β[")]
-    att = isempty(att_cols) ? zeros(n_samples, 1) : chain[att_cols].value.data[:, :, 1]
-    def = isempty(def_cols) ? zeros(n_samples, 1) : chain[def_cols].value.data[:, :, 1]
+    is_funnel = model isa TeamFunnelPxGGoalsAPMNegBinWealthModel
 
-    # Dispersion Parameters
-    r_h_samples = in(Symbol("disp.h"), c_names) ? chain[Symbol("disp.h")].data[:, 1] :
-                  (in(Symbol("disp.log_r"), c_names) ? exp.(chain[Symbol("disp.log_r")].data[:, 1] .+ (in(Symbol("disp.δ_r_home"), c_names) ? chain[Symbol("disp.δ_r_home")].data[:, 1] : 0.0)) : fill(23.66, n_samples))
-    r_a_samples = in(Symbol("disp.a"), c_names) ? chain[Symbol("disp.a")].data[:, 1] :
-                  (in(Symbol("disp.log_r"), c_names) ? exp.(chain[Symbol("disp.log_r")].data[:, 1]) : fill(9.25, n_samples))
-
-    # APM Outfield Ratings
-    w_att = in(:w_att, c_names) ? chain[:w_att].data[:, 1] : zeros(n_samples)
-    w_def = in(:w_def, c_names) ? chain[:w_def].data[:, 1] : zeros(n_samples)
-
-    # Wealth Weight
-    w_wealth = in(:w_wealth, c_names) ? chain[:w_wealth].data[:, 1] : zeros(n_samples)
-
-    # Conversion Rate κ
-    κ = in(:log_κ, c_names) ? exp.(chain[:log_κ].data[:, 1]) : ones(n_samples)
-
-    # Team Quality (for Funnel model)
-    q_base = in(:logit_q_base, c_names) ? chain[:logit_q_base].data[:, 1] : fill(logit(0.133), n_samples)
-    σ_q    = in(:σ_q_raw, c_names) ? chain[:σ_q_raw].data[:, 1] : zeros(n_samples)
-    q_att_cols = [col for col in c_names if startswith(string(col), "η_att_raw[")]
-    q_def_cols = [col for col in c_names if startswith(string(col), "η_def_raw[")]
-    aq = isempty(q_att_cols) ? zeros(n_samples, 1) : chain[q_att_cols].value.data[:, :, 1]
-    dq = isempty(q_def_cols) ? zeros(n_samples, 1) : chain[q_def_cols].value.data[:, :, 1]
-
-    contexts = Features.extract_match_contexts(feature_set, df)
-    wealth_map = get(feature_set.data, :wealth_map, Dict{Int, Float64}())
     results = Dict{Int, NamedTuple}()
+    if is_funnel
+        q_raw_samples = vec(Array(chain[Symbol("q_raw")]))
+        σ_q           = vec(Array(chain[Symbol("σ_q")]))
+        qa            = _pxg_active(model.team_quality_on)
 
-    for c in contexts
-        h_idx = max(c.h_idx, 1)
-        a_idx = max(c.a_idx, 1)
-        ha_idx = min(h_idx, size(ha_samples, 2))
+        aq = zeros(n_samples, n_teams); dq = zeros(n_samples, n_teams)
+        for i in 1:n_teams
+            col_aq = Symbol("aq_raw[$i]")
+            col_dq = Symbol("dq_raw[$i]")
+            if col_aq in keys(chain)
+                aq[:, i] = qa .* vec(Array(chain[col_aq]))
+            end
+            if col_dq in keys(chain)
+                dq[:, i] = qa .* vec(Array(chain[col_dq]))
+            end
+        end
+        aq .-= mean(aq, dims = 2); dq .-= mean(dq, dims = 2)
 
-        # APM pillar
-        base_r = Features.rating_base(model.player_ratings_feature)
-        h_out = model.apm_on ? ((c.h_D + c.h_M + c.h_F) - 10.0 * base_r) : 0.0
-        a_out = model.apm_on ? ((c.a_D + c.a_M + c.a_F) - 10.0 * base_r) : 0.0
-        pillar_h = model.apm_on ? (w_att .* h_out .- w_def .* a_out) : zeros(n_samples)
-        pillar_a = model.apm_on ? (w_att .* a_out .- w_def .* h_out) : zeros(n_samples)
+        for (mid, c) in core
+            a_h = c.h_idx > 0 ? aq[:, c.h_idx] : zeros(n_samples)
+            d_h = c.h_idx > 0 ? dq[:, c.h_idx] : zeros(n_samples)
+            a_a = c.a_idx > 0 ? aq[:, c.a_idx] : zeros(n_samples)
+            d_a = c.a_idx > 0 ? dq[:, c.a_idx] : zeros(n_samples)
 
-        # Wealth differential
-        delta_w = get(wealth_map, c.match_id, 0.0)
-        w_shift = w_wealth .* delta_w
+            log_λ_s_h = model.shot_scale .+ c.lin_h
+            log_λ_s_a = model.shot_scale .+ c.lin_a
 
-        if model isa TeamFunnelPxGGoalsAPMNegBinWealthModel
-            # 3-Layer Funnel computation
-            q_h_idx = min(h_idx, size(aq, 2))
-            q_a_idx = min(a_idx, size(dq, 2))
-            η_a_h = c.h_idx > 0 ? aq[:, q_h_idx] : zeros(n_samples)
-            η_d_a = c.a_idx > 0 ? dq[:, q_a_idx] : zeros(n_samples)
-            η_a_a = c.a_idx > 0 ? aq[:, q_a_idx] : zeros(n_samples)
-            η_d_h = c.h_idx > 0 ? dq[:, q_h_idx] : zeros(n_samples)
+            logit_q_h = clamp.(q_raw_samples .+ a_h .- d_a, -10.0, 10.0)
+            logit_q_a = clamp.(q_raw_samples .+ a_a .- d_h, -10.0, 10.0)
+            log_q_h   = .-log.(1.0 .+ exp.(.-logit_q_h))
+            log_q_a   = .-log.(1.0 .+ exp.(.-logit_q_a))
 
-            logit_q_h = clamp.(q_base .+ σ_q .* (η_a_h .- η_d_a), -10.0, 10.0)
-            logit_q_a = clamp.(q_base .+ σ_q .* (η_a_a .- η_d_h), -10.0, 10.0)
-            log_q_h = -log1pexp.(-logit_q_h)
-            log_q_a = -log1pexp.(-logit_q_a)
+            μ_h = exp.(log_λ_s_h .+ log_q_h)
+            μ_a = exp.(log_λ_s_a .+ log_q_a)
 
-            log_λ_s_h = clamp.(log(model.shot_scale) .+ μ_base .+ ha_samples[:, ha_idx] .+
-                               att[:, h_idx] .+ def[:, a_idx] .+ pillar_h .+ w_shift, -10.0, 10.0)
-            log_λ_s_a = clamp.(log(model.shot_scale) .+ μ_base .+
-                               att[:, a_idx] .+ def[:, h_idx] .+ pillar_a .- w_shift, -10.0, 10.0)
-
-            log_μ_h = log_λ_s_h .+ log_q_h
-            log_μ_a = log_λ_s_a .+ log_q_a
-            log_λ_h = log_μ_h .+ log.(κ)
-            log_λ_a = log_μ_a .+ log.(κ)
-
-            results[c.match_id] = (
-                λ_h = exp.(log_λ_h),
-                λ_a = exp.(log_λ_a),
+            results[mid] = (;
+                λ_h = κ .* μ_h,
+                λ_a = κ .* μ_a,
                 r_h = r_h_samples,
                 r_a = r_a_samples,
-                true_xg_h = exp.(log_μ_h),
-                true_xg_a = exp.(log_μ_a),
-                κ   = κ,
-                w_wealth = w_wealth
+                true_xg_h = μ_h,
+                true_xg_a = μ_a,
+                κ   = κ
             )
-        else
-            log_μ_h = clamp.(μ_base .+ ha_samples[:, ha_idx] .+
-                             att[:, h_idx] .+ def[:, a_idx] .+ pillar_h .+ w_shift, -10.0, 10.0)
-            log_μ_a = clamp.(μ_base .+
-                             att[:, a_idx] .+ def[:, h_idx] .+ pillar_a .- w_shift, -10.0, 10.0)
+        end
+    else
+        for (mid, c) in core
+            μ_h = exp.(c.lin_h)
+            μ_a = exp.(c.lin_a)
 
-            log_λ_h = model isa TeamPxGGoalsAPMNegBinWealthModel ? (log_μ_h .+ log.(κ)) : log_μ_h
-            log_λ_a = model isa TeamPxGGoalsAPMNegBinWealthModel ? (log_μ_a .+ log.(κ)) : log_μ_a
-
-            results[c.match_id] = (
-                λ_h = exp.(log_λ_h),
-                λ_a = exp.(log_λ_a),
+            results[mid] = (;
+                λ_h = κ .* μ_h,
+                λ_a = κ .* μ_a,
                 r_h = r_h_samples,
                 r_a = r_a_samples,
-                true_xg_h = exp.(log_μ_h),
-                true_xg_a = exp.(log_μ_a),
-                κ   = κ,
-                w_wealth = w_wealth
+                true_xg_h = μ_h,
+                true_xg_a = μ_a,
+                κ   = κ
             )
         end
     end
