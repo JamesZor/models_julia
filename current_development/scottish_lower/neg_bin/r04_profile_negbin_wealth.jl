@@ -83,7 +83,8 @@ for (label, model) in models
     println("------------------------------------------------------------------")
 
     # Extract Features
-    t_feat = @elapsed fs = Features.extract_features(model, train_df, ds)
+    boundary = Data.SplitBoundary(1, 1, Int.(ds.matches.match_id[1:min(1200, nrow(ds.matches))]), Int[])
+    t_feat = @elapsed fs = Features.create_features(boundary, ds, model, :match_biweek)
     println("  • Feature extraction: ", round(t_feat * 1000, digits=1), " ms")
 
     # Build Turing Model
