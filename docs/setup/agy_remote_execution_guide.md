@@ -66,16 +66,19 @@ nc -zv -w 3 archpc 5433
 
 ---
 
-## 3. Tmux Session Hierarchy & Window Map
+## 3. Tmux Session Hierarchy, Prefixes & Window Map
 
-The remote environment uses a **nested tmux hierarchy**:
+The remote environment uses a **clean, non-conflicting nested tmux architecture**:
 
-### Outer Tmux Session: `scottish_runner`
-- **Pane `scottish_runner:1.1`:** SSH terminal session connected into `mcmc-beast`.
-- **Pane `scottish_runner:1.2`:** AGY CLI session.
+| Layer | Environment | Session Name | Prefix Key | Description |
+| :--- | :--- | :--- | :---: | :--- |
+| **Outer Tmux** | Local Workstation | `scottish_runner` | **`Ctrl-a` (`C-a`)** | Manages local AGY pane (`1.2`) & SSH terminal pane (`1.1`). |
+| **Inner Tmux** | `mcmc-beast` Server | `[julia]` / default | **`Ctrl-b` (`C-b`)** | Standard default prefix. Manages Julia REPL, btop, and bash. |
 
-### Inner Tmux Session (inside `mcmc-beast`):
-Inside `scottish_runner:1.1`, an active tmux session named `[julia]` manages running processes:
+> [!IMPORTANT]
+> **Why this works seamlessly:** Because the local session prefix is `Ctrl-a`, sending `C-b` from the local CLI via `tmux send-keys -t scottish_runner:1.1 C-b <N>` passes directly through the outer layer and is received natively by the inner tmux session on `mcmc-beast`!
+
+### Inner Tmux Window Map (on `mcmc-beast`):
 - **Window `0:julia` or `3:julia*`:** Persistent Julia REPL launched with target threads (e.g. `julia --project -t 16` or `julia --project -t 32`) with `ThreadPinning.pinthreads(:cores)` initialized.
 - **Window `1:btop`:** Live CPU core utilization, thermals, and RAM monitor.
 - **Window `2:bash`:** Shell prompt on `root@mcmc-beast:~/BayesianFootball`.
