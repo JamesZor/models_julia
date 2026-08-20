@@ -207,7 +207,7 @@ Base.@kwdef struct TeamPxGGoalsAPMNegBinDistanceModel{
     dispersion_config::D      = SCOTTISH_HOMEAWAY_DISPERSION
     player_ratings_feature::P = Features.XGPlusMinusFeature()
     distance_feature::Dist    = ScottishDistanceFeature()
-    proxy_feature::ScottishLowerProxyXGFeature = ScottishLowerProxyXGFeature()
+    proxy_feature::ProxyXGFeature = ProxyXGFeature()
     w_dist_prior::Distribution= truncated(Normal(0.04, 0.03), lower = 0.0)
     w_att_prior::Distribution = Normal(0.0, 0.3)
     w_def_prior::Distribution = Normal(0.0, 0.3)

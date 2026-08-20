@@ -206,7 +206,7 @@ Base.@kwdef struct TeamPxGGoalsAPMNegBinWealthDistanceModel{
     player_ratings_feature::P = Features.XGPlusMinusFeature()
     wealth_feature::W         = ScottishTeamWealthFeature()
     distance_feature::Dist    = ScottishDistanceFeature()
-    proxy_feature::ScottishLowerProxyXGFeature = ScottishLowerProxyXGFeature()
+    proxy_feature::ProxyXGFeature = ProxyXGFeature()
     w_wealth_prior::Distribution = truncated(Normal(0.15, 0.08), lower = 0.0)
     w_dist_prior::Distribution   = truncated(Normal(0.04, 0.03), lower = 0.0)
     w_att_prior::Distribution = Normal(0.0, 0.3)
