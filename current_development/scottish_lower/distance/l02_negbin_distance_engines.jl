@@ -211,9 +211,8 @@ Base.@kwdef struct TeamPxGGoalsAPMNegBinDistanceModel{
     w_dist_prior::Distribution= truncated(Normal(0.04, 0.03), lower = 0.0)
     w_att_prior::Distribution = Normal(0.0, 0.3)
     w_def_prior::Distribution = Normal(0.0, 0.3)
-    apm_on::Bool              = true
-    kappa_prior::Distribution = Normal(0.0, 0.2)
-    nu_prior::Distribution    = Exponential(1.0)
+    log_κ_prior::Distribution = Normal(0.0, 0.2)
+    ν_prior::Distribution    = Exponential(1.0)
     league_offset_sd::Float64 = 0.1
     league_ha_sd::Float64     = 0.1
     league_ha_on::Bool        = false
@@ -249,9 +248,8 @@ end
     dyn   ~ to_submodel(PreGame.build_dynamics(config.dynamics_config, n_teams))
     disp  ~ to_submodel(PreGame.build_dispersion(config.dispersion_config, n_teams, n_months))
 
-    log_κ ~ config.kappa_prior
-    ν_raw ~ config.nu_prior
-    ν     = ν_raw + 1.0
+    ν_xg  ~ config.ν_prior
+    log_κ ~ config.log_κ_prior
 
     w_att ~ config.w_att_prior
     w_def ~ config.w_def_prior
@@ -272,36 +270,40 @@ end
 
     dist_shift = w_dist .* distance_z
 
-    log_λ_h = clamp.(int_m .+ lg .+ view(ha, home_ids) .+ γ_lg .+
+    log_μ_h = clamp.(int_m .+ lg .+ view(ha, home_ids) .+ γ_lg .+
                      view(dyn.α, home_ids) .+ view(dyn.β, away_ids) .+ pillar_h .+ dist_shift, -10.0, 10.0)
-    log_λ_a = clamp.(int_m .+ lg .+
+    log_μ_a = clamp.(int_m .+ lg .+
                      view(dyn.α, away_ids) .+ view(dyn.β, home_ids) .+ pillar_a .- dist_shift, -10.0, 10.0)
 
-    # 3. Proxy xG Gamma Likelihood
-    lν = log(ν)
-    ll_gamma = pxg_h.S_w_pxg * loggamma(ν)
+    bad_h  = isnan.(log_μ_h)
+    bad_a  = isnan.(log_μ_a)
+    is_bad = any(bad_h) || any(bad_a) || isnan(log_κ)
+    log_μ_h = ifelse.(bad_h, zero.(log_μ_h), log_μ_h)
+    log_μ_a = ifelse.(bad_a, zero.(log_μ_a), log_μ_a)
+    Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
 
-    ll_pxg_h = ν * pxg_h.S_w_log_pxg - pxg_h.S_log_pxg -
-               ν * sum(pxg_h.w_pxg_val .* exp.(-log_λ_h)) -
-               ν * sum(pxg_h.w_pxg .* log_λ_h) +
-               ν * lν * pxg_h.S_w_pxg - ll_gamma
+    inv_μ_h = exp.(.-log_μ_h)
+    inv_μ_a = exp.(.-log_μ_a)
 
-    ll_pxg_a = ν * pxg_a.S_w_log_pxg - pxg_a.S_log_pxg -
-               ν * sum(pxg_a.w_pxg_val .* exp.(-log_λ_a)) -
-               ν * sum(pxg_a.w_pxg .* log_λ_a) +
-               ν * lν * pxg_a.S_w_pxg - ll_gamma
-
-    # 4. Goals Robust Negative Binomial Likelihood
-    log_λ_gh = log_κ .+ log_λ_h
-    log_λ_ga = log_κ .+ log_λ_a
     r_h = disp.h
     r_a = disp.a
+
+    # 3. Proxy xG Gamma Likelihood
+    cν = ν_xg * log(ν_xg) - loggamma(ν_xg)
+    ll_xg_h = (ν_xg - 1.0) * pxg_h.S_logx - ν_xg * sum(pxg_h.c_x .* inv_μ_h) -
+              ν_xg * sum(pxg_h.c_m .* log_μ_h) + cν * pxg_h.S_m
+    ll_xg_a = (ν_xg - 1.0) * pxg_a.S_logx - ν_xg * sum(pxg_a.c_x .* inv_μ_a) -
+              ν_xg * sum(pxg_a.c_m .* log_μ_a) + cν * pxg_a.S_m
+
+    # 4. Goals Robust Negative Binomial Likelihood
+    log_λ_gh = log_κ .+ log_μ_h
+    log_λ_ga = log_κ .+ log_μ_a
 
     ll_g_h = _negbin_vector_loglik(home_goals, log_λ_gh, r_h, nb_h)
     ll_g_a = _negbin_vector_loglik(away_goals, log_λ_ga, r_a, nb_a)
 
-    Turing.@addlogprob! ifelse(isnan(ll_pxg_h) || isnan(ll_pxg_a) || isnan(r_h) || isnan(r_a) || isnan(ll_g_h) || isnan(ll_g_a), -Inf, 0.0)
-    Turing.@addlogprob! ll_pxg_h + ll_pxg_a + ll_g_h + ll_g_a
+    Turing.@addlogprob! ifelse(isnan(ll_xg_h) || isnan(ll_xg_a) || isnan(r_h) || isnan(r_a) || isnan(ll_g_h) || isnan(ll_g_a), -Inf, 0.0)
+    Turing.@addlogprob! ll_xg_h + ll_xg_a + ll_g_h + ll_g_a
 end
 
 function PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinDistanceModel, feature_set)
@@ -310,6 +312,11 @@ function PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinDistanceModel, 
     n    = length(d.home_ids)
     rat_h, rat_a = _pxg_ratings_distance(data, config, n)
 
+    xg_h   = Vector{Float64}(data[:flat_home_xg_proxy])
+    xg_a   = Vector{Float64}(data[:flat_away_xg_proxy])
+    mask_h = Vector{Float64}(data[:flat_pxg_mask_h])
+    mask_a = Vector{Float64}(data[:flat_pxg_mask_a])
+
     nb_h = _negbin_precompute(d.home_goals, d.w)
     nb_a = _negbin_precompute(d.away_goals, d.w)
 
@@ -317,8 +324,8 @@ function PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinDistanceModel, 
         d.home_ids, d.away_ids, d.season_idx, d.month_idx, d.league_idx,
         rat_h, rat_a,
         d.distance_z,
-        _pxg_suff_opt(Vector{Float64}(data[:flat_home_xg_proxy]), Vector{Float64}(data[:flat_pxg_mask_h]), d.w),
-        _pxg_suff_opt(Vector{Float64}(data[:flat_away_xg_proxy]), Vector{Float64}(data[:flat_pxg_mask_a]), d.w),
+        _pxg_suff(xg_h, mask_h, d.home_goals, d.w),
+        _pxg_suff(xg_a, mask_a, d.away_goals, d.w),
         d.home_goals, d.away_goals,
         nb_h, nb_a,
         d.n_teams, d.n_seasons, d.n_months, d.n_leagues,
