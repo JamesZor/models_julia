@@ -403,38 +403,47 @@ function PreGame.extract_parameters(
         λ_h = exp.(log_λ_h) .* κ
         λ_a = exp.(log_λ_a) .* κ
 
-        results[mid] = (
-            λ_home = λ_h,
-            λ_away = λ_a,
-            r_home = r_h_samples,
-            r_away = r_a_samples
+        results[mid] = (;
+            λ_h = λ_h,
+            λ_a = λ_a,
+            r_h = r_h_samples,
+            r_a = r_a_samples,
+            true_xg_h = exp.(mu_base .+ delta_m .+ ha_val .+ lg_h .+ lg_ha .+ core.α[:, h_idx] .+ core.β[:, a_idx] .+ pillar_h .+ w_shift .+ dist_shift),
+            true_xg_a = exp.(mu_base .+ delta_m .+ lg_h .+ core.α[:, a_idx] .+ core.β[:, h_idx] .+ pillar_a .- w_shift .- dist_shift),
+            κ   = κ
         )
     end
     return results
 end
 
-# Prediction matrices
-function Pred.predict_match_rates(model::ScottishNegBinWealthDistanceUnion, params::NamedTuple)
-    return (params.λ_home, params.λ_away)
-end
+PreGame.extract_parameters(model::ScottishNegBinWealthDistanceUnion, df::DataFrame, feature_tuple::Tuple, chain::MCMCChains.Chains) =
+    PreGame.extract_parameters(model, df, feature_tuple[1], chain)
 
-function Pred.predict_match_score_grid(model::ScottishNegBinWealthDistanceUnion, params::NamedTuple, max_goals::Int = 10)
-    λ_h, λ_a = params.λ_home, params.λ_away
-    r_h, r_a = params.r_home, params.r_away
+Pred.extract_params(::ScottishNegBinWealthDistanceUnion, row) = (
+    λ_h = row.λ_h,
+    λ_a = row.λ_a,
+    r_h = hasproperty(row, :r_h) ? row.r_h : fill(23.66, length(row.λ_h)),
+    r_a = hasproperty(row, :r_a) ? row.r_a : fill(9.25, length(row.λ_a))
+)
+
+function Pred.compute_score_matrix(
+    model::ScottishNegBinWealthDistanceUnion,
+    params;
+    max_goals::Int = 12
+)
+    λ_h, λ_a = params.λ_h, params.λ_a
+    r_h, r_a = params.r_h, params.r_a
     n_samples = length(λ_h)
 
-    P = zeros(Float64, max_goals + 1, max_goals + 1)
-    for s in 1:n_samples
-        dist_h = RobustNegativeBinomial(r_h[s], λ_h[s])
-        dist_a = RobustNegativeBinomial(r_a[s], λ_a[s])
+    S = zeros(Float64, max_goals, max_goals, n_samples)
 
-        p_h = [pdf(dist_h, g) for g in 0:max_goals]
-        p_a = [pdf(dist_a, g) for g in 0:max_goals]
-        p_h ./= sum(p_h)
-        p_a ./= sum(p_a)
-
-        P .+= p_h * p_a'
+    @inbounds for k in 1:n_samples
+        dist_h = RobustNegativeBinomial(max(Float64(r_h[k]), 1e-4), max(Float64(λ_h[k]), 1e-4))
+        dist_a = RobustNegativeBinomial(max(Float64(r_a[k]), 1e-4), max(Float64(λ_a[k]), 1e-4))
+        p_h = [pdf(dist_h, i) for i in 0:max_goals-1]
+        p_a = [pdf(dist_a, j) for j in 0:max_goals-1]
+        S[:, :, k] = p_h .* transpose(p_a)
     end
-    P ./= n_samples
-    return P
+
+    return Pred.ScoreMatrix(S)
 end
