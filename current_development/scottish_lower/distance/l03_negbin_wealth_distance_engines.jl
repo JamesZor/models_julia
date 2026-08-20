@@ -211,6 +211,7 @@ Base.@kwdef struct TeamPxGGoalsAPMNegBinWealthDistanceModel{
     w_dist_prior::Distribution   = truncated(Normal(0.04, 0.03), lower = 0.0)
     w_att_prior::Distribution = Normal(0.0, 0.3)
     w_def_prior::Distribution = Normal(0.0, 0.3)
+    apm_on::Bool              = true
     log_κ_prior::Distribution = Normal(0.0, 0.2)
     ν_prior::Distribution    = Exponential(1.0)
     league_offset_sd::Float64 = 0.1
