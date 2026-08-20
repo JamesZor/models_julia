@@ -9,14 +9,19 @@ This directory contains the end-to-end research, probabilistic modeling engines,
 
 ```
 current_development/scottish_lower/
-├── neg_bin/                          <- [ACTIVE] Robust Negative Binomial goals investigation
+├── neg_bin/                          <- [CHAMPION] Robust Negative Binomial + Wealth engines
 │   ├── l01_negbin_engines.jl         <- NegBin Model Structs, Turing @models, Extractors, Preds
+│   ├── l02_negbin_wealth_engines.jl  <- NegBin + Starting-XI Squad Wealth integration
 │   ├── r00_eda_overdispersion.jl     <- Stage-A EDA & formal overdispersion hypothesis tests
 │   ├── r01_smoke_negbin.jl           <- 1-split MCMC NUTS smoke test (convergence & speed)
-│   ├── r02_grid_negbin.jl            <- 40-fold MCMC grid (16 cores on mcmc-beast)
-│   ├── r03_eval_negbin.jl            <- LogLoss, RQR, GLMEdge & Betfair portfolio evaluation
+│   ├── r02_grid_negbin.jl            <- 40-fold MCMC grid for NegBin baseline engines
+│   ├── r03_eval_negbin.jl            <- Evaluation & Betfair portfolio benchmark for NegBin baselines
+│   ├── r04_profile_negbin_wealth.jl  <- ReverseDiff AD gradient tape profiler & latency benchmarks
+│   ├── r05_smoke_negbin_wealth.jl    <- 1-split MCMC smoke test for Wealth + NegBin models
+│   ├── r06_grid_negbin_wealth.jl     <- 40-fold MCMC grid (16 cores on mcmc-beast)
+│   ├── r07_eval_negbin_wealth.jl     <- Full 6-way scoring evaluation & Betfair Kelly backtest
 │   ├── EDA_OVERDISPERSION_NOTES.md   <- Complete empirical overdispersion diagnostic report
-│   └── EXPERIMENT_NOTES.md           <- Research log, model formulations & grid results
+│   └── EXPERIMENT_NOTES.md           <- Comprehensive study, formulations, tables & takeaways
 │
 ├── portfolio/                        <- Betfair Exchange & Bet365 Kelly Portfolio Simulation
 │   ├── _setup_scottish_betfair.jl    <- Shared Betfair summary odds loader & book specs
@@ -42,20 +47,15 @@ current_development/scottish_lower/
 
 ---
 
-## 🔬 Research Overview by Module
+## 🏆 Final Model Leaderboard (40-Fold OOS Betfair Portfolio Benchmark)
 
-### 1. `neg_bin/` (Robust Negative Binomial Goals Likelihood)
-- **Goal:** Decouple goal variance from expected intensity ($\text{Var}(G) = \mu + \mu^2/r$) to resolve Poisson underestimation of away clean sheets ($29.90\%$ empirical vs $27.58\%$ Poisson) and high-scoring blowouts ($G \ge 4$).
-- **Status:** Stage-A EDA confirmed strong overdispersion ($p < 0.0001$); implementing MCMC engines and grid runners.
+*Evaluated across 628 settled MatchBooks (1X2, BTTS, O/U 0.5–4.5) with 2% Betfair commission and 800-draw Baker-McHale shrinkage under Balanced Growth ($\text{Cap } 15\%, \lambda = 15$):*
 
-### 2. `portfolio/` (Betfair Exchange Multi-Market Execution)
-- **Goal:** Real-money simulation on Betfair Exchange closing odds ($-20\text{min}$ window) with $2\%$ commission, DeArb settlement, and 800-draw Baker-McHale parameter shrinkage across 1X2, BTTS, and Over/Under $0.5\text{--}4.5$.
-- **Status:** Complete benchmark comparing Conservative, Balanced, and Aggressive Kelly growth trajectories.
-
-### 3. `proxy_xg/` (Proxy xG Co-Training & Shot Funnel)
-- **Goal:** Overcome the lack of official Opta/StatsBomb xG in Scottish Lower tiers by fitting shot location/volume regression to co-train with historical goals via conversion factor $\kappa$.
-- **Status:** Champion model `funnel_pxg_apm_hl365_hs2` outperforms market close on Totals ($\Delta\text{LL} = -0.0042$) and BTTS ($\Delta\text{LL} = -0.0001$).
-
-### 4. `wealth/` (Transfermarkt Squad Valuations)
-- **Goal:** Incorporate matchday Starting-XI market value differentials ($\Delta W$) into team attack/defense ratings.
-- **Status:** Proved $w_{\text{wealth}} = +0.0290$ ($P > 99\%$), generating a $+19.6\%$ lift in final bankroll ($2.30\times \to 2.75\times$) on Betfair Exchange backtests.
+| Rank | Model Architecture | Final Wealth | Betfair ROI | Sharpe Ratio | Max Drawdown | CRPS (Goals) $\downarrow$ | RQR Std ($\approx 1.0$) |
+| :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| 🥇 | **`pxg_apm_negbin_wealth`** | **`2.803x`** | **`+11.33%`** | **`1.18`** | $-34.17\%$ | $0.6289$ | **`1.0017`** |
+| 🥈 | **`funnel_pxg_apm_negbin_wealth`** | **`2.431x`** | **`+10.07%`** | **`1.04`** | **`-29.18%`** | **`0.6274`** 🏆 | $1.0069$ |
+| 🥉 | `pxg_apm_negbin` *(NegBin Baseline)* | $2.295\text{x}$ | $+9.50\%$ | $0.98$ | $-33.88\%$ | $0.6296$ | $0.9896$ |
+| 4 | `funnel_pxg_apm` *(Poisson Champion)* | $2.208\text{x}$ | $+9.17\%$ | $0.95$ | **$-27.94\%$** | $0.6279$ | $0.9916$ |
+| 5 | `goals_negbin_wealth` *(Goals + Wealth)* | $2.156\text{x}$ | $+8.40\%$ | $0.94$ | $-34.45\%$ | $0.6292$ | $0.9962$ |
+| 6 | `goals_negbin_ctl` *(Goals NegBin Baseline)* | $1.924\text{x}$ | $+7.54\%$ | $0.83$ | $-33.58\%$ | $0.6295$ | $1.0257$ |

@@ -228,11 +228,98 @@ where $N_j = \sum_{i: k_i > j} w_i$, and collapsing the quality conditional Gamm
 
 ---
 
-## 9. Summary & Synthesis of Results
+## 9. Negative Binomial + Squad Wealth Synthesis Study
 
-1. **Massive Goals-Only Performance Leap (+38% Wealth Increase):**
-   - In pure goals-only modeling (no xG features), switching from Poisson to Negative Binomial increased final portfolio wealth from **$1.381\text{x} \to 1.589\text{x}$** (Conservative) and **$1.729\text{x} \to 2.586\text{x}$** (Aggressive), while lifting ROI from **$+5.48\% \to +7.41\%$** and Sharpe from **$0.58 \to 0.82$**.
-2. **Top-Tier Proxy xG Competitiveness:**
-   - With Proxy xG co-training, `pxg_apm_negbin_hl365_hs2` delivered **+9.63% ROI** and a final wealth of **$1.830\text{x}$** in the conservative portfolio, outperforming all other models in baseline wealth growth.
-3. **Calibrated Away Scoring:**
-   - Overdispersion correctly regularizes away team high-scoring outliers, achieving an RQR away standard deviation of **$1.0071$** (compared to $1.0536$ in the Poisson champion).
+### A. Motivation & Mathematical Formulation
+In lower leagues, team baseline ratings evolve gradually over time, but weekly starting lineups fluctuate dramatically due to Premiership loanees, suspensions, and injuries. 
+By integrating matchday **Starting-XI Squad Wealth Differentials ($\Delta W_{i}$)** directly into the latent linear scoring intensity $\lambda_{i}$ alongside the **Negative Binomial (NB2)** overdispersion parameter $r$, we combine high-resolution squad quality adjustments with fat-tailed goal likelihoods:
+
+$$\log \lambda_{h,i} = \text{clamp}\left(\mu_{\text{base}} + \text{att}_{h,t} - \text{def}_{a,t} + \text{HA} + w_{\text{wealth}} \Delta W_i + \text{RAPM}_{h,i}, -10.0, 10.0\right)$$
+$$\log \lambda_{a,i} = \text{clamp}\left(\mu_{\text{base}} + \text{att}_{a,t} - \text{def}_{h,t} - w_{\text{wealth}} \Delta W_i + \text{RAPM}_{a,i}, -10.0, 10.0\right)$$
+
+$$\text{Goals}_{h,i} \sim \text{NegativeBinomial}\left(r_h, \frac{r_h}{r_h + \lambda_{h,i}}\right), \quad r_h = \exp(\text{clamp}(\log r + \delta_{r,\text{home}}, -10, 10))$$
+$$\text{Goals}_{a,i} \sim \text{NegativeBinomial}\left(r_a, \frac{r_a}{r_a + \lambda_{a,i}}\right), \quad r_a = \exp(\text{clamp}(\log r, -10, 10))$$
+
+---
+
+### B. ReverseDiff Gradient Tape Profiling on mcmc-beast ($N = 1,990$ Matches)
+
+| Architecture | Model Code | Latent Dim $\theta$ | Tape Nodes | Compile Time | Median Grad Latency | Status |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **Model 1: Goals NegBin + Wealth** | `goals_negbin_wealth` | 120 | 37,474 | 0.200 s | **1.124 ms** | PASS ✅ |
+| **Model 2: Proxy xG + RAPM + NegBin + Wealth** | `pxg_apm_negbin_wealth` | 122 | 27,936 | 0.288 s | **1.103 ms** | PASS ✅ |
+| **Model 3: Funnel Proxy xG + RAPM + NegBin + Wealth** | `funnel_pxg_apm_negbin_wealth` | 182 | 80,775 | 0.576 s | **3.774 ms** | PASS ✅ |
+
+---
+
+### C. MCMC Parameter Recovery & Posterior Diagnostics (1-Split Smoke & 40-Fold Grid)
+
+All models converged decisively ($\text{Max } \hat{R} \le 1.015$ across all folds):
+- **Wealth Effect Weight ($w_{\text{wealth}}$):** Estimated positively across all engines ($+0.020$ to $+0.046$, with $>99\%$ posterior probability above zero).
+- **Goal Conversion Rate ($\kappa$):** Converged to $1.087 \pm 0.038$, capturing the exact efficiency conversion from Proxy xG to matchday goals.
+- **Home/Away Dispersion Disparity:** $r_{\text{away}} \approx 17.5\text{--}18.5$ vs $r_{\text{home}} \approx 39.5\text{--}41.5$ ($\delta_{r,\text{home}} \approx +0.73$), confirming Scottish Lower away matches exhibit substantially higher goal overdispersion.
+
+---
+
+### D. Definitive 6-Way Out-of-Sample Statistical Benchmark (710 Matches)
+
+| Model Architecture | CRPS (Goals) $\downarrow$ | RQR Std ($\approx 1.0$) | Log-Loss Home $\downarrow$ | Log-Loss Draw $\downarrow$ | Log-Loss Away $\downarrow$ | Log-Loss O/U 2.5 $\downarrow$ | Log-Loss BTTS $\downarrow$ |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`funnel_pxg_apm_negbin_wealth`** | **`0.6274`** 🏆 | $1.0069$ | $0.6717$ | $0.5724$ | **`0.6107`** | $0.6896$ | $0.6869$ |
+| **`pxg_apm_negbin_wealth`** | **`0.6289`** | **`1.0017`** 🎯 | **`0.6705`** | $0.5718$ | $0.6117$ | **`0.6925`** | $0.6898$ |
+| `funnel_pxg_apm` *(Poisson Champion)* | $0.6279$ | $0.9916$ | $0.6732$ | $0.5724$ | $0.6120$ | **`0.6886`** | **`0.6864`** |
+| `goals_negbin_wealth` | $0.6292$ | $0.9962$ | **`0.6696`** | $0.5717$ | $0.6115$ | $0.6951$ | $0.6906$ |
+| `goals_negbin_ctl` *(NegBin Baseline)* | $0.6295$ | $1.0257$ | **`0.6694`** | $0.5716$ | **`0.6106`** | $0.6950$ | $0.6899$ |
+| `pxg_apm_negbin` *(NegBin Baseline)* | $0.6296$ | $0.9896$ | $0.6716$ | $0.5718$ | $0.6121$ | $0.6925$ | $0.6895$ |
+
+---
+
+### E. Betfair Exchange Multi-Market Kelly Portfolio Benchmark (628 Settled Books, 2% Comm, 800-Draw Shrinkage)
+
+#### 1. Balanced Growth Policy (Fixed Cap 15%, $\lambda = 15$)
+| Model Architecture | Final Wealth | Slate Growth | Betfair ROI | Max Drawdown | Sharpe Ratio | Total Bets | Verdict |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`pxg_apm_negbin_wealth`** | **`2.803x`** | **`+1.04%`** | **`+11.33%`** | $-34.17\%$ | **`1.18`** | 1,831 | 🥇 **NEW CHAMPION** |
+| **`funnel_pxg_apm_negbin_wealth`** | **`2.431x`** | **`+0.90%`** | **`+10.07%`** | **`-29.18%`** | **`1.04`** | 1,802 | 🥈 **RUNNER-UP** |
+| `pxg_apm_negbin` *(NegBin Baseline)* | $2.295\text{x}$ | $+0.84\%$ | $+9.50\%$ | $-33.88\%$ | $0.98$ | 1,820 | Baseline |
+| `funnel_pxg_apm` *(Poisson Champion)* | $2.208\text{x}$ | $+0.80\%$ | $+9.17\%$ | **$-27.94\%$** | $0.95$ | 1,805 | Previous Champion |
+| `goals_negbin_wealth` *(Goals + Wealth)* | $2.156\text{x}$ | $+0.78\%$ | $+8.40\%$ | $-34.45\%$ | $0.94$ | 1,887 | Solid Control |
+| `goals_negbin_ctl` *(Goals NegBin Baseline)* | $1.924\text{x}$ | $+0.66\%$ | $+7.54\%$ | $-33.58\%$ | $0.83$ | 1,874 | Base Control |
+
+#### 2. Aggressive Policy (Fixed Cap 25%, $\lambda = 10$)
+| Model Architecture | Final Wealth | Slate Growth | Betfair ROI | Max Drawdown | Sharpe Ratio | Total Bets |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`pxg_apm_negbin_wealth`** | **`4.229x`** | **`+1.46%`** | **`+11.11%`** | $-48.62\%$ | **`1.17`** | 1,831 |
+| **`funnel_pxg_apm_negbin_wealth`** | **`3.819x`** | **`+1.35%`** | **`+10.71%`** | **`-41.43%`** | **`1.10`** | 1,802 |
+| `funnel_pxg_apm` *(Poisson Champion)* | $3.203\text{x}$ | $+1.18\%$ | $+9.65\%$ | **$-39.65\%$** | $1.00$ | 1,805 |
+| `pxg_apm_negbin` *(NegBin Baseline)* | $3.202\text{x}$ | $+1.18\%$ | $+9.53\%$ | $-48.11\%$ | $0.99$ | 1,820 |
+| `goals_negbin_wealth` *(Goals + Wealth)* | $3.010\text{x}$ | $+1.11\%$ | $+8.56\%$ | $-49.32\%$ | $0.95$ | 1,887 |
+| `goals_negbin_ctl` *(Goals NegBin Baseline)* | $2.586\text{x}$ | $+0.96\%$ | $+7.91\%$ | $-46.41\%$ | $0.87$ | 1,874 |
+
+#### 3. Conservative Policy (Fixed Cap 10%, $\lambda = 23$)
+| Model Architecture | Final Wealth | Slate Growth | Betfair ROI | Max Drawdown | Sharpe Ratio | Total Bets |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`pxg_apm_negbin_wealth`** | **`2.082x`** | **`+0.74%`** | **`+11.42%`** | $-24.03\%$ | **`1.19`** | 1,831 |
+| **`funnel_pxg_apm_negbin_wealth`** | **`1.903x`** | **`+0.65%`** | **`+10.23%`** | **`-20.30%`** | **`1.06`** | 1,802 |
+| `pxg_apm_negbin` *(NegBin Baseline)* | $1.830\text{x}$ | $+0.61\%$ | $+9.63\%$ | $-23.80\%$ | $0.99$ | 1,820 |
+| `funnel_pxg_apm` *(Poisson Champion)* | $1.777\text{x}$ | $+0.58\%$ | $+9.27\%$ | **$-19.41\%$** | $0.96$ | 1,805 |
+| `goals_negbin_wealth` *(Goals + Wealth)* | $1.713\text{x}$ | $+0.54\%$ | $+8.23\%$ | $-24.57\%$ | $0.92$ | 1,887 |
+| `goals_negbin_ctl` *(Goals NegBin Baseline)* | $1.589\text{x}$ | $+0.47\%$ | $+7.41\%$ | $-23.65\%$ | $0.82$ | 1,874 |
+
+---
+
+## 10. Key Takeaways & Architectural Conclusions
+
+1. **`pxg_apm_negbin_wealth` is the New Global Champion:**
+   - Outperforms all prior models across all three capital growth policies ($2.082\times$ Conservative, $2.803\times$ Balanced, $4.229\times$ Aggressive).
+   - Generates **$+11.33\%$ out-of-sample ROI** and an annualized **Sharpe ratio of $1.18$**.
+   - Achieves the fastest training throughput among multi-layer engines ($1.10\text{ ms}$ gradient latency, $\approx 3.5\text{ hours}$ for full 40-fold MCMC grid).
+
+2. **Squad Wealth ($\Delta W$) Provides Universal Alpha:**
+   - Injecting Starting-XI wealth differentials produced positive wealth gains across every architecture:
+     - Goals-only: $+0.23\text{x}$ wealth lift ($1.924\text{x} \to 2.156\text{x}$).
+     - Proxy xG + RAPM: $+0.51\text{x}$ wealth lift ($2.295\text{x} \to 2.803\text{x}$).
+     - 3-Layer Funnel: $+0.22\text{x}$ wealth lift ($2.208\text{x} \to 2.431\text{x}$).
+
+3. **Negative Binomial Solves Lower League Probabilistic Distortion:**
+   - Achieved near-perfect residual calibration ($\sigma_{\text{RQR}} = 1.0017$) and set a new project record for Continuous Ranked Probability Score (**$\text{CRPS} = 0.6274$**).
