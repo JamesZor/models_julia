@@ -70,8 +70,8 @@ selections = [:home, :draw, :away, :btts_yes, :btts_no,
               :over_05, :under_05, :over_15, :under_15, :over_25, :under_25,
               :over_35, :under_35, :over_45, :under_45]
 
-metrics = Evaluation.AbstractEvaluationMetric[
-    Evaluation.ResidualRQR(),
+metrics = Evaluation.AbstractScoringRule[
+    Evaluation.RQR(),
     Evaluation.CRPS()
 ]
 append!(metrics, [Evaluation.LogLoss(s) for s in selections])
