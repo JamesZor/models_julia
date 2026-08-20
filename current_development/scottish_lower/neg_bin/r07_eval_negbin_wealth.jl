@@ -35,6 +35,7 @@ all_folders    = vcat(wealth_folders, negbin_folders, pxg_folders)
 all_loaded     = Experiments.load_experiments(all_folders)
 
 target_models = [
+    "funnel_pxg_apm_hl365_hs2",
     "goals_negbin_ctl_hl365_hs2",
     "pxg_apm_negbin_hl365_hs2",
     "goals_negbin_wealth_hl365_hs2",
