@@ -53,6 +53,13 @@ using ThreadPinning; pinthreads(:cores) # Must be run before sampling to lock OS
 4. **Run Experiment**: `results = Experiments.run_experiment(task)`
 5. **Save**: `Experiments.save_experiment(results)`
 
+### 🖥️ Remote Compute Execution (`mcmc-beast` & `archpc`)
+Heavy MCMC sampling and evaluation grids run on the dedicated `mcmc-beast` compute node (32 cores) via nested tmux panels. Postgres database `betdb` runs on `archpc:5433`.
+- **Full Guide & Protocol:** [`docs/setup/agy_remote_execution_guide.md`](file:///home/james/bet_project/BayesianFootball/docs/setup/agy_remote_execution_guide.md)
+- **Outer Tmux Session:** `scottish_runner:1.1` (SSH to `mcmc-beast`)
+- **Inner Windows on Beast:** `0/3:julia` (REPL with pinned threads), `1:btop` (CPU/RAM), `2:bash` (git sync).
+- **Workflow:** Edit code locally -> `git push` -> `tmux send-keys` pull on beast (window 2) -> `include(...)` in REPL (window 3).
+
 ## 🧪 Prototyping & Iteration (`current_development/`)
 
 New features and architectural changes are first prototyped in the `current_development/` directory before being refactored into `src/`. This allows for high-velocity, REPL-driven development.
