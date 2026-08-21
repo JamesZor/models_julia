@@ -232,68 +232,81 @@ TeamGoalsRecombIntegratedPoissonModel(; dynamics_config = PreGame.TimeDecayDynam
     TeamGoalsRecombIntegratedPoissonModel(dynamics_config, name)
 
 # --- FeatureSet Overload for Integrated Model ---
-function Features.create_features(
-    boundaries::Vector{Features.GroupBoundary},
-    ds::Data.DataStore,
-    model::Union{TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel}
-)
+function _build_recomb_features(b, ds::Data.DataStore, model::Union{TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel})
     df_clean, df_ref = build_open_play_target_dataset(ds)
     all_refs = unique(filter(x -> x > 0, df_clean.referee_id))
     ref_map = Dict(r => idx for (idx, r) in enumerate(all_refs))
     
-    map(boundaries) do b
-        m = filter(r -> r.match_id in b.train_match_ids, df_clean)
-        
-        home_ids = Vector{Int}(m.home_team_id)
-        away_ids = Vector{Int}(m.away_team_id)
-        
-        home_open_goals = Vector{Int}(m.home_goals_np_nog)
-        away_open_goals = Vector{Int}(m.away_goals_np_nog)
-        
-        home_pens = Vector{Int}(m.home_pen_awarded)
-        away_pens = Vector{Int}(m.away_pen_awarded)
-        
-        ref_indices = [get(ref_map, r, 0) for r in m.referee_id]
-        ref_mask    = Float64.(ref_indices .> 0)
-        ref_ids_clamped = [idx > 0 ? idx : 1 for idx in ref_indices]
-        
-        date_deltas = Vector{Float64}(b.train_dates)
-        weights     = 0.5 .^ (date_deltas ./ model.dynamics_config.days_half_life)
-        
-        all_teams = sort(unique(vcat(home_ids, away_ids)))
-        team_map  = Dict(t => idx for (idx, t) in enumerate(all_teams))
-        
-        h_idx = [team_map[t] for t in home_ids]
-        a_idx = [team_map[t] for t in away_ids]
-        
-        month_indices  = month.(m.match_date)
-        league_indices = ones(Int, length(home_ids))
-        
-        Features.FeatureSet(
-            b,
-            Dict{Symbol, Any}(
-                :home_team_indices   => h_idx,
-                :away_team_indices   => a_idx,
-                :month_indices       => month_indices,
-                :league_indices      => league_indices,
-                :home_open_goals     => home_open_goals,
-                :away_open_goals     => away_open_goals,
-                :home_pens           => home_pens,
-                :away_pens           => away_pens,
-                :ref_indices         => ref_ids_clamped,
-                :ref_mask            => ref_mask,
-                :match_weights       => weights,
-                :n_teams             => length(all_teams),
-                :n_refs              => max(1, length(all_refs)),
-                :n_months            => 12,
-                :n_leagues           => 1,
-                :team_map            => team_map,
-                :ref_map             => ref_map,
-                :clean_df            => df_clean
-            )
+    m = filter(r -> r.match_id in b.train_match_ids, df_clean)
+    
+    home_ids = Vector{Int}(m.home_team_id)
+    away_ids = Vector{Int}(m.away_team_id)
+    
+    home_open_goals = Vector{Int}(m.home_goals_np_nog)
+    away_open_goals = Vector{Int}(m.away_goals_np_nog)
+    
+    home_pens = Vector{Int}(m.home_pen_awarded)
+    away_pens = Vector{Int}(m.away_pen_awarded)
+    
+    ref_indices = [get(ref_map, r, 0) for r in m.referee_id]
+    ref_mask    = Float64.(ref_indices .> 0)
+    ref_ids_clamped = [idx > 0 ? idx : 1 for idx in ref_indices]
+    
+    date_deltas = Vector{Float64}(b.train_dates)
+    weights     = 0.5 .^ (date_deltas ./ model.dynamics_config.days_half_life)
+    
+    all_teams = sort(unique(vcat(home_ids, away_ids)))
+    team_map  = Dict(t => idx for (idx, t) in enumerate(all_teams))
+    
+    h_idx = [team_map[t] for t in home_ids]
+    a_idx = [team_map[t] for t in away_ids]
+    
+    month_indices  = month.(m.match_date)
+    league_indices = ones(Int, length(home_ids))
+    
+    return Features.FeatureSet(
+        b,
+        Dict{Symbol, Any}(
+            :home_team_indices   => h_idx,
+            :away_team_indices   => a_idx,
+            :month_indices       => month_indices,
+            :league_indices      => league_indices,
+            :home_open_goals     => home_open_goals,
+            :away_open_goals     => away_open_goals,
+            :home_pens           => home_pens,
+            :away_pens           => away_pens,
+            :ref_indices         => ref_ids_clamped,
+            :ref_mask            => ref_mask,
+            :match_weights       => weights,
+            :n_teams             => length(all_teams),
+            :n_refs              => max(1, length(all_refs)),
+            :n_months            => 12,
+            :n_leagues           => 1,
+            :team_map            => team_map,
+            :ref_map             => ref_map,
+            :clean_df            => df_clean
         )
-    end
+    )
 end
+
+function Features.create_features(
+    boundaries::Vector{<:Any},
+    ds::Data.DataStore,
+    model::Union{TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel},
+    dynamics_col::Symbol = :match_month
+)
+    return [_build_recomb_features(b, ds, model) for b in boundaries]
+end
+
+function Features.create_features(
+    boundary::Any,
+    ds::Data.DataStore,
+    model::Union{TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel},
+    dynamics_col::Symbol = :match_month
+)
+    return _build_recomb_features(boundary, ds, model)
+end
+
 
 # --- Vectorized Turing Model: Pure Open Play Poisson ---
 @model function _turing_goals_poisson_open_play(
