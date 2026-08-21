@@ -37,6 +37,9 @@ model = TeamGoalsNegBinOpenPlayModel(
     name              = "goals_negbin_open_play_hl365_hs2"
 )
 
+using ThreadPinning
+pinthreads(:cores)
+
 println("Configuring 40-fold walk-forward task for: $(model.name)...")
 
 exp_task = EE.create_experiment_task(
@@ -44,16 +47,16 @@ exp_task = EE.create_experiment_task(
     model,
     model.name,
     save_dir;
-    target_seasons       = ["25/26"],
+    target_seasons       = ["24/25", "25/26"],
     history_seasons      = 2,
     warmup_period        = 20,
     dynamics_col         = :match_biweek,
-    samples              = 1000,
-    warmup               = 500,
-    chains               = 4,
+    samples              = 1200,
+    warmup               = 300,
+    chains               = 3,
     use_queue            = true,
     max_depth            = 10,
-    max_concurrent_tasks = 8
+    max_concurrent_tasks = 16
 )
 
 println("Launching 40-fold MCMC sampling on mcmc-beast (pinned 32 threads)...")
