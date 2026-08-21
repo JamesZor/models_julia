@@ -111,17 +111,17 @@ end
 banner("📉 2. CRPS & FAMILY-POOLED LOG LOSS DIFFERENCES (Lower / More Negative vs Market = Better)")
 rows = []
 for m in present_models
-    crps_val = _col(eval_df, m, "crps")
+    crps_val = _col(eval_df, m, "crps_all_score")
     
     # 1X2 LogLoss diff vs market close
-    h_ll = _col(eval_df, m, "logloss_diff_home")
-    d_ll = _col(eval_df, m, "logloss_diff_draw")
-    a_ll = _col(eval_df, m, "logloss_diff_away")
+    h_ll = _col(eval_df, m, "logloss_home_diff")
+    d_ll = _col(eval_df, m, "logloss_draw_diff")
+    a_ll = _col(eval_df, m, "logloss_away_diff")
     
     # Family pooled
-    x12_vals = [_col(eval_df, m, "logloss_diff_$s") for s in fam[:x12]]
-    btts_vals = [_col(eval_df, m, "logloss_diff_$s") for s in fam[:btts]]
-    tot_vals = [_col(eval_df, m, "logloss_diff_$s") for s in fam[:totals]]
+    x12_vals = [_col(eval_df, m, "logloss_$(s)_diff") for s in fam[:x12]]
+    btts_vals = [_col(eval_df, m, "logloss_$(s)_diff") for s in fam[:btts]]
+    tot_vals = [_col(eval_df, m, "logloss_$(s)_diff") for s in fam[:totals]]
     
     mean_x12  = round(mean(filter(!isnan, x12_vals)), digits = 5)
     mean_btts = round(mean(filter(!isnan, btts_vals)), digits = 5)
@@ -145,7 +145,7 @@ println()
 # 4. Betfair Exchange Portfolio Backtest
 banner("💰 3. BETFAIR EXCHANGE MULTI-MARKET KELLY SIMULATION (2% Commission, BM 800 Draws)")
 
-bf_summary = Data.summarize_betfair_market(ds; pre_match_window_minutes=(20, 0))
+bf_summary = Data.summarize_betfair_market(ds)
 
 policies = [
     ("Conservative (Cap 10%, λ=23)", Portfolio.PortfolioSimulationConfig(max_leverage=0.10, lambda_penalty=23.0)),
