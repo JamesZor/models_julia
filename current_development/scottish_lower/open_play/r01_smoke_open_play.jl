@@ -140,7 +140,7 @@ for (desc, model) in models_to_test
     
     row1 = split_df[1, :]
     sm = PP.compute_score_matrix(model, PP.extract_params(model, row1))
-    sum_s = mean([sum(sm.matrices[:, :, k]) for k in 1:size(sm.matrices, 3)])
+    sum_s = mean([sum(sm.data[:, :, k]) for k in 1:size(sm.data, 3)])
     @printf("  • Score Matrix Smoke Test: sum(S) = %.6f (Expected: 1.000000) -> %s\n",
             sum_s, abs(sum_s - 1.0) < 1e-4 ? "VALID ✅" : "INVALID ❌")
 end
