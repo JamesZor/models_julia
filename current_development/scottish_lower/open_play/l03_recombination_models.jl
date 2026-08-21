@@ -20,11 +20,18 @@ const PreGame     = BayesianFootball.Models.PreGame
 const Features    = BayesianFootball.Features
 const Predictions = BayesianFootball.Predictions
 
+const _TARGET_CACHE = Dict{UInt64, Tuple{DataFrame, Vector{Int}}}()
+
 # ==============================================================================
 # 0. OPEN-PLAY DATASET BUILDER
 # ==============================================================================
 
 function build_open_play_target_dataset(ds::Data.DataStore)
+    k = objectid(ds.matches)
+    if haskey(_TARGET_CACHE, k)
+        return _TARGET_CACHE[k]
+    end
+
     df = extract_open_play_match_data(ds; include_referees=true)
     
     # Map team names to unique integer team IDs
@@ -48,10 +55,12 @@ function build_open_play_target_dataset(ds::Data.DataStore)
         ref_id_map = Dict(r => idx for (idx, r) in enumerate(unique_refs))
         df.referee_id = [get(ref_id_map, r, 0) for r in df.referee_name]
     else
-        df.referee_id = zeros(Int, nrow(df))
+        df.referee_id = fill(0, nrow(df))
     end
     
-    return df, unique(filter(x -> x > 0, df.referee_id))
+    res = (df, unique(filter(x -> x > 0, df.referee_id)))
+    _TARGET_CACHE[k] = res
+    return res
 end
 
 # ==============================================================================

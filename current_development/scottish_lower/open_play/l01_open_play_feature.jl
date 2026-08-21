@@ -30,21 +30,23 @@ Returns DataFrame with columns: `:match_id`, `:referee_name`.
 """
 function fetch_match_referees(t_ids::Vector{Int} = [56, 57])::DataFrame
     db_url = get(ENV, "BF_DB_URL", "postgresql://james:scot_bet_2026_x7k9@archpc:5433/betdb")
-    conn = LibPQ.Connection(db_url)
     try
-        query = """
-            SELECT mo.match_id, mo.name AS referee_name
-            FROM bbc.match_officials mo
-            JOIN sofascore.matches m ON mo.match_id = m.match_id
-            WHERE m.tournament_id = ANY(\$1) AND mo.role = 'referee'
-        """
-        df = DataFrame(LibPQ.execute(conn, query, [t_ids]))
-        return df
+        conn = LibPQ.Connection(db_url; connect_timeout = 1)
+        try
+            query = """
+                SELECT mo.match_id, mo.name AS referee_name
+                FROM bbc.match_officials mo
+                JOIN sofascore.matches m ON mo.match_id = m.match_id
+                WHERE m.tournament_id = ANY(\$1) AND mo.role = 'referee'
+            """
+            df = DataFrame(LibPQ.execute(conn, query, [t_ids]))
+            return df
+        finally
+            close(conn)
+        end
     catch e
-        @warn "Failed to fetch match referees: $e"
+        @warn "Referee database unreachable ($e). Using default unassigned referee baseline."
         return DataFrame(match_id = Int32[], referee_name = String[])
-    finally
-        close(conn)
     end
 end
 
