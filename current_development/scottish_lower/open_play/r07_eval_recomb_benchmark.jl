@@ -65,14 +65,16 @@ for exp in experiments
 end
 
 # 3. Standard Evaluation Suite
-banner("📊 RUNNING COMPREHENSIVE EVALUATION SUITE (RQR, CRPS, LogLoss)")
+banner("📊 RUNNING COMPREHENSIVE EVALUATION SUITE (RQR, CRPS, LogLoss on 15 Markets)")
 
-selections = [:home, :draw, :away, :btts_yes, :over_25, :under_25]
+selections = [:home, :draw, :away, :btts_yes, :btts_no,
+              :over_05, :under_05, :over_15, :under_15, :over_25, :under_25,
+              :over_35, :under_35, :over_45, :under_45]
 
 fam = Dict(
     :x12    => [:home, :draw, :away],
-    :btts   => [:btts_yes],
-    :totals => [:over_25, :under_25],
+    :btts   => [:btts_yes, :btts_no],
+    :totals => [:over_05, :under_05, :over_15, :under_15, :over_25, :under_25, :over_35, :under_35, :over_45, :under_45],
 )
 
 _col(df, model, colname) = begin
@@ -105,8 +107,6 @@ if "rqr_all_mean" in names(eval_df)
     println()
 end
 
-println("DEBUG eval_df names: ", names(eval_df))
-
 banner("📉 2. CRPS & LOG LOSS EVALUATION (Lower / More Negative vs Market = Better)")
 
 if "crps_all_mean" in names(eval_df)
@@ -134,15 +134,32 @@ show(stdout, MIME("text/plain"), f_df)
 println()
 
 println("\n" * "="^85)
-println("📉 1X2 LOGLOSS DIFF BY SELECTION (Home / Draw / Away)")
+println("📉 1X2 & BTTS LOGLOSS DIFF BY SELECTION")
 println("="^85)
 x12_df = DataFrame(
-    model = present_models,
-    home  = [_col(eval_df, mm, "logloss_home_overall_diff_ll") for mm in present_models],
-    draw  = [_col(eval_df, mm, "logloss_draw_overall_diff_ll") for mm in present_models],
-    away  = [_col(eval_df, mm, "logloss_away_overall_diff_ll") for mm in present_models]
+    model    = present_models,
+    home     = [_col(eval_df, mm, "logloss_home_overall_diff_ll") for mm in present_models],
+    draw     = [_col(eval_df, mm, "logloss_draw_overall_diff_ll") for mm in present_models],
+    away     = [_col(eval_df, mm, "logloss_away_overall_diff_ll") for mm in present_models],
+    btts_yes = [_col(eval_df, mm, "logloss_btts_yes_overall_diff_ll") for mm in present_models],
+    btts_no  = [_col(eval_df, mm, "logloss_btts_no_overall_diff_ll") for mm in present_models]
 )
 show(stdout, MIME("text/plain"), x12_df)
+println()
+
+println("\n" * "="^85)
+println("📉 TOTALS OVER/UNDER LOGLOSS DIFF BY LINE")
+println("="^85)
+tot_df = DataFrame(
+    model    = present_models,
+    over_15  = [_col(eval_df, mm, "logloss_over_15_overall_diff_ll") for mm in present_models],
+    under_15 = [_col(eval_df, mm, "logloss_under_15_overall_diff_ll") for mm in present_models],
+    over_25  = [_col(eval_df, mm, "logloss_over_25_overall_diff_ll") for mm in present_models],
+    under_25 = [_col(eval_df, mm, "logloss_under_25_overall_diff_ll") for mm in present_models],
+    over_35  = [_col(eval_df, mm, "logloss_over_35_overall_diff_ll") for mm in present_models],
+    under_35 = [_col(eval_df, mm, "logloss_under_35_overall_diff_ll") for mm in present_models]
+)
+show(stdout, MIME("text/plain"), tot_df)
 println()
 
 # ==============================================================================
