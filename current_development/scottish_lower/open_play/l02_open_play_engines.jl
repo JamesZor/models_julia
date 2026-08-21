@@ -462,6 +462,11 @@ function PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinWealthOpenPlayM
     )
 end
 
+# FeatureSet overrides
+PreGame.build_turing_model(config::TeamGoalsNegBinOpenPlayModel, fs::Features.FeatureSet) = PreGame.build_turing_model(config, fs.data)
+PreGame.build_turing_model(config::TeamGoalsNegBinWealthOpenPlayModel, fs::Features.FeatureSet) = PreGame.build_turing_model(config, fs.data)
+PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinWealthOpenPlayModel, fs::Features.FeatureSet) = PreGame.build_turing_model(config, fs.data)
+
 # ==============================================================================
 # 4. PARAMETER EXTRACTOR & PREDICTION OVERLOADS
 # ==============================================================================
@@ -479,7 +484,7 @@ function _extract_open_play_params(
     feature_set::Features.FeatureSet,
     chain::MCMCChains.Chains
 )
-    core, n_samples, n_teams = _pxg_extract_core_wealth(model, df, feature_set, chain)
+    core, n_samples, n_teams = _pxg_extract_core(model, df, feature_set, chain)
 
     disp = PreGame.extract_dispersion(chain, model.dispersion_config)
     r_h_samples = disp.h
@@ -488,10 +493,23 @@ function _extract_open_play_params(
     has_kappa = Symbol("log_κ") in keys(chain)
     κ = has_kappa ? exp.(vec(Array(chain[Symbol("log_κ")]))) : ones(Float64, n_samples)
 
+    has_wealth = Symbol("w_wealth") in keys(chain)
+    w_wealth_samples = has_wealth ? vec(Array(chain[Symbol("w_wealth")])) : zeros(Float64, n_samples)
+
+    wealth_map = Dict{Int, Float64}()
+    if has_wealth && haskey(feature_set.data, :flat_wealth_diff)
+        for (i, row) in enumerate(eachrow(df))
+            wealth_map[row.match_id] = Float64(feature_set.data[:flat_wealth_diff][i])
+        end
+    end
+
     results = Dict{Int, NamedTuple}()
     for (mid, c) in core
-        μ_h = exp.(c.lin_h)
-        μ_a = exp.(c.lin_a)
+        w_diff = get(wealth_map, mid, 0.0)
+        w_shift = w_wealth_samples .* w_diff
+
+        μ_h = exp.(c.lin_h .+ w_shift)
+        μ_a = exp.(c.lin_a .- w_shift)
 
         results[mid] = (;
             λ_h = κ .* μ_h,
