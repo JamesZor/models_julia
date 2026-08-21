@@ -793,6 +793,8 @@ function Predictions.compute_score_matrix(model::TeamGoalsPoissonOpenPlayModel, 
     return Predictions.ScoreMatrix(S)
 end
 
+Predictions.compute_score_matrix(model::TeamGoalsPoissonOpenPlayModel, r::DataFrameRow; max_goals::Int = 12) = Predictions.compute_score_matrix(model, Predictions.extract_params(model, r); max_goals=max_goals)
+
 function Predictions.extract_params(model::TeamGoalsRecombIntegratedPoissonModel, row)
     n_s = length(row.λ_h)
     ln_h = hasproperty(row, :lambda_noise_h) ? (row.lambda_noise_h isa AbstractVector ? row.lambda_noise_h : fill(Float64(row.lambda_noise_h), n_s)) : fill(0.136 * 0.768 + 0.0276, n_s)
@@ -838,5 +840,7 @@ function Predictions.compute_score_matrix(model::TeamGoalsRecombIntegratedPoisso
     end
     return Predictions.ScoreMatrix(S)
 end
+
+Predictions.compute_score_matrix(model::TeamGoalsRecombIntegratedPoissonModel, r::DataFrameRow; max_goals::Int = 12) = Predictions.compute_score_matrix(model, Predictions.extract_params(model, r); max_goals=max_goals)
 
 println("✓ l03_recombination_models.jl loaded (Empirical Bayes + Integrated Turing Engines + Discrete Convolution)")
