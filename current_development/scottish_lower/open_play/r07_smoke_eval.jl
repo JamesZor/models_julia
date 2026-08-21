@@ -66,7 +66,7 @@ rqr_metric = Evaluation.RQR()
 for exp in experiments
     latents = Experiments.extract_oos_predictions(ds, exp)
     rqr_res = Evaluation.compute_metric(rqr_metric, exp, ds, latents)
-    println("✓ $(rpad(exp.config.name, 35)) RQR Mean = $(round(rqr_res.all_mean, digits=4)), Std = $(round(rqr_res.all_std, digits=4))")
+    println("✓ $(rpad(exp.config.name, 35)) RQR Mean = $(round(rqr_res.all.mean, digits=4)), Std = $(round(rqr_res.all.std, digits=4))")
 end
 
 println("\n", "="^85)
