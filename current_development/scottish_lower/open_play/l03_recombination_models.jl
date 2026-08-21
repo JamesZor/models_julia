@@ -166,7 +166,7 @@ function reconstruct_score_matrix_discrete_conv(mu_open_h::Float64, mu_open_a::F
     return S ./ sum(S)
 end
 
-"""
+raw"""
     reconstruct_score_matrix_moment_match(mu_open_h, mu_open_a, lambda_noise_h, lambda_noise_a;
                                           dist=:poisson, r_h=Inf, r_a=Inf, max_goals=10)
 
