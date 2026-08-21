@@ -35,7 +35,16 @@ current_development/scottish_lower/
 │   ├── r06_grid_negbin_wealth.jl     <- 40-fold MCMC grid (16 cores on mcmc-beast)
 │   ├── r07_eval_negbin_wealth.jl     <- Full 6-way scoring evaluation & Betfair Kelly backtest
 │   ├── EDA_OVERDISPERSION_NOTES.md   <- Complete empirical overdispersion diagnostic report
-│   └── EXPERIMENT_NOTES.md           <- Comprehensive study, formulations, tables & takeaways
+├── open_play/                        <- Open-Play Goal Targets ($y_{\text{np\_nog}}$) & Noise-Reduction Engines
+│   ├── l01_open_play_feature.jl      <- Target extractor (NP-NOG), referee loader, & clean pxG feature
+│   ├── l02_open_play_engines.jl      <- Open-Play NegBin Bayesian engines
+│   ├── r00_eda_open_play_signals.jl  <- Exploratory Data Analysis & signal persistence tests
+│   ├── r01_smoke_open_play.jl        <- 1-split MCMC smoke tests & parameter extractions
+│   ├── r02_grid_open_play_negbin.jl  <- 40-fold MCMC grid runner (mcmc-beast)
+│   ├── r03_eval_and_portfolio.jl     <- Full scoring rules & Betfair Kelly portfolio backtest
+│   ├── EDA_OPEN_PLAY_NOTES.md        <- Complete empirical tables, referee distributions, & tests
+│   ├── RESEARCH_QUESTIONS_AND_FINDINGS.md <- Detailed answers to core research questions
+│   └── README.md                     <- Module overview & workflow
 │
 ├── portfolio/                        <- Betfair Exchange & Bet365 Kelly Portfolio Simulation
 │   ├── _setup_scottish_betfair.jl    <- Shared Betfair summary odds loader & book specs
