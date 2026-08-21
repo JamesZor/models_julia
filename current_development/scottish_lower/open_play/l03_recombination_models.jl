@@ -767,28 +767,76 @@ function PreGame.extract_parameters(
 end
 
 # --- Score Matrix & Prediction Overloads ---
-function Predictions.compute_score_matrix(model::TeamGoalsPoissonOpenPlayModel, r::DataFrameRow; max_goals::Int = 10)
-    mu_h = Float64(r.λ_h)
-    mu_a = Float64(r.λ_a)
-    
-    # Baseline open-play Poisson score matrix (uniform own goal baseline)
-    p_h = [pdf(Poisson(mu_h), k) for k in 0:max_goals]
-    p_a = [pdf(Poisson(mu_a), k) for k in 0:max_goals]
-    p_h ./= sum(p_h)
-    p_a ./= sum(p_a)
-    
-    S = p_h * p_a'
-    return S ./ sum(S)
+function Predictions.extract_params(model::TeamGoalsPoissonOpenPlayModel, row)
+    return (
+        λ_h = row.λ_h isa AbstractVector ? row.λ_h : [row.λ_h],
+        λ_a = row.λ_a isa AbstractVector ? row.λ_a : [row.λ_a]
+    )
 end
 
-function Predictions.compute_score_matrix(model::TeamGoalsRecombIntegratedPoissonModel, r::DataFrameRow; max_goals::Int = 10)
-    mu_h = Float64(r.λ_h)
-    mu_a = Float64(r.λ_a)
+function Predictions.compute_score_matrix(model::TeamGoalsPoissonOpenPlayModel, params; max_goals::Int = 12)
+    p = params isa DataFrameRow ? Predictions.extract_params(model, params) : params
+    λ_h = p.λ_h
+    λ_a = p.λ_a
+    n_samples = length(λ_h)
     
-    lambda_noise_h = hasproperty(r, :lambda_noise_h) ? Float64(r.lambda_noise_h) : 0.136 * 0.768 + 0.0276
-    lambda_noise_a = hasproperty(r, :lambda_noise_a) ? Float64(r.lambda_noise_a) : 0.136 * 0.768 + 0.0276
+    S = zeros(Float64, max_goals, max_goals, n_samples)
+    for k in 1:n_samples
+        mu_h = λ_h[k]
+        mu_a = λ_a[k]
+        p_h = [pdf(Poisson(mu_h), g) for g in 0:max_goals-1]
+        p_a = [pdf(Poisson(mu_a), g) for g in 0:max_goals-1]
+        p_h ./= sum(p_h)
+        p_a ./= sum(p_a)
+        S[:, :, k] = p_h * p_a'
+    end
+    return Predictions.ScoreMatrix(S)
+end
+
+function Predictions.extract_params(model::TeamGoalsRecombIntegratedPoissonModel, row)
+    n_s = length(row.λ_h)
+    ln_h = hasproperty(row, :lambda_noise_h) ? (row.lambda_noise_h isa AbstractVector ? row.lambda_noise_h : fill(Float64(row.lambda_noise_h), n_s)) : fill(0.136 * 0.768 + 0.0276, n_s)
+    ln_a = hasproperty(row, :lambda_noise_a) ? (row.lambda_noise_a isa AbstractVector ? row.lambda_noise_a : fill(Float64(row.lambda_noise_a), n_s)) : fill(0.136 * 0.768 + 0.0276, n_s)
+    return (
+        λ_h = row.λ_h isa AbstractVector ? row.λ_h : [row.λ_h],
+        λ_a = row.λ_a isa AbstractVector ? row.λ_a : [row.λ_a],
+        λ_open_h = hasproperty(row, :λ_open_h) ? (row.λ_open_h isa AbstractVector ? row.λ_open_h : [row.λ_open_h]) : row.λ_h,
+        λ_open_a = hasproperty(row, :λ_open_a) ? (row.λ_open_a isa AbstractVector ? row.λ_open_a : [row.λ_open_a]) : row.λ_a,
+        lambda_noise_h = ln_h,
+        lambda_noise_a = ln_a
+    )
+end
+
+function Predictions.compute_score_matrix(model::TeamGoalsRecombIntegratedPoissonModel, params; max_goals::Int = 12)
+    p = params isa DataFrameRow ? Predictions.extract_params(model, params) : params
+    λ_open_h = p.λ_open_h
+    λ_open_a = p.λ_open_a
+    ln_h = p.lambda_noise_h
+    ln_a = p.lambda_noise_a
+    n_samples = length(λ_open_h)
     
-    return reconstruct_score_matrix_discrete_conv(mu_h, mu_a, lambda_noise_h, lambda_noise_a; dist=:poisson, max_goals=max_goals)
+    S = zeros(Float64, max_goals, max_goals, n_samples)
+    for k in 1:n_samples
+        mu_open_h = λ_open_h[k]
+        mu_open_a = λ_open_a[k]
+        mu_noise_h = ln_h[k]
+        mu_noise_a = ln_a[k]
+        
+        p_open_h  = [pdf(Poisson(mu_open_h), g) for g in 0:max_goals-1]
+        p_noise_h = [pdf(Poisson(mu_noise_h), g) for g in 0:max_goals-1]
+        p_open_a  = [pdf(Poisson(mu_open_a), g) for g in 0:max_goals-1]
+        p_noise_a = [pdf(Poisson(mu_noise_a), g) for g in 0:max_goals-1]
+        
+        # Convolve: P(Y_total = g) = sum_{m=0}^g P(Y_open = m) * P(Y_noise = g - m)
+        p_tot_h = [sum(p_open_h[m+1] * p_noise_h[g - m + 1] for m in 0:g) for g in 0:max_goals-1]
+        p_tot_a = [sum(p_open_a[m+1] * p_noise_a[g - m + 1] for m in 0:g) for g in 0:max_goals-1]
+        
+        p_tot_h ./= sum(p_tot_h)
+        p_tot_a ./= sum(p_tot_a)
+        
+        S[:, :, k] = p_tot_h * p_tot_a'
+    end
+    return Predictions.ScoreMatrix(S)
 end
 
 println("✓ l03_recombination_models.jl loaded (Empirical Bayes + Integrated Turing Engines + Discrete Convolution)")
