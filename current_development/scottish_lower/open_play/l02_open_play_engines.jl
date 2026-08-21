@@ -416,22 +416,46 @@ end
     log_μ_a = ifelse.(bad_a, zero.(log_μ_a), log_μ_a)
     Turing.@addlogprob! ifelse(is_bad, -Inf, 0.0)
 
-    # 3. Clean Proxy xG Gamma Likelihood
-    ll_x_h = _pxg_gamma_loglik(log_μ_h, ν_xg, sx_h)
-    ll_x_a = _pxg_gamma_loglik(log_μ_a, ν_xg, sx_a)
-
-    # 4. Open-Play Goals NegBin Likelihood (mean = kappa * mu)
-    log_λ_h = log_μ_h .+ log_κ
-    log_λ_a = log_μ_a .+ log_κ
+    μ_h     = exp.(log_μ_h);   μ_a     = exp.(log_μ_a)
+    inv_μ_h = exp.(.-log_μ_h); inv_μ_a = exp.(.-log_μ_a)
 
     r_h = disp.h
     r_a = disp.a
 
-    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_h, r_h, nb_h)
-    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_a, r_a, nb_a)
+    # 3. Clean Proxy xG (Gamma Likelihood via sufficient statistics)
+    cν = ν_xg * log(ν_xg) - loggamma(ν_xg)
+    ll_xg_h = (ν_xg - 1.0) * sx_h.S_logx - ν_xg * sum(sx_h.c_x .* inv_μ_h) -
+              ν_xg * sum(sx_h.c_m .* log_μ_h) + cν * sx_h.S_m
+    ll_xg_a = (ν_xg - 1.0) * sx_a.S_logx - ν_xg * sum(sx_a.c_x .* inv_μ_a) -
+              ν_xg * sum(sx_a.c_m .* log_μ_a) + cν * sx_a.S_m
 
-    Turing.@addlogprob! ifelse(isnan(r_h) || isnan(r_a) || isnan(ll_g_h) || isnan(ll_g_a), -Inf, 0.0)
-    Turing.@addlogprob! ll_x_h + ll_x_a + ll_g_h + ll_g_a
+    # 4. Open-Play Goals (Robust Negative Binomial Likelihood)
+    log_λ_gh = log_κ .+ log_μ_h
+    log_λ_ga = log_κ .+ log_μ_a
+    ll_g_h = _negbin_vector_loglik(home_goals, log_λ_gh, r_h, nb_h)
+    ll_g_a = _negbin_vector_loglik(away_goals, log_λ_ga, r_a, nb_a)
+
+    Turing.@addlogprob! ifelse(isnan(ll_xg_h) || isnan(ll_xg_a) || isnan(r_h) || isnan(r_a) || isnan(ll_g_h) || isnan(ll_g_a), -Inf, 0.0)
+    Turing.@addlogprob! ll_xg_h + ll_xg_a + ll_g_h + ll_g_a
+end
+
+function _clean_pxg_suff(xg::Vector{Float64}, mask::Vector{Float64}, goals::Vector{Int}, w::Vector{Float64})
+    wm      = w .* mask
+    safe_xg = [isnan(x) || x <= 0.0 ? 1.0 : x for x in xg]
+    c_x     = wm .* safe_xg
+    c_mlogx = wm .* log.(safe_xg)
+    c_g_lin = w .* goals
+    return (;
+        c_x      = c_x,
+        c_m      = wm,
+        S_m      = sum(wm),
+        S_logx   = sum(c_mlogx),
+        c_mlogx  = c_mlogx,
+        S_x      = sum(c_x),
+        c_g_lin  = c_g_lin,
+        c_g_rate = w,
+        S_g      = sum(c_g_lin),
+    )
 end
 
 function PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinWealthOpenPlayModel, feature_set)
@@ -446,8 +470,8 @@ function PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinWealthOpenPlayM
     mask_h = [isnan(x) ? 0.0 : 1.0 for x in pxg_h]
     mask_a = [isnan(x) ? 0.0 : 1.0 for x in pxg_a]
 
-    sx_h = _pxg_suff(pxg_h, mask_h, d.home_goals, d.w)
-    sx_a = _pxg_suff(pxg_a, mask_a, d.away_goals, d.w)
+    sx_h = _clean_pxg_suff(pxg_h, mask_h, d.home_goals, d.w)
+    sx_a = _clean_pxg_suff(pxg_a, mask_a, d.away_goals, d.w)
     nb_h = _negbin_precompute(d.home_goals, d.w)
     nb_a = _negbin_precompute(d.away_goals, d.w)
 
