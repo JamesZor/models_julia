@@ -29,8 +29,8 @@ Fetches referee assignments from `bbc.match_officials` for the specified tournam
 Returns DataFrame with columns: `:match_id`, `:referee_name`.
 """
 function fetch_match_referees(t_ids::Vector{Int} = [56, 57])::DataFrame
-    db_config = Data.DBConfig()
-    conn = Data.connect_to_db(db_config)
+    db_url = get(ENV, "BF_DB_URL", "postgresql://james:scot_bet_2026_x7k9@archpc:5433/betdb")
+    conn = LibPQ.Connection(db_url)
     try
         query = """
             SELECT mo.match_id, mo.name AS referee_name
