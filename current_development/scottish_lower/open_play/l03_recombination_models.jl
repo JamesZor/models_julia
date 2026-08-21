@@ -27,30 +27,28 @@ const Predictions = BayesianFootball.Predictions
 function build_open_play_target_dataset(ds::Data.DataStore)
     df = extract_open_play_match_data(ds; include_referees=true)
     
-    # Add home_team_id and away_team_id if not present
-    if !hasproperty(df, :home_team_id)
-        match_map = Dict(r.match_id => (r.home_team_id, r.away_team_id) for r in eachrow(ds.matches))
-        df.home_team_id = [get(match_map, m_id, (0, 0))[1] for m_id in df.match_id]
-        df.away_team_id = [get(match_map, m_id, (0, 0))[2] for m_id in df.match_id]
-    end
+    # Map team names to unique integer team IDs
+    all_team_names = sort(unique(vcat(df.home_team, df.away_team)))
+    team_name_map  = Dict(t => idx for (idx, t) in enumerate(all_team_names))
+    
+    df.home_team_id = [team_name_map[t] for t in df.home_team]
+    df.away_team_id = [team_name_map[t] for t in df.away_team]
     
     # Add home_pen_awarded and away_pen_awarded
-    if !hasproperty(df, :home_pen_awarded)
-        df.home_pen_awarded = df.pen_scored_h .+ df.pen_missed_h
-        df.away_pen_awarded = df.pen_scored_a .+ df.pen_missed_a
-    end
+    df.home_pen_awarded = df.pen_scored_h .+ df.pen_missed_h
+    df.away_pen_awarded = df.pen_scored_a .+ df.pen_missed_a
     
     # Add home_goals_np_nog and away_goals_np_nog
-    if !hasproperty(df, :home_goals_np_nog)
-        df.home_goals_np_nog = df.y_np_nog_h
-        df.away_goals_np_nog = df.y_np_nog_a
-    end
+    df.home_goals_np_nog = df.y_np_nog_h
+    df.away_goals_np_nog = df.y_np_nog_a
     
     # Map referee_name -> integer referee_id
-    if hasproperty(df, :referee_name) && !hasproperty(df, :referee_id)
+    if hasproperty(df, :referee_name)
         unique_refs = unique(filter(x -> x != "Unknown", df.referee_name))
         ref_id_map = Dict(r => idx for (idx, r) in enumerate(unique_refs))
         df.referee_id = [get(ref_id_map, r, 0) for r in df.referee_name]
+    else
+        df.referee_id = zeros(Int, nrow(df))
     end
     
     return df, unique(filter(x -> x > 0, df.referee_id))
