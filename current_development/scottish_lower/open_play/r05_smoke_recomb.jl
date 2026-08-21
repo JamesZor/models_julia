@@ -76,12 +76,13 @@ sampler_cfg = Samplers.NUTSConfig(
     n_samples   = 500,
     n_warmup    = 200,
     n_chains    = 2,
-    target_accept = 0.65,
-    max_depth   = 8
+    accept_rate = 0.65,
+    max_depth   = 8,
+    show_progress = false
 )
 
 t0 = time()
-chain_pois = Samplers.sample(tur_pois, sampler_cfg; progress = false)
+chain_pois = Samplers.sample(tur_pois, sampler_cfg)
 elapsed_pois = round(time() - t0, digits = 1)
 
 rhats_pois = summarize(chain_pois)[:, :rhat]
@@ -100,7 +101,7 @@ f_int = Features.create_features(b1, ds, m_int)
 tur_int = PreGame.build_turing_model(m_int, f_int[1])
 
 t0 = time()
-chain_int = Samplers.sample(tur_int, sampler_cfg; progress = false)
+chain_int = Samplers.sample(tur_int, sampler_cfg)
 elapsed_int = round(time() - t0, digits = 1)
 
 rhats_int = summarize(chain_int)[:, :rhat]
