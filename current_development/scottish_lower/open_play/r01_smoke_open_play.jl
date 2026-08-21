@@ -121,19 +121,19 @@ for (desc, model) in models_to_test
     end
 
     # 5. Parameter Extraction & Score Matrix Smoke Test
-    boundaries_with_meta = DD.create_id_boundaries(ds, exp_task.splitter)
+    boundaries_with_meta = DD.create_id_boundaries(ds, exp_task.config.splitter)
     feature_sets = FF.create_features(
         boundaries_with_meta[1:1], 
         ds, 
-        exp_task.model, 
-        exp_task.splitter.dynamics_col
+        exp_task.config.model, 
+        exp_task.config.splitter.dynamics_col
     )
     result_tuple = res.training_results.items[1]
     
     split_df = EE._process_split(
         ds,
-        exp_task.model,
-        exp_task.splitter,
+        exp_task.config.model,
+        exp_task.config.splitter,
         feature_sets[1],
         result_tuple
     )
