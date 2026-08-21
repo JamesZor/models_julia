@@ -16,6 +16,8 @@ const PreGame     = BayesianFootball.Models.PreGame
 const Experiments = BayesianFootball.Experiments
 const Evaluation  = BayesianFootball.Evaluation
 const Portfolio   = BayesianFootball.Portfolio
+const Signals     = BayesianFootball.Signals
+const BackTesting = BayesianFootball.BackTesting
 const Data        = BayesianFootball.Data
 
 const ROOT = pkgdir(BayesianFootball)
