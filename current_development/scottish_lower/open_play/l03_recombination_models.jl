@@ -595,6 +595,166 @@ function PreGame.extract_parameters(model::TeamGoalsRecombIntegratedPoissonModel
     )
 end
 
+function PreGame.extract_parameters(
+    model::TeamGoalsPoissonOpenPlayModel,
+    df::AbstractDataFrame,
+    feature_set::Features.FeatureSet,
+    chain::Chains
+)
+    data = feature_set.data
+    team_map = data[:team_map]
+    n_teams = data[:n_teams]
+    n_months = data[:n_months]
+    n_leagues = data[:n_leagues]
+    
+    base_mu = vec(Array(chain["base_mu"]))
+    ha_home = vec(Array(chain["ha_home"]))
+    n_samples = length(base_mu)
+    
+    raw_alpha_mat = Array(chain[["raw_alpha[$i]" for i in 1:n_teams]])
+    raw_beta_mat  = Array(chain[["raw_beta[$i]" for i in 1:n_teams]])
+    alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
+    beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
+    
+    delta_month_mat  = haskey(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
+    delta_league_mat = haskey(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)
+    
+    results = Dict{Int, NamedTuple}()
+    for row in eachrow(df)
+        mid = Int(row.match_id)
+        h_id = hasproperty(row, :home_team_id) ? Int(row.home_team_id) : (hasproperty(row, :home_team) ? get(team_map, row.home_team, -1) : -1)
+        a_id = hasproperty(row, :away_team_id) ? Int(row.away_team_id) : (hasproperty(row, :away_team) ? get(team_map, row.away_team, -1) : -1)
+        
+        h_idx = get(team_map, h_id, -1)
+        a_idx = get(team_map, a_id, -1)
+        
+        α_h = h_idx > 0 ? alpha_mat[:, h_idx] : zeros(n_samples)
+        β_h = h_idx > 0 ? beta_mat[:, h_idx]  : zeros(n_samples)
+        α_a = a_idx > 0 ? alpha_mat[:, a_idx] : zeros(n_samples)
+        β_a = a_idx > 0 ? beta_mat[:, a_idx]  : zeros(n_samples)
+        
+        m_idx = month(row.match_date)
+        l_idx = hasproperty(row, :tournament_id) && row.tournament_id == 57 ? 2 : 1
+        
+        δ_m = (m_idx >= 1 && m_idx <= n_months) ? delta_month_mat[:, m_idx] : zeros(n_samples)
+        δ_l = (l_idx >= 1 && l_idx <= n_leagues) ? delta_league_mat[:, l_idx] : zeros(n_samples)
+        
+        int_m = base_mu .+ δ_m .+ δ_l
+        λ_h = exp.(int_m .+ ha_home .+ α_h .- β_a)
+        λ_a = exp.(int_m .+           α_a .- β_h)
+        
+        results[mid] = (;
+            λ_h = λ_h,
+            λ_a = λ_a,
+            r_h = fill(100.0, n_samples),
+            r_a = fill(100.0, n_samples),
+            true_xg_h = λ_h,
+            true_xg_a = λ_a
+        )
+    end
+    return results
+end
+
+function PreGame.extract_parameters(
+    model::TeamGoalsRecombIntegratedPoissonModel,
+    df::AbstractDataFrame,
+    feature_set::Features.FeatureSet,
+    chain::Chains
+)
+    data = feature_set.data
+    team_map = data[:team_map]
+    ref_map  = data[:ref_map]
+    n_teams  = data[:n_teams]
+    n_refs   = data[:n_refs]
+    n_months = data[:n_months]
+    n_leagues = data[:n_leagues]
+    
+    base_mu = vec(Array(chain["base_mu"]))
+    ha_home = vec(Array(chain["ha_home"]))
+    n_samples = length(base_mu)
+    
+    raw_alpha_mat = Array(chain[["raw_alpha[$i]" for i in 1:n_teams]])
+    raw_beta_mat  = Array(chain[["raw_beta[$i]" for i in 1:n_teams]])
+    alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
+    beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
+    
+    delta_month_mat  = haskey(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
+    delta_league_mat = haskey(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)
+    
+    pen_base_mu = vec(Array(chain["pen_base_mu"]))
+    ha_pen      = vec(Array(chain["ha_pen"]))
+    sigma_ref   = vec(Array(chain["sigma_ref"]))
+    
+    raw_gamma_mat = (n_refs > 0 && haskey(chain, "raw_gamma_ref[1]")) ? Array(chain[["raw_gamma_ref[$i]" for i in 1:n_refs]]) : zeros(n_samples, n_refs)
+    gamma_mat = raw_gamma_mat .* sigma_ref
+    
+    apd_mat = haskey(chain, "alpha_pen_draw[1]") ? Array(chain[["alpha_pen_draw[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    bpf_mat = haskey(chain, "beta_pen_foul[1]") ? Array(chain[["beta_pen_foul[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    
+    results = Dict{Int, NamedTuple}()
+    for row in eachrow(df)
+        mid = Int(row.match_id)
+        h_id = hasproperty(row, :home_team_id) ? Int(row.home_team_id) : (hasproperty(row, :home_team) ? get(team_map, row.home_team, -1) : -1)
+        a_id = hasproperty(row, :away_team_id) ? Int(row.away_team_id) : (hasproperty(row, :away_team) ? get(team_map, row.away_team, -1) : -1)
+        
+        h_idx = get(team_map, h_id, -1)
+        a_idx = get(team_map, a_id, -1)
+        
+        α_h = h_idx > 0 ? alpha_mat[:, h_idx] : zeros(n_samples)
+        β_h = h_idx > 0 ? beta_mat[:, h_idx]  : zeros(n_samples)
+        α_a = a_idx > 0 ? alpha_mat[:, a_idx] : zeros(n_samples)
+        β_a = a_idx > 0 ? beta_mat[:, a_idx]  : zeros(n_samples)
+        
+        m_idx = month(row.match_date)
+        l_idx = hasproperty(row, :tournament_id) && row.tournament_id == 57 ? 2 : 1
+        
+        δ_m = (m_idx >= 1 && m_idx <= n_months) ? delta_month_mat[:, m_idx] : zeros(n_samples)
+        δ_l = (l_idx >= 1 && l_idx <= n_leagues) ? delta_league_mat[:, l_idx] : zeros(n_samples)
+        
+        int_m = base_mu .+ δ_m .+ δ_l
+        λ_h = exp.(int_m .+ ha_home .+ α_h .- β_a)
+        λ_a = exp.(int_m .+           α_a .- β_h)
+        
+        # Referee Penalty Intensity
+        ref_id = hasproperty(row, :referee_id) && !ismissing(row.referee_id) ? Int(row.referee_id) : -1
+        r_idx  = get(ref_map, ref_id, -1)
+        γ_ref  = r_idx > 0 ? gamma_mat[:, r_idx] : zeros(n_samples)
+        
+        apd_h = h_idx > 0 ? apd_mat[:, h_idx] : zeros(n_samples)
+        apd_a = a_idx > 0 ? apd_mat[:, a_idx] : zeros(n_samples)
+        bpf_h = h_idx > 0 ? bpf_mat[:, h_idx] : zeros(n_samples)
+        bpf_a = a_idx > 0 ? bpf_mat[:, a_idx] : zeros(n_samples)
+        
+        log_pen_h = pen_base_mu .+ ha_pen .+ γ_ref .+ apd_h .+ bpf_a
+        log_pen_a = pen_base_mu .- ha_pen .+ γ_ref .+ apd_a .+ bpf_h
+        
+        lambda_pen_h = exp.(log_pen_h)
+        lambda_pen_a = exp.(log_pen_a)
+        
+        # Noise goal intensity (conversion ~ 0.768 + own goals ~ 0.0276)
+        lambda_noise_h = (0.768 .* lambda_pen_h) .+ 0.0276
+        lambda_noise_a = (0.768 .* lambda_pen_a) .+ 0.0276
+        
+        # Total expected goals for scoring rules & portfolio books
+        λ_tot_h = λ_h .+ lambda_noise_h
+        λ_tot_a = λ_a .+ lambda_noise_a
+        
+        results[mid] = (;
+            λ_h = λ_tot_h,
+            λ_a = λ_tot_a,
+            r_h = fill(100.0, n_samples),
+            r_a = fill(100.0, n_samples),
+            true_xg_h = λ_tot_h,
+            true_xg_a = λ_tot_a,
+            λ_open_h = λ_h,
+            λ_open_a = λ_a,
+            lambda_noise_h = lambda_noise_h,
+            lambda_noise_a = lambda_noise_a
+        )
+    end
+    return results
+end
+
 # --- Score Matrix & Prediction Overloads ---
 function Predictions.compute_score_matrix(model::TeamGoalsPoissonOpenPlayModel, r::DataFrameRow; max_goals::Int = 10)
     mu_h = Float64(r.λ_h)
