@@ -443,8 +443,11 @@ function PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinWealthOpenPlayM
     pxg_h = Vector{Float64}(data[:flat_home_pxg])
     pxg_a = Vector{Float64}(data[:flat_away_pxg])
 
-    sx_h = _pxg_precompute(pxg_h, d.w)
-    sx_a = _pxg_precompute(pxg_a, d.w)
+    mask_h = [isnan(x) ? 0.0 : 1.0 for x in pxg_h]
+    mask_a = [isnan(x) ? 0.0 : 1.0 for x in pxg_a]
+
+    sx_h = _pxg_suff(pxg_h, mask_h, d.home_goals, d.w)
+    sx_a = _pxg_suff(pxg_a, mask_a, d.away_goals, d.w)
     nb_h = _negbin_precompute(d.home_goals, d.w)
     nb_a = _negbin_precompute(d.away_goals, d.w)
 
