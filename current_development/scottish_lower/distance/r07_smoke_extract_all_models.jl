@@ -74,14 +74,14 @@ for t in target_models
     print("Testing extraction for [$mname] ($(typeof(model).name.name))... ")
     try
         # Test split 1
-        split_meta = exp.training_results.items[1].split
-        feature_tuple = exp.features.items[1]
         result_tuple = exp.training_results.items[1]
+        feature_tuple = exp.features.items[1]
+        chain = result_tuple[1]
+        split_meta = result_tuple[2]
+        f_set = feature_tuple[1]
         
         # Test extract_parameters
         test_df = filter(r -> r.match_id in split_meta.test_match_ids, ds.matches)
-        f_set = feature_tuple.feature_set
-        chain = result_tuple.result.chain
         
         params_dict = Experiments.extract_parameters(model, test_df, f_set, chain)
         
