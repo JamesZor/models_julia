@@ -82,7 +82,7 @@ sampler_cfg = Samplers.NUTSConfig(
 )
 
 t0 = time()
-chain_pois = Samplers.sample(tur_pois, sampler_cfg)
+chain_pois = Samplers.run_sampler(tur_pois, sampler_cfg)
 elapsed_pois = round(time() - t0, digits = 1)
 
 rhats_pois = summarize(chain_pois)[:, :rhat]
@@ -101,7 +101,7 @@ f_int = Features.create_features(b1, ds, m_int)
 tur_int = PreGame.build_turing_model(m_int, f_int[1])
 
 t0 = time()
-chain_int = Samplers.sample(tur_int, sampler_cfg)
+chain_int = Samplers.run_sampler(tur_int, sampler_cfg)
 elapsed_int = round(time() - t0, digits = 1)
 
 rhats_int = summarize(chain_int)[:, :rhat]
