@@ -107,41 +107,47 @@ end
 
 println("DEBUG eval_df names: ", names(eval_df))
 
-banner("📉 2. CRPS & FAMILY-POOLED LOG LOSS DIFFERENCES (Lower / More Negative vs Market = Better)")
-rows = []
-for m in present_models
-    crps_val = _col(eval_df, m, "crps_all_score")
-    
-    # 1X2 LogLoss diff vs market close
-    h_ll = _col(eval_df, m, "logloss_home_diff")
-    d_ll = _col(eval_df, m, "logloss_draw_diff")
-    a_ll = _col(eval_df, m, "logloss_away_diff")
-    
-    # Family pooled
-    x12_vals = [_col(eval_df, m, "logloss_$(s)_diff") for s in fam[:x12]]
-    btts_vals = [_col(eval_df, m, "logloss_$(s)_diff") for s in fam[:btts]]
-    tot_vals = [_col(eval_df, m, "logloss_$(s)_diff") for s in fam[:totals]]
-    
-    mean_x12  = round(mean(filter(!isnan, x12_vals)), digits = 5)
-    mean_btts = round(mean(filter(!isnan, btts_vals)), digits = 5)
-    mean_tot  = round(mean(filter(!isnan, tot_vals)), digits = 5)
-    
-    push!(rows, (
-        model     = m,
-        crps      = crps_val,
-        LL_Home   = h_ll,
-        LL_Draw   = d_ll,
-        LL_Away   = a_ll,
-        LL_1X2    = mean_x12,
-        LL_BTTS   = mean_btts,
-        LL_Totals = mean_tot
-    ))
+banner("📉 2. CRPS & LOG LOSS EVALUATION (Lower / More Negative vs Market = Better)")
+
+if "crps_all_mean" in names(eval_df)
+    crps_df = DataFrame(
+        model      = eval_df.model,
+        crps_all   = [round(v, digits = 4) for v in eval_df.crps_all_mean],
+        crps_home  = [round(v, digits = 4) for v in eval_df.crps_home_mean],
+        crps_away  = [round(v, digits = 4) for v in eval_df.crps_away_mean]
+    )
+    sort!(crps_df, :crps_all)
+    show(stdout, MIME("text/plain"), crps_df)
+    println()
 end
-ll_summary_df = DataFrame(rows)
-show(stdout, MIME("text/plain"), ll_summary_df)
+
+println("\n" * "="^85)
+println("📊 FAMILY-POOLED LOGLOSS DIFF (Model − Market De-Vigged Close; Negative is Better)")
+println("="^85)
+f_df = DataFrame(model = present_models)
+for (fname, sels) in fam
+    f_df[!, fname] = [round(mean(filter(!isnan,
+        [_col(eval_df, mm, "logloss_$(s)_overall_diff_ll") for s in sels])), digits = 5)
+        for mm in present_models]
+end
+show(stdout, MIME("text/plain"), f_df)
 println()
 
-# 4. Betfair Exchange Portfolio Backtest
+println("\n" * "="^85)
+println("📉 1X2 LOGLOSS DIFF BY SELECTION (Home / Draw / Away)")
+println("="^85)
+x12_df = DataFrame(
+    model = present_models,
+    home  = [_col(eval_df, mm, "logloss_home_overall_diff_ll") for mm in present_models],
+    draw  = [_col(eval_df, mm, "logloss_draw_overall_diff_ll") for mm in present_models],
+    away  = [_col(eval_df, mm, "logloss_away_overall_diff_ll") for mm in present_models]
+)
+show(stdout, MIME("text/plain"), x12_df)
+println()
+
+# ==============================================================================
+# 4. BETFAIR EXCHANGE MULTI-MARKET PORTFOLIO BENCHMARK
+# ==============================================================================
 banner("💰 3. BETFAIR EXCHANGE MULTI-MARKET KELLY SIMULATION (2% Commission, BM 800 Draws)")
 
 bf_summary = Data.summarize_betfair_market(ds)
