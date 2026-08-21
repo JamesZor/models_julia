@@ -163,9 +163,26 @@ show(stdout, MIME("text/plain"), tot_df)
 println()
 
 # ==============================================================================
+# 3. FULL-MARKET BOOKMAKER KELLY BACKTEST (All 710 Matches, ds.odds)
+# ==============================================================================
+banner("📈 3. FULL-MARKET BOOKMAKER BACKTEST (All 710 OOS Matches, Signals.BayesianKelly)")
+
+try
+    ledger = BackTesting.run_backtest(
+        ds, experiments, [Signals.BayesianKelly()];
+        market_config = Data.Markets.DEFAULT_MARKET_CONFIG
+    )
+    tearsheet = BackTesting.generate_tearsheet(ledger; groupby_cols = [:model_name])
+    show(stdout, MIME("text/plain"), tearsheet)
+    println()
+catch e
+    @warn "Full bookmaker backtest skipped: $e"
+end
+
+# ==============================================================================
 # 4. BETFAIR EXCHANGE MULTI-MARKET PORTFOLIO BENCHMARK
 # ==============================================================================
-banner("💰 3. BETFAIR EXCHANGE MULTI-MARKET KELLY SIMULATION (2% Commission, BM 800 Draws)")
+banner("💰 4. BETFAIR EXCHANGE MULTI-MARKET KELLY SIMULATION (2% Commission, BM 800 Draws)")
 
 bf_summary = Data.summarize_betfair_market(ds)
 
