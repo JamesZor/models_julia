@@ -1,15 +1,17 @@
 # current_development/scottish_lower/open_play/l01_open_play_feature.jl
 #
-# LOADER 1/2 — Open-Play Target Builder & Clean Proxy xG Feature
+# LOADER 1/2 — Open-Play Target Builder, Referees, & Clean Proxy xG Feature
 #
 # Removes non-systemic noise (Penalties and Own Goals) from:
 #   1. Match Goal Targets: y_np_nog_h, y_np_nog_a
 #   2. Shot Commentary Parser: Clean Open-Play pxG (excluding is_penalty shots)
+#   3. Match Officials Extraction: Attaches referee name for officiating bias analysis
 
 using DataFrames
 using Statistics
 using Distributions
 using InlineStrings
+using LibPQ
 
 const PreGame  = BayesianFootball.Models.PreGame
 const Features = BayesianFootball.Features
@@ -17,11 +19,41 @@ const Pred     = BayesianFootball.Predictions
 const Data     = BayesianFootball.Data
 
 # ==============================================================================
-# 1. OPEN-PLAY MATCH TARGET EXTRACTION
+# 1. REFEREE EXTRACTION
 # ==============================================================================
 
 """
-    extract_open_play_match_data(ds::Data.DataStore) -> DataFrame
+    fetch_match_referees(t_ids::Vector{Int} = [56, 57]) -> DataFrame
+
+Fetches referee assignments from `bbc.match_officials` for the specified tournament IDs.
+Returns DataFrame with columns: `:match_id`, `:referee_name`.
+"""
+function fetch_match_referees(t_ids::Vector{Int} = [56, 57])::DataFrame
+    db_config = Data.DBConfig()
+    conn = Data.connect_to_db(db_config)
+    try
+        query = """
+            SELECT mo.match_id, mo.name AS referee_name
+            FROM bbc.match_officials mo
+            JOIN sofascore.matches m ON mo.match_id = m.match_id
+            WHERE m.tournament_id = ANY(\$1) AND mo.role = 'referee'
+        """
+        df = DataFrame(LibPQ.execute(conn, query, [t_ids]))
+        return df
+    catch e
+        @warn "Failed to fetch match referees: $e"
+        return DataFrame(match_id = Int32[], referee_name = String[])
+    finally
+        close(conn)
+    end
+end
+
+# ==============================================================================
+# 2. OPEN-PLAY MATCH TARGET EXTRACTION
+# ==============================================================================
+
+"""
+    extract_open_play_match_data(ds::Data.DataStore; include_referees::Bool = true) -> DataFrame
 
 Extracts match-level penalty and own-goal counts from `ds.incidents` and computes
 clean Non-Penalty, Non-Own-Goal (NP-NOG) open-play goal targets.
@@ -32,9 +64,10 @@ Returns a DataFrame with columns:
   :pen_scored_h, :pen_scored_a,
   :pen_missed_h, :pen_missed_a,
   :og_for_h, :og_for_a,
-  :y_np_nog_h, :y_np_nog_a
+  :y_np_nog_h, :y_np_nog_a,
+  :referee_name (if include_referees=true)
 """
-function extract_open_play_match_data(ds::Data.DataStore)::DataFrame
+function extract_open_play_match_data(ds::Data.DataStore; include_referees::Bool = true)::DataFrame
     matches = copy(ds.matches)
     incidents = copy(ds.incidents)
 
@@ -45,6 +78,8 @@ function extract_open_play_match_data(ds::Data.DataStore)::DataFrame
     pen_missed_a = Dict{Int32, Int}()
     og_for_h     = Dict{Int32, Int}()
     og_for_a     = Dict{Int32, Int}()
+    cards_h      = Dict{Int32, Int}()
+    cards_a      = Dict{Int32, Int}()
 
     for row in eachrow(incidents)
         m_id = Int32(row.match_id)
@@ -72,6 +107,12 @@ function extract_open_play_match_data(ds::Data.DataStore)::DataFrame
             else
                 pen_missed_a[m_id] = get(pen_missed_a, m_id, 0) + 1
             end
+        elseif i_type == "card"
+            if is_home
+                cards_h[m_id] = get(cards_h, m_id, 0) + 1
+            else
+                cards_a[m_id] = get(cards_a, m_id, 0) + 1
+            end
         end
     end
 
@@ -83,6 +124,8 @@ function extract_open_play_match_data(ds::Data.DataStore)::DataFrame
     pm_a = zeros(Int, n)
     og_h = zeros(Int, n)
     og_a = zeros(Int, n)
+    c_h  = zeros(Int, n)
+    c_a  = zeros(Int, n)
     y_np_h = zeros(Int, n)
     y_np_a = zeros(Int, n)
 
@@ -94,6 +137,8 @@ function extract_open_play_match_data(ds::Data.DataStore)::DataFrame
         pm_a[i] = get(pen_missed_a, m_id, 0)
         og_h[i] = get(og_for_h, m_id, 0)
         og_a[i] = get(og_for_a, m_id, 0)
+        c_h[i]  = get(cards_h, m_id, 0)
+        c_a[i]  = get(cards_a, m_id, 0)
 
         # Non-penalty, non-own-goal open-play goals
         raw_h = coalesce(matches.home_score[i], 0)
@@ -118,15 +163,28 @@ function extract_open_play_match_data(ds::Data.DataStore)::DataFrame
         pen_missed_a  = pm_a,
         og_for_h      = og_h,
         og_for_a      = og_a,
+        cards_h       = c_h,
+        cards_a       = c_a,
         y_np_nog_h    = y_np_h,
         y_np_nog_a    = y_np_a
     )
+
+    if include_referees
+        ref_df = fetch_match_referees([56, 57])
+        if !isempty(ref_df)
+            df = leftjoin(df, ref_df, on=:match_id)
+            # Fill missing referees with Unknown
+            df.referee_name = coalesce.(df.referee_name, "Unknown")
+        else
+            df.referee_name = fill("Unknown", nrow(df))
+        end
+    end
 
     return df
 end
 
 # ==============================================================================
-# 2. CLEAN OPEN-PLAY PROXY xG FEATURE
+# 3. CLEAN OPEN-PLAY PROXY xG FEATURE
 # ==============================================================================
 
 """
