@@ -343,13 +343,8 @@ PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinDistanceModel, fs::Featu
 # 3. PARAMETER EXTRACTOR FOR DISTANCE MODELS
 # ==============================================================================
 
-const ScottishNegBinDistanceUnion = Union{
-    TeamGoalsNegBinDistanceModel,
-    TeamPxGGoalsAPMNegBinDistanceModel
-}
-
-function PreGame.extract_parameters(
-    model::ScottishNegBinDistanceUnion,
+function _extract_distance_params(
+    model,
     df::DataFrame,
     feature_set::Features.FeatureSet,
     chain::MCMCChains.Chains
@@ -416,21 +411,30 @@ function PreGame.extract_parameters(
     return results
 end
 
-PreGame.extract_parameters(model::ScottishNegBinDistanceUnion, df::DataFrame, feature_tuple::Tuple, chain::MCMCChains.Chains) =
-    PreGame.extract_parameters(model, df, feature_tuple[1], chain)
+PreGame.extract_parameters(model::TeamGoalsNegBinDistanceModel, df::DataFrame, feature_set::Features.FeatureSet, chain::MCMCChains.Chains) =
+    _extract_distance_params(model, df, feature_set, chain)
+PreGame.extract_parameters(model::TeamPxGGoalsAPMNegBinDistanceModel, df::DataFrame, feature_set::Features.FeatureSet, chain::MCMCChains.Chains) =
+    _extract_distance_params(model, df, feature_set, chain)
 
-Pred.extract_params(::ScottishNegBinDistanceUnion, row) = (
+PreGame.extract_parameters(model::TeamGoalsNegBinDistanceModel, df::DataFrame, feature_tuple::Tuple, chain::MCMCChains.Chains) =
+    _extract_distance_params(model, df, feature_tuple[1], chain)
+PreGame.extract_parameters(model::TeamPxGGoalsAPMNegBinDistanceModel, df::DataFrame, feature_tuple::Tuple, chain::MCMCChains.Chains) =
+    _extract_distance_params(model, df, feature_tuple[1], chain)
+
+Pred.extract_params(::TeamGoalsNegBinDistanceModel, row) = (
+    λ_h = row.λ_h,
+    λ_a = row.λ_a,
+    r_h = hasproperty(row, :r_h) ? row.r_h : fill(23.66, length(row.λ_h)),
+    r_a = hasproperty(row, :r_a) ? row.r_a : fill(9.25, length(row.λ_a))
+)
+Pred.extract_params(::TeamPxGGoalsAPMNegBinDistanceModel, row) = (
     λ_h = row.λ_h,
     λ_a = row.λ_a,
     r_h = hasproperty(row, :r_h) ? row.r_h : fill(23.66, length(row.λ_h)),
     r_a = hasproperty(row, :r_a) ? row.r_a : fill(9.25, length(row.λ_a))
 )
 
-function Pred.compute_score_matrix(
-    model::ScottishNegBinDistanceUnion,
-    params;
-    max_goals::Int = 12
-)
+function _compute_nb_score_matrix(params; max_goals::Int = 12)
     λ_h, λ_a = params.λ_h, params.λ_a
     r_h, r_a = params.r_h, params.r_a
     n_samples = length(λ_h)
@@ -447,3 +451,6 @@ function Pred.compute_score_matrix(
 
     return Pred.ScoreMatrix(S)
 end
+
+Pred.compute_score_matrix(::TeamGoalsNegBinDistanceModel, params; max_goals::Int = 12) = _compute_nb_score_matrix(params; max_goals = max_goals)
+Pred.compute_score_matrix(::TeamPxGGoalsAPMNegBinDistanceModel, params; max_goals::Int = 12) = _compute_nb_score_matrix(params; max_goals = max_goals)

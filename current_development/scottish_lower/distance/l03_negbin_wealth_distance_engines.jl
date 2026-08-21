@@ -345,13 +345,8 @@ PreGame.build_turing_model(config::TeamPxGGoalsAPMNegBinWealthDistanceModel, fs:
 # 3. PARAMETER EXTRACTOR
 # ==============================================================================
 
-const ScottishNegBinWealthDistanceUnion = Union{
-    TeamGoalsNegBinWealthDistanceModel,
-    TeamPxGGoalsAPMNegBinWealthDistanceModel
-}
-
-function PreGame.extract_parameters(
-    model::ScottishNegBinWealthDistanceUnion,
+function _extract_wealth_distance_params(
+    model,
     df::DataFrame,
     feature_set::Features.FeatureSet,
     chain::MCMCChains.Chains
@@ -424,34 +419,28 @@ function PreGame.extract_parameters(
     return results
 end
 
-PreGame.extract_parameters(model::ScottishNegBinWealthDistanceUnion, df::DataFrame, feature_tuple::Tuple, chain::MCMCChains.Chains) =
-    PreGame.extract_parameters(model, df, feature_tuple[1], chain)
+PreGame.extract_parameters(model::TeamGoalsNegBinWealthDistanceModel, df::DataFrame, feature_set::Features.FeatureSet, chain::MCMCChains.Chains) =
+    _extract_wealth_distance_params(model, df, feature_set, chain)
+PreGame.extract_parameters(model::TeamPxGGoalsAPMNegBinWealthDistanceModel, df::DataFrame, feature_set::Features.FeatureSet, chain::MCMCChains.Chains) =
+    _extract_wealth_distance_params(model, df, feature_set, chain)
 
-Pred.extract_params(::ScottishNegBinWealthDistanceUnion, row) = (
+PreGame.extract_parameters(model::TeamGoalsNegBinWealthDistanceModel, df::DataFrame, feature_tuple::Tuple, chain::MCMCChains.Chains) =
+    _extract_wealth_distance_params(model, df, feature_tuple[1], chain)
+PreGame.extract_parameters(model::TeamPxGGoalsAPMNegBinWealthDistanceModel, df::DataFrame, feature_tuple::Tuple, chain::MCMCChains.Chains) =
+    _extract_wealth_distance_params(model, df, feature_tuple[1], chain)
+
+Pred.extract_params(::TeamGoalsNegBinWealthDistanceModel, row) = (
+    λ_h = row.λ_h,
+    λ_a = row.λ_a,
+    r_h = hasproperty(row, :r_h) ? row.r_h : fill(23.66, length(row.λ_h)),
+    r_a = hasproperty(row, :r_a) ? row.r_a : fill(9.25, length(row.λ_a))
+)
+Pred.extract_params(::TeamPxGGoalsAPMNegBinWealthDistanceModel, row) = (
     λ_h = row.λ_h,
     λ_a = row.λ_a,
     r_h = hasproperty(row, :r_h) ? row.r_h : fill(23.66, length(row.λ_h)),
     r_a = hasproperty(row, :r_a) ? row.r_a : fill(9.25, length(row.λ_a))
 )
 
-function Pred.compute_score_matrix(
-    model::ScottishNegBinWealthDistanceUnion,
-    params;
-    max_goals::Int = 12
-)
-    λ_h, λ_a = params.λ_h, params.λ_a
-    r_h, r_a = params.r_h, params.r_a
-    n_samples = length(λ_h)
-
-    S = zeros(Float64, max_goals, max_goals, n_samples)
-
-    @inbounds for k in 1:n_samples
-        dist_h = RobustNegativeBinomial(max(Float64(r_h[k]), 1e-4), max(Float64(λ_h[k]), 1e-4))
-        dist_a = RobustNegativeBinomial(max(Float64(r_a[k]), 1e-4), max(Float64(λ_a[k]), 1e-4))
-        p_h = [pdf(dist_h, i) for i in 0:max_goals-1]
-        p_a = [pdf(dist_a, j) for j in 0:max_goals-1]
-        S[:, :, k] = p_h .* transpose(p_a)
-    end
-
-    return Pred.ScoreMatrix(S)
-end
+Pred.compute_score_matrix(::TeamGoalsNegBinWealthDistanceModel, params; max_goals::Int = 12) = _compute_nb_score_matrix(params; max_goals = max_goals)
+Pred.compute_score_matrix(::TeamPxGGoalsAPMNegBinWealthDistanceModel, params; max_goals::Int = 12) = _compute_nb_score_matrix(params; max_goals = max_goals)
