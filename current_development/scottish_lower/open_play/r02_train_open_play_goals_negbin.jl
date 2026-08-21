@@ -49,7 +49,7 @@ exp_task = EE.create_experiment_task(
     save_dir;
     target_seasons       = ["24/25", "25/26"],
     history_seasons      = 2,
-    warmup_period        = 20,
+    warmup_period        = 0,
     dynamics_col         = :match_biweek,
     samples              = 1200,
     warmup               = 300,

@@ -71,7 +71,7 @@ banner("2. OUT-OF-SAMPLE STATISTICAL & PROBABILISTIC EVALUATION")
 
 function evaluate_experiment_oos(ds::Data.DataStore, exp::Experiments.ExperimentResults)
     latents = Experiments.extract_oos_predictions(ds, exp)
-    df_preds = latents.predictions
+    df_preds = latents.df
     
     # 1. Join with actual match results
     m_df = select(ds.matches, :match_id, :home_goals, :away_goals, :result)
@@ -154,7 +154,7 @@ banner("3. BETFAIR EXCHANGE MULTI-MARKET KELLY BACKTEST")
 function run_kelly_backtest_oos(ds::Data.DataStore, exp::Experiments.ExperimentResults;
                                edge_threshold::Float64 = 0.05, kelly_fraction::Float64 = 0.25)
     latents = Experiments.extract_oos_predictions(ds, exp)
-    df_preds = latents.predictions
+    df_preds = latents.df
     
     # Generate betting signals vs Betfair Exchange Odds
     # Uses standard Signals & BackTesting pipeline
