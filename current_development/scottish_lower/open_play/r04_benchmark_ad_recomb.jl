@@ -31,7 +31,7 @@ splitter = Data.GroupedCVConfig(
     tournament_groups = [[56, 57]],
     target_seasons    = ["25/26"],
     history_seasons   = 2,
-    dynamics_col      = "match_biweek",
+    dynamics_col      = :match_biweek,
     warmup_period     = 0,
     stop_early        = true
 )
