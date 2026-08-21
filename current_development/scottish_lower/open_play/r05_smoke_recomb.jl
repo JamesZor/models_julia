@@ -41,7 +41,8 @@ splitter = Data.GroupedCVConfig(
 )
 boundaries = Data.create_id_boundaries(ds, splitter)
 b1 = boundaries[1:1]
-println("✓ Generated 1 smoke split: $(length(b1[1].train_match_ids)) train matches, $(length(b1[1].test_match_ids)) test matches")
+bound1 = b1[1][1]
+println("✓ Generated 1 smoke split: $(length(bound1.history_match_ids)) train matches, $(length(bound1.target_match_ids)) test matches")
 
 # ==============================================================================
 # TEST 1: BRANCH A - ANALYTICAL EMPIRICAL BAYES PENALTY ESTIMATOR
@@ -49,7 +50,7 @@ println("✓ Generated 1 smoke split: $(length(b1[1].train_match_ids)) train mat
 banner("TEST 1: BRANCH A - EMPIRICAL BAYES PENALTY & REFEREE ESTIMATOR")
 
 t0 = time()
-eb_estimator = fit_empirical_bayes_penalties(ds, b1[1].train_match_ids)
+eb_estimator = fit_empirical_bayes_penalties(ds, bound1.history_match_ids)
 t_eb = round((time() - t0) * 1000, digits = 2)
 
 println("✓ Fitted Empirical Bayes Penalty Estimator in $(t_eb)ms:")

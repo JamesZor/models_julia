@@ -266,12 +266,13 @@ TeamGoalsRecombIntegratedPoissonModel(; dynamics_config = PreGame.TimeDecayDynam
     TeamGoalsRecombIntegratedPoissonModel(dynamics_config, name)
 
 # --- FeatureSet Overload for Integrated Model ---
-function _build_recomb_features(b, ds::Data.DataStore, model::Union{TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel})
+function _build_recomb_features(b::Data.SplitBoundary, ds::Data.DataStore, model::Union{TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel})
     df_clean, df_ref = build_open_play_target_dataset(ds)
     all_refs = unique(filter(x -> x > 0, df_clean.referee_id))
     ref_map = Dict(r => idx for (idx, r) in enumerate(all_refs))
     
-    m = filter(r -> r.match_id in b.train_match_ids, df_clean)
+    m = filter(r -> r.match_id in b.history_match_ids, df_clean)
+    sort!(m, :match_date)
     
     home_ids = Vector{Int}(m.home_team_id)
     away_ids = Vector{Int}(m.away_team_id)
@@ -286,7 +287,8 @@ function _build_recomb_features(b, ds::Data.DataStore, model::Union{TeamGoalsPoi
     ref_mask    = Float64.(ref_indices .> 0)
     ref_ids_clamped = [idx > 0 ? idx : 1 for idx in ref_indices]
     
-    date_deltas = Vector{Float64}(b.train_dates)
+    max_date = maximum(m.match_date)
+    date_deltas = [Float64(Dates.value(max_date - d)) for d in m.match_date]
     weights     = 0.5 .^ (date_deltas ./ model.dynamics_config.days_half_life)
     
     all_teams = sort(unique(vcat(home_ids, away_ids)))
@@ -299,7 +301,6 @@ function _build_recomb_features(b, ds::Data.DataStore, model::Union{TeamGoalsPoi
     league_indices = ones(Int, length(home_ids))
     
     return Features.FeatureSet(
-        b,
         Dict{Symbol, Any}(
             :home_team_indices   => h_idx,
             :away_team_indices   => a_idx,
@@ -318,7 +319,8 @@ function _build_recomb_features(b, ds::Data.DataStore, model::Union{TeamGoalsPoi
             :n_leagues           => 1,
             :team_map            => team_map,
             :ref_map             => ref_map,
-            :clean_df            => df_clean
+            :clean_df            => df_clean,
+            :boundary            => b
         )
     )
 end
