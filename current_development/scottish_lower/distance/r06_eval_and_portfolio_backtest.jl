@@ -1,7 +1,7 @@
 # current_development/scottish_lower/distance/r06_eval_and_portfolio_backtest.jl
 #
-# RUNNER: Comprehensive Leaderboard Evaluation (LogLoss, RQR, CRPS)
-#         & Betfair Exchange Multi-Market Kelly Portfolio Backtest
+# RUNNER: Comprehensive Evaluation Suite (LogLoss, GLMEdge, RQR, CRPS)
+#         & Betfair Exchange Multi-Market Portfolio Backtest
 #         Comparing Baseline, Wealth, Distance, and Grand Champion Models.
 
 using Revise
@@ -16,7 +16,9 @@ const Signals     = BayesianFootball.Signals
 const Data        = BayesianFootball.Data
 
 const ROOT = pkgdir(BayesianFootball)
+include(joinpath(ROOT, "current_development/scottish_lower/proxy_xg/l01_proxy_xg_feature.jl"))
 include(joinpath(ROOT, "current_development/scottish_lower/proxy_xg/l02_pxg_engines.jl"))
+include(joinpath(ROOT, "current_development/scottish_lower/wealth/l01_wealth_data.jl"))
 include(joinpath(ROOT, "current_development/scottish_lower/neg_bin/l01_negbin_engines.jl"))
 include(joinpath(ROOT, "current_development/scottish_lower/neg_bin/l02_negbin_wealth_engines.jl"))
 include("l01_distance_features.jl")
@@ -119,92 +121,178 @@ if "crps_goals_mean" in names(eval_df)
     println(crps_df)
 end
 
-# ==============================================================================
-# 4. BETFAIR EXCHANGE KELLY PORTFOLIO BACKTEST
-# ==============================================================================
-banner("4. BETFAIR EXCHANGE MULTI-MARKET PORTFOLIO BACKTEST (2% Commission)")
-
-include(joinpath(ROOT, "current_development/scottish_lower/portfolio/_setup_scottish_betfair.jl"))
-
-bcache_path = joinpath(CACHE_DIR, "scottish_benchmark_books.jls")
-books_by_model = if isfile(bcache_path)
-    println("✓ Loading pre-built MatchBooks from cache...")
-    deserialize(bcache_path)
-else
-    println("Building MatchBooks for $(length(experiments)) models (800 draws, shrinkage)...")
-    b_dict = Dict{String, Any}()
-    for exp in experiments
-        mname = exp.config.name
-        println("  -> Building MatchBooks for: $mname")
-        b_dict[mname] = Portfolio.build_all_match_books(
-            exp, ds;
-            source            = :betfair_summary,
-            selections        = selections,
-            n_draws           = 800,
-            shrinkage_lambda  = 1.0,
-            commission        = 0.02
-        )
+# C. GLMEdge Multi-Market Summary
+println("\n" * "="^85)
+println("🎯 GLMEDGE (Market Efficiency Edge: Higher is Better)")
+println("="^85)
+edge_cols = filter(n -> occursin("glm", lowercase(n)) || occursin("edge", lowercase(n)), names(eval_df))
+if !isempty(edge_cols)
+    edge_df = select(eval_df, :model, edge_cols...)
+    for col in edge_cols
+        edge_df[!, col] = [round(v, digits = 4) for v in edge_df[!, col]]
     end
-    serialize(bcache_path, b_dict)
-    b_dict
+    println(edge_df)
+end
+
+# D. LogLoss Multi-Market Summary
+println("\n" * "="^85)
+println("📉 LOGLOSS (Predictive Information: Lower is Better)")
+println("="^85)
+ll_cols = filter(n -> startswith(n, "log_loss_") || startswith(n, "logloss_"), names(eval_df))
+if !isempty(ll_cols)
+    ll_df = select(eval_df, :model, ll_cols...)
+    for col in ll_cols
+        ll_df[!, col] = [round(v, digits = 4) for v in ll_df[!, col]]
+    end
+    println(ll_df)
+end
+
+# ==============================================================================
+# 4. BETFAIR EXCHANGE MULTI-MARKET PORTFOLIO BENCHMARK
+# ==============================================================================
+banner("4. BETFAIR EXCHANGE MULTI-MARKET PORTFOLIO BENCHMARK (2% Commission, BM 800 Draws)")
+
+ODDS_CACHE = joinpath(CACHE_DIR, "betfair_summary_odds.jls")
+local betfair_odds
+if isfile(ODDS_CACHE)
+    @info "Restoring Betfair closing summary from cache" ODDS_CACHE
+    betfair_odds = deserialize(ODDS_CACHE)
+else
+    @info "Building Betfair closing summary [-20min, 0min] (cached)..."
+    betfair_odds = Data.summarize_betfair_market(ds, open_window = (-100000.0, -10.0), close_window = (-20.0, 0.0))
+    serialize(ODDS_CACHE, betfair_odds)
+end
+@info "Betfair Odds loaded" n_matches=length(unique(betfair_odds.match_id)) n_quotes=nrow(betfair_odds)
+
+LATENTS_CACHE = joinpath(CACHE_DIR, "latents_map_scottish_distance_negbin.jls")
+local latents_map
+if isfile(LATENTS_CACHE) && get(ENV, "REBUILD_LATENTS", "0") != "1"
+    @info "Restoring OOS latents from cache" LATENTS_CACHE
+    latents_map = deserialize(LATENTS_CACHE)
+else
+    @info "Extracting OOS predictions for all benchmark models..."
+    latents_map = Dict{String, DataFrame}()
+    for exp in experiments
+        println("  -> Extracting OOS latents for: $(exp.config.name)")
+        latents_map[exp.config.name] = Experiments.extract_oos_predictions(ds, exp).df
+    end
+    serialize(LATENTS_CACHE, latents_map)
+end
+
+MARKETS = Data.MarketConfig(reduce(vcat, (
+    Data.AbstractMarket[Data.Market1X2(), Data.MarketBTTS()],
+    [Data.MarketOverUnder(i + 0.5) for i in 0:4],
+)))
+
+spec = Portfolio.BookSpec(
+    markets   = MARKETS,
+    price     = Portfolio.DeArb(),
+    allocator = Portfolio.KellyLogUtility(),
+    shrink    = Portfolio.BakerMcHale(n_draws = 800),
+    exec      = Portfolio.ExecutionConfig(
+                    commission = Portfolio.PerBetCommission(0.02),
+                    max_selection_stake = 0.50,
+                    budget = 0.99,
+                    require_complete_markets = true
+                )
+)
+
+books_map = Dict{String, Vector{Portfolio.MatchBook}}()
+for exp in experiments
+    m_name = exp.config.name
+    cache_file = joinpath(CACHE_DIR, "books_$(m_name)_betfair_bm800.jls")
+    
+    if isfile(cache_file) && get(ENV, "REBUILD_BOOKS", "0") != "1"
+        @info "Reusing cached Betfair MatchBooks for: $m_name" cache_file
+        books_map[m_name] = deserialize(cache_file)
+    else
+        @info "Building Betfair MatchBooks for: $m_name..."
+        m_latents = latents_map[m_name]
+        t0 = time()
+        b = Portfolio.build_books(spec, m_latents, exp, betfair_odds, ds)
+        elapsed = round(time() - t0, digits = 1)
+        @info "Completed MatchBooks for $m_name in $(elapsed)s" n_books=length(b)
+        serialize(cache_file, b)
+        books_map[m_name] = b
+    end
+end
+
+all_slates = Dict{String, Vector{Portfolio.Slate}}()
+for (m_name, b) in books_map
+    all_slates[m_name] = Portfolio.group(Portfolio.DailySlate(), b)
 end
 
 policies = [
-    ("Conservative", Portfolio.RiskAverse(bankroll_cap = 0.10, risk_aversion = 23.0)),
-    ("Balanced",     Portfolio.BalancedGrowth(bankroll_cap = 0.15, risk_aversion = 15.0)),
-    ("Aggressive",   Portfolio.AggressiveGrowth(bankroll_cap = 0.20, risk_aversion = 10.0))
+    ("Conservative (Cap 10%, λ=23)", Portfolio.PolicySpec(
+        trust    = Portfolio.FlatTrust(0.25),
+        risk     = Portfolio.SlateDrawdown(23.0),
+        cap      = Portfolio.FixedCap(0.10),
+        filter   = Portfolio.KeepAll(),
+        grouping = Portfolio.DailySlate()
+    )),
+    ("Balanced Growth (Cap 15%, λ=15)", Portfolio.PolicySpec(
+        trust    = Portfolio.FlatTrust(0.25),
+        risk     = Portfolio.SlateDrawdown(15.0),
+        cap      = Portfolio.FixedCap(0.15),
+        filter   = Portfolio.KeepAll(),
+        grouping = Portfolio.DailySlate()
+    )),
+    ("Aggressive (Cap 25%, λ=10)", Portfolio.PolicySpec(
+        trust    = Portfolio.FlatTrust(0.50),
+        risk     = Portfolio.SlateDrawdown(10.0),
+        cap      = Portfolio.FixedCap(0.25),
+        filter   = Portfolio.KeepAll(),
+        grouping = Portfolio.DailySlate()
+    ))
 ]
 
-for (pname, policy) in policies
-    println("\n" * "="^85)
-    println("💼 BETFAIR PORTFOLIO: $pname ($(typeof(policy).name.name))")
-    println("="^85)
-
+for (pol_name, pol) in policies
+    println("\n", "="^95)
+    println("BETFAIR PORTFOLIO SIMULATION: $pol_name (2% Comm, Baker-McHale 800 Draws)")
+    println("="^95)
+    
     port_df = DataFrame(
-        model        = String[],
+        model = String[],
         final_wealth = Float64[],
         growth_slate = Float64[],
-        roi_pct      = Float64[],
-        mean_expo    = Float64[],
-        mdd_pct      = Float64[],
-        sharpe       = Float64[],
-        n_bets       = Int[]
+        roi_pct = Float64[],
+        mean_expo = Float64[],
+        mdd_pct = Float64[],
+        sharpe = Float64[],
+        calmar = Float64[],
+        n_bets = Int[]
     )
-
+    
     for exp in experiments
-        mname = exp.config.name
-        haskey(books_by_model, mname) || continue
-        mbooks = books_by_model[mname]
-
-        sim_res = Portfolio.simulate_portfolio(mbooks, policy)
-        ts = BackTesting.generate_tearsheet(sim_res.wealth_series, ds.matches; benchmark = :flat_stake)
-
-        fw = last(sim_res.wealth_series.wealth)
-        g_slate = sim_res.metrics.per_slate_growth_rate
-        roi = sim_res.metrics.roi * 100.0
-        mdd = sim_res.metrics.max_drawdown * 100.0
-        expo = mean(sim_res.portfolio_exposure) * 100.0
-        total_bets = sum(length(mb.positions) for mb in sim_res.settled_books)
-
-        ret_series = diff(sim_res.wealth_series.wealth) ./ sim_res.wealth_series.wealth[1:(end - 1)]
-        sh = (std(ret_series) > 0) ? (mean(ret_series) / std(ret_series)) * sqrt(38) : 0.0
-
+        m_name = exp.config.name
+        haskey(all_slates, m_name) || continue
+        slates = all_slates[m_name]
+        traj = Portfolio.simulate(pol, slates; use_shrink = true)
+        m = Portfolio.path_metrics(traj)
+        
+        ret_series = traj.slate_pl
+        sh = length(ret_series) > 1 && std(ret_series) > 1e-6 ? (mean(ret_series) / std(ret_series)) * sqrt(35) : 0.0
+        calm = m.mdd > 0.0 ? (m.final - 1.0) / (m.mdd / 100.0) : 0.0
+        
+        total_bets = isempty(books_map[m_name]) ? 0 : sum(sum(b.a_kelly .> 1e-5) for b in books_map[m_name]; init = 0)
+        
         push!(port_df, (
-            mname,
-            round(fw, digits = 3),
-            round(g_slate, digits = 5),
-            round(roi, digits = 2),
-            round(expo, digits = 1),
-            round(mdd, digits = 2),
+            m_name,
+            round(m.final, digits = 3),
+            round(m.growth_per_slate, digits = 5),
+            round(m.roi, digits = 2),
+            round(m.mean_exposure * 100, digits = 1),
+            round(m.mdd, digits = 2),
             round(sh, digits = 2),
+            round(calm, digits = 2),
             total_bets
         ))
     end
-
+    
     sort!(port_df, :final_wealth, rev = true)
     show(port_df, allrows=true, allcols=true); println()
 end
 
 println("\n", "="^95)
-println("✓ EVALUATION & BETFAIR PORTFOLIO BACKTEST COMPLETE!")
+println("✓ Comprehensive Evaluation & Betfair Portfolio Backtesting Complete!")
 println("="^95)
