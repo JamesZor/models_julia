@@ -65,16 +65,14 @@ for exp in experiments
 end
 
 # 3. Standard Evaluation Suite
-banner("📊 RUNNING COMPREHENSIVE EVALUATION SUITE (RQR, CRPS, LogLoss, GLMEdge)")
+banner("📊 RUNNING COMPREHENSIVE EVALUATION SUITE (RQR, CRPS, LogLoss)")
 
-selections = [:home, :draw, :away, :btts_yes, :btts_no,
-              :over_05, :under_05, :over_15, :under_15, :over_25, :under_25,
-              :over_35, :under_35, :over_45, :under_45]
+selections = [:home, :draw, :away, :btts_yes, :over_25, :under_25]
 
 fam = Dict(
     :x12    => [:home, :draw, :away],
-    :btts   => [:btts_yes, :btts_no],
-    :totals => [:over_05, :under_05, :over_15, :under_15, :over_25, :under_25, :over_35, :under_35, :over_45, :under_45],
+    :btts   => [:btts_yes],
+    :totals => [:over_25, :under_25],
 )
 
 _col(df, model, colname) = begin
@@ -88,7 +86,6 @@ metrics = Evaluation.AbstractScoringRule[
     Evaluation.CRPS()
 ]
 append!(metrics, [Evaluation.LogLoss(s) for s in selections])
-append!(metrics, [Evaluation.GLMEdge(s) for s in selections])
 
 eval_df = Evaluation.evaluate_experiments(metrics, experiments, ds)
 present_models = unique(eval_df.model)

@@ -27,11 +27,18 @@ function predict_row(model, row, markets)
     return results
 end
 
+const _PPD_CACHE = Dict{UInt64, Any}()
+
 # 2. The Orchestrator
 # ------------------------------------------------------------------
 function model_inference(latents::LatentStates; market_config=DEFAULT_MARKET_CONFIG, verbose::Bool=false)
     if isnothing(market_config)
         error("market_config must be provided")
+    end
+
+    k = hash((objectid(latents.df), objectid(latents.model), hash(market_config.markets)))
+    if haskey(_PPD_CACHE, k)
+        return _PPD_CACHE[k]
     end
 
     df = latents.df
@@ -94,7 +101,9 @@ function model_inference(latents::LatentStates; market_config=DEFAULT_MARKET_CON
         :distribution => v_dists
     )
     
-    return PPD(ppd_df, model, market_config)
+    res = PPD(ppd_df, model, market_config)
+    _PPD_CACHE[k] = res
+    return res
 end
 
 
