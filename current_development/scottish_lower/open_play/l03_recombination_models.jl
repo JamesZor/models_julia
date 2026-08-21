@@ -569,7 +569,7 @@ function PreGame.extract_parameters(model::TeamGoalsRecombIntegratedPoissonModel
     end
     
     gamma_ref_dict = Dict{Int, Vector{Float64}}()
-    if n_refs > 0 && haskey(chain, "raw_gamma_ref[1]")
+    if n_refs > 0 && _has_param(chain, "raw_gamma_ref[1]")
         raw_gamma_mat = Array(chain[["raw_gamma_ref[$i]" for i in 1:n_refs]])
         gamma_mat = raw_gamma_mat .* sigma_ref_samples
         for (ref_id, idx) in ref_map
@@ -579,7 +579,7 @@ function PreGame.extract_parameters(model::TeamGoalsRecombIntegratedPoissonModel
     
     alpha_pen_draw_dict = Dict{Int, Vector{Float64}}()
     beta_pen_foul_dict  = Dict{Int, Vector{Float64}}()
-    if haskey(chain, "alpha_pen_draw[1]")
+    if _has_param(chain, "alpha_pen_draw[1]")
         apd_mat = Array(chain[["alpha_pen_draw[$i]" for i in 1:n_teams]])
         bpf_mat = Array(chain[["beta_pen_foul[$i]" for i in 1:n_teams]])
         for (team_id, idx) in team_map
@@ -604,6 +604,8 @@ function PreGame.extract_parameters(model::TeamGoalsRecombIntegratedPoissonModel
     )
 end
 
+_has_param(chain::Chains, p::String) = Symbol(p) in names(chain) || p in string.(names(chain))
+
 function PreGame.extract_parameters(
     model::TeamGoalsPoissonOpenPlayModel,
     df::AbstractDataFrame,
@@ -625,8 +627,8 @@ function PreGame.extract_parameters(
     alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
     beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
     
-    delta_month_mat  = haskey(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
-    delta_league_mat = haskey(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)
+    delta_month_mat  = _has_param(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
+    delta_league_mat = _has_param(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)
     
     results = Dict{Int, NamedTuple}()
     for row in eachrow(df)
@@ -687,18 +689,18 @@ function PreGame.extract_parameters(
     alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
     beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
     
-    delta_month_mat  = haskey(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
-    delta_league_mat = haskey(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)
+    delta_month_mat  = _has_param(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
+    delta_league_mat = _has_param(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)
     
     pen_base_mu = vec(Array(chain["pen_base_mu"]))
     ha_pen      = vec(Array(chain["ha_pen"]))
     sigma_ref   = vec(Array(chain["sigma_ref"]))
     
-    raw_gamma_mat = (n_refs > 0 && haskey(chain, "raw_gamma_ref[1]")) ? Array(chain[["raw_gamma_ref[$i]" for i in 1:n_refs]]) : zeros(n_samples, n_refs)
+    raw_gamma_mat = (n_refs > 0 && _has_param(chain, "raw_gamma_ref[1]")) ? Array(chain[["raw_gamma_ref[$i]" for i in 1:n_refs]]) : zeros(n_samples, n_refs)
     gamma_mat = raw_gamma_mat .* sigma_ref
     
-    apd_mat = haskey(chain, "alpha_pen_draw[1]") ? Array(chain[["alpha_pen_draw[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
-    bpf_mat = haskey(chain, "beta_pen_foul[1]") ? Array(chain[["beta_pen_foul[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    apd_mat = _has_param(chain, "alpha_pen_draw[1]") ? Array(chain[["alpha_pen_draw[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    bpf_mat = _has_param(chain, "beta_pen_foul[1]") ? Array(chain[["beta_pen_foul[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
     
     results = Dict{Int, NamedTuple}()
     for row in eachrow(df)

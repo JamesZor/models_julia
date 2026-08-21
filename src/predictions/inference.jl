@@ -29,7 +29,7 @@ end
 
 # 2. The Orchestrator
 # ------------------------------------------------------------------
-function model_inference(latents::LatentStates; market_config=DEFAULT_MARKET_CONFIG)
+function model_inference(latents::LatentStates; market_config=DEFAULT_MARKET_CONFIG, verbose::Bool=false)
     if isnothing(market_config)
         error("market_config must be provided")
     end
@@ -39,7 +39,7 @@ function model_inference(latents::LatentStates; market_config=DEFAULT_MARKET_CON
     markets = collect(market_config.markets)
     
     n_matches = nrow(df)
-    println("Running Inference on $(n_matches) matches...")
+    verbose && println("Running Inference on $(n_matches) matches...")
     
     # A. Run Predictions (Threaded)
     results_vec = Vector{Dict}(undef, n_matches)
