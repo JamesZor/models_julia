@@ -15,7 +15,6 @@ const PreGame  = BayesianFootball.Models.PreGame
 const Features = BayesianFootball.Features
 const Pred     = BayesianFootball.Predictions
 const Data     = BayesianFootball.Data
-const ShotParser = BayesianFootball.Features.ShotParser
 
 # ==============================================================================
 # 1. OPEN-PLAY MATCH TARGET EXTRACTION
@@ -136,7 +135,7 @@ end
 Constructs team-match proxy xG strictly from open-play and regular set-piece shots,
 excluding penalty kick events (`is_penalty == false`).
 """
-struct CleanProxyXGFeature <: Features.AbstractFeature
+struct CleanProxyXGFeature <: Features.AbstractFeatureConfig
     k::Float64
     fit_on::Symbol
 end
@@ -149,7 +148,7 @@ Parses BBC commentary shot events, strips penalties (`is_penalty == false`), and
 predicts empirical-Bayes zonal xG.
 """
 function build_clean_open_play_shots(ds::Data.DataStore; k = 25.0)::DataFrame
-    all_shots = ShotParser.build_shots(ds)
+    all_shots = Features.build_shots(ds)
     if isempty(all_shots)
         return DataFrame()
     end
@@ -158,10 +157,10 @@ function build_clean_open_play_shots(ds::Data.DataStore; k = 25.0)::DataFrame
     open_play_shots = filter(s -> !s.is_penalty, all_shots)
 
     # Fit empirical-Bayes cell table on open play shots only
-    model = ShotParser.fit_shot_xg(open_play_shots; k = k)
+    model = Features.fit_shot_xg(open_play_shots; k = k)
     
     # Predict open play xG
-    open_play_shots[!, :pred_xg] = ShotParser.predict_xg(model, open_play_shots)
+    open_play_shots[!, :pred_xg] = Features.predict_xg(model, open_play_shots)
     return open_play_shots
 end
 
