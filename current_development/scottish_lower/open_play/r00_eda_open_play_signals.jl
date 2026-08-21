@@ -168,7 +168,7 @@ r_np  = cor(lagged_pairs.np_t, lagged_pairs.np_t1)
 r_pen = cor(lagged_pairs.pen_t, lagged_pairs.pen_t1)
 r_og  = cor(lagged_pairs.og_t, lagged_pairs.og_t1)
 
-println("Cross-Season Year-over-Year Persistence (Auto-Correlation $r_{t, t+1}$, n = $(nrow(lagged_pairs)) team-season pairs):")
+println("Cross-Season Year-over-Year Persistence (Auto-Correlation r(t, t+1), n = $(nrow(lagged_pairs)) team-season pairs):")
 @printf("  • Clean Open-Play Goals (NP-NOG):  r = %+.4f (HIGH SIGNAL / PERSISTENT SKILL)\n", r_np)
 @printf("  • Raw Goals (Total):               r = %+.4f\n", r_raw)
 @printf("  • Penalties Awarded:               r = %+.4f (NEAR ZERO / NOISE DOMINATED)\n", r_pen)
