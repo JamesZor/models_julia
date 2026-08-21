@@ -331,7 +331,11 @@ function Features.create_features(
     model::Union{TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel},
     dynamics_col::Symbol = :match_month
 )
-    return [_build_recomb_features(boundary, ds, model) for (boundary, _) in splits]
+    raw_vector = [
+        (_build_recomb_features(boundary, ds, model), meta)
+        for (boundary, meta) in splits
+    ]
+    return Features.FeatureCollection(raw_vector)
 end
 
 function Features.create_features(
