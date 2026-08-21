@@ -3,6 +3,7 @@
 using DataFrames
 using ProgressMeter
 using Base.Threads
+using Serialization
 using ..Data
 using ..Features
 using ..Models
@@ -32,25 +33,126 @@ DataFrames.ncol(ls::LatentStates) = ncol(ls.df)
 
 
 # ==============================================================================
+# 2. CONSTANTS & CACHING HELPERS
+# ==============================================================================
+
+const OOS_LATENTS_FILENAME = "oos_latents.jls"
+
+"""
+    has_oos_predictions(exp_results::ExperimentResults; path=nothing)::Bool
+    has_oos_predictions(path::String)::Bool
+
+Check if serialized out-of-sample latent predictions (`oos_latents.jls`) exist on disk.
+"""
+function has_oos_predictions(path::String)::Bool
+    return isfile(joinpath(path, OOS_LATENTS_FILENAME))
+end
+
+function has_oos_predictions(exp_results::ExperimentResults; path=nothing)::Bool
+    target_path = isnothing(path) ? exp_results.save_path : path
+    return has_oos_predictions(target_path)
+end
+
+"""
+    load_oos_predictions(exp_results::ExperimentResults; path=nothing)::Union{LatentStates, Nothing}
+    load_oos_predictions(path::String)::Union{LatentStates, Nothing}
+
+Load cached out-of-sample latent predictions from disk. Returns `nothing` if the file
+is missing or corrupted.
+"""
+function load_oos_predictions(path::String)::Union{LatentStates, Nothing}
+    target_file = joinpath(path, OOS_LATENTS_FILENAME)
+    if !isfile(target_file)
+        return nothing
+    end
+    try
+        obj = Serialization.deserialize(target_file)
+        if obj isa LatentStates
+            return obj
+        else
+            @warn "Cached file at $target_file is not of type LatentStates (got $(typeof(obj)))"
+            return nothing
+        end
+    catch e
+        @warn "Failed to deserialize cached OOS predictions from $target_file: $e"
+        return nothing
+    end
+end
+
+function load_oos_predictions(exp_results::ExperimentResults; path=nothing)::Union{LatentStates, Nothing}
+    target_path = isnothing(path) ? exp_results.save_path : path
+    return load_oos_predictions(target_path)
+end
+
+"""
+    save_oos_predictions(exp_results::ExperimentResults, latents::LatentStates; path=nothing)::String
+    save_oos_predictions(path::String, latents::LatentStates)::String
+
+Atomically serialize out-of-sample latent predictions to disk (`.tmp` -> `mv`).
+Returns the saved file path.
+"""
+function save_oos_predictions(path::String, latents::LatentStates)::String
+    mkpath(path)
+    target_file = joinpath(path, OOS_LATENTS_FILENAME)
+    tmp_file = target_file * ".tmp." * string(rand(UInt64), base=16)
+    try
+        Serialization.serialize(tmp_file, latents)
+        mv(tmp_file, target_file; force=true)
+    catch e
+        if isfile(tmp_file)
+            rm(tmp_file; force=true)
+        end
+        rethrow(e)
+    end
+    return target_file
+end
+
+function save_oos_predictions(exp_results::ExperimentResults, latents::LatentStates; path=nothing)::String
+    target_path = isnothing(path) ? exp_results.save_path : path
+    return save_oos_predictions(target_path, latents)
+end
+
+
+# ==============================================================================
 # 2. THE BRIDGE (Relational DataStore Pipeline)
 # ==============================================================================
 
-function extract_oos_predictions(ds::Data.DataStore, exp_results::ExperimentResults)
+"""
+    extract_oos_predictions(ds::Data.DataStore, exp_results::ExperimentResults; force::Bool = false)::LatentStates
+
+Extract out-of-sample latent predictions across splits.
+- Default (`force = false`): If `oos_latents.jls` exists on disk, it is loaded (~0.04s).
+  Otherwise, predictions are computed across MCMC splits, atomically saved to `oos_latents.jls`, and returned.
+- Recompute (`force = true`): Force recomputation from MCMC chains and overwrite `oos_latents.jls`.
+"""
+function extract_oos_predictions(ds::Data.DataStore, exp_results::ExperimentResults; force::Bool = false)::LatentStates
+    if !force && has_oos_predictions(exp_results)
+        cached = load_oos_predictions(exp_results)
+        if cached !== nothing
+            return cached
+        end
+    end
+
     config = exp_results.config
     
     # 1. Reconstruct Context using the NEW Relational Pipeline
     boundaries_with_meta = Data.create_id_boundaries(ds, config.splitter)
     
+    # Extract the array of tuples from the TrainingResults object
+    results_array = exp_results.training_results.items
+    n_splits = length(results_array)
+
+    # Safety guard: prevent DataStore drift corruption
+    if length(boundaries_with_meta) != n_splits
+        error("DataStore drift detected: Splitter generated $(length(boundaries_with_meta)) boundaries from DataStore, but ExperimentResults has $(n_splits) training splits. Please re-run experiment or align DataStore.")
+    end
+
     feature_sets = Features.create_features(
         boundaries_with_meta, 
         ds, 
         config.model, 
         config.splitter.dynamics_col
     )
-    
-    # Extract the array of tuples from the TrainingResults object
-    results_array = exp_results.training_results.items
-    n_splits = length(results_array)
 
     # 2. Extract (Multi-threaded across splits)
     split_dfs = Vector{DataFrame}(undef, n_splits)
@@ -65,7 +167,19 @@ function extract_oos_predictions(ds::Data.DataStore, exp_results::ExperimentResu
     end
 
     # 3. Consolidate
-    return LatentStates(vcat(split_dfs...), config.model)
+    combined_df = isempty(split_dfs) ? DataFrame() : vcat(split_dfs...)
+    latents = LatentStates(combined_df, config.model)
+
+    # 4. Atomic Cache Persistence
+    if !isempty(exp_results.save_path)
+        try
+            save_oos_predictions(exp_results, latents)
+        catch e
+            @warn "Failed to cache OOS predictions to $(exp_results.save_path): $e"
+        end
+    end
+
+    return latents
 end
 
 function _process_split(ds, model, splitter, feature_tuple, result_tuple)

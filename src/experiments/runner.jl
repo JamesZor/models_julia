@@ -90,7 +90,13 @@ end
 # 2. PERSISTENCE (Saving)
 # ==============================================================================
 
-function save_experiment(results::ExperimentResults; path=nothing, quiet=false)
+function save_experiment(
+    results::ExperimentResults; 
+    path=nothing, 
+    quiet=false, 
+    ds::Union{Data.DataStore, Nothing}=nothing, 
+    compute_oos::Bool=false
+)
     target_path = isnothing(path) ? results.save_path : path
     mkpath(target_path)
 
@@ -102,13 +108,21 @@ function save_experiment(results::ExperimentResults; path=nothing, quiet=false)
         :name => results.config.name,
         :save_dir => results.config.save_dir,
         :model => string(results.config.model),     
-        :splitter => results.config.splitter,
-        :training_config => results.config.training_config,
+        :splitter => string(results.config.splitter),
+        :training_config => string(results.config.training_config),
         :tags => results.config.tags # Make sure tags get written to JSON!
     )
 
     open(joinpath(target_path, "config.json"), "w") do io
         JSON3.pretty(io, safe_config)
+    end
+
+    # Precompute OOS latents if requested and ds is provided
+    if compute_oos && ds !== nothing
+        latents = extract_oos_predictions(ds, results; force=true)
+        if target_path != results.save_path
+            save_oos_predictions(results, latents; path=target_path)
+        end
     end
 
     # Extract time from tags for the meta sidecar
@@ -127,7 +141,8 @@ function save_experiment(results::ExperimentResults; path=nothing, quiet=false)
         :splitter => string(nameof(typeof(results.config.splitter))),
         :sampler => string(nameof(typeof(results.config.training_config.sampler))),
         :timestamp => basename(target_path),
-        :time_taken => time_taken # Easy extraction for the UI
+        :time_taken => time_taken, # Easy extraction for the UI
+        :has_oos_latents => isfile(joinpath(target_path, "oos_latents.jls"))
     )
     
     open(joinpath(target_path, "meta.json"), "w") do io
@@ -162,7 +177,7 @@ function list_experiments(dir::String; data_dir::String="./data")
     end
 
     println("\n Experiments in: $base_dir")
-    println("="^125)
+    println("="^135)
     println(
         rpad("IDX", 4), " | ", 
         rpad("NAME", 25), " | ", 
@@ -170,9 +185,10 @@ function list_experiments(dir::String; data_dir::String="./data")
         rpad("SPLITTER", 18), " | ", 
         rpad("SAMPLER", 15), " | ", 
         rpad("TIME", 10), " | ", 
+        rpad("LATENTS", 7), " | ", 
         "PATH ID"
     )
-    println("-"^125)
+    println("-"^135)
 
     for (i, path) in enumerate(subdirs)
         m = _read_meta(path)
@@ -183,6 +199,7 @@ function list_experiments(dir::String; data_dir::String="./data")
         split_s = length(m.splitter) > 16 ? m.splitter[1:16] * ".." : m.splitter
         samp_s = length(m.sampler) > 13 ? m.sampler[1:13] * ".." : m.sampler
         time_s = length(m.time_taken) > 10 ? m.time_taken[1:10] : m.time_taken
+        latents_s = m.has_oos_latents ? "YES" : "NO"
 
         c = i == 1 ? :white : :light_black
         
@@ -192,9 +209,10 @@ function list_experiments(dir::String; data_dir::String="./data")
         printstyled(rpad(split_s, 18), " | ", color=c)
         printstyled(rpad(samp_s, 15), " | ", color=c)
         printstyled(rpad(time_s, 10), " | ", color=:yellow, bold=false) # Pop the time in yellow!
+        printstyled(rpad(latents_s, 7), " | ", color=(m.has_oos_latents ? :green : :light_black))
         println(basename(path))
     end
-    println("="^125, "\n")
+    println("="^135, "\n")
 
     return subdirs
 end
@@ -266,7 +284,8 @@ function Base.convert(::Type{Training.AbstractExecutionStrategy}, rs::JLD2.Recon
 
 function _read_meta(path)
     meta_path = joinpath(path, "meta.json")
-    default = (name=basename(path), model="?", splitter="?", sampler="?", time_taken="N/A")
+    has_latents_file = isfile(joinpath(path, "oos_latents.jls"))
+    default = (name=basename(path), model="?", splitter="?", sampler="?", time_taken="N/A", has_oos_latents=has_latents_file)
 
     if isfile(meta_path)
         try
@@ -277,7 +296,8 @@ function _read_meta(path)
                 model = get(cfg, :model, default.model),
                 splitter = get(cfg, :splitter, default.splitter),
                 sampler = get(cfg, :sampler, default.sampler),
-                time_taken = get(cfg, :time_taken, "N/A")
+                time_taken = get(cfg, :time_taken, "N/A"),
+                has_oos_latents = get(cfg, :has_oos_latents, has_latents_file) || has_latents_file
             )
         catch
             return default
@@ -305,7 +325,8 @@ function _read_meta(path)
                 model = "Legacy Config",
                 splitter = "?",
                 sampler = "?",
-                time_taken = time_tag
+                time_taken = time_tag,
+                has_oos_latents = has_latents_file
             )
         catch
         end

@@ -9,7 +9,21 @@ This directory contains the end-to-end research, probabilistic modeling engines,
 
 ```
 current_development/scottish_lower/
-├── neg_bin/                          <- [CHAMPION] Robust Negative Binomial + Wealth engines
+├── distance/                         <- Travel Distance Fatigue ($d_{\text{km}}$) & Geographic Models
+│   ├── l01_distance_feature.jl       <- Lat/Lon coordinate ingestion, Haversine, & log-distance standardization
+│   ├── l02_negbin_distance_engines.jl<- NegBin + Distance Bayesian engines
+│   ├── l03_negbin_wealth_distance_engines.jl <- NegBin + Squad Wealth + Distance unified engines
+│   ├── r00_eda_distance_fatigue.jl   <- Exploratory data analysis, distance distributions, & fatigue metrics
+│   ├── r01_smoke_distance.jl         <- 1-split MCMC NUTS smoke tests
+│   ├── r02_grid_distance_negbin.jl   <- 40-fold MCMC grid for distance engines (120 tasks on mcmc-beast)
+│   ├── r03_grid_wealth_distance_negbin.jl <- 40-fold MCMC grid for wealth + distance engines
+│   ├── r06_eval_and_portfolio_backtest.jl <- Full 8-model scoring evaluation & Betfair Kelly simulation
+│   ├── r07_smoke_extract_all_models.jl    <- Extraction smoke tests across all 8 models
+│   ├── EDA_DISTANCE_FATIGUE_NOTES.md <- Empirical spatial analysis & fatigue diagnostics
+│   ├── RESULTS_DISTANCE_WEALTH_LEADERBOARD.md <- Comprehensive leaderboard & metric tables
+│   └── EXPERIMENT_NOTES.md           <- In-depth study, formulations, findings & takeaways
+│
+├── neg_bin/                          <- [CHAMPION ARCHITECTURE] Negative Binomial Dispersion Models
 │   ├── l01_negbin_engines.jl         <- NegBin Model Structs, Turing @models, Extractors, Preds
 │   ├── l02_negbin_wealth_engines.jl  <- NegBin + Starting-XI Squad Wealth integration
 │   ├── r00_eda_overdispersion.jl     <- Stage-A EDA & formal overdispersion hypothesis tests
@@ -47,15 +61,32 @@ current_development/scottish_lower/
 
 ---
 
-## 🏆 Final Model Leaderboard (40-Fold OOS Betfair Portfolio Benchmark)
+## 🏆 Comprehensive 8-Model Leaderboard (40-Fold OOS Betfair Portfolio Benchmark)
 
 *Evaluated across 628 settled MatchBooks (1X2, BTTS, O/U 0.5–4.5) with 2% Betfair commission and 800-draw Baker-McHale shrinkage under Balanced Growth ($\text{Cap } 15\%, \lambda = 15$):*
 
-| Rank | Model Architecture | Final Wealth | Betfair ROI | Sharpe Ratio | Max Drawdown | CRPS (Goals) $\downarrow$ | RQR Std ($\approx 1.0$) |
-| :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| 🥇 | **`pxg_apm_negbin_wealth`** | **`2.803x`** | **`+11.33%`** | **`1.18`** | $-34.17\%$ | $0.6289$ | **`1.0017`** |
-| 🥈 | **`funnel_pxg_apm_negbin_wealth`** | **`2.431x`** | **`+10.07%`** | **`1.04`** | **`-29.18%`** | **`0.6274`** 🏆 | $1.0069$ |
-| 🥉 | `pxg_apm_negbin` *(NegBin Baseline)* | $2.295\text{x}$ | $+9.50\%$ | $0.98$ | $-33.88\%$ | $0.6296$ | $0.9896$ |
-| 4 | `funnel_pxg_apm` *(Poisson Champion)* | $2.208\text{x}$ | $+9.17\%$ | $0.95$ | **$-27.94\%$** | $0.6279$ | $0.9916$ |
-| 5 | `goals_negbin_wealth` *(Goals + Wealth)* | $2.156\text{x}$ | $+8.40\%$ | $0.94$ | $-34.45\%$ | $0.6292$ | $0.9962$ |
-| 6 | `goals_negbin_ctl` *(Goals NegBin Baseline)* | $1.924\text{x}$ | $+7.54\%$ | $0.83$ | $-33.58\%$ | $0.6295$ | $1.0257$ |
+| Rank | Model Architecture | Final Wealth | Betfair ROI | Sharpe Ratio | Max Drawdown | CRPS (Goals) $\downarrow$ | RQR Std ($\approx 1.0$) | Bets |
+| :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 🥇 | **`pxg_apm_negbin_wealth`** | **`2.803x`** | **`+11.33%`** | **`1.18`** | $-34.17\%$ | **`0.6289`** | **`0.9922`** | 1,831 |
+| 🥈 | **`pxg_apm_negbin_wealth_dist`** | **`2.520x`** | **`+10.21%`** | **`1.07`** | $-38.85\%$ | $0.6294$ | **`0.9996`** | 1,844 |
+| 🥉 | **`pxg_apm_negbin`** *(NegBin Baseline)* | **`2.295x`** | $+9.50\%$ | $0.98$ | $-33.88\%$ | $0.6296$ | $1.0007$ | 1,820 |
+| 4 | `goals_negbin_wealth` *(Goals + Wealth)* | **`2.156x`** | $+8.40\%$ | $0.94$ | $-34.45\%$ | $0.6292$ | $1.0021$ | 1,887 |
+| 5 | `pxg_apm_negbin_dist` *(Proxy xG + Dist)* | **`2.063x`** | $+8.43\%$ | $0.86$ | $-38.48\%$ | $0.6300$ | $1.0225$ | 1,844 |
+| 6 | `goals_negbin_ctl` *(Goals Control)* | **`1.924x`** | $+7.54\%$ | $0.83$ | **`-33.58%`** | $0.6295$ | $1.0164$ | 1,874 |
+| 7 | `goals_negbin_wealth_dist` | **`1.774x`** | $+6.57\%$ | $0.74$ | $-40.45\%$ | $0.6303$ | $0.9981$ | 1,905 |
+| 8 | `goals_negbin_dist` | **`1.539x`** | $+5.42\%$ | $0.60$ | $-39.48\%$ | $0.6305$ | $0.9849$ | 1,902 |
+
+---
+
+## 🔬 Core Modeling Insights
+
+1. **Negative Binomial Count Likelihood ($\phi_{\text{goals}} \approx 6.5$)**:
+   - Captures match-level overdispersion and eliminates tail variance underestimation in lower leagues.
+2. **Squad Wealth Disparity ($\Delta W$) is the Primary Value Driver**:
+   - Financial disparity provides a persistent fundamental edge over retail market participants who over-index on recent form.
+   - Boosts portfolio wealth growth from 1.924x to **2.803x (+45.7% growth increase)**.
+3. **Travel Distance ($d_{\text{km}}$) Drives Away-Side Information Separation**:
+   - Adding log-standardized travel distance produces a **+27% to +57% improvement in Away LogLoss separation vs Market Fair**.
+   - Collinear with remote low-budget clubs in Scotland, so pure Wealth remains optimal for unconstrained Kelly capital compounding.
+4. **Sub-Second OOS Inference Caching**:
+   - `extract_oos_predictions(ds, exp; force=false)` uses atomic `.jls` persistence, reducing multi-experiment benchmark evaluations from **15+ minutes down to 0.04s per model**.
