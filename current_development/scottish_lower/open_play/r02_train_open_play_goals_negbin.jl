@@ -65,6 +65,7 @@ results = EE.run_experiment(exp_task)
 elapsed = round(time() - t0, digits = 1)
 println("✓ MCMC Sampling Completed in $(elapsed)s ($(round(elapsed/60, digits=2)) mins)")
 
-# 3. Save Experiment & Persist Latents
-EE.save_experiment(results; ds = ds, compute_oos = true)
-println("✓ Experiment saved to disk with cached out-of-sample predictions: $(model.name)")
+# 3. Save Experiment
+EE.save_experiment(results)
+println("✓ Experiment saved to disk: $(model.name)")
+
