@@ -290,16 +290,16 @@ function _build_recomb_features(b, ds::Data.DataStore, model::Union{TeamGoalsPoi
 end
 
 function Features.create_features(
-    boundaries::Vector{<:Any},
+    splits::Vector{<:Tuple{Data.SplitBoundary, <:Any}},
     ds::Data.DataStore,
     model::Union{TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel},
     dynamics_col::Symbol = :match_month
 )
-    return [_build_recomb_features(b, ds, model) for b in boundaries]
+    return [_build_recomb_features(boundary, ds, model) for (boundary, _) in splits]
 end
 
 function Features.create_features(
-    boundary::Any,
+    boundary::Data.SplitBoundary,
     ds::Data.DataStore,
     model::Union{TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel},
     dynamics_col::Symbol = :match_month
