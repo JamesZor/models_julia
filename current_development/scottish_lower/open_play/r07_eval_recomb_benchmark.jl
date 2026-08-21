@@ -144,42 +144,104 @@ banner("💰 3. BETFAIR EXCHANGE MULTI-MARKET KELLY SIMULATION (2% Commission, B
 
 bf_summary = Data.summarize_betfair_market(ds)
 
+MARKETS = Data.MarketConfig(reduce(vcat, (
+    Data.AbstractMarket[Data.Market1X2(), Data.MarketBTTS()],
+    [Data.MarketOverUnder(i + 0.5) for i in 0:4],
+)))
+
+spec = Portfolio.BookSpec(
+    markets   = MARKETS,
+    price     = Portfolio.DeArb(),
+    allocator = Portfolio.KellyLogUtility(),
+    shrink    = Portfolio.BakerMcHale(n_draws = 800),
+    exec      = Portfolio.ExecutionConfig(
+                    commission = Portfolio.PerBetCommission(0.02),
+                    max_selection_stake = 0.50,
+                    budget = 0.99,
+                    require_complete_markets = true
+                )
+)
+
+books_map = Dict{String, Vector{Portfolio.MatchBook}}()
+for exp in experiments
+    m_name = exp.config.name
+    oos_latents = Experiments.extract_oos_predictions(ds, exp)
+    b = Portfolio.build_books(spec, oos_latents.df, exp, bf_summary, ds)
+    books_map[m_name] = b
+end
+
+all_slates = Dict{String, Vector{Portfolio.Slate}}()
+for (m_name, b) in books_map
+    all_slates[m_name] = Portfolio.group(Portfolio.DailySlate(), b)
+end
+
 policies = [
-    ("Conservative (Cap 10%, λ=23)", Portfolio.PortfolioSimulationConfig(max_leverage=0.10, lambda_penalty=23.0)),
-    ("Balanced Growth (Cap 15%, λ=15)", Portfolio.PortfolioSimulationConfig(max_leverage=0.15, lambda_penalty=15.0)),
-    ("Aggressive (Cap 25%, λ=10)", Portfolio.PortfolioSimulationConfig(max_leverage=0.25, lambda_penalty=10.0))
+    ("Conservative (Cap 10%, λ=23)", Portfolio.PolicySpec(
+        trust    = Portfolio.FlatTrust(0.25),
+        risk     = Portfolio.SlateDrawdown(23.0),
+        cap      = Portfolio.FixedCap(0.10),
+        filter   = Portfolio.KeepAll(),
+        grouping = Portfolio.DailySlate()
+    )),
+    ("Balanced Growth (Cap 15%, λ=15)", Portfolio.PolicySpec(
+        trust    = Portfolio.FlatTrust(0.25),
+        risk     = Portfolio.SlateDrawdown(15.0),
+        cap      = Portfolio.FixedCap(0.15),
+        filter   = Portfolio.KeepAll(),
+        grouping = Portfolio.DailySlate()
+    )),
+    ("Aggressive (Cap 25%, λ=10)", Portfolio.PolicySpec(
+        trust    = Portfolio.FlatTrust(0.50),
+        risk     = Portfolio.SlateDrawdown(10.0),
+        cap      = Portfolio.FixedCap(0.25),
+        filter   = Portfolio.KeepAll(),
+        grouping = Portfolio.DailySlate()
+    ))
 ]
 
-for (p_name, p_cfg) in policies
-    println("\n" * "="^95)
-    println("BETFAIR PORTFOLIO: $p_name")
+for (pol_name, pol) in policies
+    println("\n", "="^95)
+    println("BETFAIR PORTFOLIO SIMULATION: $pol_name (2% Comm, Baker-McHale 800 Draws)")
     println("="^95)
     
-    sim_rows = []
+    port_df = DataFrame(
+        model        = String[],
+        final_wealth = Float64[],
+        growth_slate = Float64[],
+        roi_pct      = Float64[],
+        mean_expo    = Float64[],
+        mdd_pct      = Float64[],
+        sharpe       = Float64[],
+        calmar       = Float64[],
+        n_bets       = Int[]
+    )
+    
     for exp in experiments
-        oos_latents = Experiments.extract_oos_predictions(ds, exp)
-        books = Portfolio.build_books(exp.config.model, oos_latents, bf_summary, ds; n_draws_joint=800)
-        slates = Portfolio.group(Portfolio.DailySlate(), books)
-        sim = Portfolio.simulate(slates, p_cfg)
+        m_name = exp.config.name
+        haskey(all_slates, m_name) || continue
+        slates = all_slates[m_name]
+        traj = Portfolio.simulate(pol, slates; use_shrink = true)
+        m = Portfolio.path_metrics(traj)
         
-        n_bets = sum(length(s.orders) for s in sim.slates)
-        mdd = isempty(sim.drawdowns) ? 0.0 : minimum(sim.drawdowns) * 100.0
+        ret_series = traj.slate_pl
+        sh = length(ret_series) > 1 && std(ret_series) > 1e-6 ? (mean(ret_series) / std(ret_series)) * sqrt(35) : 0.0
+        calm = m.mdd > 0.0 ? (m.final - 1.0) / (m.mdd / 100.0) : 0.0
         
-        push!(sim_rows, (
-            model        = exp.config.name,
-            final_wealth = round(sim.final_wealth, digits=3),
-            growth_slate = round(sim.mean_slate_growth, digits=5),
-            roi_pct      = round(sim.roi * 100.0, digits=2),
-            mean_expo    = round(sim.mean_exposure * 100.0, digits=1),
-            mdd_pct      = round(mdd, digits=2),
-            sharpe       = round(sim.sharpe, digits=2),
-            n_bets       = n_bets
+        push!(port_df, (
+            model        = m_name,
+            final_wealth = round(m.final, digits=3),
+            growth_slate = round(m.growth, digits=5),
+            roi_pct      = round(m.roi, digits=2),
+            mean_expo    = round(m.mean_exposure * 100.0, digits=1),
+            mdd_pct      = round(m.mdd, digits=2),
+            sharpe       = round(sh, digits=2),
+            calmar       = round(calm, digits=2),
+            n_bets       = m.n_bets
         ))
     end
     
-    res_df = DataFrame(sim_rows)
-    sort!(res_df, :final_wealth, rev=true)
-    show(stdout, MIME("text/plain"), res_df)
+    sort!(port_df, :final_wealth, rev=true)
+    show(stdout, MIME("text/plain"), port_df)
     println()
 end
 
