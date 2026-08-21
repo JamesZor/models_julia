@@ -34,7 +34,7 @@ struct EmpiricalBayesPenaltyEstimator
     lambda_og::Float64
 end
 
-function fit_empirical_bayes_penalties(ds::DataStore, match_ids::Vector{Int};
+function fit_empirical_bayes_penalties(ds::Data.DataStore, match_ids::Vector{Int};
                                       shrink_ref_k::Float64 = 10.0,
                                       shrink_team_k::Float64 = 15.0)::EmpiricalBayesPenaltyEstimator
     df_clean, df_ref = build_open_play_target_dataset(ds)
