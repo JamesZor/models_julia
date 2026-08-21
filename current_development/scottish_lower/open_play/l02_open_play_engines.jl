@@ -473,10 +473,69 @@ const OpenPlayNegBinModels = Union{
     TeamPxGGoalsAPMNegBinWealthOpenPlayModel
 }
 
-function Pred.extract_parameters(model::OpenPlayNegBinModels, chain::MCMCChains.Chains, ds::Data.DataStore; kwargs...)
-    return _negbin_extract_parameters(model, chain, ds; kwargs...)
+function _extract_open_play_params(
+    model,
+    df::DataFrame,
+    feature_set::Features.FeatureSet,
+    chain::MCMCChains.Chains
+)
+    core, n_samples, n_teams = _pxg_extract_core_wealth(model, df, feature_set, chain)
+
+    disp = PreGame.extract_dispersion(chain, model.dispersion_config)
+    r_h_samples = disp.h
+    r_a_samples = disp.a
+
+    has_kappa = Symbol("log_κ") in keys(chain)
+    κ = has_kappa ? exp.(vec(Array(chain[Symbol("log_κ")]))) : ones(Float64, n_samples)
+
+    results = Dict{Int, NamedTuple}()
+    for (mid, c) in core
+        μ_h = exp.(c.lin_h)
+        μ_a = exp.(c.lin_a)
+
+        results[mid] = (;
+            λ_h = κ .* μ_h,
+            λ_a = κ .* μ_a,
+            r_h = r_h_samples,
+            r_a = r_a_samples,
+            true_xg_h = μ_h,
+            true_xg_a = μ_a,
+            κ   = κ
+        )
+    end
+    return results
 end
 
-function Pred.compute_score_matrix(model::OpenPlayNegBinModels, params::NamedTuple, max_goals::Int = 10)
-    return _negbin_compute_score_matrix(model, params, max_goals)
+PreGame.extract_parameters(model::OpenPlayNegBinModels, df::DataFrame, feature_set::Features.FeatureSet, chain::MCMCChains.Chains) =
+    _extract_open_play_params(model, df, feature_set, chain)
+
+PreGame.extract_parameters(model::OpenPlayNegBinModels, df::DataFrame, feature_tuple::Tuple, chain::MCMCChains.Chains) =
+    _extract_open_play_params(model, df, feature_tuple[1], chain)
+
+Pred.extract_params(::OpenPlayNegBinModels, row) = (
+    λ_h = row.λ_h,
+    λ_a = row.λ_a,
+    r_h = hasproperty(row, :r_h) ? row.r_h : fill(23.66, length(row.λ_h)),
+    r_a = hasproperty(row, :r_a) ? row.r_a : fill(9.25, length(row.λ_a))
+)
+
+function _compute_open_play_nb_score_matrix(params; max_goals::Int = 12)
+    λ_h, λ_a = params.λ_h, params.λ_a
+    r_h, r_a = params.r_h, params.r_a
+    n_samples = length(λ_h)
+
+    S = zeros(Float64, max_goals, max_goals, n_samples)
+
+    @inbounds for k in 1:n_samples
+        dist_h = RobustNegativeBinomial(max(Float64(r_h[k]), 1e-4), max(Float64(λ_h[k]), 1e-4))
+        dist_a = RobustNegativeBinomial(max(Float64(r_a[k]), 1e-4), max(Float64(λ_a[k]), 1e-4))
+        p_h = [pdf(dist_h, i) for i in 0:max_goals-1]
+        p_a = [pdf(dist_a, j) for j in 0:max_goals-1]
+        S[:, :, k] = p_h .* transpose(p_a)
+    end
+
+    return Pred.ScoreMatrix(S)
 end
+
+Pred.compute_score_matrix(::OpenPlayNegBinModels, params; max_goals::Int = 12) = _compute_open_play_nb_score_matrix(params; max_goals = max_goals)
+

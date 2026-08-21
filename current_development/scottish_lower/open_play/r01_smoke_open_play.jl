@@ -121,10 +121,26 @@ for (desc, model) in models_to_test
     end
 
     # 5. Parameter Extraction & Score Matrix Smoke Test
-    sample_match = ds.matches[end, :]
-    params = PP.extract_parameters(model, chain, ds; match_id = sample_match.match_id)
-    S = PP.compute_score_matrix(model, params, 10)
-    sum_s = sum(S)
+    boundaries_with_meta = DD.create_id_boundaries(ds, exp_task.splitter)
+    feature_sets = FF.create_features(
+        boundaries_with_meta[1:1], 
+        ds, 
+        exp_task.model, 
+        exp_task.splitter.dynamics_col
+    )
+    result_tuple = res.training_results.items[1]
+    
+    split_df = EE._process_split(
+        ds,
+        exp_task.model,
+        exp_task.splitter,
+        feature_sets[1],
+        result_tuple
+    )
+    
+    row1 = split_df[1, :]
+    sm = PP.compute_score_matrix(model, PP.extract_params(model, row1))
+    sum_s = mean([sum(sm.matrices[:, :, k]) for k in 1:size(sm.matrices, 3)])
     @printf("  • Score Matrix Smoke Test: sum(S) = %.6f (Expected: 1.000000) -> %s\n",
             sum_s, abs(sum_s - 1.0) < 1e-4 ? "VALID ✅" : "INVALID ❌")
 end
@@ -132,3 +148,4 @@ end
 println("\n", "="^95)
 println("SMOKE TEST COMPLETE: ALL OPEN-PLAY NOISE-REDUCTION MODELS VALIDATED ✅")
 println("="^95)
+
