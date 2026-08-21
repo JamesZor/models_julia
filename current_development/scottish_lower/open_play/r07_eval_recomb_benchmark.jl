@@ -105,6 +105,8 @@ if "rqr_all_mean" in names(eval_df)
     println()
 end
 
+println("DEBUG eval_df names: ", names(eval_df))
+
 banner("📉 2. CRPS & FAMILY-POOLED LOG LOSS DIFFERENCES (Lower / More Negative vs Market = Better)")
 rows = []
 for m in present_models
@@ -230,7 +232,7 @@ for (pol_name, pol) in policies
         push!(port_df, (
             model        = m_name,
             final_wealth = round(m.final, digits=3),
-            growth_slate = round(m.growth, digits=5),
+            growth_slate = round(m.growth_per_slate, digits=5),
             roi_pct      = round(m.roi, digits=2),
             mean_expo    = round(m.mean_exposure * 100.0, digits=1),
             mdd_pct      = round(m.mdd, digits=2),
