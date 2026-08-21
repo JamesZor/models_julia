@@ -75,12 +75,20 @@ for (tag, model_spec) in models_to_train
         model_spec,
         tag,
         save_dir;
-        data_config   = splitter,
-        sampler_config = sampler_cfg
+        target_seasons       = ["24/25", "25/26"],
+        history_seasons      = 2,
+        warmup_period        = 0,
+        dynamics_col         = :match_biweek,
+        samples              = 1200,
+        warmup               = 300,
+        chains               = 3,
+        use_queue            = true,
+        max_depth            = 10,
+        max_concurrent_tasks = 16
     )
     
     t0 = time()
-    results = Experiments.run_experiment(task; max_concurrent_tasks = 16)
+    results = Experiments.run_experiment(task)
     elapsed = round(time() - t0, digits = 1)
     
     mins = Int(floor(elapsed / 60))
