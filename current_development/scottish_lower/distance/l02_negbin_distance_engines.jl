@@ -360,51 +360,32 @@ function _extract_distance_params(
 
     w_dist_samples = Symbol("w_dist") in keys(chain) ? vec(Array(chain[Symbol("w_dist")])) : zeros(Float64, n_samples)
 
-    results = Dict{Int, NamedTuple}()
-    for (i, row) in enumerate(eachrow(df))
-        mid = row.match_id
-        h_idx, a_idx, s_idx, m_idx, lg_idx, w_att, w_def = _pxg_row_covars(core, row, i)
-        
-        # Pull match distance
-        dist_z_val = 0.0
-        if haskey(feature_set.data, :flat_distance)
-            dist_z_val = Float64(feature_set.data[:flat_distance][i])
-        elseif haskey(feature_set.data, :distance_df)
-            dist_match_row = filter(r -> r.match_id == mid, feature_set.data[:distance_df])
-            if nrow(dist_match_row) > 0
-                dist_z_val = Float64(dist_match_row[1, :log_dist_z])
-            end
+    distance_map = Dict{Int, Float64}()
+    if haskey(feature_set.data, :flat_distance)
+        for (i, row) in enumerate(eachrow(df))
+            distance_map[row.match_id] = Float64(feature_set.data[:flat_distance][i])
         end
+    elseif haskey(feature_set.data, :distance_df)
+        for r in eachrow(feature_set.data[:distance_df])
+            distance_map[r.match_id] = Float64(r.log_dist_z)
+        end
+    end
 
-        mu_base = core.μ_base[:, s_idx]
-        delta_m = core.δ_month[:, m_idx]
-        ha_val  = core.ha[:, h_idx]
+    results = Dict{Int, NamedTuple}()
+    for (mid, c) in core
+        dist_z = get(distance_map, mid, 0.0)
+        dist_shift = w_dist_samples .* dist_z
 
-        h_rat = (core.rat_h[i] .- core.base)
-        a_rat = (core.rat_a[i] .- core.base)
-        pillar_h = core.apm_on ? (w_att .* h_rat .- w_def .* a_rat) : zeros(Float64, n_samples)
-        pillar_a = core.apm_on ? (w_att .* a_rat .- w_def .* h_rat) : zeros(Float64, n_samples)
-
-        lg_h = core.δ_league[:, lg_idx]
-        lg_ha = core.league_ha_on ? core.γ_league[:, lg_idx] : zeros(Float64, n_samples)
-
-        dist_shift = w_dist_samples .* dist_z_val
-
-        log_λ_h = mu_base .+ delta_m .+ ha_val .+ lg_h .+ lg_ha .+
-                  core.α[:, h_idx] .+ core.β[:, a_idx] .+ pillar_h .+ dist_shift
-        log_λ_a = mu_base .+ delta_m .+ lg_h .+
-                  core.α[:, a_idx] .+ core.β[:, h_idx] .+ pillar_a .- dist_shift
-
-        λ_h = exp.(log_λ_h) .* κ
-        λ_a = exp.(log_λ_a) .* κ
+        μ_h = exp.(c.lin_h .+ dist_shift)
+        μ_a = exp.(c.lin_a .- dist_shift)
 
         results[mid] = (;
-            λ_h = λ_h,
-            λ_a = λ_a,
+            λ_h = κ .* μ_h,
+            λ_a = κ .* μ_a,
             r_h = r_h_samples,
             r_a = r_a_samples,
-            true_xg_h = exp.(mu_base .+ delta_m .+ ha_val .+ lg_h .+ lg_ha .+ core.α[:, h_idx] .+ core.β[:, a_idx] .+ pillar_h .+ dist_shift),
-            true_xg_a = exp.(mu_base .+ delta_m .+ lg_h .+ core.α[:, a_idx] .+ core.β[:, h_idx] .+ pillar_a .- dist_shift),
+            true_xg_h = μ_h,
+            true_xg_a = μ_a,
             κ   = κ
         )
     end

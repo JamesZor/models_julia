@@ -92,7 +92,7 @@ for t in target_models
         p = Pred.extract_params(model, row1)
         s_mat = Pred.compute_score_matrix(model, p; max_goals = 10)
         
-        println("✅ OK (extracted $(nrow(split_df)) matches, score matrix sum = $(round(sum(s_mat.matrix[:,:,1]), digits=4)))")
+        println("✅ OK (extracted $(nrow(split_df)) matches, score matrix sum = $(round(sum(s_mat.data[:,:,1]), digits=4)))")
     catch e
         println("❌ FAILED!")
         println("  Error: $e")
