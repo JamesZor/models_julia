@@ -55,7 +55,7 @@ for exp in experiments
     
     first_row = latents.df[1, :]
     S = Predictions.compute_score_matrix(exp.config.model, first_row)
-    s_sum = sum(S)
+    s_sum = round(sum(S.matrix), digits=4)
     
     println("✓ Model: $(rpad(exp.config.name, 35)) | $(nrow(latents.df)) matches extracted/loaded in $(elapsed)ms | Score Matrix Sum = $s_sum")
 end
