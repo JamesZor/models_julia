@@ -217,14 +217,14 @@ end
 # 3. BRANCH B: INTEGRATED CO-TRAINED TURING ENGINE (POISSON PROOF-OF-CONCEPT)
 # ==============================================================================
 
-struct TeamGoalsPoissonOpenPlayModel <: PreGame.AbstractPreGameModel
+struct TeamGoalsPoissonOpenPlayModel <: PreGame.AbstractTimeDecayTeamModel
     dynamics_config::PreGame.AbstractDynamicsConfig
     name::String
 end
 TeamGoalsPoissonOpenPlayModel(; dynamics_config = PreGame.TimeDecayDynamics(days_half_life=365.0), name="goals_pois_open_play") =
     TeamGoalsPoissonOpenPlayModel(dynamics_config, name)
 
-struct TeamGoalsRecombIntegratedPoissonModel <: PreGame.AbstractPreGameModel
+struct TeamGoalsRecombIntegratedPoissonModel <: PreGame.AbstractTimeDecayTeamModel
     dynamics_config::PreGame.AbstractDynamicsConfig
     name::String
 end
