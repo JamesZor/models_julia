@@ -182,7 +182,8 @@ function aggregate_clean_pxg_by_match(ds::Data.DataStore; k = 25.0)::DataFrame
         for row in eachrow(shots)
             m_id = Int32(row.match_id)
             xg = coalesce(row.pred_xg, 0.0)
-            if row.is_home
+            is_home = coalesce(row.is_home, true)
+            if is_home
                 pxg_h_map[m_id] = get(pxg_h_map, m_id, 0.0) + xg
                 n_shots_h[m_id] = get(n_shots_h, m_id, 0) + 1
             else
