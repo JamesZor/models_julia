@@ -2,11 +2,6 @@
 #
 # SMOKE TEST: Fast Verification of Parameter Extraction & Score Matrix Computation
 #             across all 8 Scottish Lower Benchmark Models.
-#
-# Tests:
-# 1. Experiments.extract_parameters for each model type
-# 2. Pred.extract_params & Pred.compute_score_matrix
-# 3. Quick 1-split test match prediction
 
 using Revise
 using BayesianFootball
@@ -14,6 +9,7 @@ using DataFrames, Dates, Statistics, Printf
 
 const Evaluation  = BayesianFootball.Evaluation
 const Experiments = BayesianFootball.Experiments
+const Features    = BayesianFootball.Features
 const Pred        = BayesianFootball.Predictions
 const Data        = BayesianFootball.Data
 
@@ -60,7 +56,7 @@ for exp in all_loaded
     end
 end
 
-println("✓ Found $(length(experiments_dict))/$(length(target_models)) target models on disk")
+println("✓ Found $(length(experiments_dict))/$(length(target_models)) target models on disk\n")
 
 for t in target_models
     if !haskey(experiments_dict, t)
@@ -73,24 +69,30 @@ for t in target_models
     
     print("Testing extraction for [$mname] ($(typeof(model).name.name))... ")
     try
-        # Test split 1
+        # Reconstruct features for split 1
+        boundaries_with_meta = Data.create_id_boundaries(ds, exp.config.splitter)
+        feature_sets = Features.create_features(
+            boundaries_with_meta[1:1], 
+            ds, 
+            exp.config.model, 
+            exp.config.splitter.dynamics_col
+        )
         result_tuple = exp.training_results.items[1]
-        feature_tuple = exp.features.items[1]
-        chain = result_tuple[1]
-        split_meta = result_tuple[2]
-        f_set = feature_tuple[1]
         
-        # Test extract_parameters
-        test_df = filter(r -> r.match_id in split_meta.test_match_ids, ds.matches)
+        split_df = Experiments._process_split(
+            ds,
+            exp.config.model,
+            exp.config.splitter,
+            feature_sets[1],
+            result_tuple
+        )
         
-        params_dict = Experiments.extract_parameters(model, test_df, f_set, chain)
-        
-        # Test score matrix for 1 match
-        first_mid = first(keys(params_dict))
-        p = params_dict[first_mid]
+        # Test score matrix for row 1
+        row1 = split_df[1, :]
+        p = Pred.extract_params(model, row1)
         s_mat = Pred.compute_score_matrix(model, p; max_goals = 10)
         
-        println("✅ OK (extracted $(length(params_dict)) matches, score matrix sum = $(round(sum(s_mat.matrix[:,:,1]), digits=4)))")
+        println("✅ OK (extracted $(nrow(split_df)) matches, score matrix sum = $(round(sum(s_mat.matrix[:,:,1]), digits=4)))")
     catch e
         println("❌ FAILED!")
         println("  Error: $e")
