@@ -181,7 +181,7 @@ for mod_name in target_models
     end
     exp_path = matching[end]
     println("Loading: $exp_path")
-    exp_res = Experiments.load_experiments(exp_path)
+    exp_res = Experiments.load_experiment(exp_path)
     
     r_h_all_folds = Float64[]
     r_a_all_folds = Float64[]
