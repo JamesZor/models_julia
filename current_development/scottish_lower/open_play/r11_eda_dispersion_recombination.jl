@@ -19,16 +19,17 @@ using Statistics
 using Printf
 using MCMCChains
 
+# Include loader for open play extraction
+include("l01_open_play_feature.jl")
+
 println("="^90)
 println("🔬 EDA: DISPERSION & OVERDISPERSION ANALYSIS (GROSS GOALS vs OPEN-PLAY)")
 println("="^90)
 
 # 1. Load DataStore
 ds = Data.load_datastore_cached(Data.ScottishLower())
-df = sort(ds.matches, :starting_time)
+df = extract_open_play_match_data(ds)
 
-# Filter valid target matches
-df = filter(r -> !ismissing(r.home_score) && !ismissing(r.away_score), df)
 n_total = nrow(df)
 println("\n✓ Total Matches in Dataset: $n_total")
 
@@ -36,11 +37,11 @@ println("\n✓ Total Matches in Dataset: $n_total")
 df.home_gross_goals = Int.(df.home_score)
 df.away_gross_goals = Int.(df.away_score)
 
-df.home_pen_goals = coalesce.(Int.(df.home_penalties), 0)
-df.away_pen_goals = coalesce.(Int.(df.away_penalties), 0)
+df.home_pen_goals = Int.(df.pen_scored_h)
+df.away_pen_goals = Int.(df.pen_scored_a)
 
-df.home_open_goals = max.(0, df.home_gross_goals .- df.home_pen_goals)
-df.away_open_goals = max.(0, df.away_gross_goals .- df.away_pen_goals)
+df.home_open_goals = Int.(df.y_np_nog_h)
+df.away_open_goals = Int.(df.y_np_nog_a)
 
 # ==============================================================================
 # SECTION 1: EMPIRICAL DISPERSION METRICS (FULL DATASET & RECENT SEASONS)
@@ -83,13 +84,13 @@ disp_df_all = DataFrame(metrics_all)
 println(disp_df_all)
 
 # Target Test Matches (Seasons 24/25 & 25/26)
-df_recent = filter(r -> !ismissing(r.season_name) && r.season_name in ["2024/2025", "2025/2026", "24/25", "25/26"] || (r.starting_time >= minimum(df.starting_time[end-709:end])), df)
-if nrow(df_recent) > 710
+df_recent = filter(r -> hasproperty(r, :season) && (r.season == "24/25" || r.season == "25/26"), df)
+if nrow(df_recent) == 0
     df_recent = df[end-709:end, :]
 end
 
 println("\n" * "="^90)
-println("📊 2. EMPIRICAL DISPERSION METRICS (RECENT 710 TEST MATCHES: 24/25 & 25/26)")
+println("📊 2. EMPIRICAL DISPERSION METRICS (RECENT $(nrow(df_recent)) TEST MATCHES: 24/25 & 25/26)")
 println("="^90)
 
 metrics_recent = [
