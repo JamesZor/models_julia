@@ -162,9 +162,9 @@ end
 # ==============================================================================
 
 """
-    TeamGoalsRecombIntegratedPoisWealthModel <: PreGame.AbstractTuringModel
+    TeamGoalsRecombIntegratedPoisWealthModel <: PreGame.AbstractTimeDecayTeamModel
 """
-struct TeamGoalsRecombIntegratedPoisWealthModel <: PreGame.AbstractTuringModel
+struct TeamGoalsRecombIntegratedPoisWealthModel <: PreGame.AbstractTimeDecayTeamModel
     dynamics_config::PreGame.AbstractDynamicsConfig
     w_wealth_prior::Distribution
     name::String
