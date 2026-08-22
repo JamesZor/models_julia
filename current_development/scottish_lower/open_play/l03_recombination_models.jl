@@ -681,8 +681,13 @@ end
 end
 
 # --- Builder Implementations ---
-function PreGame.build_turing_model(model::TeamGoalsPoissonModel, feature_set::Features.FeatureSet)
-    d = feature_set.data
+_get_recomb_data(fs::Features.FeatureSet) = fs.data
+_get_recomb_data(fs::Tuple) = _get_recomb_data(first(fs))
+_get_recomb_data(fs::Dict) = fs
+_get_recomb_data(fs) = hasproperty(fs, :data) ? fs.data : fs
+
+function PreGame.build_turing_model(model::TeamGoalsPoissonModel, feature_set)
+    d = _get_recomb_data(feature_set)
     return _turing_goals_poisson_control(
         d[:home_team_indices],
         d[:away_team_indices],
@@ -697,8 +702,8 @@ function PreGame.build_turing_model(model::TeamGoalsPoissonModel, feature_set::F
     )
 end
 
-function PreGame.build_turing_model(model::TeamGoalsPoissonOpenPlayModel, feature_set::Features.FeatureSet)
-    d = feature_set.data
+function PreGame.build_turing_model(model::TeamGoalsPoissonOpenPlayModel, feature_set)
+    d = _get_recomb_data(feature_set)
     return _turing_goals_poisson_open_play(
         d[:home_team_indices],
         d[:away_team_indices],
@@ -713,8 +718,8 @@ function PreGame.build_turing_model(model::TeamGoalsPoissonOpenPlayModel, featur
     )
 end
 
-function PreGame.build_turing_model(model::TeamGoalsRecombIntegratedPoissonModel, feature_set::Features.FeatureSet)
-    d = feature_set.data
+function PreGame.build_turing_model(model::TeamGoalsRecombIntegratedPoissonModel, feature_set)
+    d = _get_recomb_data(feature_set)
     return _turing_goals_recomb_integrated_poisson(
         d[:home_team_indices],
         d[:away_team_indices],
@@ -734,8 +739,8 @@ function PreGame.build_turing_model(model::TeamGoalsRecombIntegratedPoissonModel
     )
 end
 
-function PreGame.build_turing_model(model::TeamGoalsRecombIntegratedNegBinModel, feature_set::Features.FeatureSet)
-    d = feature_set.data
+function PreGame.build_turing_model(model::TeamGoalsRecombIntegratedNegBinModel, feature_set)
+    d = _get_recomb_data(feature_set)
     return _turing_goals_recomb_integrated_negbin(
         d[:home_team_indices],
         d[:away_team_indices],
