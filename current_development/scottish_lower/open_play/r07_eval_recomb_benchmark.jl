@@ -44,10 +44,11 @@ all_folders = vcat(ctl_folders, op_folders)
 all_loaded  = Experiments.load_experiments(all_folders)
 
 target_models = [
-    "goals_negbin_ctl_hl365_hs2",
-    "goals_negbin_open_play_hl365_hs2",
+    "goals_pois_ctl_hl365_hs2",
     "goals_pois_open_play_hl365_hs2",
-    "recomb_pois_integrated_hl365_hs2"
+    "recomb_pois_integrated_hl365_hs2",
+    "goals_negbin_ctl_hl365_hs2",
+    "goals_negbin_open_play_hl365_hs2"
 ]
 
 experiments_dict = Dict{String, Any}()
