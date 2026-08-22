@@ -608,46 +608,50 @@ function Predictions.extract_params(
     return Predictions.LatentStates(out_df, model)
 end
 
-function Predictions.compute_score_matrix(
-    model::TeamGoalsRecombIntegratedPoisWealthModel,
-    params;
-    max_goals::Int = 12
-)
-    mu_open_h    = params.mu_open_h
-    mu_open_a    = params.mu_open_a
-    lambda_pen_h = params.lambda_pen_h
-    lambda_pen_a = params.lambda_pen_a
-    q_pen        = get(params, :q_pen, 0.76)
-    rho          = get(params, :rho, -0.05)
-
-    # 1. Open Play Marginals: Poisson
-    d_open_h = Poisson(max(Float64(mu_open_h), 1e-4))
-    d_open_a = Poisson(max(Float64(mu_open_a), 1e-4))
-
-    p_open_h = [pdf(d_open_h, g) for g in 0:max_goals]
-    p_open_a = [pdf(d_open_a, g) for g in 0:max_goals]
-
-    # 2. Penalty Marginals
-    p_pen_h = _compute_penalty_goal_probs(lambda_pen_h, q_pen, max_goals)
-    p_pen_a = _compute_penalty_goal_probs(lambda_pen_a, q_pen, max_goals)
-
-    # 3. Discrete Convolution
-    p_h = _discrete_convolve(p_open_h, p_pen_h, max_goals)
-    p_a = _discrete_convolve(p_open_a, p_pen_a, max_goals)
-
-    # 4. Joint Matrix with Dixon-Coles Low-Score Adjustment
-    S = zeros(Float64, max_goals + 1, max_goals + 1)
-    for h in 0:max_goals, a in 0:max_goals
-        tau = _dixon_coles_tau(h, a, mu_open_h, mu_open_a, rho)
-        S[h + 1, a + 1] = p_h[h + 1] * p_a[a + 1] * tau
-    end
-
-    total_p = sum(S)
-    if total_p > 0.0
-        S ./= total_p
-    end
-
-    return S
+function Predictions.extract_params(model::TeamGoalsRecombIntegratedPoisWealthModel, row::DataFrameRow)
+    ln_h = hasproperty(row, :lambda_noise_h) ? (row.lambda_noise_h isa AbstractVector ? row.lambda_noise_h : [row.lambda_noise_h]) : (hasproperty(row, :lambda_pen_h) ? (0.768 .* (row.lambda_pen_h isa AbstractVector ? row.lambda_pen_h : [row.lambda_pen_h])) .+ 0.0276 : fill(0.10, length(row.λ_h)))
+    ln_a = hasproperty(row, :lambda_noise_a) ? (row.lambda_noise_a isa AbstractVector ? row.lambda_noise_a : [row.lambda_noise_a]) : (hasproperty(row, :lambda_pen_a) ? (0.768 .* (row.lambda_pen_a isa AbstractVector ? row.lambda_pen_a : [row.lambda_pen_a])) .+ 0.0276 : fill(0.10, length(row.λ_a)))
+    
+    return (
+        λ_open_h = hasproperty(row, :λ_open_h) ? (row.λ_open_h isa AbstractVector ? row.λ_open_h : [row.λ_open_h]) : (hasproperty(row, :lambda_open_h) ? (row.lambda_open_h isa AbstractVector ? row.lambda_open_h : [row.lambda_open_h]) : row.λ_h),
+        λ_open_a = hasproperty(row, :λ_open_a) ? (row.λ_open_a isa AbstractVector ? row.λ_open_a : [row.λ_open_a]) : (hasproperty(row, :lambda_open_a) ? (row.lambda_open_a isa AbstractVector ? row.lambda_open_a : [row.lambda_open_a]) : row.λ_a),
+        lambda_noise_h = ln_h,
+        lambda_noise_a = ln_a
+    )
 end
+
+function Predictions.compute_score_matrix(model::TeamGoalsRecombIntegratedPoisWealthModel, params; max_goals::Int = 12)
+    p = params isa DataFrameRow ? Predictions.extract_params(model, params) : params
+    λ_open_h = p.λ_open_h
+    λ_open_a = p.λ_open_a
+    ln_h = p.lambda_noise_h
+    ln_a = p.lambda_noise_a
+    n_samples = length(λ_open_h)
+    
+    S = zeros(Float64, max_goals, max_goals, n_samples)
+    for k in 1:n_samples
+        mu_open_h = λ_open_h[k]
+        mu_open_a = λ_open_a[k]
+        mu_noise_h = ln_h[k]
+        mu_noise_a = ln_a[k]
+        
+        p_open_h  = [pdf(Poisson(max(1e-4, mu_open_h)), g) for g in 0:max_goals-1]
+        p_noise_h = [pdf(Poisson(max(1e-4, mu_noise_h)), g) for g in 0:max_goals-1]
+        p_open_a  = [pdf(Poisson(max(1e-4, mu_open_a)), g) for g in 0:max_goals-1]
+        p_noise_a = [pdf(Poisson(max(1e-4, mu_noise_a)), g) for g in 0:max_goals-1]
+        
+        # Convolve: P(Y_total = g) = sum_{m=0}^g P(Y_open = m) * P(Y_noise = g - m)
+        p_tot_h = [sum(p_open_h[m+1] * p_noise_h[g - m + 1] for m in 0:g) for g in 0:max_goals-1]
+        p_tot_a = [sum(p_open_a[m+1] * p_noise_a[g - m + 1] for m in 0:g) for g in 0:max_goals-1]
+        
+        p_tot_h ./= sum(p_tot_h)
+        p_tot_a ./= sum(p_tot_a)
+        
+        S[:, :, k] = p_tot_h * p_tot_a'
+    end
+    return Predictions.ScoreMatrix(S)
+end
+
+Predictions.compute_score_matrix(model::TeamGoalsRecombIntegratedPoisWealthModel, r::DataFrameRow; max_goals::Int = 12) = Predictions.compute_score_matrix(model, Predictions.extract_params(model, r); max_goals=max_goals)
 
 println("✓ l04_recomb_wealth_models.jl loaded (Integrated Poisson Recombination + Starting-XI Squad Wealth Model)")

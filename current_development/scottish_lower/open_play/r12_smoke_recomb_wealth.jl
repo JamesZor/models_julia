@@ -95,21 +95,18 @@ println("\n✓ Extracted OOS LatentStates for $(nrow(latents.df)) target matches
 
 first_match = latents.df[1, :]
 params = (
-    mu_open_h    = first_match.mu_open_h_samples[1],
-    mu_open_a    = first_match.mu_open_a_samples[1],
-    lambda_pen_h = first_match.lambda_pen_h_samples[1],
-    lambda_pen_a = first_match.lambda_pen_a_samples[1],
-    q_pen        = first_match.q_pen_samples[1],
-    rho          = first_match.rho_samples[1]
+    λ_open_h       = first_match.mu_open_h_samples,
+    λ_open_a       = first_match.mu_open_a_samples,
+    lambda_noise_h = (0.768 .* first_match.lambda_pen_h_samples) .+ 0.0276,
+    lambda_noise_a = (0.768 .* first_match.lambda_pen_a_samples) .+ 0.0276
 )
 
-S = Predictions.compute_score_matrix(model, params)
-println("✓ Computed Score Matrix for Match $(first_match.match_id) (Sum = $(round(sum(S), digits=6)))")
-println("  • μ_open_h = $(round(params.mu_open_h, digits=3)), μ_open_a = $(round(params.mu_open_a, digits=3))")
-println("  • λ_pen_h  = $(round(params.lambda_pen_h, digits=3)), λ_pen_a  = $(round(params.lambda_pen_a, digits=3))")
-println("  • P(Home Win) = $(round(sum(tril(S, -1)), digits=4))")
-println("  • P(Draw)     = $(round(sum(diag(S)), digits=4))")
-println("  • P(Away Win) = $(round(sum(triu(S, 1)), digits=4))")
+SM = Predictions.compute_score_matrix(model, params)
+S_mean = mean(SM.matrices, dims=3)[:, :, 1]
+println("✓ Computed Score Matrix for Match $(first_match.match_id) (Mean Sum = $(round(sum(S_mean), digits=6)))")
+println("  • P(Home Win) = $(round(sum(tril(S_mean, -1)), digits=4))")
+println("  • P(Draw)     = $(round(sum(diag(S_mean)), digits=4))")
+println("  • P(Away Win) = $(round(sum(triu(S_mean, 1)), digits=4))")
 
 println("\n" * "="^90)
 println("✓ RECOMBINATION + SQUAD WEALTH SMOKE TEST COMPLETED SUCCESSFULLY!")
