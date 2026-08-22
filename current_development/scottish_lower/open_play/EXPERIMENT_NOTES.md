@@ -110,9 +110,10 @@ All models have completed 40-fold walk-forward MCMC sampling and are persisted o
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Gross Goals Poisson Control** (`goals_pois_ctl`) | Poisson | **`+0.0081`** | 0.6380 | **`-0.00034`** | **`-0.0009`** | 0.0072 |
 | **Pure Open-Play Poisson** (`goals_pois_open_play`) | Poisson | `+0.1103` | 0.6420 | `+0.00686` | `-0.0005` | 0.0094 |
-| **Integrated Recombination** (`recomb_pois_integrated`) | Poisson | **`+0.0199`** | **0.6372** | **`-0.00156`** *(Beats Market)* | **`-0.0012`** *(Beats Market)* | **0.0065** |
+| **Integrated Recombination** (`recomb_pois_integrated`) | Poisson | **`+0.0199`** | **0.6372`** | **`-0.00156`** *(Beats Market)* | **`-0.0012`** *(Beats Market)* | **0.0065`** |
 | **Gross Goals NegBin Control** (`goals_negbin_ctl`) | NegBin | `+0.0354` | **0.6295** | `+0.00070` | `+0.0011` | **0.0034** |
 | **Pure Open-Play NegBin** (`goals_negbin_open_play`) | NegBin | `+0.1240` | 0.6343 | `+0.00896` | `+0.0015` | 0.0111 |
+| **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | NegBin | **`-0.0071`** | 0.6367 | `+0.03306` | `+0.0026` | 0.0294 |
 
 ---
 
@@ -127,6 +128,7 @@ All models have completed 40-fold walk-forward MCMC sampling and are persisted o
 | 🥉 **Pure Open-Play Poisson** (`goals_pois_open_play`) | 2.512x | +0.930% | +9.03% | 12.7% | **-33.86%** | 1.01 | 2,002 |
 | 4. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 1.924x | +0.661% | +7.54% | 11.0% | **-33.58%** | 0.83 | 1,874 |
 | 5. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.425x | +0.358% | +4.04% | 12.2% | **-31.93%** | 0.56 | 1,978 |
+| 6. **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | 0.960x | -0.041% | +0.80% | 13.5% | -34.46% | 0.12 | 2,095 |
 
 #### 2. Conservative Policy (Exposure Cap 10%, Drawdown Penalty $\lambda = 23$)
 | Model | Final Wealth | Slate Growth | ROI % | Mean Exposure % | Max Drawdown % | Sharpe Ratio | Bets Placed |
@@ -136,6 +138,7 @@ All models have completed 40-fold walk-forward MCMC sampling and are persisted o
 | 🥉 **Pure Open-Play Poisson** (`goals_pois_open_play`) | 1.936x | +0.667% | +9.03% | 8.5% | -23.44% | 1.02 | 2,002 |
 | 4. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 1.589x | +0.468% | +7.41% | 7.3% | -23.65% | 0.82 | 1,874 |
 | 5. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.301x | +0.266% | +4.00% | 8.1% | -22.48% | 0.55 | 1,978 |
+| 6. **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | 1.006x | +0.006% | +0.81% | 9.0% | -23.88% | 0.12 | 2,095 |
 
 #### 3. Aggressive Policy (Exposure Cap 25%, Drawdown Penalty $\lambda = 10$)
 | Model | Final Wealth | Slate Growth | ROI % | Mean Exposure % | Max Drawdown % | Sharpe Ratio | Bets Placed |
@@ -145,6 +148,7 @@ All models have completed 40-fold walk-forward MCMC sampling and are persisted o
 | 🥉 **Pure Open-Play Poisson** (`goals_pois_open_play`) | 3.842x | +1.360% | +9.20% | 20.6% | **-49.82%** | 1.05 | 2,002 |
 | 4. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 2.586x | +0.960% | +7.91% | 17.4% | -46.41% | 0.87 | 1,874 |
 | 5. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.651x | +0.507% | +4.28% | 19.8% | -47.10% | 0.60 | 1,978 |
+| 6. **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | 0.884x | -0.125% | +1.16% | 22.1% | -49.74% | 0.17 | 2,095 |
 
 ---
 
