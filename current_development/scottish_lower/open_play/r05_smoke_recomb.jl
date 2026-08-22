@@ -150,7 +150,7 @@ println("✓ Extracted NegBin parameters for $(length(params_nb)) matches")
 first_mid = first(keys(params_nb))
 p_sample = params_nb[first_mid]
 sm_nb = Predictions.compute_score_matrix(m_nb, p_sample)
-sum_sm = sum(sm_nb.matrix[:, :, 1])
+sum_sm = sum(sm_nb.data[:, :, 1])
 println("✓ Computed Recombined NegBin Score Matrix (Sum = $(round(sum_sm, digits=6)), $(isapprox(sum_sm, 1.0) ? "VALID ✅" : "INVALID ❌"))")
 
 println("\n", "="^95)
