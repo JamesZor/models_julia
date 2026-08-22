@@ -97,10 +97,9 @@ for exp in experiments
     else
         @info "Building Betfair MatchBooks for: $m_name..."
         oos_latents = Experiments.extract_oos_predictions(ds, exp)
+        target_df = filter(r -> r.match_id in target_match_ids, oos_latents.df)
         t0 = time()
-        b_all = Portfolio.build_books(spec, oos_latents.df, exp, bf_odds, ds)
-        # Filter to target matches
-        b = filter(bk -> bk.m_id in target_match_ids, b_all)
+        b = Portfolio.build_books(spec, target_df, exp, bf_odds, ds)
         elapsed = round(time() - t0, digits = 1)
         @info "Completed Betfair MatchBooks for $m_name in $(elapsed)s" n_books=length(b)
         serialize(cache_file, b)
