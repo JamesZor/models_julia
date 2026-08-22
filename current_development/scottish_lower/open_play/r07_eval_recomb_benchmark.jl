@@ -24,6 +24,7 @@ const ROOT = pkgdir(BayesianFootball)
 include("l01_open_play_feature.jl")
 include("l02_open_play_engines.jl")
 include("l03_recombination_models.jl")
+include("l04_recomb_wealth_models.jl")
 
 function banner(msg::String)
     println("\n", "="^95)
@@ -47,6 +48,7 @@ target_models = [
     "goals_pois_ctl_hl365_hs2",
     "goals_pois_open_play_hl365_hs2",
     "recomb_pois_integrated_hl365_hs2",
+    "recomb_pois_wealth_integrated_hl365_hs2",
     "goals_negbin_ctl_hl365_hs2",
     "goals_negbin_open_play_hl365_hs2",
     "recomb_negbin_integrated_hl365_hs2"
