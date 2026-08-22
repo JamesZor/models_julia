@@ -257,8 +257,16 @@ function score_matrix_divergence(S1::Matrix{Float64}, S2::Matrix{Float64})
 end
 
 # ==============================================================================
+# ==============================================================================
 # 3. BRANCH B: INTEGRATED CO-TRAINED TURING ENGINE (POISSON PROOF-OF-CONCEPT)
 # ==============================================================================
+
+struct TeamGoalsPoissonModel <: PreGame.AbstractTimeDecayTeamModel
+    dynamics_config::PreGame.AbstractDynamicsConfig
+    name::String
+end
+TeamGoalsPoissonModel(; dynamics_config = PreGame.TimeDecayDynamics(days_half_life=365.0), name="goals_pois_ctl") =
+    TeamGoalsPoissonModel(dynamics_config, name)
 
 struct TeamGoalsPoissonOpenPlayModel <: PreGame.AbstractTimeDecayTeamModel
     dynamics_config::PreGame.AbstractDynamicsConfig
@@ -274,8 +282,10 @@ end
 TeamGoalsRecombIntegratedPoissonModel(; dynamics_config = PreGame.TimeDecayDynamics(days_half_life=365.0), name="recomb_pois_integrated_bayes") =
     TeamGoalsRecombIntegratedPoissonModel(dynamics_config, name)
 
+const AbstractScottishPoissonModel = Union{TeamGoalsPoissonModel, TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel}
+
 # --- FeatureSet Overload for Integrated Model ---
-function _build_recomb_features(b::Data.SplitBoundary, ds::Data.DataStore, model::Union{TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel})
+function _build_recomb_features(b::Data.SplitBoundary, ds::Data.DataStore, model::AbstractScottishPoissonModel)
     df_clean, df_ref = build_open_play_target_dataset(ds)
     all_refs = unique(filter(x -> x > 0, df_clean.referee_id))
     ref_map = Dict(r => idx for (idx, r) in enumerate(all_refs))
@@ -285,6 +295,9 @@ function _build_recomb_features(b::Data.SplitBoundary, ds::Data.DataStore, model
     
     home_ids = Vector{Int}(m.home_team_id)
     away_ids = Vector{Int}(m.away_team_id)
+    
+    home_gross_goals = Vector{Int}(m.home_goals)
+    away_gross_goals = Vector{Int}(m.away_goals)
     
     home_open_goals = Vector{Int}(m.home_goals_np_nog)
     away_open_goals = Vector{Int}(m.away_goals_np_nog)
@@ -315,6 +328,8 @@ function _build_recomb_features(b::Data.SplitBoundary, ds::Data.DataStore, model
             :away_team_indices   => a_idx,
             :month_indices       => month_indices,
             :league_indices      => league_indices,
+            :home_gross_goals    => home_gross_goals,
+            :away_gross_goals    => away_gross_goals,
             :home_open_goals     => home_open_goals,
             :away_open_goals     => away_open_goals,
             :home_pens           => home_pens,
@@ -337,7 +352,7 @@ end
 function Features.create_features(
     splits::Vector{<:Tuple{Data.SplitBoundary, <:Any}},
     ds::Data.DataStore,
-    model::Union{TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel},
+    model::AbstractScottishPoissonModel,
     dynamics_col::Symbol = :match_month
 )
     raw_vector = [
@@ -350,12 +365,53 @@ end
 function Features.create_features(
     boundary::Data.SplitBoundary,
     ds::Data.DataStore,
-    model::Union{TeamGoalsPoissonOpenPlayModel, TeamGoalsRecombIntegratedPoissonModel},
+    model::AbstractScottishPoissonModel,
     dynamics_col::Symbol = :match_month
 )
     return _build_recomb_features(boundary, ds, model)
 end
 
+# --- Vectorized Turing Model: Baseline Gross Goals Poisson ---
+@model function _turing_goals_poisson_control(
+    home_indices::Vector{Int},
+    away_indices::Vector{Int},
+    month_indices::Vector{Int},
+    league_indices::Vector{Int},
+    home_gross_goals::Vector{Int},
+    away_gross_goals::Vector{Int},
+    match_weights::Vector{Float64},
+    n_teams::Int,
+    n_months::Int,
+    n_leagues::Int
+)
+    # 1. Priors
+    base_mu ~ Normal(0.2, 0.5)
+    ha_home ~ Normal(0.2, 0.15)
+    
+    delta_month ~ filldist(Normal(0.0, 0.1), n_months)
+    delta_league ~ filldist(Normal(0.0, 0.1), n_leagues)
+    
+    raw_alpha ~ filldist(Normal(0.0, 0.3), n_teams)
+    raw_beta  ~ filldist(Normal(0.0, 0.3), n_teams)
+    
+    alpha = raw_alpha .- mean(raw_alpha)
+    beta  = raw_beta  .- mean(raw_beta)
+    
+    # 2. Vectorized Intensity
+    int_m = base_mu .+ view(delta_month, month_indices) .+ view(delta_league, league_indices)
+    
+    log_mu_h = clamp.(int_m .+ ha_home .+ view(alpha, home_indices) .- view(beta, away_indices), -10.0, 10.0)
+    log_mu_a = clamp.(int_m .+ view(alpha, away_indices) .- view(beta, home_indices), -10.0, 10.0)
+    
+    mu_h = exp.(log_mu_h) .+ 1e-6
+    mu_a = exp.(log_mu_a) .+ 1e-6
+    
+    # 3. Vectorized Likelihood
+    ll_h = logpdf.(Poisson.(mu_h), home_gross_goals)
+    ll_a = logpdf.(Poisson.(mu_a), away_gross_goals)
+    
+    Turing.@addlogprob! sum((ll_h .+ ll_a) .* match_weights)
+end
 
 # --- Vectorized Turing Model: Pure Open Play Poisson ---
 @model function _turing_goals_poisson_open_play(
@@ -471,6 +527,22 @@ end
 end
 
 # --- Builder Implementations ---
+function PreGame.build_turing_model(model::TeamGoalsPoissonModel, feature_set::Features.FeatureSet)
+    d = feature_set.data
+    return _turing_goals_poisson_control(
+        d[:home_team_indices],
+        d[:away_team_indices],
+        d[:month_indices],
+        d[:league_indices],
+        d[:home_gross_goals],
+        d[:away_gross_goals],
+        d[:match_weights],
+        d[:n_teams],
+        d[:n_months],
+        d[:n_leagues]
+    )
+end
+
 function PreGame.build_turing_model(model::TeamGoalsPoissonOpenPlayModel, feature_set::Features.FeatureSet)
     d = feature_set.data
     return _turing_goals_poisson_open_play(
@@ -607,7 +679,7 @@ end
 _has_param(chain::Chains, p::String) = Symbol(p) in names(chain) || p in string.(names(chain))
 
 function PreGame.extract_parameters(
-    model::TeamGoalsPoissonOpenPlayModel,
+    model::Union{TeamGoalsPoissonModel, TeamGoalsPoissonOpenPlayModel},
     df::AbstractDataFrame,
     feature_set::Features.FeatureSet,
     chain::Chains
@@ -767,14 +839,14 @@ function PreGame.extract_parameters(
 end
 
 # --- Score Matrix & Prediction Overloads ---
-function Predictions.extract_params(model::TeamGoalsPoissonOpenPlayModel, row)
+function Predictions.extract_params(model::Union{TeamGoalsPoissonModel, TeamGoalsPoissonOpenPlayModel}, row)
     return (
         λ_h = row.λ_h isa AbstractVector ? row.λ_h : [row.λ_h],
         λ_a = row.λ_a isa AbstractVector ? row.λ_a : [row.λ_a]
     )
 end
 
-function Predictions.compute_score_matrix(model::TeamGoalsPoissonOpenPlayModel, params; max_goals::Int = 12)
+function Predictions.compute_score_matrix(model::Union{TeamGoalsPoissonModel, TeamGoalsPoissonOpenPlayModel}, params; max_goals::Int = 12)
     p = params isa DataFrameRow ? Predictions.extract_params(model, params) : params
     λ_h = p.λ_h
     λ_a = p.λ_a
@@ -793,7 +865,7 @@ function Predictions.compute_score_matrix(model::TeamGoalsPoissonOpenPlayModel, 
     return Predictions.ScoreMatrix(S)
 end
 
-Predictions.compute_score_matrix(model::TeamGoalsPoissonOpenPlayModel, r::DataFrameRow; max_goals::Int = 12) = Predictions.compute_score_matrix(model, Predictions.extract_params(model, r); max_goals=max_goals)
+Predictions.compute_score_matrix(model::Union{TeamGoalsPoissonModel, TeamGoalsPoissonOpenPlayModel}, r::DataFrameRow; max_goals::Int = 12) = Predictions.compute_score_matrix(model, Predictions.extract_params(model, r); max_goals=max_goals)
 
 function Predictions.extract_params(model::TeamGoalsRecombIntegratedPoissonModel, row)
     n_s = length(row.λ_h)
