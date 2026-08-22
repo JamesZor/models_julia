@@ -189,8 +189,8 @@ for mod_name in target_models
     r_h_all_folds = Float64[]
     r_a_all_folds = Float64[]
     
-    for split_res in exp_res.results
-        chain = split_res.chain
+    for item in exp_res.training_results.items
+        chain = item[1]
         chain_names = String.(names(chain))
         
         # Check parameter names
