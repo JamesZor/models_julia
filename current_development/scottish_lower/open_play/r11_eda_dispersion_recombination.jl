@@ -19,8 +19,9 @@ using Statistics
 using Printf
 using MCMCChains
 
-# Include loader for open play extraction
+# Include loaders for open play and recombination models
 include("l01_open_play_feature.jl")
+include("l03_recombination_models.jl")
 
 println("="^90)
 println("🔬 EDA: DISPERSION & OVERDISPERSION ANALYSIS (GROSS GOALS vs OPEN-PLAY)")
