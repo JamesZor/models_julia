@@ -19,8 +19,10 @@ using Statistics
 using Printf
 using MCMCChains
 
-# Include loaders for open play and recombination models
+const ROOT = pkgdir(BayesianFootball)
+include(joinpath(ROOT, "current_development/scottish_lower/neg_bin/l01_negbin_engines.jl"))
 include("l01_open_play_feature.jl")
+include("l02_open_play_engines.jl")
 include("l03_recombination_models.jl")
 
 println("="^90)
