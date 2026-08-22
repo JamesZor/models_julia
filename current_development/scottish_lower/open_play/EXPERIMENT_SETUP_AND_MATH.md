@@ -121,11 +121,12 @@ For each MCMC posterior draw $k$:
 
 | Model Tag | Likelihood | RQR Mean Bias ($\approx 0.0$) | CRPS (Lower = Better) | Totals LogLoss Diff | Draw LogLoss Diff | BTTS LogLoss Diff |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Gross Goals Poisson Control** (`goals_pois_ctl`) | Poisson | **`+0.0081`** | 0.6380 | **`-0.00034`** | **`-0.0009`** | 0.0072 |
-| **Pure Open-Play Poisson** (`goals_pois_open_play`) | Poisson | `+0.1103` | 0.6420 | `+0.00686` | `-0.0005` | 0.0094 |
-| **Integrated Recombination Poisson** (`recomb_pois_integrated`) | Poisson | **`+0.0199`** | **0.6372** | **`-0.00156`** *(Beats Market)* | **`-0.0012`** *(Beats Market)* | **0.0065** |
-| **Gross Goals NegBin Control** (`goals_negbin_ctl`) | NegBin | `+0.0354` | **0.6295** | `+0.00070` | `+0.0011` | **0.0| **Pure Open-Play NegBin** (`goals_negbin_open_play`) | NegBin | `+0.1240` | 0.6343 | `+0.00896` | `+0.0015` | 0.0111 |
-| **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | NegBin | **`-0.0071`** | **0.6367** | `+0.03306` | `+0.0026` | 0.0294 |
+| **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | NegBin | **`-0.0057`** 🏆 | **0.6367** 🏆 | **`-0.00180`** 🏆 *(Beats Market)* | **`-0.0009`** | **`+0.0057`** 🏆 |
+| **Integrated Recombination Poisson** (`recomb_pois_integrated`) | Poisson | `+0.0032` | `0.6372` | **`-0.00156`** *(Beats Market)* | **`-0.0012`** *(Beats Market)* | `+0.0065` |
+| **Gross Goals Poisson Control** (`goals_pois_ctl`) | Poisson | `+0.0988` | 0.6380 | **`-0.00034`** *(Beats Market)* | **`-0.0009`** | 0.0072 |
+| **Gross Goals NegBin Control** (`goals_negbin_ctl`) | NegBin | `-0.0081` | **0.6295** | `+0.00070` | `+0.0011` | **0.0034** |
+| **Pure Open-Play Poisson** (`goals_pois_open_play`) | Poisson | `+0.1258` | 0.6420 | `+0.00686` | `-0.0005` | 0.0094 |
+| **Pure Open-Play NegBin** (`goals_negbin_open_play`) | NegBin | `-0.0068` | 0.6343 | `+0.00896` | `+0.0015` | 0.0111 |
 
 *(LogLoss Diff = Model LogLoss − De-Vigged Market Close; negative numbers beat closing bookmaker lines)*
 
@@ -138,12 +139,12 @@ For each MCMC posterior draw $k$:
 ### 1. Balanced Growth Policy (Exposure Cap 15%, Drawdown Penalty $\lambda = 15$)
 | Model | Final Wealth | Slate Growth | ROI % | Mean Exposure % | Max Drawdown % | Sharpe Ratio | Bets Placed |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| 🥇 **Integrated Recombination Poisson** (`recomb_pois_integrated`) | **3.004x** | **+1.111%** | **+11.47%** | 12.1% | -37.75% | **1.08** | **1,919** |
-| 🥈 **Gross Goals Poisson Control** (`goals_pois_ctl`) | 2.862x | +1.062% | +11.06% | 12.1% | -38.91% | 1.05 | 1,927 |
-| 🥉 **Pure Open-Play Poisson** (`goals_pois_open_play`) | 2.512x | +0.930% | +9.03% | 12.7% | **-33.86%** | 1.01 | 2,002 |
-| 4. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 1.924x | +0.661% | +7.54% | 11.0% | **-33.58%** | 0.83 | 1,874 |
-| 5. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.425x | +0.358% | +4.04% | 12.2% | **-31.93%** | 0.56 | 1,978 |
-| 6. **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | 0.960x | -0.041% | +0.80% | 13.5% | -34.46% | 0.12 | 2,095 |
+| 🥇 **Integrated Recombination Poisson** (`recomb_pois_integrated`) | **3.004x** | **+1.111%** | **+11.47%** | 12.1% | **-37.75%** | **1.08** | **1,919** |
+| 🥈 **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | **2.891x** | **+1.072%** | **+11.58%** 🏆 | 11.9% | -41.56% | **1.02** | 1,884 |
+| 🥉 **Gross Goals Poisson Control** (`goals_pois_ctl`) | 2.862x | +1.062% | +11.06% | 12.1% | -38.91% | 1.05 | 1,927 |
+| 4. **Pure Open-Play Poisson** (`goals_pois_open_play`) | 2.512x | +0.930% | +9.03% | 12.7% | -33.86% | 1.01 | 2,002 |
+| 5. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 1.924x | +0.661% | +7.54% | 11.0% | -33.58% | 0.83 | 1,874 |
+| 6. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.425x | +0.358% | +4.04% | 12.2% | **-31.93%** | 0.56 | 1,978 |
 
 ---
 
@@ -151,23 +152,23 @@ For each MCMC posterior draw $k$:
 | Model | Final Wealth | Slate Growth | ROI % | Mean Exposure % | Max Drawdown % | Sharpe Ratio | Bets Placed |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | 🥇 **Integrated Recombination Poisson** (`recomb_pois_integrated`) | **2.215x** | **+0.803%** | **+11.52%** | 8.1% | **-26.48%** | **1.09** | **1,919** |
-| 🥈 **Gross Goals Poisson Control** (`goals_pois_ctl`) | 2.144x | +0.770% | +11.11% | 8.0% | -27.42% | 1.05 | 1,927 |
-| 🥉 **Pure Open-Play Poisson** (`goals_pois_open_play`) | 1.936x | +0.667% | +9.03% | 8.5% | -23.44% | 1.02 | 2,002 |
-| 4. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 1.589x | +0.468% | +7.41% | 7.3% | -23.65% | 0.82 | 1,874 |
-| 5. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.301x | +0.266% | +4.00% | 8.1% | **-22.48%** | 0.55 | 1,978 |
-| 6. **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | 1.006x | +0.006% | +0.81% | 9.0% | -23.88% | 0.12 | 2,095 |
+| 🥈 **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | **2.160x** | **+0.778%** | **+11.57%** 🏆 | 7.9% | -29.51% | **1.02** | 1,884 |
+| 🥉 **Gross Goals Poisson Control** (`goals_pois_ctl`) | 2.144x | +0.770% | +11.11% | 8.0% | -27.42% | 1.05 | 1,927 |
+| 4. **Pure Open-Play Poisson** (`goals_pois_open_play`) | 1.936x | +0.667% | +9.03% | 8.5% | -23.44% | 1.02 | 2,002 |
+| 5. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 1.589x | +0.468% | +7.41% | 7.3% | -23.65% | 0.82 | 1,874 |
+| 6. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.301x | +0.266% | +4.00% | 8.1% | **-22.48%** | 0.55 | 1,978 |
 
 ---
 
 ### 3. Aggressive Policy (Exposure Cap 25%, Drawdown Penalty $\lambda = 10$)
 | Model | Final Wealth | Slate Growth | ROI % | Mean Exposure % | Max Drawdown % | Sharpe Ratio | Bets Placed |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| 🥇 **Integrated Recombination Poisson** (`recomb_pois_integrated`) | **5.118x** | **+1.649%** | **+12.14%** | 19.3% | -54.52% | **1.13** | **1,919** |
+| 🥇 **Integrated Recombination Poisson** (`recomb_pois_integrated`) | **5.118x** | **+1.649%** | **+12.14%** 🏆 | 19.3% | **-54.52%** | **1.13** | **1,919** |
 | 🥈 **Gross Goals Poisson Control** (`goals_pois_ctl`) | 4.728x | +1.569% | +11.69% | 19.3% | -55.45% | 1.09 | 1,927 |
-| 🥉 **Pure Open-Play Poisson** (`goals_pois_open_play`) | 3.842x | +1.360% | +9.20% | 20.6% | **-49.82%** | 1.05 | 2,002 |
-| 4. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 2.586x | +0.960% | +7.91% | 17.4% | -46.41% | 0.87 | 1,874 |
-| 5. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.651x | +0.507% | +4.28% | 19.8% | -47.10% | 0.60 | 1,978 |
-| 6. **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | 0.884x | -0.125% | +1.16% | 22.1% | -49.74% | 0.17 | 2,095 |
+| 🥉 **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | **4.411x** | **+1.499%** | **+11.86%** | 18.9% | -58.59% | **1.05** | 1,884 |
+| 4. **Pure Open-Play Poisson** (`goals_pois_open_play`) | 3.842x | +1.360% | +9.20% | 20.6% | -49.82% | 1.05 | 2,002 |
+| 5. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 2.586x | +0.960% | +7.91% | 17.4% | -46.41% | 0.87 | 1,874 |
+| 6. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.651x | +0.507% | +4.28% | 19.8% | -47.10% | 0.60 | 1,978 |
 
 ---
 
