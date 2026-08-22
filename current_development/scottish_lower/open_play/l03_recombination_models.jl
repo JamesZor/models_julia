@@ -296,8 +296,8 @@ function _build_recomb_features(b::Data.SplitBoundary, ds::Data.DataStore, model
     home_ids = Vector{Int}(m.home_team_id)
     away_ids = Vector{Int}(m.away_team_id)
     
-    home_gross_goals = Vector{Int}(m.home_goals)
-    away_gross_goals = Vector{Int}(m.away_goals)
+    home_gross_goals = Vector{Int}(coalesce.(m.home_score, 0))
+    away_gross_goals = Vector{Int}(coalesce.(m.away_score, 0))
     
     home_open_goals = Vector{Int}(m.home_goals_np_nog)
     away_open_goals = Vector{Int}(m.away_goals_np_nog)
