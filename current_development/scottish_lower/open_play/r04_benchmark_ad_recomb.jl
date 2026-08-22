@@ -42,7 +42,8 @@ b1 = boundaries[1:1]
 models = [
     ("Pure Open-Play Poisson", TeamGoalsPoissonOpenPlayModel()),
     ("Integrated Open-Play + Penalty Poisson", TeamGoalsRecombIntegratedPoissonModel()),
-    ("Pure Open-Play NegBin", TeamGoalsNegBinOpenPlayModel())
+    ("Pure Open-Play NegBin", TeamGoalsNegBinOpenPlayModel()),
+    ("Integrated Open-Play + Penalty NegBin", TeamGoalsRecombIntegratedNegBinModel())
 ]
 
 println("\n--- 1. REVERSEDIFF GRADIENT EVALUATION PROFILING ---")
