@@ -1,6 +1,6 @@
 # Scottish Lower: Open-Play Noise Reduction & Two-Stage Recombination Framework
 
-This document contains the complete mathematical specifications, system architectures, data contracts, and experimental results for the **Open-Play Noise Reduction & Two-Stage Recombination** research track in Scottish Lower Football analytics.
+This document contains the complete mathematical specifications, system architectures, data contracts, ReverseDiff AD benchmarks, and experimental backtest results for the **Open-Play Noise Reduction & Two-Stage Recombination** research track in Scottish Lower Football analytics (Scottish League One `#56` & Scottish League Two `#57`).
 
 ---
 
@@ -25,112 +25,159 @@ $$Y_{\text{gross}} = Y_{\text{np\_nog}} + Y_{\text{pen}} + Y_{\text{og\_benefite
 
 ---
 
-## 2. Mathematical Model Formulations
+## 2. Mathematical Model Architectures
 
-### A. Stage 1: The Open-Play Bayesian MCMC Engine
+### A. Integrated Poisson Recombination Model (`recomb_pois_integrated`)
+Co-trains open-play skill intensities alongside referee whistle strictness and team penalty propensities:
+```julia
+# 1. Vectorized Open-Play Poisson Intensity
+log_mu_h = clamp.(mu_base .+ ha_home .+ delta_month[m] .+ delta_league[l] .+ alpha[h] .- beta[a], -10.0, 10.0)
+log_mu_a = clamp.(mu_base .+           delta_month[m] .+ delta_league[l] .+ alpha[a] .- beta[h], -10.0, 10.0)
+
+# 2. Vectorized Referee Whistle & Penalty Intensity
+log_pen_h = clamp.(pen_base_mu .+ ha_pen .+ gamma_ref[ref] .+ alpha_pen[h] .+ beta_foul[a], -10.0, 5.0)
+log_pen_a = clamp.(pen_base_mu .- ha_pen .+ gamma_ref[ref] .+ alpha_pen[a] .+ beta_foul[h], -10.0, 5.0)
+
+# 3. Multi-Target Likelihood
+ll_open = sum((logpdf.(Poisson.(exp.(log_mu_h)), y_open_h) .+ logpdf.(Poisson.(exp.(log_mu_a)), y_open_a)) .* weights)
+ll_pen  = sum((logpdf.(Poisson.(exp.(log_pen_h)), pens_h)   .+ logpdf.(Poisson.(exp.(log_pen_a)), pens_a)) .* ref_mask .* weights)
+@addlogprob! (ll_open + ll_pen)
+```
+
+---
+
+### B. Integrated Negative Binomial Recombination Model (`recomb_negbin_integrated`)
+Extends open-play modeling to overdispersed count distributions while retaining explicit penalty whistle co-training:
 
 $$\begin{aligned}
 y_{\text{np\_nog}, h, i} &\sim \text{NegativeBinomial2}\left(\mu_{h, \text{open}, i}, \; r_h\right) \\
-y_{\text{np\_nog}, a, i} &\sim \text{NegativeBinomial2}\left(\mu_{a, \text{open}, i}, \; r_a\right)
+y_{\text{np\_nog}, a, i} &\sim \text{NegativeBinomial2}\left(\mu_{a, \text{open}, i}, \; r_a\right) \\
+N_{\text{pen}, h, i} &\sim \text{Poisson}\left(\lambda_{\text{pen}, h, i}\right) \\
+N_{\text{pen}, a, i} &\sim \text{Poisson}\left(\lambda_{\text{pen}, a, i}\right)
 \end{aligned}$$
 
-#### Latent Intensity Decomposition:
-$$\begin{aligned}
-\log \mu_{h, \text{open}, i} &= \mu_{\text{base}} + \text{month}_{m, i} + \text{league}_{l, i} + \text{ha}_h + w_{\text{wealth}} W_i + (\alpha_{h, t} - \beta_{a, t}) \\
-\log \mu_{a, \text{open}, i} &= \mu_{\text{base}} + \text{month}_{m, i} + \text{league}_{l, i} + w_{\text{wealth}} W_i + (\alpha_{a, t} - \beta_{h, t})
-\end{aligned}$$
+#### Mathematical Formulation & 0-Allocation Vectorization:
+```julia
+# 1. Open-Play Negative Binomial Log-Mean
+log_mu_h = clamp.(mu_base .+ ha_home .+ delta_month[m] .+ delta_league[l] .+ alpha[h] .- beta[a], -10.0, 10.0)
+log_mu_a = clamp.(mu_base .+           delta_month[m] .+ delta_league[l] .+ alpha[a] .- beta[h], -10.0, 10.0)
 
-Where:
-- $\alpha_{k, t}, \beta_{k, t}$: Dynamic team attack and defense ratings governed by exponential time-decay random walks ($t_{\text{half-life}} = 365\text{ days}$).
-- $\text{ha}_h \sim \mathcal{N}(\mu_{\text{ha}}, \sigma_{\text{ha}}^2)$: Hierarchical home ground advantage.
-- $w_{\text{wealth}} \sim \mathcal{N}(0, 0.1)$: Starting-XI relative market valuation effect ($w \approx +0.042$).
-- $r_h, r_a \sim \text{Exponential}(1.0)$: Overdispersion shape parameters ($r_{\text{home}} \approx 38.4, r_{\text{away}} \approx 17.6$).
+# 2. Scottish Home/Away Asymmetric Dispersion
+r_a = exp(log_r)
+r_h = exp(log_r + delta_r_home)
 
----
+# 3. Fast Vectorized Negative Binomial Log-Likelihood via Precomputed Gamma Recurrences
+ll_open_h = _negbin_vector_loglik(y_open_h, log_mu_h, r_h, nb_h)
+ll_open_a = _negbin_vector_loglik(y_open_a, log_mu_a, r_a, nb_a)
 
-### B. Stage 2: Matchday Penalty & Referee Engine
+# 4. Referee Whistle & Penalty Intensity
+log_pen_h = clamp.(pen_base_mu .+ ha_pen .+ gamma_ref[ref] .+ alpha_pen[h] .+ beta_foul[a], -10.0, 5.0)
+log_pen_a = clamp.(pen_base_mu .- ha_pen .+ gamma_ref[ref] .+ alpha_pen[a] .+ beta_foul[h], -10.0, 5.0)
+ll_pen    = sum((logpdf.(Poisson.(exp.(log_pen_h)), pens_h) .+ logpdf.(Poisson.(exp.(log_pen_a)), pens_a)) .* ref_mask .* weights)
 
-Penalties awarded follow a Poisson process, thinned by empirical conversion rate $p_{\text{conv}} = 0.768$:
-
-$$N_{\text{pen}, h, i} \sim \text{Poisson}\left(\lambda_{\text{pen\_awarded}, h, i}\right)$$
-$$\log \lambda_{\text{pen\_awarded}, h, i} = \mu_{\text{pen\_base}} + \text{ha}_{\text{pen}} + \gamma_{\text{ref}, r_i} + \alpha_{\text{pen\_draw}, h_i} + \beta_{\text{pen\_concede}, a_i}$$
-
-#### Component Breakdown:
-- $\mu_{\text{pen\_base}} = \log(0.136)$: Baseline penalty arrival rate per team-match.
-- $\text{ha}_{\text{pen}} = +0.190$: Home refereeing whistle bias ($59.7\%$ home penalty share).
-- $\gamma_{\text{ref}} \sim \mathcal{N}(0, \sigma_{\text{ref}}^2)$: Referee strictness latent (e.g. Ross Hardie $+0.55$, Steven Reid $-0.70$).
-- $\alpha_{\text{pen\_draw}}, \beta_{\text{pen\_concede}} \sim \mathcal{N}(0, \sigma_{\text{team\_pen}}^2)$: Team box penetration threat and opponent defensive foul propensities.
-
-The expected penalty scoring rate is:
-$$\lambda_{\text{pen\_scored}, h, i} = 0.768 \cdot \lambda_{\text{pen\_awarded}, h, i}$$
+# 5. Combined Likelihood
+@addlogprob! (ll_open_h + ll_open_a + ll_pen)
+```
 
 ---
 
-### C. Stage 3: Two-Stage Score Matrix Recombination
+### C. Discrete Probability Convolution Recombination
 
-The matchday noise intensity is:
-$$\lambda_{\text{noise}, h} = \lambda_{\text{pen\_scored}, h} + \lambda_{\text{og}}$$
-$$\lambda_{\text{noise}, a} = \lambda_{\text{pen\_scored}, a} + \lambda_{\text{og}}$$
-
-#### Method 1: Discrete Probability Convolution (Exact Mathematical Formulation)
-Because open-play goals and matchday noise are conditionally independent given match parameters:
-
-$$P(Y_h = k) = \left(P_{\text{NB2}} * P_{\text{Poisson}}\right)(k) = \sum_{m=0}^{k} P_{\text{NB2}}\left(Y_{\text{open}, h} = m \;\middle|\; \mu_{h, \text{open}}, r_h\right) \cdot P_{\text{Poisson}}\left(Y_{\text{noise}, h} = k - m \;\middle|\; \lambda_{\text{noise}, h}\right)$$
-
-$$S_{\text{recon}}(i, j) = P(Y_h = i) \cdot P(Y_a = j)$$
-
-#### Method 2: Moment-Matched Negative Binomial Approximation
-$$\mathbb{E}[Y_h] = \mu_{h, \text{open}} + \lambda_{\text{noise}, h}$$
-$$\text{Var}(Y_h) = \left(\mu_{h, \text{open}} + \frac{\mu_{h, \text{open}}^2}{r_h}\right) + \lambda_{\text{noise}, h}$$
-$$r_{\text{total}, h} = \frac{\mathbb{E}[Y_h]^2}{\text{Var}(Y_h) - \mathbb{E}[Y_h]}$$
-$$Y_h \sim \text{NegativeBinomial2}\left(\mathbb{E}[Y_h], \; r_{\text{total}, h}\right)$$
+For each MCMC posterior draw $k$:
+1. **Open-Play Goal Mass**:
+   - For Poisson: $P(Y_{\text{open}, h} = m) = \text{Poisson}(m \mid \mu_{\text{open}, h})$
+   - For NegBin: $p_h = \frac{r_h}{r_h + \mu_{\text{open}, h}}$, $P(Y_{\text{open}, h} = m) = \text{NegativeBinomial}(m \mid r_h, p_h)$
+2. **Matchday Noise Goal Mass** (converted penalties + deflection own goals):
+   $$\lambda_{\text{noise}, h} = 0.768 \cdot \lambda_{\text{pen}, h} + 0.0276, \quad P(Y_{\text{noise}, h} = n) = \text{Poisson}(n \mid \lambda_{\text{noise}, h})$$
+3. **Discrete Convolution for Total Goals**:
+   $$P(Y_{\text{tot}, h} = g) = \sum_{m=0}^g P(Y_{\text{open}, h} = m) \cdot P(Y_{\text{noise}, h} = g - m)$$
+4. **Joint Match Score Matrix**:
+   $$S(i, j) = P(Y_{\text{tot}, h} = i) \cdot P(Y_{\text{tot}, a} = j)$$
 
 ---
 
-## 3. 40-Fold Walk-Forward Benchmark Results (Control vs Pure Open-Play)
+## 3. ReverseDiff AD Gradient Profiling & Smoke Testing
 
-### A. Statistical & Calibration Metrics
+### A. ReverseDiff AD Gradient Tape Benchmarks (`r04_benchmark_ad_recomb.jl`)
+*Target: Gradient evaluation time $< 1.0\text{ms}$ (Enforces docs/turing_ad_performance_guide.md)*
 
-| Metric | Baseline Control (`goals_negbin_ctl`) | Pure Open-Play (`goals_negbin_open_play`) | Delta / Interpretation |
-| :--- | :---: | :---: | :--- |
-| **Training Time (40 folds)** | 1h 34m | 1h 58m | Stable NUTS sampling on `mcmc-beast` |
-| **RQR Calibration Mean** | $+0.0401$ | $+0.1240$ | Open-play shifted $+0.12$ without $+0.26$ pen add-back |
-| **RQR Calibration Std** | $0.9834$ | **$1.0071$** | Open-play dispersion is perfectly scaled ($\approx 1.0$) |
-| **1X2 Away LogLoss Diff** | $0.0049$ | **$0.0045$** | **+0.0004 Sharper** (Cleaner away team ratings) |
-| **1X2 Home LogLoss Diff** | **$0.0043$** | $0.0052$ | Control benefits from raw home whistle bias |
-| **Totals LogLoss Diff** | **$0.0007$** | $0.00896$ | Open-play alone under-predicts total goals |
-| **BTTS LogLoss Diff** | **$0.0034$** | $0.01110$ | Open-play alone under-predicts BTTS probability |
+| Model Architecture | Parameters | Tape Compile Time | Gradient Eval Time | Status |
+| :--- | :---: | :---: | :---: | :---: |
+| **Pure Open-Play Poisson** (`goals_pois_open_play`) | 59 | 4,466.8 ms | **0.429 ms** | ⚡ EXCELLENT (<1ms) |
+| **Integrated Recombination Poisson** (`recomb_pois_integrated`) | 107 | 4,230.6 ms | **0.983 ms** | ⚡ EXCELLENT (<1ms) |
+| **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 93 | 7,062.5 ms | **0.572 ms** | ⚡ EXCELLENT (<1ms) |
+| **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | 112 | 5,917.4 ms | **1.021 ms** | ✓ GOOD (<2.5ms) |
 
-*(LogLoss Diff = Model LogLoss − De-Vigged Market Close; lower is better)*
-
----
-
-### B. Betfair Exchange Portfolio Simulation (2% Commission, BM 800 Draws)
-
-Simulated across 628 out-of-sample match slates spanning seasons 2024/25 & 2025/26:
-
-| Policy | Metric | All-Goals Control (`goals_negbin_ctl`) | Pure Open-Play (`goals_negbin_open_play`) |
-| :--- | :--- | :---: | :---: |
-| **Conservative** (Cap 10%, $\lambda=23$) | **Final Wealth** | **$1.589\times$** | $1.301\times$ |
-| | **ROI (%)** | **$+7.41\%$** | $+4.00\%$ |
-| | **Max Drawdown** | $-23.65\%$ | **$-22.48\%$ (Lower Risk ✅)** |
-| | **Sharpe Ratio** | **0.82** | 0.55 |
-| **Balanced Growth** (Cap 15%, $\lambda=15$) | **Final Wealth** | **$1.924\times$** | $1.425\times$ |
-| | **ROI (%)** | **$+7.54\%$** | $+4.04\%$ |
-| | **Max Drawdown** | $-33.58\%$ | **$-31.93\%$ (Lower Risk ✅)** |
-| | **Sharpe Ratio** | **0.83** | 0.56 |
-| **Aggressive** (Cap 25%, $\lambda=10$) | **Final Wealth** | **$2.586\times$** | $1.651\times$ |
-| | **ROI (%)** | **$+7.91\%$** | $+4.28\%$ |
-| | **Max Drawdown** | **$-46.41\%$** | $-47.10\%$ |
-| | **Sharpe Ratio** | **0.87** | 0.60 |
+### B. 1-Split MCMC NUTS Smoke Test Convergence (`r05_smoke_recomb.jl`)
+- **Integrated Poisson Recombination**: Sampled in 73.7s, $\hat{R}_{\max} = \mathbf{1.0104}$, $\sigma_{\text{ref}} = 1.0015$, Home penalty whistle bias $= +0.1926$.
+- **Integrated NegBin Recombination**: Sampled in 89.9s, $\hat{R}_{\max} = \mathbf{1.0148}$, Learned Scottish Dispersion: $r_{\text{home}} = \mathbf{25.5}$, $r_{\text{away}} = \mathbf{13.5}$.
+- **Score Matrix Normalization**: Discrete convolution sums to $\mathbf{1.000000}$ identically.
 
 ---
 
-## 4. Key Takeaways & Architecture Decision
+## 4. 40-Fold Walk-Forward Calibration Leaderboard (710 Target Matches)
 
-1. **Pure Open-Play Ratings Contain Superior Net Predictive Signal**:
-   Even with zero penalty add-back, the open-play model generates **$+4.04\%$ ROI** on Betfair closing prices with **lower maximum drawdowns** across conservative and balanced Kelly policies.
-2. **Why Recombination is Necessary**:
-   Because market betting lines (Over/Under 2.5, BTTS) settle on **gross match goals**, evaluating an open-play model directly against market totals causes a systematic under-prediction bias ($~2.49$ expected goals vs $~2.75$ market goals).
-3. **The Solution**:
-   The **Two-Stage Recombination Model** cleanly solves this dilemma by keeping team ratings $\alpha, \beta$ unpolluted while convolving matchday penalty arrival rates ($\gamma_{\text{ref}}$) at the score matrix layer.
+*Evaluated across all 40 rolling walk-forward test slates in 2024/25 & 2025/26 (710 out-of-sample matches).*
+
+| Model Tag | Likelihood | RQR Mean Bias ($\approx 0.0$) | CRPS (Lower = Better) | Totals LogLoss Diff | Draw LogLoss Diff | BTTS LogLoss Diff |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Gross Goals Poisson Control** (`goals_pois_ctl`) | Poisson | **`+0.0081`** | 0.6380 | **`-0.00034`** | **`-0.0009`** | 0.0072 |
+| **Pure Open-Play Poisson** (`goals_pois_open_play`) | Poisson | `+0.1103` | 0.6420 | `+0.00686` | `-0.0005` | 0.0094 |
+| **Integrated Recombination Poisson** (`recomb_pois_integrated`) | Poisson | **`+0.0199`** | **0.6372** | **`-0.00156`** *(Beats Market)* | **`-0.0012`** *(Beats Market)* | **0.0065** |
+| **Gross Goals NegBin Control** (`goals_negbin_ctl`) | NegBin | `+0.0354` | **0.6295** | `+0.00070` | `+0.0011` | **0.0034** |
+| **Pure Open-Play NegBin** (`goals_negbin_open_play`) | NegBin | `+0.1240` | 0.6343 | `+0.00896` | `+0.0015` | 0.0111 |
+| **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | NegBin | *Grid in Progress* | *Grid in Progress* | *Grid in Progress* | *Grid in Progress* | *Grid in Progress* |
+
+*(LogLoss Diff = Model LogLoss − De-Vigged Market Close; negative numbers beat closing bookmaker lines)*
+
+---
+
+## 5. Betfair Exchange Historical Portfolio Backtest (24/25 & 25/26 Seasons, 2% Commission, BM 800 Draws)
+
+*Evaluated across all 710 target matches in seasons 2024/25 & 2025/26 against closed Betfair Exchange orderbook prices with 2.0% net exchange commission and 800 Baker-McHale posterior draws.*
+
+### 1. Balanced Growth Policy (Exposure Cap 15%, Drawdown Penalty $\lambda = 15$)
+| Model | Final Wealth | Slate Growth | ROI % | Mean Exposure % | Max Drawdown % | Sharpe Ratio | Bets Placed |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 🥇 **Integrated Recombination Poisson** (`recomb_pois_integrated`) | **3.004x** | **+1.111%** | **+11.47%** | 12.1% | -37.75% | **1.08** | **1,919** |
+| 🥈 **Gross Goals Poisson Control** (`goals_pois_ctl`) | 2.862x | +1.062% | +11.06% | 12.1% | -38.91% | 1.05 | 1,927 |
+| 🥉 **Pure Open-Play Poisson** (`goals_pois_open_play`) | 2.512x | +0.930% | +9.03% | 12.7% | **-33.86%** | 1.01 | 2,002 |
+| 4. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 1.924x | +0.661% | +7.54% | 11.0% | **-33.58%** | 0.83 | 1,874 |
+| 5. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.425x | +0.358% | +4.04% | 12.2% | **-31.93%** | 0.56 | 1,978 |
+| 6. **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | *In Progress* | *In Progress* | *In Progress* | *In Progress* | *In Progress* | *In Progress* | *In Progress* |
+
+---
+
+### 2. Conservative Policy (Exposure Cap 10%, Drawdown Penalty $\lambda = 23$)
+| Model | Final Wealth | Slate Growth | ROI % | Mean Exposure % | Max Drawdown % | Sharpe Ratio | Bets Placed |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 🥇 **Integrated Recombination Poisson** (`recomb_pois_integrated`) | **2.215x** | **+0.803%** | **+11.52%** | 8.1% | **-26.48%** | **1.09** | **1,919** |
+| 🥈 **Gross Goals Poisson Control** (`goals_pois_ctl`) | 2.144x | +0.770% | +11.11% | 8.0% | -27.42% | 1.05 | 1,927 |
+| 🥉 **Pure Open-Play Poisson** (`goals_pois_open_play`) | 1.936x | +0.667% | +9.03% | 8.5% | -23.44% | 1.02 | 2,002 |
+| 4. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 1.589x | +0.468% | +7.41% | 7.3% | -23.65% | 0.82 | 1,874 |
+| 5. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.301x | +0.266% | +4.00% | 8.1% | -22.48% | 0.55 | 1,978 |
+
+---
+
+### 3. Aggressive Policy (Exposure Cap 25%, Drawdown Penalty $\lambda = 10$)
+| Model | Final Wealth | Slate Growth | ROI % | Mean Exposure % | Max Drawdown % | Sharpe Ratio | Bets Placed |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 🥇 **Integrated Recombination Poisson** (`recomb_pois_integrated`) | **5.118x** | **+1.649%** | **+12.14%** | 19.8% | -54.52% | **1.13** | **1,919** |
+| 🥈 **Gross Goals Poisson Control** (`goals_pois_ctl`) | 4.678x | +1.560% | +11.58% | 19.9% | -55.85% | 1.09 | 1,927 |
+| 🥉 **Pure Open-Play Poisson** (`goals_pois_open_play`) | 3.867x | +1.365% | +9.51% | 20.8% | **-49.03%** | 1.05 | 2,002 |
+| 4. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 2.586x | +0.957% | +7.91% | 18.0% | **-46.41%** | 0.87 | 1,874 |
+| 5. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.651x | +0.505% | +4.28% | 19.9% | -47.10% | 0.60 | 1,978 |
+
+---
+
+## 6. Persistent Checkpoint Registry
+
+All completed MCMC training runs are permanently saved on disk on `mcmc-beast` (`/root/BayesianFootball/`):
+
+- `goals_pois_ctl_hl365_hs2`: `/root/BayesianFootball/data/scottish_open_play_grid/goals_pois_ctl_hl365_hs2_20260822_122018`
+- `goals_pois_open_play_hl365_hs2`: `/root/BayesianFootball/data/scottish_open_play_grid/goals_pois_open_play_hl365_hs2_20260821_162201`
+- `recomb_pois_integrated_hl365_hs2`: `/root/BayesianFootball/data/scottish_open_play_grid/recomb_pois_integrated_hl365_hs2_20260821_200041`
+- `goals_negbin_ctl_hl365_hs2`: `/root/BayesianFootball/data/scottish_negbin_grid/goals_negbin_ctl_hl365_hs2_20260819_022431`
+- `goals_negbin_open_play_hl365_hs2`: `/root/BayesianFootball/data/scottish_open_play_grid/goals_negbin_open_play_hl365_hs2_20260821_151232`
+- `recomb_negbin_integrated_hl365_hs2`: *Actively training (destination: `data/scottish_open_play_grid/`)*
+
