@@ -110,7 +110,7 @@ params = (
 )
 
 SM = Predictions.compute_score_matrix(model, params)
-S_mean = mean(SM.matrices, dims=3)[:, :, 1]
+S_mean = mean(SM.data, dims=3)[:, :, 1]
 println("✓ Computed Score Matrix for Match $(first_match.match_id) (Mean Sum = $(round(sum(S_mean), digits=6)))")
 println("  • P(Home Win) = $(round(sum(tril(S_mean, -1)), digits=4))")
 println("  • P(Draw)     = $(round(sum(diag(S_mean)), digits=4))")
