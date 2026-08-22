@@ -763,8 +763,8 @@ function PreGame.build_turing_model(model::TeamGoalsRecombIntegratedNegBinModel,
 end
 
 # --- Parameter Extraction Interface ---
-function PreGame.extract_parameters(model::TeamGoalsPoissonOpenPlayModel, chain::Chains, feature_set::Features.FeatureSet)
-    d = feature_set.data
+function PreGame.extract_parameters(model::TeamGoalsPoissonOpenPlayModel, chain::Chains, feature_set)
+    d = _get_recomb_data(feature_set)
     team_map = d[:team_map]
     n_teams  = d[:n_teams]
     
@@ -794,8 +794,8 @@ function PreGame.extract_parameters(model::TeamGoalsPoissonOpenPlayModel, chain:
     )
 end
 
-function PreGame.extract_parameters(model::TeamGoalsRecombIntegratedPoissonModel, chain::Chains, feature_set::Features.FeatureSet)
-    d = feature_set.data
+function PreGame.extract_parameters(model::TeamGoalsRecombIntegratedPoissonModel, chain::Chains, feature_set)
+    d = _get_recomb_data(feature_set)
     team_map = d[:team_map]
     ref_map  = d[:ref_map]
     n_teams  = d[:n_teams]
@@ -863,10 +863,10 @@ _has_param(chain::Chains, p::String) = Symbol(p) in names(chain) || p in string.
 function PreGame.extract_parameters(
     model::Union{TeamGoalsPoissonModel, TeamGoalsPoissonOpenPlayModel},
     df::AbstractDataFrame,
-    feature_set::Features.FeatureSet,
+    feature_set,
     chain::Chains
 )
-    data = feature_set.data
+    data = _get_recomb_data(feature_set)
     team_map = data[:team_map]
     n_teams = data[:n_teams]
     n_months = data[:n_months]
@@ -923,10 +923,10 @@ end
 function PreGame.extract_parameters(
     model::TeamGoalsRecombIntegratedPoissonModel,
     df::AbstractDataFrame,
-    feature_set::Features.FeatureSet,
+    feature_set,
     chain::Chains
 )
-    data = feature_set.data
+    data = _get_recomb_data(feature_set)
     team_map = data[:team_map]
     ref_map  = data[:ref_map]
     n_teams  = data[:n_teams]
@@ -1097,8 +1097,8 @@ end
 
 Predictions.compute_score_matrix(model::TeamGoalsRecombIntegratedPoissonModel, r::DataFrameRow; max_goals::Int = 12) = Predictions.compute_score_matrix(model, Predictions.extract_params(model, r); max_goals=max_goals)
 
-function PreGame.extract_parameters(model::TeamGoalsRecombIntegratedNegBinModel, chain::Chains, feature_set::Features.FeatureSet)
-    d = feature_set.data
+function PreGame.extract_parameters(model::TeamGoalsRecombIntegratedNegBinModel, chain::Chains, feature_set)
+    d = _get_recomb_data(feature_set)
     team_map = d[:team_map]
     ref_map  = d[:ref_map]
     n_teams  = d[:n_teams]
@@ -1171,10 +1171,10 @@ end
 function PreGame.extract_parameters(
     model::TeamGoalsRecombIntegratedNegBinModel,
     df::AbstractDataFrame,
-    feature_set::Features.FeatureSet,
+    feature_set,
     chain::Chains
 )
-    data = feature_set.data
+    data = _get_recomb_data(feature_set)
     team_map = data[:team_map]
     ref_map  = data[:ref_map]
     n_teams  = data[:n_teams]

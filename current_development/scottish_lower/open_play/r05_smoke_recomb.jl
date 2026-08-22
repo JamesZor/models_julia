@@ -40,10 +40,12 @@ splitter = Data.GroupedCVConfig(
     stop_early        = true
 )
 boundaries = Data.create_id_boundaries(ds, splitter)
-b1 = boundaries[1:1]
+split_idx = findfirst(b -> !isempty(b[1].target_match_ids), boundaries)
+split_idx = isnothing(split_idx) ? 1 : split_idx
+b1 = boundaries[split_idx:split_idx]
 bound1 = b1[1][1]
 df_target = filter(r -> r.match_id in bound1.target_match_ids, ds.matches)
-println("✓ Generated 1 smoke split: $(length(bound1.history_match_ids)) train matches, $(length(bound1.target_match_ids)) test matches")
+println("✓ Generated 1 smoke split (#$split_idx): $(length(bound1.history_match_ids)) train matches, $(length(bound1.target_match_ids)) test matches")
 
 # ==============================================================================
 # TEST 1: BRANCH A - ANALYTICAL EMPIRICAL BAYES PENALTY ESTIMATOR
