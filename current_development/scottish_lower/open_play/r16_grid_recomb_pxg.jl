@@ -11,6 +11,10 @@ using Revise
 using BayesianFootball
 using Turing, DynamicPPL, MCMCChains
 using DataFrames, Dates, Statistics, Printf
+using ThreadPinning
+
+pinthreads(:cores)
+println("✓ ThreadPinning: $(Threads.nthreads()) threads pinned to physical cores")
 
 const PreGame     = BayesianFootball.Models.PreGame
 const Features    = BayesianFootball.Features
