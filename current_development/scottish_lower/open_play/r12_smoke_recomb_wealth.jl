@@ -41,7 +41,7 @@ splitter = Data.GroupedCVConfig(
 )
 
 boundaries = Data.create_id_boundaries(ds, splitter)
-bound1 = boundaries[end] # Most recent fold
+bound1 = boundaries[end][1] # Most recent fold (SplitBoundary)
 println("✓ Fold 40: $(length(bound1.history_match_ids)) history matches, $(length(bound1.target_match_ids)) test matches")
 
 fset = Features.create_features(bound1, ds, model)
