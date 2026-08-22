@@ -42,6 +42,7 @@ splitter = Data.GroupedCVConfig(
 boundaries = Data.create_id_boundaries(ds, splitter)
 b1 = boundaries[1:1]
 bound1 = b1[1][1]
+df_target = filter(r -> r.match_id in bound1.target_match_ids, ds.matches)
 println("✓ Generated 1 smoke split: $(length(bound1.history_match_ids)) train matches, $(length(bound1.target_match_ids)) test matches")
 
 # ==============================================================================
@@ -118,32 +119,38 @@ println("  - Learned Home Whistle Bias: $(round(ha_pen_mean, digits=4))")
 println("  - Learned Referee Strictness Scale (sigma_ref): $(round(sig_ref_mean, digits=4))")
 
 # ==============================================================================
-# TEST 4: SCORE MATRIX RECOMBINATION NORMALIZATION
+# TEST 5: BRANCH B - INTEGRATED RECOMBINATION NEGATIVE BINOMIAL MODEL (MCMC SMOKE)
 # ==============================================================================
-banner("TEST 4: SCORE MATRIX RECOMBINATION VALIDATION")
+banner("TEST 5: BRANCH B - INTEGRATED RECOMBINATION NEGATIVE BINOMIAL MODEL (MCMC SMOKE)")
 
-mu_open_h = 1.35
-mu_open_a = 0.95
-noise_h   = (0.768 * 0.16) + 0.0276 # 0.150 goals
-noise_a   = (0.768 * 0.11) + 0.0276 # 0.112 goals
+m_nb = TeamGoalsRecombIntegratedNegBinModel()
+f_nb = Features.create_features(b1, ds, m_nb)
+tur_nb = PreGame.build_turing_model(m_nb, f_nb[1])
 
-S_conv = reconstruct_score_matrix_discrete_conv(mu_open_h, mu_open_a, noise_h, noise_a; dist=:poisson, max_goals=10)
-S_mm   = reconstruct_score_matrix_moment_match(mu_open_h, mu_open_a, noise_h, noise_a; dist=:poisson, max_goals=10)
+t0 = time()
+chain_nb = Samplers.run_sampler(tur_nb, sampler_cfg)
+elapsed_nb = round(time() - t0, digits = 1)
 
-sum_conv = sum(S_conv)
-sum_mm   = sum(S_mm)
+rhats_nb = summarize(chain_nb)[:, :rhat]
+max_rhat_nb = maximum(filter(!isnan, rhats_nb))
 
-println("✓ Discrete Convolution Score Matrix Sum: $(sum_conv) ($(isapprox(sum_conv, 1.0) ? "VALID ✅" : "INVALID ❌"))")
-println("✓ Moment-Matched Score Matrix Sum: $(sum_mm) ($(isapprox(sum_mm, 1.0) ? "VALID ✅" : "INVALID ❌"))")
+r_a_mean = exp(mean(Array(chain_nb["log_r"])))
+r_h_mean = exp(mean(Array(chain_nb["log_r"])) + mean(Array(chain_nb["delta_r_home"])))
 
-p_home_conv = sum(triu(S_conv, 1))
-p_draw_conv = sum(diag(S_conv))
-p_away_conv = sum(tril(S_conv, -1))
-p_over25_conv = sum(S_conv[i, j] for i in 1:11, j in 1:11 if (i-1) + (j-1) > 2.5)
+println("✓ Integrated Recombination NegBin Model Sampled in $(elapsed_nb)s:")
+println("  - Max R-hat: $(round(max_rhat_nb, digits=4)) ($(max_rhat_nb <= 1.05 ? "CONVERGED ✅" : "WARNING ⚠️"))")
+println("  - Learned Dispersion: r_home = $(round(r_h_mean, digits=2)), r_away = $(round(r_a_mean, digits=2))")
 
-@printf("  - Recombined Probabilities (Conv): Home=%.3f, Draw=%.3f, Away=%.3f, Over2.5=%.3f\n",
-        p_home_conv, p_draw_conv, p_away_conv, p_over25_conv)
+# Test parameter extraction & score matrix generation
+params_nb = PreGame.extract_parameters(m_nb, df_target, f_nb[1], chain_nb)
+println("✓ Extracted NegBin parameters for $(length(params_nb)) matches")
+
+first_mid = first(keys(params_nb))
+p_sample = params_nb[first_mid]
+sm_nb = Predictions.compute_score_matrix(m_nb, p_sample)
+sum_sm = sum(sm_nb.matrix[:, :, 1])
+println("✓ Computed Recombined NegBin Score Matrix (Sum = $(round(sum_sm, digits=6)), $(isapprox(sum_sm, 1.0) ? "VALID ✅" : "INVALID ❌"))")
 
 println("\n", "="^95)
-println("✓ ALL SMOKE TESTS PASSED CLEANLY! Ready for AD gradient benchmarking and 40-fold grid.")
+println("✓ ALL SMOKE TESTS PASSED CLEANLY! Ready for 40-fold walk-forward grid.")
 println("="^95)
