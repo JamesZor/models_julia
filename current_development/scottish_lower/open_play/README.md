@@ -11,14 +11,21 @@
 ```
 current_development/scottish_lower/open_play/
 ├── l01_open_play_feature.jl            <- Match target extractor (y_np_nog), referee loader, & clean pxG feature
-├── l02_open_play_engines.jl            <- Turing @models, structs, parameter extractors, and score matrices
+├── l02_open_play_engines.jl            <- Clean open-play NegBin Turing @models & parameter extractors
+├── l03_recombination_models.jl        <- Poisson Control, Open-Play, & Integrated Recombination Turing engines + Discrete Convolution
 ├── r00_eda_open_play_signals.jl        <- Exploratory Data Analysis & signal-to-noise statistical tests
 ├── r01_smoke_open_play.jl              <- 1-split MCMC NUTS smoke test & extraction verification
-├── r02_grid_open_play_negbin.jl        <- 40-fold MCMC grid runner on mcmc-beast (120 MCMC tasks)
-├── r03_eval_and_portfolio.jl           <- Full scoring suite (RQR, CRPS, LogLoss, GLMEdge) & Betfair Kelly backtest
+├── r02_train_open_play_goals_negbin.jl <- 40-fold MCMC grid runner for open-play NegBin
+├── r04_benchmark_ad_recomb.jl          <- ReverseDiff AD gradient tape profiling & TV divergence test
+├── r05_smoke_recomb.jl                 <- 1-split Recombination smoke test
+├── r06_grid_poisson_recomb.jl          <- 40-fold MCMC grid runner for open-play Poisson & Recombination Poisson
+├── r07_eval_recomb_benchmark.jl        <- Grand evaluation suite (RQR, CRPS, 15-market LogLoss, Betfair Backtest)
+├── r08_train_poisson_control.jl        <- 40-fold MCMC grid runner for Gross Goals Poisson Control
 ├── EDA_OPEN_PLAY_NOTES.md              <- Full empirical tables, referee distributions, & statistical proofs
+├── EXPERIMENT_NOTES.md                 <- Authoritative experiment documentation, formulation, & saved artifact registry
+├── RECOMBINATION_EXPERIMENT_LOGS.md    <- Detailed timing, profiling logs, and 5-model comparison breakdown
 ├── RESEARCH_QUESTIONS_AND_FINDINGS.md  <- Detailed answers & analysis for key research questions
-├── RESULTS_OPEN_PLAY_LEADERBOARD.md    <- Benchmark leaderboard tables vs prior champions
+├── RESULTS_RECOMBINATION_LEADERBOARD.md<- 5-model grand leaderboard and multi-market portfolio wealth breakdown
 └── README.md                           <- This documentation file
 ```
 
@@ -51,18 +58,13 @@ Analysis across **1,990 historical Scottish Lower matches** (3,980 team-matches)
 
 ## 🛠️ How to Run
 
-### 1. Run the Exploratory Data Analysis
+### 1. Run the Evaluation & Betfair Backtest Across All 5 Models
 ```julia
 using BayesianFootball
-include("current_development/scottish_lower/open_play/r00_eda_open_play_signals.jl")
+include("current_development/scottish_lower/open_play/r07_eval_recomb_benchmark.jl")
 ```
 
-### 2. Run the 1-Split Smoke Test
-```julia
-include("current_development/scottish_lower/open_play/r01_smoke_open_play.jl")
-```
-
-### 3. Run the 40-Fold Rolling MCMC Grid (on `mcmc-beast`)
-```julia
-include("current_development/scottish_lower/open_play/r02_grid_open_play_negbin.jl")
-```
+### 2. View Complete Notes & Saved Artifact Checkpoints
+- [`EXPERIMENT_NOTES.md`](file:///home/james/bet_project/BayesianFootball/current_development/scottish_lower/open_play/EXPERIMENT_NOTES.md)
+- [`RESULTS_RECOMBINATION_LEADERBOARD.md`](file:///home/james/bet_project/BayesianFootball/current_development/scottish_lower/open_play/RESULTS_RECOMBINATION_LEADERBOARD.md)
+- [`RECOMBINATION_EXPERIMENT_LOGS.md`](file:///home/james/bet_project/BayesianFootball/current_development/scottish_lower/open_play/RECOMBINATION_EXPERIMENT_LOGS.md)
