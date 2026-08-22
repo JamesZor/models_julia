@@ -49,7 +49,7 @@ println("  • Non-zero wealth diffs: $(count(!iszero, f[:wealth_diff])) / $(len
 println("  • Mean |ΔW|: $(round(mean(abs.(f[:wealth_diff])), digits=3))")
 
 # 4. Build Turing Model & Run Fast NUTS Sample
-turing_mod = Samplers.build_turing_model(model, fset)
+turing_mod = PreGame.build_turing_model(model, fset)
 
 println("\n[MCMC] Sampling 1 chain (150 warmup, 150 samples) with NUTS ReverseDiff...")
 t0 = time()

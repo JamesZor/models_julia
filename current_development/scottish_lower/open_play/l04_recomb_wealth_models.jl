@@ -350,9 +350,9 @@ end
     Turing.@addlogprob! sum((ll_open_h .+ ll_open_a .+ ll_pen_h .+ ll_pen_a) .* match_weights)
 end
 
-function Samplers.build_turing_model(
+function PreGame.build_turing_model(
     model::TeamGoalsRecombIntegratedPoisWealthModel,
-    feature_set::Features.FeatureSet
+    feature_set
 )
     f = feature_set.data
     return _turing_goals_recomb_pois_wealth(
