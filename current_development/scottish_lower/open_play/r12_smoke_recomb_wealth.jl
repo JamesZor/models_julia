@@ -54,9 +54,18 @@ println("  • Mean |ΔW|: $(round(mean(abs.(f[:wealth_diff])), digits=3))")
 # 4. Build Turing Model & Run Fast NUTS Sample
 turing_mod = PreGame.build_turing_model(model, fset)
 
-println("\n[MCMC] Sampling 1 chain (150 warmup, 150 samples) with NUTS ReverseDiff...")
+sampler_cfg = Samplers.NUTSConfig(
+    n_samples   = 400,
+    n_warmup    = 150,
+    n_chains    = 2,
+    accept_rate = 0.65,
+    max_depth   = 8,
+    show_progress = false
+)
+
+println("\n[MCMC] Sampling with Queued/Optimized NUTS (ReverseDiff)...")
 t0 = time()
-chain = sample(turing_mod, NUTS(150, 0.8; adtype=AutoReverseDiff()), 150; progress=false)
+chain = Samplers.run_sampler(turing_mod, sampler_cfg)
 elapsed = round(time() - t0, digits=2)
 println("✓ Sampled in $(elapsed)s")
 
