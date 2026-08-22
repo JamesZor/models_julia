@@ -97,33 +97,25 @@ println("  • τ_alpha (Attack Spread)             : $(round(tau_alpha, digits=
 println("  • τ_beta (Defense Spread)             : $(round(tau_beta, digits=4))")
 println("  • σ_ref (Referee Whistle Spread)      : $(round(sigma_ref, digits=4))")
 
-# 6. Test Score Matrix Recombination
-println("\n" * "="^90)
-println("🎲 SCORE MATRIX TEST")
-println("="^90)
+# 6. Test Out-of-Sample Parameter Extraction & Score Matrix
+latents = Predictions.extract_params(model, fset, chain)
+println("\n✓ Extracted OOS LatentStates for $(nrow(latents.df)) target matches")
 
-test_match = first(bound1.target_match_ids)
-m_row = filter(r -> r.match_id == test_match, ds.matches)[1, :]
-params = Dict(
-    :chain        => chain,
-    :team_map     => f[:team_map],
-    :ref_map      => f[:ref_map],
-    :wealth_map   => f[:wealth_map],
-    :home_team_id => m_row.home_team_id,
-    :away_team_id => m_row.away_team_id,
-    :match_id     => m_row.match_id,
-    :referee_id   => 0
+first_match = latents.df[1, :]
+params = (
+    λ_open_h       = first_match.mu_open_h_samples,
+    λ_open_a       = first_match.mu_open_a_samples,
+    lambda_noise_h = (0.768 .* first_match.lambda_pen_h_samples) .+ 0.0276,
+    lambda_noise_a = (0.768 .* first_match.lambda_pen_a_samples) .+ 0.0276
 )
 
-sm = Predictions.compute_score_matrix(model, params; max_goals=12)
-sm_data = Predictions.score_matrix_data(sm)
-matrix_sum = sum(mean(sm_data, dims=3))
-p_home = sum(tril(mean(sm_data, dims=3), -1))
-p_draw = sum(diag(mean(sm_data, dims=3)[:, :, 1]))
-p_away = sum(triu(mean(sm_data, dims=3), 1))
+SM = Predictions.compute_score_matrix(model, params)
+S_mean = mean(SM.matrices, dims=3)[:, :, 1]
+println("✓ Computed Score Matrix for Match $(first_match.match_id) (Mean Sum = $(round(sum(S_mean), digits=6)))")
+println("  • P(Home Win) = $(round(sum(tril(S_mean, -1)), digits=4))")
+println("  • P(Draw)     = $(round(sum(diag(S_mean)), digits=4))")
+println("  • P(Away Win) = $(round(sum(triu(S_mean, 1)), digits=4))")
 
-println("✓ Match: $(m_row.home_team) vs $(m_row.away_team)")
-println("  • Matrix Sum = $(round(matrix_sum, digits=6)) (Expected: 1.000000)")
-println("  • Probabilities: Home=$(round(p_home*100, digits=1))% | Draw=$(round(p_draw*100, digits=1))% | Away=$(round(p_away*100, digits=1))%")
-
-println("\n✓ SMOKE TEST COMPLETED SUCCESSFULLY!")
+println("\n" * "="^90)
+println("✓ OPEN-PLAY PROXY xG RECOMBINATION SMOKE TEST COMPLETED SUCCESSFULLY!")
+println("="^90)

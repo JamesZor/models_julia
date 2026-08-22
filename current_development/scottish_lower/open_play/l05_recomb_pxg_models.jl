@@ -331,147 +331,283 @@ function PreGame.build_turing_model(
 end
 
 # ==============================================================================
-# SECTION 4: POSTERIOR PREDICTION & SCORE MATRIX RECOMBINATION
+# SECTION 4: OUT-OF-SAMPLE PREDICTIONS & SCORE CONVOLUTION
 # ==============================================================================
+
+function PreGame.extract_parameters(
+    model::TeamPxGRecombWealthIntegratedModel,
+    df::AbstractDataFrame,
+    feature_set,
+    chain::Chains
+)
+    data = feature_set.data
+    team_map   = data[:team_map]
+    ref_map    = data[:ref_map]
+    wealth_map = data[:wealth_map]
+    n_teams    = data[:n_teams]
+    n_refs     = data[:n_refs]
+    n_months   = data[:n_months]
+    n_leagues  = data[:n_leagues]
+    
+    base_mu  = vec(Array(chain["base_mu"]))
+    ha_home  = vec(Array(chain["ha_home"]))
+    w_wealth = vec(Array(chain["w_wealth"]))
+    n_samples = length(base_mu)
+    
+    raw_alpha_mat = Array(chain[["raw_alpha[$i]" for i in 1:n_teams]])
+    raw_beta_mat  = Array(chain[["raw_beta[$i]" for i in 1:n_teams]])
+    alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
+    beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
+    
+    raw_kappa_mat = _has_param(chain, "raw_kappa[1]") ? Array(chain[["raw_kappa[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    kappa_mat = exp.(raw_kappa_mat)
+    
+    delta_month_mat  = _has_param(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
+    delta_league_mat = _has_param(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)
+    
+    pen_base_mu = vec(Array(chain["pen_base_mu"]))
+    ha_pen      = vec(Array(chain["ha_pen"]))
+    sigma_ref   = vec(Array(chain["sigma_ref"]))
+    
+    raw_gamma_mat = (n_refs > 0 && _has_param(chain, "raw_gamma_ref[1]")) ? Array(chain[["raw_gamma_ref[$i]" for i in 1:n_refs]]) : zeros(n_samples, n_refs)
+    gamma_mat = raw_gamma_mat .* sigma_ref
+    
+    apd_mat = _has_param(chain, "alpha_pen_draw[1]") ? Array(chain[["alpha_pen_draw[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    bpf_mat = _has_param(chain, "beta_pen_foul[1]") ? Array(chain[["beta_pen_foul[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    
+    results = Dict{Int, NamedTuple}()
+    for row in eachrow(df)
+        mid = Int(row.match_id)
+        h_id = hasproperty(row, :home_team_id) ? Int(row.home_team_id) : (hasproperty(row, :home_team) ? get(team_map, row.home_team, -1) : -1)
+        a_id = hasproperty(row, :away_team_id) ? Int(row.away_team_id) : (hasproperty(row, :away_team) ? get(team_map, row.away_team, -1) : -1)
+        
+        h_idx = get(team_map, h_id, -1)
+        a_idx = get(team_map, a_id, -1)
+        
+        α_h = h_idx > 0 ? alpha_mat[:, h_idx] : zeros(n_samples)
+        β_h = h_idx > 0 ? beta_mat[:, h_idx]  : zeros(n_samples)
+        α_a = a_idx > 0 ? alpha_mat[:, a_idx] : zeros(n_samples)
+        β_a = a_idx > 0 ? beta_mat[:, a_idx]  : zeros(n_samples)
+        
+        κ_h = h_idx > 0 ? kappa_mat[:, h_idx] : ones(n_samples)
+        κ_a = a_idx > 0 ? kappa_mat[:, a_idx] : ones(n_samples)
+        
+        dw = get(wealth_map, mid, 0.0)
+        w_shift = w_wealth .* dw
+        
+        m_idx = month(row.match_date)
+        l_idx = hasproperty(row, :tournament_id) && row.tournament_id == 57 ? 2 : 1
+        
+        δ_m = (m_idx >= 1 && m_idx <= n_months) ? delta_month_mat[:, m_idx] : zeros(n_samples)
+        δ_l = (l_idx >= 1 && l_idx <= n_leagues) ? delta_league_mat[:, l_idx] : zeros(n_samples)
+        
+        int_m = base_mu .+ δ_m .+ δ_l
+        λ_h = exp.(int_m .+ ha_home .+ α_h .- β_a .+ w_shift)
+        λ_a = exp.(int_m .+           α_a .- β_h .- w_shift)
+        
+        # Finishing kappa applied to open-play goal rate
+        mu_open_h = κ_h .* λ_h
+        mu_open_a = κ_a .* λ_a
+        
+        # Referee Penalty Intensity
+        ref_id = hasproperty(row, :referee_id) && !ismissing(row.referee_id) ? Int(row.referee_id) : -1
+        r_idx  = get(ref_map, ref_id, -1)
+        γ_ref  = r_idx > 0 ? gamma_mat[:, r_idx] : zeros(n_samples)
+        
+        apd_h = h_idx > 0 ? apd_mat[:, h_idx] : zeros(n_samples)
+        apd_a = a_idx > 0 ? apd_mat[:, a_idx] : zeros(n_samples)
+        bpf_h = h_idx > 0 ? bpf_mat[:, h_idx] : zeros(n_samples)
+        bpf_a = a_idx > 0 ? bpf_mat[:, a_idx] : zeros(n_samples)
+        
+        log_pen_h = pen_base_mu .+ ha_pen .+ γ_ref .+ apd_h .+ bpf_a
+        log_pen_a = pen_base_mu .- ha_pen .+ γ_ref .+ apd_a .+ bpf_h
+        
+        lambda_pen_h = exp.(log_pen_h)
+        lambda_pen_a = exp.(log_pen_a)
+        
+        # Noise goal intensity (conversion ~ 0.768 + own goals ~ 0.0276)
+        lambda_noise_h = (0.768 .* lambda_pen_h) .+ 0.0276
+        lambda_noise_a = (0.768 .* lambda_pen_a) .+ 0.0276
+        
+        lambda_total_h = mu_open_h .+ lambda_noise_h
+        lambda_total_a = mu_open_a .+ lambda_noise_a
+        
+        results[mid] = (;
+            λ_h = lambda_total_h,
+            λ_a = lambda_total_a,
+            r_h = fill(100.0, n_samples),
+            r_a = fill(100.0, n_samples),
+            true_xg_h = λ_h,
+            true_xg_a = λ_a,
+            lambda_pen_h = lambda_pen_h,
+            lambda_pen_a = lambda_pen_a,
+            lambda_open_h = mu_open_h,
+            lambda_open_a = mu_open_a
+        )
+    end
+    return results
+end
 
 function Predictions.extract_params(
     model::TeamPxGRecombWealthIntegratedModel,
-    chain::MCMCChains.Chains,
-    feature_set
+    feature_set::Features.FeatureSet,
+    chain::Chains
 )
-    f = feature_set.data
-    team_map = f[:team_map]
-    ref_map  = f[:ref_map]
-    wealth_map = f[:wealth_map]
+    F = feature_set.data
+    b = F[:boundary]
+    df_clean = F[:clean_df]
+    target_matches = filter(r -> r.match_id in b.target_match_ids, df_clean)
     
-    return Dict(
-        :chain      => chain,
-        :team_map   => team_map,
-        :ref_map    => ref_map,
-        :wealth_map => wealth_map,
-        :model      => model
+    team_map   = F[:team_map]
+    ref_map    = F[:ref_map]
+    wealth_map = F[:wealth_map]
+    n_teams    = F[:n_teams]
+    n_refs     = F[:n_refs]
+    n_months   = F[:n_months]
+    n_leagues  = F[:n_leagues]
+    
+    base_mu  = vec(Array(chain["base_mu"]))
+    ha_home  = vec(Array(chain["ha_home"]))
+    w_wealth = vec(Array(chain["w_wealth"]))
+    n_samples = length(base_mu)
+    
+    raw_alpha_mat = Array(chain[["raw_alpha[$i]" for i in 1:n_teams]])
+    raw_beta_mat  = Array(chain[["raw_beta[$i]" for i in 1:n_teams]])
+    alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
+    beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
+    
+    raw_kappa_mat = _has_param(chain, "raw_kappa[1]") ? Array(chain[["raw_kappa[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    kappa_mat = exp.(raw_kappa_mat)
+    
+    delta_month_mat  = _has_param(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
+    delta_league_mat = _has_param(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)
+    
+    pen_base_mu = vec(Array(chain["pen_base_mu"]))
+    ha_pen      = vec(Array(chain["ha_pen"]))
+    sigma_ref   = vec(Array(chain["sigma_ref"]))
+    
+    raw_gamma_mat = (n_refs > 0 && _has_param(chain, "raw_gamma_ref[1]")) ? Array(chain[["raw_gamma_ref[$i]" for i in 1:n_refs]]) : zeros(n_samples, n_refs)
+    gamma_mat = raw_gamma_mat .* sigma_ref
+    
+    apd_mat = _has_param(chain, "alpha_pen_draw[1]") ? Array(chain[["alpha_pen_draw[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    bpf_mat = _has_param(chain, "beta_pen_foul[1]") ? Array(chain[["beta_pen_foul[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    
+    out_df = DataFrame(
+        match_id            = Int[],
+        mu_open_h_samples   = Vector{Float64}[],
+        mu_open_a_samples   = Vector{Float64}[],
+        lambda_pen_h_samples= Vector{Float64}[],
+        lambda_pen_a_samples= Vector{Float64}[],
+        q_pen_samples       = Vector{Float64}[],
+        rho_samples         = Vector{Float64}[]
+    )
+    
+    for row in eachrow(target_matches)
+        m_id = row.match_id
+        h_id = row.home_team_id
+        a_id = row.away_team_id
+        r_id = row.referee_id
+        
+        h_idx = get(team_map, h_id, -1)
+        a_idx = get(team_map, a_id, -1)
+        r_idx = get(ref_map, r_id, -1)
+        
+        α_h = h_idx > 0 ? alpha_mat[:, h_idx] : zeros(n_samples)
+        β_h = h_idx > 0 ? beta_mat[:, h_idx]  : zeros(n_samples)
+        α_a = a_idx > 0 ? alpha_mat[:, a_idx] : zeros(n_samples)
+        β_a = a_idx > 0 ? beta_mat[:, a_idx]  : zeros(n_samples)
+        
+        κ_h = h_idx > 0 ? kappa_mat[:, h_idx] : ones(n_samples)
+        κ_a = a_idx > 0 ? kappa_mat[:, a_idx] : ones(n_samples)
+        
+        dw = get(wealth_map, m_id, 0.0)
+        w_shift = w_wealth .* dw
+        
+        m_idx = month(row.match_date)
+        l_idx = hasproperty(row, :tournament_id) && row.tournament_id == 57 ? 2 : 1
+        
+        δ_m = (m_idx >= 1 && m_idx <= n_months) ? delta_month_mat[:, m_idx] : zeros(n_samples)
+        δ_l = (l_idx >= 1 && l_idx <= n_leagues) ? delta_league_mat[:, l_idx] : zeros(n_samples)
+        
+        int_m = base_mu .+ δ_m .+ δ_l
+        λ_h = exp.(int_m .+ ha_home .+ α_h .- β_a .+ w_shift)
+        λ_a = exp.(int_m .+           α_a .- β_h .- w_shift)
+        
+        mu_open_h = κ_h .* λ_h
+        mu_open_a = κ_a .* λ_a
+        
+        # Penalty intensities
+        γ_ref = r_idx > 0 ? gamma_mat[:, r_idx] : zeros(n_samples)
+        
+        apd_h = h_idx > 0 ? apd_mat[:, h_idx] : zeros(n_samples)
+        apd_a = a_idx > 0 ? apd_mat[:, a_idx] : zeros(n_samples)
+        bpf_h = h_idx > 0 ? bpf_mat[:, h_idx] : zeros(n_samples)
+        bpf_a = a_idx > 0 ? bpf_mat[:, a_idx] : zeros(n_samples)
+        
+        lambda_pen_h = exp.(pen_base_mu .+ ha_pen .+ γ_ref .+ apd_h .+ bpf_a)
+        lambda_pen_a = exp.(pen_base_mu .- ha_pen .+ γ_ref .+ apd_a .+ bpf_h)
+        
+        q_pen_samples = fill(0.768, n_samples)
+        rho_samples   = fill(-0.05, n_samples)
+        
+        push!(out_df, (
+            match_id             = m_id,
+            mu_open_h_samples    = mu_open_h,
+            mu_open_a_samples    = mu_open_a,
+            lambda_pen_h_samples = lambda_pen_h,
+            lambda_pen_a_samples = lambda_pen_a,
+            q_pen_samples        = q_pen_samples,
+            rho_samples          = rho_samples
+        ))
+    end
+    
+    return Predictions.LatentStates(out_df, model)
+end
+
+function Predictions.extract_params(model::TeamPxGRecombWealthIntegratedModel, row::DataFrameRow)
+    ln_h = hasproperty(row, :lambda_noise_h) ? (row.lambda_noise_h isa AbstractVector ? row.lambda_noise_h : [row.lambda_noise_h]) : (hasproperty(row, :lambda_pen_h) ? (0.768 .* (row.lambda_pen_h isa AbstractVector ? row.lambda_pen_h : [row.lambda_pen_h])) .+ 0.0276 : fill(0.10, length(row.λ_h)))
+    ln_a = hasproperty(row, :lambda_noise_a) ? (row.lambda_noise_a isa AbstractVector ? row.lambda_noise_a : [row.lambda_noise_a]) : (hasproperty(row, :lambda_pen_a) ? (0.768 .* (row.lambda_pen_a isa AbstractVector ? row.lambda_pen_a : [row.lambda_pen_a])) .+ 0.0276 : fill(0.10, length(row.λ_a)))
+    
+    return (
+        λ_open_h = hasproperty(row, :λ_open_h) ? (row.λ_open_h isa AbstractVector ? row.λ_open_h : [row.λ_open_h]) : (hasproperty(row, :lambda_open_h) ? (row.lambda_open_h isa AbstractVector ? row.lambda_open_h : [row.lambda_open_h]) : row.λ_h),
+        λ_open_a = hasproperty(row, :λ_open_a) ? (row.λ_open_a isa AbstractVector ? row.λ_open_a : [row.λ_open_a]) : (hasproperty(row, :lambda_open_a) ? (row.lambda_open_a isa AbstractVector ? row.lambda_open_a : [row.lambda_open_a]) : row.λ_a),
+        lambda_noise_h = ln_h,
+        lambda_noise_a = ln_a
     )
 end
 
-function Predictions.extract_params(
-    model::TeamPxGRecombWealthIntegratedModel,
-    row::DataFrameRow
-)
-    return row.params
+function Predictions.compute_score_matrix(model::TeamPxGRecombWealthIntegratedModel, params; max_goals::Int = 12)
+    p = params isa DataFrameRow ? Predictions.extract_params(model, params) : params
+    λ_open_h = p.λ_open_h
+    λ_open_a = p.λ_open_a
+    ln_h = p.lambda_noise_h
+    ln_a = p.lambda_noise_a
+    n_samples = length(λ_open_h)
+    
+    S = zeros(Float64, max_goals, max_goals, n_samples)
+    for k in 1:n_samples
+        mu_open_h = λ_open_h[k]
+        mu_open_a = λ_open_a[k]
+        mu_noise_h = ln_h[k]
+        mu_noise_a = ln_a[k]
+        
+        p_open_h  = [pdf(Poisson(max(1e-4, mu_open_h)), g) for g in 0:max_goals-1]
+        p_noise_h = [pdf(Poisson(max(1e-4, mu_noise_h)), g) for g in 0:max_goals-1]
+        p_open_a  = [pdf(Poisson(max(1e-4, mu_open_a)), g) for g in 0:max_goals-1]
+        p_noise_a = [pdf(Poisson(max(1e-4, mu_noise_a)), g) for g in 0:max_goals-1]
+        
+        # Discrete Poisson Convolution
+        p_tot_h = [sum(p_open_h[m+1] * p_noise_h[g - m + 1] for m in 0:g) for g in 0:max_goals-1]
+        p_tot_a = [sum(p_open_a[m+1] * p_noise_a[g - m + 1] for m in 0:g) for g in 0:max_goals-1]
+        
+        p_tot_h ./= sum(p_tot_h)
+        p_tot_a ./= sum(p_tot_a)
+        
+        S[:, :, k] = p_tot_h * p_tot_a'
+    end
+    return Predictions.ScoreMatrix(S)
 end
 
-function Predictions.compute_score_matrix(
-    model::TeamPxGRecombWealthIntegratedModel,
-    params::Dict;
-    max_goals::Int = 12,
-    ρ::Float64 = -0.05
-)
-    chain      = params[:chain]
-    team_map   = params[:team_map]
-    ref_map    = params[:ref_map]
-    wealth_map = params[:wealth_map]
-    
-    h_tid = get(params, :home_team_id, 0)
-    a_tid = get(params, :away_team_id, 0)
-    m_id  = get(params, :match_id, 0)
-    r_id  = get(params, :referee_id, 0)
-    
-    h_idx = get(team_map, h_tid, 0)
-    a_idx = get(team_map, a_tid, 0)
-    r_idx = get(ref_map, r_id, 0)
-    
-    delta_w = get(wealth_map, Int(m_id), 0.0)
-    
-    # Extract posterior draws
-    base_mu = vec(Array(chain[:base_mu]))
-    ha_home = vec(Array(chain[:ha_home]))
-    w_w     = vec(Array(chain[:w_wealth]))
-    n_draws = length(base_mu)
-    
-    alpha_h = h_idx > 0 && haskey(chain, Symbol("raw_alpha[$h_idx]")) ? vec(Array(chain[Symbol("raw_alpha[$h_idx]")])) : zeros(n_draws)
-    alpha_a = a_idx > 0 && haskey(chain, Symbol("raw_alpha[$a_idx]")) ? vec(Array(chain[Symbol("raw_alpha[$a_idx]")])) : zeros(n_draws)
-    beta_h  = h_idx > 0 && haskey(chain, Symbol("raw_beta[$h_idx]"))  ? vec(Array(chain[Symbol("raw_beta[$h_idx]")]))  : zeros(n_draws)
-    beta_a  = a_idx > 0 && haskey(chain, Symbol("raw_beta[$a_idx]"))  ? vec(Array(chain[Symbol("raw_beta[$a_idx]")]))  : zeros(n_draws)
-    
-    tau_a = vec(Array(chain[:tau_alpha]))
-    tau_b = vec(Array(chain[:tau_beta]))
-    
-    # Finishing kappa
-    raw_kap_h = h_idx > 0 && haskey(chain, Symbol("raw_kappa[$h_idx]")) ? vec(Array(chain[Symbol("raw_kappa[$h_idx]")])) : zeros(n_draws)
-    raw_kap_a = a_idx > 0 && haskey(chain, Symbol("raw_kappa[$a_idx]")) ? vec(Array(chain[Symbol("raw_kappa[$a_idx]")])) : zeros(n_draws)
-    kappa_h = exp.(raw_kap_h)
-    kappa_a = exp.(raw_kap_a)
-    
-    # Penalty submodel
-    pen_base_mu = vec(Array(chain[:pen_base_mu]))
-    ha_pen      = vec(Array(chain[:ha_pen]))
-    sigma_ref   = vec(Array(chain[:sigma_ref]))
-    gamma_r     = r_idx > 0 && haskey(chain, Symbol("raw_gamma_ref[$r_idx]")) ? vec(Array(chain[Symbol("raw_gamma_ref[$r_idx]")])) .* sigma_ref : zeros(n_draws)
-    
-    alpha_pen_h = h_idx > 0 && haskey(chain, Symbol("alpha_pen_draw[$h_idx]")) ? vec(Array(chain[Symbol("alpha_pen_draw[$h_idx]")])) : zeros(n_draws)
-    alpha_pen_a = a_idx > 0 && haskey(chain, Symbol("alpha_pen_draw[$a_idx]")) ? vec(Array(chain[Symbol("alpha_pen_draw[$a_idx]")])) : zeros(n_draws)
-    beta_pen_h  = h_idx > 0 && haskey(chain, Symbol("beta_pen_foul[$h_idx]"))  ? vec(Array(chain[Symbol("beta_pen_foul[$h_idx]")]))  : zeros(n_draws)
-    beta_pen_a  = a_idx > 0 && haskey(chain, Symbol("beta_pen_foul[$a_idx]"))  ? vec(Array(chain[Symbol("beta_pen_foul[$a_idx]")]))  : zeros(n_draws)
-    
-    # Latent open-play & penalty intensities
-    log_mu_open_h = clamp.(base_mu .+ ha_home .+ (alpha_h .* tau_a) .- (beta_a .* tau_b) .+ (w_w .* delta_w), -10.0, 10.0)
-    log_mu_open_a = clamp.(base_mu .+            (alpha_a .* tau_a) .- (beta_h .* tau_b) .- (w_w .* delta_w), -10.0, 10.0)
-    
-    mu_open_h = exp.(log_mu_open_h)
-    mu_open_a = exp.(log_mu_open_a)
-    
-    log_pen_h = clamp.(pen_base_mu .+ ha_pen .+ gamma_r .+ alpha_pen_h .+ beta_pen_a, -10.0, 5.0)
-    log_pen_a = clamp.(pen_base_mu .- ha_pen .+ gamma_r .+ alpha_pen_a .+ beta_pen_h, -10.0, 5.0)
-    
-    lambda_pen_h = exp.(log_pen_h)
-    lambda_pen_a = exp.(log_pen_a)
-    
-    # Analytical total rates via Poisson convolution
-    # mu_total = kappa * mu_open + q_pen * lambda_pen + lambda_og
-    q_pen = 0.768
-    lambda_og = 0.0276
-    
-    mu_tot_h = (kappa_h .* mu_open_h) .+ (q_pen .* lambda_pen_h) .+ lambda_og
-    mu_tot_a = (kappa_a .* mu_open_a) .+ (q_pen .* lambda_pen_a) .+ lambda_og
-    
-    # Construct 3D score matrix (max_goals x max_goals x n_draws)
-    mat = zeros(Float64, max_goals, max_goals, n_draws)
-    
-    @inbounds for s in 1:n_draws
-        lh = mu_tot_h[s]
-        la = mu_tot_a[s]
-        
-        # Marginal Poisson probabilities
-        p_h = [pdf(Poisson(lh), g) for g in 0:(max_goals - 1)]
-        p_a = [pdf(Poisson(la), g) for g in 0:(max_goals - 1)]
-        
-        # Outer product with Dixon-Coles adjustment
-        for h in 1:max_goals, a in 1:max_goals
-            gh = h - 1
-            ga = a - 1
-            prob = p_h[h] * p_a[a]
-            
-            # Dixon-Coles low score adjustment
-            if gh == 0 && ga == 0
-                prob *= (1.0 - lh * la * ρ)
-            elseif gh == 0 && ga == 1
-                prob *= (1.0 + lh * ρ)
-            elseif gh == 1 && ga == 0
-                prob *= (1.0 + la * ρ)
-            elseif gh == 1 && ga == 1
-                prob *= (1.0 - ρ)
-            end
-            mat[h, a, s] = max(0.0, prob)
-        end
-        
-        # Normalize sample slice
-        tot = sum(view(mat, :, :, s))
-        if tot > 0.0
-            mat[:, :, s] ./= tot
-        end
-    end
-    
-    return Predictions.ScoreMatrix(mat)
-end
+Predictions.compute_score_matrix(model::TeamPxGRecombWealthIntegratedModel, r::DataFrameRow; max_goals::Int = 12) = Predictions.compute_score_matrix(model, Predictions.extract_params(model, r); max_goals=max_goals)
 
 println("✓ l05_recomb_pxg_models.jl loaded (Open-Play Proxy xG + Squad Wealth + Officiating Submodel)")
