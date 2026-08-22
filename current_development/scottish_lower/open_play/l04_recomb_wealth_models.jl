@@ -127,24 +127,39 @@ function build_scottish_match_wealth_map(ds::Data.DataStore; fallback_default::F
     val_cat = get_cached_scottish_valuation_catalog()
     val_map = Dict(Int(r.player_id) => Float64(r.market_value) for r in eachrow(val_cat))
     
-    lineups = copy(ds.lineups)
-    
-    # Filter starting XI
-    starters = filter(r -> coalesce(r.substitute, false) == false, lineups)
+    lineup_sub_col = :is_substitute in propertynames(ds.lineups) ? :is_substitute : (:substitute in propertynames(ds.lineups) ? :substitute : nothing)
+    starters = lineup_sub_col !== nothing ? filter(r -> !coalesce(r[lineup_sub_col], false), copy(ds.lineups)) : copy(ds.lineups)
     
     # Map player market value with fallback
-    starters.val = [get(val_map, coalesce(r.player_id, 0), fallback_default) for r in eachrow(starters)]
+    pos_medians = Dict("G" => 80_000.0, "D" => 100_000.0, "M" => 110_000.0, "F" => 120_000.0)
+    pos_col = :position in propertynames(starters) ? :position : nothing
     
-    # Group by match and side
-    home_starters = filter(r -> coalesce(r.is_home, true) == true, starters)
-    away_starters = filter(r -> coalesce(r.is_home, true) == false, starters)
+    starters.val = [
+        let v = get(val_map, coalesce(r.player_id, 0), NaN)
+            if !isnan(v) && v > 0
+                v
+            elseif pos_col !== nothing && !ismissing(r[pos_col])
+                get(pos_medians, String(r[pos_col]), fallback_default)
+            else
+                fallback_default
+            end
+        end
+        for r in eachrow(starters)
+    ]
     
-    home_agg = combine(groupby(home_starters, :match_id), :val => sum => :w_h_raw)
-    away_agg = combine(groupby(away_starters, :match_id), :val => sum => :w_a_raw)
+    # Identify home/away
+    team_side_col = :team_side in propertynames(starters) ? :team_side : (:is_home_team in propertynames(starters) ? :is_home_team : :is_home)
+    is_home_expr(r) = (team_side_col == :team_side) ? (r.team_side == "home") : Bool(r[team_side_col])
+    
+    starters.is_home_bool = is_home_expr.(eachrow(starters))
+    
+    home_starters = filter(r -> r.is_home_bool, starters)
+    away_starters = filter(r -> !r.is_home_bool, starters)
+    
+    home_agg = combine(groupby(home_starters, :match_id), :val => (v -> mean(log.(v))) => :log_w_h)
+    away_agg = combine(groupby(away_starters, :match_id), :val => (v -> mean(log.(v))) => :log_w_a)
     
     joined = innerjoin(home_agg, away_agg, on = :match_id)
-    joined.log_w_h = log.(joined.w_h_raw .+ 1.0)
-    joined.log_w_a = log.(joined.w_a_raw .+ 1.0)
     
     # Standardize
     all_log_w = vcat(joined.log_w_h, joined.log_w_a)
