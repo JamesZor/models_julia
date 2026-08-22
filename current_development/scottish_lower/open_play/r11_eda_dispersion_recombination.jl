@@ -174,13 +174,14 @@ target_models = [
 model_r_stats = []
 
 for mod_name in target_models
-    matching = filter(e -> occursin(mod_name, e.name), all_exps)
+    matching = filter(p -> occursin(mod_name, p), all_exps)
     if isempty(matching)
         println("⚠️  Experiment not found for: $mod_name")
         continue
     end
-    exp_info = matching[end]
-    exp_res = Experiments.load_experiments(exp_info.save_path)
+    exp_path = matching[end]
+    println("Loading: $exp_path")
+    exp_res = Experiments.load_experiments(exp_path)
     
     r_h_all_folds = Float64[]
     r_a_all_folds = Float64[]
