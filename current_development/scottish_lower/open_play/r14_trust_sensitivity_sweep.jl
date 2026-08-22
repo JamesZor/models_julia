@@ -158,7 +158,7 @@ sweep_uncon_df = DataFrame(
 for w in [0.10, 0.25, 0.30, 0.50, 0.75, 1.00]
     pol = Portfolio.PolicySpec(
         trust    = Portfolio.FlatTrust(w),
-        risk     = Portfolio.NoRiskConstraint(),
+        risk     = Portfolio.NoRisk(),
         cap      = Portfolio.FixedCap(0.50),
         filter   = Portfolio.KeepAll(),
         grouping = Portfolio.DailySlate()
