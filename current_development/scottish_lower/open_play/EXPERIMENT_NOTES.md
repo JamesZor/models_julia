@@ -43,11 +43,48 @@ ll_pen  = sum((logpdf.(Poisson.(exp.(log_pen_h)), pens_h)   .+ logpdf.(Poisson.(
 @addlogprob! (ll_open + ll_pen)
 ```
 
-### B. Discrete Convolution Score Matrix Generation
-For each MCMC posterior sample:
-$$\lambda_{\text{noise}, h} = 0.768 \cdot \lambda_{\text{pen}, h} + 0.0276$$
-$$p_{\text{tot}, h}(g) = \sum_{m=0}^g \text{Poisson}(m \mid \mu_{\text{open}, h}) \cdot \text{Poisson}(g - m \mid \lambda_{\text{noise}, h})$$
-$$S(i, j) = p_{\text{tot}, h}(i) \cdot p_{\text{tot}, a}(j)$$
+### B. Integrated Negative Binomial Recombination Model (`recomb_negbin_integrated`)
+Co-trains open-play skill overdispersed goal counts with referee whistle tendencies:
+```julia
+# 1. Open-Play Negative Binomial Log-Mean
+log_mu_h = clamp.(mu_base .+ ha_home .+ delta_month[m] .+ delta_league[l] .+ alpha[h] .- beta[a], -10.0, 10.0)
+log_mu_a = clamp.(mu_base .+           delta_month[m] .+ delta_league[l] .+ alpha[a] .- beta[h], -10.0, 10.0)
+
+# 2. Scottish Home/Away Asymmetric Dispersion
+r_a = exp(log_r)
+r_h = exp(log_r + delta_r_home)
+
+# 3. Fast 0-Allocation Negative Binomial Log-Likelihood via Precomputed Gamma Recurrences
+ll_open_h = _negbin_vector_loglik(y_open_h, log_mu_h, r_h, nb_h)
+ll_open_a = _negbin_vector_loglik(y_open_a, log_mu_a, r_a, nb_a)
+
+# 4. Referee Whistle & Penalty Intensity
+log_pen_h = clamp.(pen_base_mu .+ ha_pen .+ gamma_ref[ref] .+ alpha_pen[h] .+ beta_foul[a], -10.0, 5.0)
+log_pen_a = clamp.(pen_base_mu .- ha_pen .+ gamma_ref[ref] .+ alpha_pen[a] .+ beta_foul[h], -10.0, 5.0)
+ll_pen    = sum((logpdf.(Poisson.(exp.(log_pen_h)), pens_h) .+ logpdf.(Poisson.(exp.(log_pen_a)), pens_a)) .* ref_mask .* weights)
+
+# 5. Combined Likelihood
+@addlogprob! (ll_open_h + ll_open_a + ll_pen)
+```
+
+### C. Discrete Convolution Score Matrix Generation
+For each MCMC posterior draw $k$:
+1. Compute Negative Binomial probability mass for open play:
+   $$p_h = \frac{r_h}{r_h + \mu_{\text{open}, h}}, \quad P(Y_{\text{open}, h} = m) = \text{NegativeBinomial}(m \mid r_h, p_h)$$
+2. Compute Poisson probability mass for noise goals (penalties + own goals):
+   $$\lambda_{\text{noise}, h} = 0.768 \cdot \lambda_{\text{pen}, h} + 0.0276, \quad P(Y_{\text{noise}, h} = n) = \text{Poisson}(n \mid \lambda_{\text{noise}, h})$$
+3. Discrete Convolution for total match goals:
+   $$P(Y_{\text{tot}, h} = g) = \sum_{m=0}^g P(Y_{\text{open}, h} = m) \cdot P(Y_{\text{noise}, h} = g - m)$$
+4. Outer product produces the complete, normalized joint score grid:
+   $$S(i, j) = P(Y_{\text{tot}, h} = i) \cdot P(Y_{\text{tot}, a} = j)$$
+
+### D. ReverseDiff AD Gradient Tape Performance Benchmarks
+| Model Architecture | Parameters | Tape Compile Time | Gradient Eval Time | Status |
+| :--- | :---: | :---: | :---: | :---: |
+| **Pure Open-Play Poisson** (`goals_pois_open_play`) | 59 | 4,466.8 ms | **0.429 ms** | ⚡ EXCELLENT (<1ms) |
+| **Integrated Recombination Poisson** (`recomb_pois_integrated`) | 107 | 4,230.6 ms | **0.983 ms** | ⚡ EXCELLENT (<1ms) |
+| **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 93 | 7,062.5 ms | **0.572 ms** | ⚡ EXCELLENT (<1ms) |
+| **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | 112 | 5,917.4 ms | **1.021 ms** | ✓ GOOD (<2.5ms) |
 
 ---
 

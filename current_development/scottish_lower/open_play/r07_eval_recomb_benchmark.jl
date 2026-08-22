@@ -48,7 +48,8 @@ target_models = [
     "goals_pois_open_play_hl365_hs2",
     "recomb_pois_integrated_hl365_hs2",
     "goals_negbin_ctl_hl365_hs2",
-    "goals_negbin_open_play_hl365_hs2"
+    "goals_negbin_open_play_hl365_hs2",
+    "recomb_negbin_integrated_hl365_hs2"
 ]
 
 experiments_dict = Dict{String, Any}()
