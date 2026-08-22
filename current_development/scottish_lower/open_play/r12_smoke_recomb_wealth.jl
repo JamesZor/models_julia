@@ -31,13 +31,16 @@ model = TeamGoalsRecombIntegratedPoisWealthModel(
 )
 
 # 3. Create Splitter & 1-Fold FeatureSet
-splitter = BayesianFootball.Training.GroupedCVConfig(
-    time_column = :match_month,
-    n_splits = 40,
-    min_train_periods = 12
+splitter = Data.GroupedCVConfig(
+    tournament_groups = [[56, 57]],
+    target_seasons    = ["24/25", "25/26"],
+    history_seasons   = 2,
+    dynamics_col      = :match_biweek,
+    warmup_period     = 0,
+    stop_early        = true
 )
 
-boundaries = BayesianFootball.Training.create_splits(splitter, ds.matches)
+boundaries = Data.create_id_boundaries(ds, splitter)
 bound1 = boundaries[end] # Most recent fold
 println("✓ Fold 40: $(length(bound1.history_match_ids)) history matches, $(length(bound1.target_match_ids)) test matches")
 
