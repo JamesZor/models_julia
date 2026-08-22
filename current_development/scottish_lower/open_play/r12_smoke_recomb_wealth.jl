@@ -67,14 +67,18 @@ println("="^90)
 
 w_wealth_mean = mean(Array(chain["w_wealth"]))
 w_wealth_sd   = std(Array(chain["w_wealth"]))
-sigma_team    = mean(Array(chain["sigma_team"]))
+base_mu       = mean(Array(chain["base_mu"]))
+ha_home       = mean(Array(chain["ha_home"]))
+tau_alpha     = mean(Array(chain["tau_alpha"]))
+tau_beta      = mean(Array(chain["tau_beta"]))
 sigma_ref     = mean(Array(chain["sigma_ref"]))
-sigma_pen     = mean(Array(chain["sigma_team_pen"]))
 
+println("  • base_mu (Open-Play Intercept)       : $(round(base_mu, digits=4))")
+println("  • ha_home (Home Advantage)            : $(round(ha_home, digits=4))")
 println("  • w_wealth (Squad Wealth Sensitivity) : $(round(w_wealth_mean, digits=4)) ± $(round(w_wealth_sd, digits=4))")
-println("  • σ_team (Team Open-Play Spread)      : $(round(sigma_team, digits=4))")
-println("  • σ_ref (Referee Strictness Spread)   : $(round(sigma_ref, digits=4))")
-println("  • σ_team_pen (Penalty Tendency Spread): $(round(sigma_pen, digits=4))")
+println("  • τ_alpha (Attack Spread)             : $(round(tau_alpha, digits=4))")
+println("  • τ_beta (Defense Spread)             : $(round(tau_beta, digits=4))")
+println("  • σ_ref (Referee Whistle Spread)      : $(round(sigma_ref, digits=4))")
 
 # 6. Test Out-of-Sample Parameter Extraction & Score Matrix
 latents = Predictions.extract_params(model, fset, chain)

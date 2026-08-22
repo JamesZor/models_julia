@@ -295,8 +295,8 @@ end
     league_indices::Vector{Int},
     home_open_goals::Vector{Int},
     away_open_goals::Vector{Int},
-    home_pens_awarded::Vector{Int},
-    away_pens_awarded::Vector{Int},
+    home_pens::Vector{Int},
+    away_pens::Vector{Int},
     ref_indices::Vector{Int},
     ref_mask::Vector{Float64},
     wealth_diff::Vector{Float64},
@@ -307,62 +307,64 @@ end
     n_leagues::Int,
     w_wealth_prior::Distribution
 )
-    # 1. Priors: Open Play
-    base_mu_open ~ Normal(0.15, 0.5)
-    ha_home      ~ Normal(0.20, 0.15)
+    # 1. Open Play Priors
+    base_mu     ~ Normal(0.15, 0.3)
+    ha_home     ~ Normal(0.20, 0.1)
     
-    delta_month  ~ filldist(Normal(0.0, 0.1), n_months)
+    tau_alpha   ~ truncated(Normal(0.0, 0.2), 0.0, Inf)
+    tau_beta    ~ truncated(Normal(0.0, 0.2), 0.0, Inf)
+    
+    raw_alpha   ~ filldist(Normal(0.0, 1.0), n_teams)
+    raw_beta    ~ filldist(Normal(0.0, 1.0), n_teams)
+    
+    alpha       = (raw_alpha .- mean(raw_alpha)) .* tau_alpha
+    beta        = (raw_beta  .- mean(raw_beta))  .* tau_beta
+    
+    delta_month  ~ filldist(Normal(0.0, 0.05), n_months)
     delta_league ~ filldist(Normal(0.0, 0.1), n_leagues)
-    
-    sigma_team   ~ truncated(Normal(0.3, 0.15), lower = 0.05)
-    raw_alpha    ~ filldist(Normal(0.0, 1.0), n_teams)
-    raw_beta     ~ filldist(Normal(0.0, 1.0), n_teams)
-    
-    alpha = (raw_alpha .- mean(raw_alpha)) .* sigma_team
-    beta  = (raw_beta  .- mean(raw_beta))  .* sigma_team
     
     # Squad Wealth Sensitivity
     w_wealth ~ w_wealth_prior
-    w_shift = w_wealth .* wealth_diff
+    w_shift  = w_wealth .* wealth_diff
 
-    # 2. Priors: Penalty Submodel
-    base_mu_pen    ~ Normal(-2.0, 0.5)
-    sigma_ref      ~ truncated(Normal(0.2, 0.1), lower = 0.01)
-    raw_gamma_ref  ~ filldist(Normal(0.0, 1.0), n_refs)
-    gamma_ref      = (raw_gamma_ref .- mean(raw_gamma_ref)) .* sigma_ref
+    # 2. Penalty Sub-Model Priors
+    pen_base_mu ~ Normal(-2.0, 0.5) # log(0.136) ~ -2.0
+    ha_pen      ~ Normal(0.19, 0.1) # Home whistle bias
     
-    sigma_team_pen ~ truncated(Normal(0.15, 0.1), lower = 0.01)
-    raw_alpha_pen  ~ filldist(Normal(0.0, 1.0), n_teams)
-    raw_beta_pen   ~ filldist(Normal(0.0, 1.0), n_teams)
-    alpha_pen      = (raw_alpha_pen .- mean(raw_alpha_pen)) .* sigma_team_pen
-    beta_pen       = (raw_beta_pen  .- mean(raw_beta_pen))  .* sigma_team_pen
+    sigma_ref   ~ Exponential(1.0)
+    raw_gamma_ref ~ filldist(Normal(0.0, 1.0), n_refs)
+    gamma_ref   = raw_gamma_ref .* sigma_ref
     
-    # 3. Vectorized Open-Play Likelihood
-    int_open = base_mu_open .+ view(delta_month, month_indices) .+ view(delta_league, league_indices)
+    alpha_pen_draw ~ filldist(Normal(0.0, 0.2), n_teams)
+    beta_pen_foul  ~ filldist(Normal(0.0, 0.2), n_teams)
     
-    log_mu_open_h = clamp.(int_open .+ ha_home .+ view(alpha, home_indices) .- view(beta, away_indices) .+ w_shift, -10.0, 10.0)
-    log_mu_open_a = clamp.(int_open .+ view(alpha, away_indices) .- view(beta, home_indices) .- w_shift, -10.0, 10.0)
+    # 3. Vectorized Open Play Intensity
+    int_m = base_mu .+ view(delta_month, month_indices) .+ view(delta_league, league_indices)
     
-    mu_open_h = exp.(log_mu_open_h) .+ 1e-6
-    mu_open_a = exp.(log_mu_open_a) .+ 1e-6
+    log_mu_h = clamp.(int_m .+ ha_home .+ view(alpha, home_indices) .- view(beta, away_indices) .+ w_shift, -10.0, 10.0)
+    log_mu_a = clamp.(int_m .+ view(alpha, away_indices) .- view(beta, home_indices) .- w_shift, -10.0, 10.0)
     
-    ll_open_h = logpdf.(Poisson.(mu_open_h), home_open_goals)
-    ll_open_a = logpdf.(Poisson.(mu_open_a), away_open_goals)
+    mu_h = exp.(log_mu_h) .+ 1e-6
+    mu_a = exp.(log_mu_a) .+ 1e-6
     
-    # 4. Vectorized Penalty Awarded Likelihood
-    ref_eff = view(gamma_ref, ref_indices) .* ref_mask
+    # 4. Vectorized Penalty Intensity
+    log_pen_h = clamp.(pen_base_mu .+ ha_pen .+ view(gamma_ref, ref_indices) .+ view(alpha_pen_draw, home_indices) .+ view(beta_pen_foul, away_indices), -10.0, 5.0)
+    log_pen_a = clamp.(pen_base_mu .- ha_pen .+ view(gamma_ref, ref_indices) .+ view(alpha_pen_draw, away_indices) .+ view(beta_pen_foul, home_indices), -10.0, 5.0)
     
-    log_lambda_pen_h = clamp.(base_mu_pen .+ ref_eff .+ view(alpha_pen, home_indices) .+ view(beta_pen, away_indices), -10.0, 5.0)
-    log_lambda_pen_a = clamp.(base_mu_pen .+ ref_eff .+ view(alpha_pen, away_indices) .+ view(beta_pen, home_indices), -10.0, 5.0)
-    
-    lambda_pen_h = exp.(log_lambda_pen_h) .+ 1e-6
-    lambda_pen_a = exp.(log_lambda_pen_a) .+ 1e-6
-    
-    ll_pen_h = logpdf.(Poisson.(lambda_pen_h), home_pens_awarded)
-    ll_pen_a = logpdf.(Poisson.(lambda_pen_a), away_pens_awarded)
+    lambda_pen_h = exp.(log_pen_h) .+ 1e-6
+    lambda_pen_a = exp.(log_pen_a) .+ 1e-6
     
     # 5. Combined Likelihood
-    Turing.@addlogprob! sum((ll_open_h .+ ll_open_a .+ ll_pen_h .+ ll_pen_a) .* match_weights)
+    ll_open_h = logpdf.(Poisson.(mu_h), home_open_goals)
+    ll_open_a = logpdf.(Poisson.(mu_a), away_open_goals)
+    
+    ll_pen_h  = logpdf.(Poisson.(lambda_pen_h), home_pens)
+    ll_pen_a  = logpdf.(Poisson.(lambda_pen_a), away_pens)
+    
+    ll_open_tot = (ll_open_h .+ ll_open_a) .* match_weights
+    ll_pen_tot  = (ll_pen_h .+ ll_pen_a) .* ref_mask .* match_weights
+    
+    Turing.@addlogprob! sum(ll_open_tot .+ ll_pen_tot)
 end
 
 function PreGame.build_turing_model(
@@ -395,6 +397,110 @@ end
 # SECTION 4: OUT-OF-SAMPLE PREDICTIONS & SCORE CONVOLUTION
 # ==============================================================================
 
+function PreGame.extract_parameters(
+    model::TeamGoalsRecombIntegratedPoisWealthModel,
+    df::AbstractDataFrame,
+    feature_set,
+    chain::Chains
+)
+    data = feature_set.data
+    team_map   = data[:team_map]
+    ref_map    = data[:ref_map]
+    wealth_map = data[:wealth_map]
+    n_teams    = data[:n_teams]
+    n_refs     = data[:n_refs]
+    n_months   = data[:n_months]
+    n_leagues  = data[:n_leagues]
+    
+    base_mu  = vec(Array(chain["base_mu"]))
+    ha_home  = vec(Array(chain["ha_home"]))
+    w_wealth = vec(Array(chain["w_wealth"]))
+    n_samples = length(base_mu)
+    
+    raw_alpha_mat = Array(chain[["raw_alpha[$i]" for i in 1:n_teams]])
+    raw_beta_mat  = Array(chain[["raw_beta[$i]" for i in 1:n_teams]])
+    alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
+    beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
+    
+    delta_month_mat  = _has_param(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
+    delta_league_mat = _has_param(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)
+    
+    pen_base_mu = vec(Array(chain["pen_base_mu"]))
+    ha_pen      = vec(Array(chain["ha_pen"]))
+    sigma_ref   = vec(Array(chain["sigma_ref"]))
+    
+    raw_gamma_mat = (n_refs > 0 && _has_param(chain, "raw_gamma_ref[1]")) ? Array(chain[["raw_gamma_ref[$i]" for i in 1:n_refs]]) : zeros(n_samples, n_refs)
+    gamma_mat = raw_gamma_mat .* sigma_ref
+    
+    apd_mat = _has_param(chain, "alpha_pen_draw[1]") ? Array(chain[["alpha_pen_draw[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    bpf_mat = _has_param(chain, "beta_pen_foul[1]") ? Array(chain[["beta_pen_foul[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    
+    results = Dict{Int, NamedTuple}()
+    for row in eachrow(df)
+        mid = Int(row.match_id)
+        h_id = hasproperty(row, :home_team_id) ? Int(row.home_team_id) : (hasproperty(row, :home_team) ? get(team_map, row.home_team, -1) : -1)
+        a_id = hasproperty(row, :away_team_id) ? Int(row.away_team_id) : (hasproperty(row, :away_team) ? get(team_map, row.away_team, -1) : -1)
+        
+        h_idx = get(team_map, h_id, -1)
+        a_idx = get(team_map, a_id, -1)
+        
+        α_h = h_idx > 0 ? alpha_mat[:, h_idx] : zeros(n_samples)
+        β_h = h_idx > 0 ? beta_mat[:, h_idx]  : zeros(n_samples)
+        α_a = a_idx > 0 ? alpha_mat[:, a_idx] : zeros(n_samples)
+        β_a = a_idx > 0 ? beta_mat[:, a_idx]  : zeros(n_samples)
+        
+        dw = get(wealth_map, mid, 0.0)
+        w_shift = w_wealth .* dw
+        
+        m_idx = month(row.match_date)
+        l_idx = hasproperty(row, :tournament_id) && row.tournament_id == 57 ? 2 : 1
+        
+        δ_m = (m_idx >= 1 && m_idx <= n_months) ? delta_month_mat[:, m_idx] : zeros(n_samples)
+        δ_l = (l_idx >= 1 && l_idx <= n_leagues) ? delta_league_mat[:, l_idx] : zeros(n_samples)
+        
+        int_m = base_mu .+ δ_m .+ δ_l
+        λ_h = exp.(int_m .+ ha_home .+ α_h .- β_a .+ w_shift)
+        λ_a = exp.(int_m .+           α_a .- β_h .- w_shift)
+        
+        # Referee Penalty Intensity
+        ref_id = hasproperty(row, :referee_id) && !ismissing(row.referee_id) ? Int(row.referee_id) : -1
+        r_idx  = get(ref_map, ref_id, -1)
+        γ_ref  = r_idx > 0 ? gamma_mat[:, r_idx] : zeros(n_samples)
+        
+        apd_h = h_idx > 0 ? apd_mat[:, h_idx] : zeros(n_samples)
+        apd_a = a_idx > 0 ? apd_mat[:, a_idx] : zeros(n_samples)
+        bpf_h = h_idx > 0 ? bpf_mat[:, h_idx] : zeros(n_samples)
+        bpf_a = a_idx > 0 ? bpf_mat[:, a_idx] : zeros(n_samples)
+        
+        log_pen_h = pen_base_mu .+ ha_pen .+ γ_ref .+ apd_h .+ bpf_a
+        log_pen_a = pen_base_mu .- ha_pen .+ γ_ref .+ apd_a .+ bpf_h
+        
+        lambda_pen_h = exp.(log_pen_h)
+        lambda_pen_a = exp.(log_pen_a)
+        
+        # Noise goal intensity (conversion ~ 0.768 + own goals ~ 0.0276)
+        lambda_noise_h = (0.768 .* lambda_pen_h) .+ 0.0276
+        lambda_noise_a = (0.768 .* lambda_pen_a) .+ 0.0276
+        
+        lambda_total_h = λ_h .+ lambda_noise_h
+        lambda_total_a = λ_a .+ lambda_noise_a
+        
+        results[mid] = (;
+            λ_h = lambda_total_h,
+            λ_a = lambda_total_a,
+            r_h = fill(100.0, n_samples),
+            r_a = fill(100.0, n_samples),
+            true_xg_h = λ_h,
+            true_xg_a = λ_a,
+            lambda_pen_h = lambda_pen_h,
+            lambda_pen_a = lambda_pen_a,
+            lambda_open_h = λ_h,
+            lambda_open_a = λ_a
+        )
+    end
+    return results
+end
+
 function Predictions.extract_params(
     model::TeamGoalsRecombIntegratedPoisWealthModel,
     feature_set::Features.FeatureSet,
@@ -408,50 +514,33 @@ function Predictions.extract_params(
     team_map   = F[:team_map]
     ref_map    = F[:ref_map]
     wealth_map = F[:wealth_map]
+    n_teams    = F[:n_teams]
+    n_refs     = F[:n_refs]
+    n_months   = F[:n_months]
+    n_leagues  = F[:n_leagues]
     
-    n_samples = size(chain, 1) * size(chain, 3)
+    base_mu  = vec(Array(chain["base_mu"]))
+    ha_home  = vec(Array(chain["ha_home"]))
+    w_wealth = vec(Array(chain["w_wealth"]))
+    n_samples = length(base_mu)
     
-    # 1. Open-play parameter extraction
-    base_mu_open_samples = vec(Array(chain["base_mu_open"]))
-    ha_home_samples      = vec(Array(chain["ha_home"]))
-    w_wealth_samples     = vec(Array(chain["w_wealth"]))
+    raw_alpha_mat = Array(chain[["raw_alpha[$i]" for i in 1:n_teams]])
+    raw_beta_mat  = Array(chain[["raw_beta[$i]" for i in 1:n_teams]])
+    alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
+    beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
     
-    raw_alpha_samples    = Array(chain[[Symbol("raw_alpha[$i]") for i in 1:F[:n_teams]]])
-    raw_beta_samples     = Array(chain[[Symbol("raw_beta[$i]") for i in 1:F[:n_teams]]])
-    sigma_team_samples   = vec(Array(chain["sigma_team"]))
+    delta_month_mat  = _has_param(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
+    delta_league_mat = _has_param(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)
     
-    alpha_mat = zeros(Float64, n_samples, F[:n_teams])
-    beta_mat  = zeros(Float64, n_samples, F[:n_teams])
-    for s in 1:n_samples
-        ra = raw_alpha_samples[s, :]
-        rb = raw_beta_samples[s, :]
-        alpha_mat[s, :] = (ra .- mean(ra)) .* sigma_team_samples[s]
-        beta_mat[s, :]  = (rb .- mean(rb))  .* sigma_team_samples[s]
-    end
+    pen_base_mu = vec(Array(chain["pen_base_mu"]))
+    ha_pen      = vec(Array(chain["ha_pen"]))
+    sigma_ref   = vec(Array(chain["sigma_ref"]))
     
-    # 2. Penalty submodel extraction
-    base_mu_pen_samples    = vec(Array(chain["base_mu_pen"]))
-    sigma_ref_samples      = vec(Array(chain["sigma_ref"]))
-    raw_gamma_ref_samples  = Array(chain[[Symbol("raw_gamma_ref[$i]") for i in 1:F[:n_refs]]])
+    raw_gamma_mat = (n_refs > 0 && _has_param(chain, "raw_gamma_ref[1]")) ? Array(chain[["raw_gamma_ref[$i]" for i in 1:n_refs]]) : zeros(n_samples, n_refs)
+    gamma_mat = raw_gamma_mat .* sigma_ref
     
-    gamma_ref_mat = zeros(Float64, n_samples, F[:n_refs])
-    for s in 1:n_samples
-        rg = raw_gamma_ref_samples[s, :]
-        gamma_ref_mat[s, :] = (rg .- mean(rg)) .* sigma_ref_samples[s]
-    end
-    
-    sigma_team_pen_samples = vec(Array(chain["sigma_team_pen"]))
-    raw_alpha_pen_samples  = Array(chain[[Symbol("raw_alpha_pen[$i]") for i in 1:F[:n_teams]]])
-    raw_beta_pen_samples   = Array(chain[[Symbol("raw_beta_pen[$i]") for i in 1:F[:n_teams]]])
-    
-    alpha_pen_mat = zeros(Float64, n_samples, F[:n_teams])
-    beta_pen_mat  = zeros(Float64, n_samples, F[:n_teams])
-    for s in 1:n_samples
-        rap = raw_alpha_pen_samples[s, :]
-        rbp = raw_beta_pen_samples[s, :]
-        alpha_pen_mat[s, :] = (rap .- mean(rap)) .* sigma_team_pen_samples[s]
-        beta_pen_mat[s, :]  = (rbp .- mean(rbp))  .* sigma_team_pen_samples[s]
-    end
+    apd_mat = _has_param(chain, "alpha_pen_draw[1]") ? Array(chain[["alpha_pen_draw[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
+    bpf_mat = _has_param(chain, "beta_pen_foul[1]") ? Array(chain[["beta_pen_foul[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
     
     out_df = DataFrame(
         match_id            = Int[],
@@ -469,41 +558,40 @@ function Predictions.extract_params(
         a_id = row.away_team_id
         r_id = row.referee_id
         
-        h_idx = get(team_map, h_id, 0)
-        a_idx = get(team_map, a_id, 0)
-        r_idx = get(ref_map, r_id, 0)
+        h_idx = get(team_map, h_id, -1)
+        a_idx = get(team_map, a_id, -1)
+        r_idx = get(ref_map, r_id, -1)
+        
+        α_h = h_idx > 0 ? alpha_mat[:, h_idx] : zeros(n_samples)
+        β_h = h_idx > 0 ? beta_mat[:, h_idx]  : zeros(n_samples)
+        α_a = a_idx > 0 ? alpha_mat[:, a_idx] : zeros(n_samples)
+        β_a = a_idx > 0 ? beta_mat[:, a_idx]  : zeros(n_samples)
         
         dw = get(wealth_map, m_id, 0.0)
-        w_shift = w_wealth_samples .* dw
-        
-        # Open Play intensities
-        alpha_h = h_idx > 0 ? alpha_mat[:, h_idx] : zeros(Float64, n_samples)
-        beta_h  = h_idx > 0 ? beta_mat[:, h_idx]  : zeros(Float64, n_samples)
-        alpha_a = a_idx > 0 ? alpha_mat[:, a_idx] : zeros(Float64, n_samples)
-        beta_a  = a_idx > 0 ? beta_mat[:, a_idx]  : zeros(Float64, n_samples)
+        w_shift = w_wealth .* dw
         
         m_idx = month(row.match_date)
-        delta_m_samples = vec(Array(chain[Symbol("delta_month[$m_idx]")]))
-        delta_l_samples = vec(Array(chain[Symbol("delta_league[1]")]))
+        l_idx = hasproperty(row, :tournament_id) && row.tournament_id == 57 ? 2 : 1
         
-        int_open = base_mu_open_samples .+ delta_m_samples .+ delta_l_samples
+        δ_m = (m_idx >= 1 && m_idx <= n_months) ? delta_month_mat[:, m_idx] : zeros(n_samples)
+        δ_l = (l_idx >= 1 && l_idx <= n_leagues) ? delta_league_mat[:, l_idx] : zeros(n_samples)
         
-        mu_open_h = exp.(int_open .+ ha_home_samples .+ alpha_h .- beta_a .+ w_shift)
-        mu_open_a = exp.(int_open .+ alpha_a .- beta_h .- w_shift)
+        int_m = base_mu .+ δ_m .+ δ_l
+        mu_open_h = exp.(int_m .+ ha_home .+ α_h .- β_a .+ w_shift)
+        mu_open_a = exp.(int_m .+           α_a .- β_h .- w_shift)
         
         # Penalty intensities
-        ref_eff = r_idx > 0 ? gamma_ref_mat[:, r_idx] : zeros(Float64, n_samples)
+        γ_ref = r_idx > 0 ? gamma_mat[:, r_idx] : zeros(n_samples)
         
-        alpha_pen_h = h_idx > 0 ? alpha_pen_mat[:, h_idx] : zeros(Float64, n_samples)
-        beta_pen_h  = h_idx > 0 ? beta_pen_mat[:, h_idx]  : zeros(Float64, n_samples)
-        alpha_pen_a = a_idx > 0 ? alpha_pen_mat[:, a_idx] : zeros(Float64, n_samples)
-        beta_pen_a  = a_idx > 0 ? beta_pen_mat[:, a_idx]  : zeros(Float64, n_samples)
+        apd_h = h_idx > 0 ? apd_mat[:, h_idx] : zeros(n_samples)
+        apd_a = a_idx > 0 ? apd_mat[:, a_idx] : zeros(n_samples)
+        bpf_h = h_idx > 0 ? bpf_mat[:, h_idx] : zeros(n_samples)
+        bpf_a = a_idx > 0 ? bpf_mat[:, a_idx] : zeros(n_samples)
         
-        lambda_pen_h = exp.(base_mu_pen_samples .+ ref_eff .+ alpha_pen_h .+ beta_pen_a)
-        lambda_pen_a = exp.(base_mu_pen_samples .+ ref_eff .+ alpha_pen_a .+ beta_pen_h)
+        lambda_pen_h = exp.(pen_base_mu .+ ha_pen .+ γ_ref .+ apd_h .+ bpf_a)
+        lambda_pen_a = exp.(pen_base_mu .- ha_pen .+ γ_ref .+ apd_a .+ bpf_h)
         
-        # Fixed empirical conversion rate & Dixon-Coles rho
-        q_pen_samples = fill(0.76, n_samples)
+        q_pen_samples = fill(0.768, n_samples)
         rho_samples   = fill(-0.05, n_samples)
         
         push!(out_df, (
