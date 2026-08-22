@@ -1310,12 +1310,8 @@ function Predictions.compute_score_matrix(model::TeamGoalsRecombIntegratedNegBin
         mu_noise_h = ln_h[k]
         mu_noise_a = ln_a[k]
         
-        # Probabilities for NegBin: prob = r / (r + mu)
-        prob_h = rk_h / (rk_h + mu_open_h)
-        prob_a = rk_a / (rk_a + mu_open_a)
-        
-        d_nb_h = RobustNegativeBinomial(rk_h, prob_h)
-        d_nb_a = RobustNegativeBinomial(rk_a, prob_a)
+        d_nb_h = RobustNegativeBinomial(max(Float64(rk_h), 1e-4), max(Float64(mu_open_h), 1e-4))
+        d_nb_a = RobustNegativeBinomial(max(Float64(rk_a), 1e-4), max(Float64(mu_open_a), 1e-4))
         
         p_open_h  = [pdf(d_nb_h, g) for g in 0:max_goals-1]
         p_open_a  = [pdf(d_nb_a, g) for g in 0:max_goals-1]
