@@ -116,26 +116,30 @@ t_elapsed = time() - t_start
 
 # 5. Diagnostic Assessment (R-hat & ESS)
 println("--- MCMC CONVERGENCE DIAGNOSTICS ---")
-chn_summary = describe(chain)[1]
+summary_df = DataFrame(MCMCChains.summarize(chain))
+rhat_df = DataFrame(MCMCChains.ess_rhat(chain))
 
 # Extract core scalar parameters
-core_params = ["μ_c_base", "γ_ha_c", "ϕ_c_inv", "σ_conv_att", "σ_conv_def"]
+core_params = ["μ_c_base", "γ_ha_c", "ϕ_c_inv", "σ_conv_att", "σ_conv_def", "ha.γ_global", "inter.μ_base[1]"]
 println("Core Latent Parameters:")
 for p in core_params
-    row_idx = findfirst(==(Symbol(p)), chn_summary[:, :parameters])
+    row_idx = findfirst(==(Symbol(p)), summary_df[:, :parameters])
     if row_idx !== nothing
-        m = chn_summary[row_idx, :mean]
-        s = chn_summary[row_idx, :std]
-        rhat = chn_summary[row_idx, :rhat]
-        ess = chn_summary[row_idx, :ess]
-        @printf("  %-15s | Mean: %+.3f | Std: %.3f | R-hat: %.4f | ESS: %6.1f\n", p, m, s, rhat, ess)
+        m = summary_df[row_idx, :mean]
+        s = summary_df[row_idx, :std]
+        
+        # Look up rhat
+        r_row = findfirst(==(Symbol(p)), rhat_df[:, :parameters])
+        rhat = r_row !== nothing ? rhat_df[r_row, :rhat] : 1.0
+        ess_col = :ess_bulk in propertynames(rhat_df) ? :ess_bulk : (:ess in propertynames(rhat_df) ? :ess : first(names(rhat_df)))
+        ess = r_row !== nothing ? rhat_df[r_row, ess_col] : 0.0
+        @printf("  %-18s | Mean: %+.3f | Std: %.3f | R-hat: %.4f | ESS: %6.1f\n", p, m, s, rhat, ess)
     end
 end
 
-# Check overall max R-hat
-rhats = filter(isfinite, chn_summary[:, :rhat])
-max_rhat = isempty(rhats) ? 1.0 : maximum(rhats)
-@printf("\nGlobal Max R-hat across all %d parameters: %.4f\n", length(chn_summary[:, :parameters]), max_rhat)
+rhat_vals = filter(isfinite, rhat_df[:, :rhat])
+max_rhat = isempty(rhat_vals) ? 1.0 : maximum(rhat_vals)
+@printf("\nGlobal Max R-hat across all %d parameters: %.4f\n", nrow(rhat_df), max_rhat)
 
 if max_rhat <= 1.05
     println(">>> VERDICT: All parameters CONVERGED with R-hat <= 1.05! <<<")
@@ -149,14 +153,20 @@ println("\n--- OUT-OF-SAMPLE (OOS) PREDICTION EVALUATION (N = $(nrow(df_test)) m
 # Extract posterior mean parameters
 chain_df = DataFrame(chain)
 mu_open_base = mean(chain_df[:, "inter.μ_base[1]"])
-gamma_ha_open = mean(chain_df[:, "ha[1]"]) # approximate home adv
+gamma_ha_open = mean(chain_df[:, "ha.γ_global"])
 mu_c_base = mean(chain_df[:, "μ_c_base"])
 gamma_ha_c = mean(chain_df[:, "γ_ha_c"])
 sigma_conv_att = mean(chain_df[:, "σ_conv_att"])
 sigma_conv_def = mean(chain_df[:, "σ_conv_def"])
 
-alpha_open_means = [mean(chain_df[:, "dyn.α[$i]"]) for i in 1:n_teams]
-beta_open_means = [mean(chain_df[:, "dyn.β[$i]"]) for i in 1:n_teams]
+sigma_a_open = mean(chain_df[:, "dyn.σ_a"])
+sigma_d_open = mean(chain_df[:, "dyn.σ_d"])
+
+raw_a_means = [mean(chain_df[:, "dyn.raw_a[$i]"]) for i in 1:n_teams]
+raw_d_means = [mean(chain_df[:, "dyn.raw_d[$i]"]) for i in 1:n_teams]
+alpha_open_means = (raw_a_means .* sigma_a_open) .- mean(raw_a_means .* sigma_a_open)
+beta_open_means = (raw_d_means .* sigma_d_open) .- mean(raw_d_means .* sigma_d_open)
+
 alpha_c_means = [mean(chain_df[:, "α_c_raw[$i]"]) for i in 1:n_teams]
 beta_c_means = [mean(chain_df[:, "β_c_raw[$i]"]) for i in 1:n_teams]
 alpha_c_means .-= mean(alpha_c_means)
