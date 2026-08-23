@@ -27,6 +27,7 @@ include("score_computation/dixoncoles.jl") # When ready
 include("./score_computation/negativebinomial.jl")
 include("./score_computation/dixon_coles_negbin.jl")
 include("./score_computation/frank_copula.jl")
+include("./score_computation/recombination.jl")
 
 # 3. Market Inferences (The Business Logic)
 include("market_inference/1x2.jl")

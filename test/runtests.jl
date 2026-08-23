@@ -26,5 +26,8 @@ using DataFrames, Dates, InlineStrings # Add any other packages your tests need 
 
     println("Running Caching and OOS Predictions tests...")
     include("caching_tests.jl")
+
+    println("Running Recombination and Squad Wealth Engine tests...")
+    include("recombination_tests.jl")
 end
 

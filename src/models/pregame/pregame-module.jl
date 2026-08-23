@@ -23,6 +23,9 @@ include("./components/copula.jl")
 include("./components/dixon_coles.jl")
 include("./components/dynamics.jl")
 include("./components/kappa.jl")
+include("./components/squad_wealth.jl")
+include("./components/recombination.jl")
+include("./components/pxg_observation.jl")
 include("./display.jl")
 
 # Team Level - Standard
@@ -37,6 +40,8 @@ include("./engines/team_level/time_decay/copula_goals.jl")
 include("./engines/team_level/time_decay/goals_market.jl")
 include("./engines/team_level/time_decay/goals_smile_league.jl")
 include("./engines/team_level/time_decay/goals_funnel_league.jl")
+include("./engines/team_level/time_decay/recombined_goals.jl")
+include("./engines/team_level/time_decay/recombined_pxg.jl")
 include("./engines/team_level/time_decay/xg.jl")
 include("./engines/team_level/time_decay/xg_market.jl")
 
@@ -60,6 +65,10 @@ include("./engines/player_level/time_decay/goals_plus_minus_league.jl")
 include("./engines/player_level/time_decay/goals_funnel_plus_minus_league.jl")
 
 export DynamicGoalsModel, DynamicGoalsTimeDecayModel, DynamicMarketGoalsTimeDecayModel, DynamicXGModel, DynamicXGTimeDecayModel, DynamicMarketGoalsModel, DynamicMarketXGModel, DynamicMarketXGTimeDecayModel, DynamicMarketXGPlayerModel, DynamicMarketXGPlayerTimeDecayModel, DynamicMarketXGHierarchicalPlayerTimeDecayModel, DynamicMarketXGOutfieldPlayerTimeDecayModel, DynamicXGOutfieldPlayerTimeDecayModel, DynamicCopulaGoalsTimeDecayModel, DynamicDixonColesXGOutfieldPlayerTimeDecayModel, DynamicDixonColesXGFullPositionPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicSmileDoublePoissonGoalsLeagueTimeDecayModel, DynamicFunnelDoublePoissonGoalsLeagueTimeDecayModel, DynamicDoubleNegBinXGOutfieldPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDixonColesXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDoublePoissonBigChanceOutfieldPlayerTimeDecayModel, DynamicGoalsPlusMinusLeagueTimeDecayModel, DynamicFunnelPlusMinusGoalsLeagueTimeDecayModel
+export DynamicRecombinedGoalsModel, DynamicPxGRecombModel
+export AbstractRecombinationConfig, EmpiricalRecombinationConfig, HierarchicalOfficiatingConfig
+export AbstractSquadWealthConfig, NoSquadWealthConfig, LinearSquadWealthConfig
+export AbstractPxGObservationConfig, NoPxGObservationConfig, GammaPxGObservationConfig
 export TimeDecayDynamics, StaticZeroDynamics, PositionalPlayerDynamics, HierarchicalPlayerDynamicsConfig, OutfieldPlayerDynamicsConfig, HierarchicalFrankCopulaConfig, GlobalFrankCopulaConfig
 
 ##
