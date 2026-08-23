@@ -61,9 +61,13 @@ target_models = [
 
 experiments_dict = Dict{String, Any}()
 for exp in all_loaded
-    for t in target_models
-        if startswith(exp.config.name, t)
-            experiments_dict[t] = exp
+    if length(exp.training_results.items) > 0
+        for t in target_models
+            if startswith(exp.config.name, t)
+                if !haskey(experiments_dict, t) || exp.save_path > experiments_dict[t].save_path
+                    experiments_dict[t] = exp
+                end
+            end
         end
     end
 end
