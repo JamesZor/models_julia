@@ -414,18 +414,18 @@ function Predictions.extract_params(model::TeamGoalsCornerRecombIntegratedModel,
 end
 
 function _poisson_pmf_vec(λ::Float64, max_g::Int)
-    p = zeros(Float64, max_g + 1)
-    p[1] = exp(-λ)
-    for k in 1:max_g
+    p = zeros(Float64, max_g)
+    p[1] = exp(-max(1e-8, λ))
+    for k in 1:(max_g - 1)
         p[k + 1] = p[k] * λ / k
     end
     return p
 end
 
 function _convolve_pmfs(p1::Vector{Float64}, p2::Vector{Float64}, max_g::Int)
-    p_out = zeros(Float64, max_g + 1)
-    for i in 0:max_g
-        for j in 0:(max_g - i)
+    p_out = zeros(Float64, max_g)
+    for i in 0:(max_g - 1)
+        for j in 0:(max_g - 1 - i)
             p_out[i + j + 1] += p1[i + 1] * p2[j + 1]
         end
     end
@@ -436,8 +436,7 @@ function Predictions.compute_score_matrix(model::TeamGoalsCornerRecombIntegrated
     p = params isa DataFrameRow ? Predictions.extract_params(model, params) : params
 
     n_samples = length(p.λ_h)
-    dim = max_goals + 1
-    S = zeros(Float64, dim, dim, n_samples)
+    S = zeros(Float64, max_goals, max_goals, n_samples)
 
     μ_pen = 0.78 * 0.219 # 0.1708
     μ_og  = 0.0630
@@ -470,9 +469,9 @@ function Predictions.compute_score_matrix(model::TeamGoalsCornerRecombIntegrated
         p_tot_a ./= sum(p_tot_a)
 
         # 2D Joint Score Slice
-        for j in 1:dim
+        for j in 1:max_goals
             pj = p_tot_a[j]
-            for i in 1:dim
+            for i in 1:max_goals
                 S[i, j, k] = p_tot_h[i] * pj
             end
         end
