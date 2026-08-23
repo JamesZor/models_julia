@@ -218,8 +218,8 @@ end
     λ_c_h = exp.(log_λ_c_h)
     λ_c_a = exp.(log_λ_c_a)
 
-    dist_c_h = RobustNegativeBinomial(ϕ_c, λ_c_h)
-    dist_c_a = RobustNegativeBinomial(ϕ_c, λ_c_a)
+    dist_c_h = RobustNegativeBinomial.(ϕ_c, λ_c_h)
+    dist_c_a = RobustNegativeBinomial.(ϕ_c, λ_c_a)
 
     ll_c_h = logpdf.(dist_c_h, corners_h)
     ll_c_a = logpdf.(dist_c_a, corners_a)
