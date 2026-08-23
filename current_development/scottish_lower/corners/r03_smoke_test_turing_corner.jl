@@ -27,9 +27,9 @@ sort!(df_lower, :match_datetime)
 
 println("Total Scottish Lower Matches: ", nrow(df_lower))
 
-# 2. Train / Test Walk-Forward Split (Split at 2024-08-01)
+# 2. Train / Test Walk-Forward Split (2-Season History Benchmark)
 split_date = Date(2024, 8, 1)
-df_train = filter(r -> Date(r.match_date) < split_date, df_lower)
+df_train = filter(r -> Date(r.match_date) >= split_date - Year(2) && Date(r.match_date) < split_date, df_lower)
 df_test = filter(r -> Date(r.match_date) >= split_date && Date(r.match_date) < Date(2025, 1, 1), df_lower)
 
 println("Training Set: ", nrow(df_train), " matches (", Dates.format(minimum(df_train.match_date), "yyyy-mm-dd"), " to ", Dates.format(maximum(df_train.match_date), "yyyy-mm-dd"), ")")
