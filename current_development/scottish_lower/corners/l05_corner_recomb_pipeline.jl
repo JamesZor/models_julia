@@ -265,12 +265,13 @@ function _has_param(chain::Chains, p::String)
     return Symbol(p) in names(chain, :parameters)
 end
 
-function Predictions.extract_latents(
+function PreGame.extract_parameters(
     model::TeamGoalsCornerRecombIntegratedModel,
-    chain::Chains,
-    features::Features.FeatureSet,
-    df::DataFrame
+    df::AbstractDataFrame,
+    feature_set,
+    chain::Chains
 )
+    features = feature_set isa Tuple ? feature_set[1] : feature_set
     n_samples = size(chain, 1) * size(chain, 3)
     d = features.data
     team_map = d[:team_map]
