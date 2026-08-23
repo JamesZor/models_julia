@@ -15,6 +15,7 @@ using DynamicPPL
 using ReverseDiff
 using BenchmarkTools
 using LogDensityProblems
+using SpecialFunctions: loggamma
 
 include("l01_corner_data.jl")
 include("l04_turing_corner_model.jl")
@@ -47,6 +48,14 @@ max_train_date = maximum(df_train.match_datetime)
 decay_rate = log(2.0) / 365.0
 match_weights = [exp(-decay_rate * max(0.0, (max_train_date - r.match_datetime).value / (1000 * 3600 * 24))) for r in eachrow(df_train)]
 
+c_h = Int.(df_train.corners_h)
+cg_h = Int.(df_train.corner_goals_h)
+c_a = Int.(df_train.corners_a)
+cg_a = Int.(df_train.corner_goals_a)
+
+logbinom_h = [Float64(loggamma(c + 1) - loggamma(g + 1) - loggamma(c - g + 1)) for (c, g) in zip(c_h, cg_h)]
+logbinom_a = [Float64(loggamma(c + 1) - loggamma(g + 1) - loggamma(c - g + 1)) for (c, g) in zip(c_a, cg_a)]
+
 println("✓ Ingested Dataset: $(nrow(df_train)) matches, $n_teams teams, $n_leagues divisions\n")
 
 # 2. Instantiate Turing Model
@@ -58,10 +67,12 @@ turing_mod = build_corner_recomb_engine(
     league_idx,
     Int.(df_train.open_goals_h),
     Int.(df_train.open_goals_a),
-    Int.(df_train.corners_h),
-    Int.(df_train.corners_a),
-    Int.(df_train.corner_goals_h),
-    Int.(df_train.corner_goals_a),
+    c_h,
+    c_a,
+    cg_h,
+    cg_a,
+    logbinom_h,
+    logbinom_a,
     Float64.(df_train.corners_h .> 0),
     Float64.(df_train.corners_a .> 0),
     match_weights,

@@ -13,8 +13,8 @@ using Printf
 using Dates
 using Statistics
 using MCMCChains
-using ReverseDiff
-using DynamicPPL: AutoReverseDiff
+using SpecialFunctions: loggamma
+using BayesianFootball.Samplers
 
 println("================================================================================")
 println(" TURING MCMC SMOKE TEST: 4-WAY CORNER RECOMBINATION BASELINE")
@@ -57,6 +57,14 @@ max_train_date = maximum(df_train.match_datetime)
 decay_rate = log(2.0) / 365.0
 match_weights = [exp(-decay_rate * max(0.0, (max_train_date - r.match_datetime).value / (1000 * 3600 * 24))) for r in eachrow(df_train)]
 
+c_h = Int.(df_train.corners_h)
+cg_h = Int.(df_train.corner_goals_h)
+c_a = Int.(df_train.corners_a)
+cg_a = Int.(df_train.corner_goals_a)
+
+logbinom_h = [Float64(loggamma(c + 1) - loggamma(g + 1) - loggamma(c - g + 1)) for (c, g) in zip(c_h, cg_h)]
+logbinom_a = [Float64(loggamma(c + 1) - loggamma(g + 1) - loggamma(c - g + 1)) for (c, g) in zip(c_a, cg_a)]
+
 # 4. Instantiate Model & Run MCMC
 config = DynamicCornerRecombModel()
 turing_mod = build_corner_recomb_engine(
@@ -66,10 +74,12 @@ turing_mod = build_corner_recomb_engine(
     league_idx_train,
     Int.(df_train.open_goals_h),
     Int.(df_train.open_goals_a),
-    Int.(df_train.corners_h),
-    Int.(df_train.corners_a),
-    Int.(df_train.corner_goals_h),
-    Int.(df_train.corner_goals_a),
+    c_h,
+    c_a,
+    cg_h,
+    cg_a,
+    logbinom_h,
+    logbinom_a,
     Float64.(df_train.corners_h .> 0),
     Float64.(df_train.corners_a .> 0),
     match_weights,
@@ -78,9 +88,18 @@ turing_mod = build_corner_recomb_engine(
     config
 )
 
-println("--- Starting NUTS MCMC Sampling (500 warmup, 500 samples, 4 chains) ---")
+sampler_cfg = Samplers.NUTSConfig(
+    n_samples   = 500,
+    n_warmup    = 300,
+    n_chains    = 4,
+    accept_rate = 0.65,
+    max_depth   = 8,
+    show_progress = false
+)
+
+println("--- Starting NUTS MCMC Sampling (300 warmup, 500 samples, 4 chains) via Samplers ---")
 t_start = time()
-chain = sample(turing_mod, NUTS(500, 0.65), MCMCThreads(), 500, 4; adtype = AutoReverseDiff(compile=true))
+chain = Samplers.run_sampler(turing_mod, sampler_cfg)
 t_elapsed = time() - t_start
 @printf("✓ Sampling complete in %.2f seconds (%.2f s/chain)\n\n", t_elapsed, t_elapsed / 4)
 

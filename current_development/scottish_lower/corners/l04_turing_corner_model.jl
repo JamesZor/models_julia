@@ -12,6 +12,7 @@ using MCMCChains
 using LinearAlgebra
 using SpecialFunctions
 using StatsFuns: logistic
+using LogExpFunctions: log1pexp
 
 # Reference the core types and components
 using BayesianFootball
@@ -23,6 +24,7 @@ import BayesianFootball.Models.PreGame: AbstractInterceptionConfig, Hierarchical
                                         AbstractTimeDecayTeamModel, to_submodel,
                                         build_interception, build_home_advantage, build_dynamics
 using BayesianFootball.Features
+using BayesianFootball.MyDistributions: RobustNegativeBinomial
 
 """
     DynamicCornerRecombModel <: AbstractTimeDecayTeamModel
@@ -53,6 +55,8 @@ end
     corners_a::Vector{Int},
     corner_goals_h::Vector{Int},
     corner_goals_a::Vector{Int},
+    logbinom_h::Vector{Float64},
+    logbinom_a::Vector{Float64},
     mask_c_h::Vector{Float64},
     mask_c_a::Vector{Float64},
     match_weights::Vector{Float64},
@@ -88,11 +92,11 @@ end
     μ_open_a = exp.(clamp.(log_μ_open_a, -5.0, 4.0))
 
     # -------------------------------------------------------------
-    # 2. Corner Count Generation Submodel (Negative Binomial)
+    # 2. Corner Count Generation Submodel (RobustNegativeBinomial(r, μ))
     # -------------------------------------------------------------
     μ_c_base ~ Normal(1.45, 0.20)
     γ_ha_c   ~ Normal(0.13, 0.05)
-    ϕ_c_inv  ~ Exponential(0.15) # 1 / phi overdispersion scale
+    ϕ_c_inv  ~ Exponential(0.15) # 1 / r dispersion scale
     ϕ_c      = 1.0 / clamp(ϕ_c_inv, 0.01, 10.0)
 
     α_c_raw ~ filldist(Normal(0, 0.25), n_teams)
@@ -131,11 +135,8 @@ end
     logit_q_h = const_logit_q_base .+ σ_conv_att .* z_att_h .- σ_conv_def .* z_def_a
     logit_q_a = const_logit_q_base .+ σ_conv_att .* z_att_a .- σ_conv_def .* z_def_h
 
-    q_c_h = logistic.(clamp.(logit_q_h, -6.0, 0.0))
-    q_c_a = logistic.(clamp.(logit_q_a, -6.0, 0.0))
-
     # -------------------------------------------------------------
-    # 4. Vectorized Likelihood Accumulation
+    # 4. Vectorized Likelihood Accumulation (Zero-Allocation SIMD)
     # -------------------------------------------------------------
     # 1. Open Play Goals (Poisson)
     ll_open_h = logpdf.(Poisson.(μ_open_h), y_open_h)
@@ -143,19 +144,18 @@ end
     Turing.@addlogprob! sum(ll_open_h .* match_weights)
     Turing.@addlogprob! sum(ll_open_a .* match_weights)
 
-    # 2. Corner Generation (Negative Binomial)
-    p_c_h = ϕ_c ./ (ϕ_c .+ λ_c_h)
-    p_c_a = ϕ_c ./ (ϕ_c .+ λ_c_a)
-    ll_c_h = logpdf.(NegativeBinomial.(ϕ_c, clamp.(p_c_h, 1e-5, 0.99999)), corners_h)
-    ll_c_a = logpdf.(NegativeBinomial.(ϕ_c, clamp.(p_c_a, 1e-5, 0.99999)), corners_a)
+    # 2. Corner Generation (RobustNegativeBinomial(r=ϕ_c, μ=λ_c))
+    ll_c_h = logpdf.(RobustNegativeBinomial.(ϕ_c, λ_c_h), corners_h)
+    ll_c_a = logpdf.(RobustNegativeBinomial.(ϕ_c, λ_c_a), corners_a)
     Turing.@addlogprob! sum(ll_c_h .* match_weights)
     Turing.@addlogprob! sum(ll_c_a .* match_weights)
 
-    # 3. Corner Goal Conversion (Binomial with zero-allocation mask)
-    c_h_safe = max.(1, corners_h)
-    c_a_safe = max.(1, corners_a)
-    ll_cg_h = logpdf.(Binomial.(c_h_safe, q_c_h), corner_goals_h)
-    ll_cg_a = logpdf.(Binomial.(c_a_safe, q_c_a), corner_goals_a)
+    # 3. Corner Goal Conversion (Analytical Logit-Binomial)
+    # logpdf = logbinom + k * logit_q - n * log1pexp(logit_q)
+    lq_h_clamped = clamp.(logit_q_h, -10.0, 5.0)
+    lq_a_clamped = clamp.(logit_q_a, -10.0, 5.0)
+    ll_cg_h = logbinom_h .+ corner_goals_h .* lq_h_clamped .- corners_h .* log1pexp.(lq_h_clamped)
+    ll_cg_a = logbinom_a .+ corner_goals_a .* lq_a_clamped .- corners_a .* log1pexp.(lq_a_clamped)
     Turing.@addlogprob! sum(ll_cg_h .* mask_c_h .* match_weights)
     Turing.@addlogprob! sum(ll_cg_a .* mask_c_a .* match_weights)
 end
