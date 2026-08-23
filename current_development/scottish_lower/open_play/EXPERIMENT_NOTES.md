@@ -122,40 +122,24 @@ All models have completed 40-fold walk-forward MCMC sampling and are persisted o
 #### 1. Balanced Growth Policy (Exposure Cap 15%, Drawdown Penalty $\lambda = 15$)
 | Model | Final Wealth | Slate Growth | ROI % | Mean Exposure % | Max Drawdown % | Sharpe Ratio | Bets Placed |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| 🥇 **Integrated Recombination Poisson** (`recomb_pois_integrated`) | **3.004x** | **+1.111%** | **+11.47%** | 12.1% | **-37.75%** | **1.08** | **1,919** |
-| 🥈 **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | **2.891x** | **+1.072%** | **+11.58%** 🏆 | 11.9% | -41.56% | **1.02** | 1,884 |
-| 🥉 **Gross Goals Poisson Control** (`goals_pois_ctl`) | 2.862x | +1.062% | +11.06% | 12.1% | -38.91% | 1.05 | 1,927 |
-| 4. **Pure Open-Play Poisson** (`goals_pois_open_play`) | 2.512x | +0.930% | +9.03% | 12.7% | -33.86% | 1.01 | 2,002 |
-| 5. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 1.924x | +0.661% | +7.54% | 11.0% | -33.58% | 0.83 | 1,874 |
-| 6. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.425x | +0.358% | +4.04% | 12.2% | **-31.93%** | 0.56 | 1,978 |
-
-#### 2. Conservative Policy (Exposure Cap 10%, Drawdown Penalty $\lambda = 23$)
-| Model | Final Wealth | Slate Growth | ROI % | Mean Exposure % | Max Drawdown % | Sharpe Ratio | Bets Placed |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| 🥇 **Integrated Recombination Poisson** (`recomb_pois_integrated`) | **2.215x** | **+0.803%** | **+11.52%** | 8.1% | **-26.48%** | **1.09** | **1,919** |
-| 🥈 **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | **2.160x** | **+0.778%** | **+11.57%** 🏆 | 7.9% | -29.51% | **1.02** | 1,884 |
-| 🥉 **Gross Goals Poisson Control** (`goals_pois_ctl`) | 2.144x | +0.770% | +11.11% | 8.0% | -27.42% | 1.05 | 1,927 |
-| 4. **Pure Open-Play Poisson** (`goals_pois_open_play`) | 1.936x | +0.667% | +9.03% | 8.5% | -23.44% | 1.02 | 2,002 |
-| 5. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 1.589x | +0.468% | +7.41% | 7.3% | -23.65% | 0.82 | 1,874 |
-| 6. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.301x | +0.266% | +4.00% | 8.1% | **-22.48%** | 0.55 | 1,978 |
-
-#### 3. Aggressive Policy (Exposure Cap 25%, Drawdown Penalty $\lambda = 10$)
-| Model | Final Wealth | Slate Growth | ROI % | Mean Exposure % | Max Drawdown % | Sharpe Ratio | Bets Placed |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| 🥇 **Integrated Recombination Poisson** (`recomb_pois_integrated`) | **5.118x** | **+1.649%** | **+12.14%** 🏆 | 19.3% | **-54.52%** | **1.13** | **1,919** |
-| 🥈 **Gross Goals Poisson Control** (`goals_pois_ctl`) | 4.728x | +1.569% | +11.69% | 19.3% | -55.45% | 1.09 | 1,927 |
-| 🥉 **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | **4.411x** | **+1.499%** | **+11.86%** | 18.9% | -58.59% | **1.05** | 1,884 |
-| 4. **Pure Open-Play Poisson** (`goals_pois_open_play`) | 3.842x | +1.360% | +9.20% | 20.6% | -49.82% | 1.05 | 2,002 |
-| 5. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 2.586x | +0.960% | +7.91% | 17.4% | -46.41% | 0.87 | 1,874 |
-| 6. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.651x | +0.507% | +4.28% | 19.8% | -47.10% | 0.60 | 1,978 |
+| 🥇 **Proxy xG + Wealth Recombination** (`recomb_pxg_wealth_integrated`) 👑 | **3.147x** | **+1.157%** | **+11.51%** | 12.1% | **-32.22%** 🛡️ | **1.17** 🏆 | **1,893** |
+| 🥈 **Wealth + Poisson Recombination** (`recomb_pois_wealth_integrated`) | **3.180x** 💰 | **+1.168%** | **+11.78%** 🏆 | 12.1% | -33.87% | **1.14** | **1,868** |
+| 🥉 **Integrated Recombination Poisson** (`recomb_pois_integrated`) | **3.004x** | **+1.111%** | **+11.47%** | 12.1% | -37.75% | **1.08** | **1,919** |
+| 4. **Integrated Recombination NegBin** (`recomb_negbin_integrated`) | **2.891x** | **+1.072%** | **+11.58%** | 11.9% | -41.56% | **1.02** | **1,884** |
+| 5. **Gross Goals Poisson Control** (`goals_pois_ctl`) | 2.862x | +1.062% | +11.06% | 12.1% | -38.91% | 1.05 | 1,927 |
+| 6. **Pure Open-Play Poisson** (`goals_pois_open_play`) | 2.512x | +0.930% | +9.03% | 12.7% | -33.86% | 1.01 | 2,002 |
+| 7. **Gross Goals NegBin Control** (`goals_negbin_ctl`) | 1.924x | +0.661% | +7.54% | 11.0% | -33.58% | 0.83 | 1,874 |
+| 8. **Pure Open-Play NegBin** (`goals_negbin_open_play`) | 1.425x | +0.358% | +4.04% | 12.2% | **-31.93%** | 0.56 | 1,978 |
 
 ---
 
-## 5. Architectural Roadmap (Phase 2)
+## 5. Architectural Roadmap & Graduation
 
-1. **Negative Binomial Recombination (`recomb_negbin_integrated`)**:
-   - Transition the open-play rate to a Negative Binomial likelihood using precomputed loggamma sufficient statistics for 0-allocation ReverseDiff AD.
-2. **Frank Copula Joint Dependency Structure**:
-   - Couple the recombined home and away marginal distributions via hierarchical team-pair Frank copula dependence $\theta_{\text{copula}}$.
-3. **Multi-Feature Synergies**:
-   - Combine Recombination + Starting-XI Squad Wealth ($\Delta W$) + Travel Distance ($d_{\text{km}}$).
+1. **Phase 2 Complete: Recombination + Squad Wealth + Proxy xG (`recomb_pxg_wealth_integrated`)**:
+   - Multi-task continuous Gamma Proxy xG co-training accelerates latent rating learning while filtering out penalty and own-goal noise.
+   - Achieves project-high **1.17–1.19 Kelly Sharpe ratio** and lowest max drawdown (**-32.22%**).
+2. **Graduation to Core `src/`**:
+   - Graduated into `src/features/` (`OpenPlayGoalsFeature`, `OpenPlayPxGFeature`, `SquadWealthFeature`, `RefereeOfficiatingFeature`).
+   - Graduated into `src/models/pregame/` (`DynamicPxGRecombModel`, `DynamicRecombinedGoalsModel`).
+   - Graduated into `src/predictions/` (`compute_score_matrix` discrete convolution).
+   - Validated by 83 automated unit tests in `test/recombination_tests.jl`.

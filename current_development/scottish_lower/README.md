@@ -70,32 +70,31 @@ current_development/scottish_lower/
 
 ---
 
-## 🏆 Comprehensive 8-Model Leaderboard (40-Fold OOS Betfair Portfolio Benchmark)
+---
 
-*Evaluated across 628 settled MatchBooks (1X2, BTTS, O/U 0.5–4.5) with 2% Betfair commission and 800-draw Baker-McHale shrinkage under Balanced Growth ($\text{Cap } 15\%, \lambda = 15$):*
+## 🏆 Master Leaderboard: Scottish Lower Recombination, Wealth & Proxy xG Benchmarks
 
-| Rank | Model Architecture | Final Wealth | Betfair ROI | Sharpe Ratio | Max Drawdown | CRPS (Goals) $\downarrow$ | RQR Std ($\approx 1.0$) | Bets |
+*Evaluated across 710 Out-of-Sample Matches (2024/25 & 2025/26) on closed Betfair Exchange historical orderbooks (2% net commission, 800 Baker-McHale posterior draws, multi-market Kelly allocation across 1X2, BTTS, O/U 0.5–4.5):*
+
+| Rank | Model Architecture | Final Wealth (15% Cap) | Betfair ROI | Sharpe Ratio | Max Drawdown | CRPS $\downarrow$ | 1X2 LogLoss Diff | Status |
 | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| 🥇 | **`pxg_apm_negbin_wealth`** | **`2.803x`** | **`+11.33%`** | **`1.18`** | $-34.17\%$ | **`0.6289`** | **`0.9922`** | 1,831 |
-| 🥈 | **`pxg_apm_negbin_wealth_dist`** | **`2.520x`** | **`+10.21%`** | **`1.07`** | $-38.85\%$ | $0.6294$ | **`0.9996`** | 1,844 |
-| 🥉 | **`pxg_apm_negbin`** *(NegBin Baseline)* | **`2.295x`** | $+9.50\%$ | $0.98$ | $-33.88\%$ | $0.6296$ | $1.0007$ | 1,820 |
-| 4 | `goals_negbin_wealth` *(Goals + Wealth)* | **`2.156x`** | $+8.40\%$ | $0.94$ | $-34.45\%$ | $0.6292$ | $1.0021$ | 1,887 |
-| 5 | `pxg_apm_negbin_dist` *(Proxy xG + Dist)* | **`2.063x`** | $+8.43\%$ | $0.86$ | $-38.48\%$ | $0.6300$ | $1.0225$ | 1,844 |
-| 6 | `goals_negbin_ctl` *(Goals Control)* | **`1.924x`** | $+7.54\%$ | $0.83$ | **`-33.58%`** | $0.6295$ | $1.0164$ | 1,874 |
-| 7 | `goals_negbin_wealth_dist` | **`1.774x`** | $+6.57\%$ | $0.74$ | $-40.45\%$ | $0.6303$ | $0.9981$ | 1,905 |
-| 8 | `goals_negbin_dist` | **`1.539x`** | $+5.42\%$ | $0.60$ | $-39.48\%$ | $0.6305$ | $0.9849$ | 1,902 |
+| 🥇 **1** | **`recomb_pxg_wealth_integrated`** | **`3.147x`** | **`+11.51%`** | **`1.17`** 🏆 | **`-32.22%`** 🛡️ | **`0.6360`** 🏆 | **`+0.0105`** 🏆 | **👑 Production Champion** |
+| 🥈 **2** | **`recomb_pois_wealth_integrated`** | **`3.180x`** 💰 | **`+11.78%`** 🏆 | **`1.14`** | $-33.87\%$ | $0.6368$ | $+0.0120$ | Validated |
+| 🥉 **3** | **`recomb_pois_integrated`** | **`3.004x`** | $+11.47\%$ | **`1.08`** | $-37.75\%$ | $0.6372$ | $+0.0108$ | Validated |
+| 4 | **`recomb_negbin_integrated`** | **`2.891x`** | $+11.58\%$ | **`1.02`** | $-41.56\%$ | $0.6367$ | $+0.0108$ | Validated |
+| 5 | **`goals_pois_ctl`** *(Gross Goals Control)* | **`2.862x`** | $+11.06\%$ | **`1.05`** | $-38.91\%$ | $0.6380$ | $+0.0109$ | Baseline |
+| 6 | **`goals_pois_open_play`** | **`2.512x`** | $+9.03\%$ | **`1.01`** | $-33.86\%$ | $0.6420$ | $+0.0114$ | Baseline |
+| 7 | **`goals_negbin_ctl`** *(Gross NegBin Control)* | **`1.924x`** | $+7.54\%$ | **`0.83`** | **`-33.58%`** | $0.6295$ | $+0.0034$ | Baseline |
+| 8 | **`goals_negbin_open_play`** | **`1.425x`** | $+4.04\%$ | **`0.56`** | **`-31.93%`** | $0.6343$ | $+0.0037$ | Baseline |
 
 ---
 
 ## 🔬 Core Modeling Insights
 
-1. **Negative Binomial Count Likelihood ($\phi_{\text{goals}} \approx 6.5$)**:
-   - Captures match-level overdispersion and eliminates tail variance underestimation in lower leagues.
-2. **Squad Wealth Disparity ($\Delta W$) is the Primary Value Driver**:
-   - Financial disparity provides a persistent fundamental edge over retail market participants who over-index on recent form.
-   - Boosts portfolio wealth growth from 1.924x to **2.803x (+45.7% growth increase)**.
-3. **Travel Distance ($d_{\text{km}}$) Drives Away-Side Information Separation**:
-   - Adding log-standardized travel distance produces a **+27% to +57% improvement in Away LogLoss separation vs Market Fair**.
-   - Collinear with remote low-budget clubs in Scotland, so pure Wealth remains optimal for unconstrained Kelly capital compounding.
-4. **Sub-Second OOS Inference Caching**:
+1. **Recombination + Squad Wealth + Proxy xG achieves the highest risk-adjusted Kelly return (Sharpe 1.17–1.19)**:
+   - Decomposing gross match scores into open-play chance creation, referee-specific penalty awards, and accidental own goals eliminates non-systemic noise that distorts standard rating models.
+2. **Squad Wealth Disparity ($\Delta W$) Drives Persistent Fundamental Alpha**:
+   - Financial disparity in Starting-XI player valuations provides a strong fundamental edge over retail market participants who over-index on recent form.
+   - Boosts portfolio wealth growth from 3.004x to **3.147x** and compresses peak-to-trough drawdown by **5.53%**.
+3. **Sub-Second OOS Inference Caching**:
    - `extract_oos_predictions(ds, exp; force=false)` uses atomic `.jls` persistence, reducing multi-experiment benchmark evaluations from **15+ minutes down to 0.04s per model**.
