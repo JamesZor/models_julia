@@ -63,7 +63,8 @@ function shrink_factor(s::BakerMcHale, score_matrix, R::AbstractMatrix{Float64},
 
     # portfolio return vector implied by each draw's own optimal allocation
     port = Vector{Vector{Float64}}(undef, length(draws))
-    @inbounds for (i, j) in enumerate(draws)
+    Threads.@threads for i in 1:length(draws)
+        j = draws[i]
         q = vec(sm_data[:, :, j])          # copy -> concrete Vector{Float64}
         q ./= sum(q)
         port[i] = R * allocate(alloc, q, R, exec).a
