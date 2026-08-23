@@ -22,10 +22,12 @@ The foundational data layer that handles the extraction, transformation, and val
 
 ### Layer 1: Bayesian Engines (`src/Models/`)
 Standardized components ("Mathematical Lego Blocks") are assembled into Master Engines:
-- **`DynamicGoalsModel`**: Historical goals-only engine.
+- **`DynamicPxGRecombModel`**: **(Production Champion)** Multi-task continuous Proxy xG (`pxG`) and open-play goals engine co-training with Starting-XI squad market wealth ($\Delta W$) and hierarchical officiating penalty submodels. Recombines latents via exact discrete Poisson convolution. [Architecture Guide](file:///home/james/bet_project/BayesianFootball/docs/models/recombination_pxg_wealth_architecture.md).
+- **`DynamicRecombinedGoalsModel`**: Recombination engine decomposing gross scores into open-play goals, penalty awards, and own goals with squad wealth adjustment.
+- **`DynamicGoalsModel`**: Historical gross goals-only engine.
 - **`DynamicXGModel`**: Unified engine co-training on True xG and goals via a `Kappa` conversion rate.
 - **`DynamicCopulaGoalsModel`**: Evaluates match outcomes using a Frank Copula joint distribution over Negative Binomial marginals to capture team-specific match correlation styles.
-- **Components**: Interception (μ), Dispersion (variance), Home Advantage (hierarchical), Dynamics (multi-scale GRW), and Copula (hierarchical correlation).
+- **Components**: Interception (μ), Dispersion (variance), Home Advantage (hierarchical), Dynamics (multi-scale GRW), Squad Wealth (linear/none), Proxy xG (Gamma observation), Recombination (officiating/empirical), and Copula (hierarchical correlation).
 
 ### Layer 2: Calibration (`src/Calibration/`)
 Shifts scalar probabilities and MCMC posterior distributions to align with historical outcomes.
