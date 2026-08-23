@@ -25,6 +25,17 @@ try
     println("Testing CRPS computation...")
     crps_res = Evaluation.compute_metric(Evaluation.CRPS(), exp_corner, ds, latents)
     println("✓ CRPS: ", crps_res)
+
+    println("Testing LogLoss computation...")
+    ll_res = Evaluation.compute_metric(Evaluation.LogLoss(:home), exp_corner, ds, latents)
+    println("✓ LogLoss(:home): ", ll_res)
+
+    println("Testing batch evaluation...")
+    metrics = Evaluation.AbstractScoringRule[Evaluation.CRPS(), Evaluation.LogLoss(:home)]
+    eval_df = Evaluation.evaluate_experiments(metrics, [exp_corner], ds)
+    println("✓ Batch evaluation: ")
+    show(stdout, MIME("text/plain"), eval_df)
+    println()
 catch e
     println("\n!!! EXCEPTION CAUGHT !!!")
     println(e)
