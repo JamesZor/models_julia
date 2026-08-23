@@ -83,8 +83,8 @@ function _build_corner_recomb_features(b::Data.SplitBoundary, ds::Data.DataStore
     h_idx = [team_map[t] for t in m.home_team]
     a_idx = [team_map[t] for t in m.away_team]
 
-    y_op_h = Vector{Int}(m.y_np_nog_h)
-    y_op_a = Vector{Int}(m.y_np_nog_a)
+    y_op_h = Vector{Int}(m.open_goals_h)
+    y_op_a = Vector{Int}(m.open_goals_a)
 
     corners_h = Vector{Int}(m.corners_h)
     corners_a = Vector{Int}(m.corners_a)
