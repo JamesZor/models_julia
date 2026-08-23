@@ -43,7 +43,7 @@ end
 
 function TeamGoalsCornerRecombIntegratedModel(;
     dynamics_config      = PreGame.TimeDecayDynamics(days_half_life = 365.0),
-    interception_config  = PreGame.SingleInterception(),
+    interception_config  = PreGame.GlobalInterception(),
     homeadvantage_config = PreGame.GlobalHomeAdvantage(),
     name                 = "recomb_corner_integrated"
 )
@@ -278,7 +278,7 @@ function PreGame.extract_parameters(
     n_teams  = d[:n_teams]
 
     # Open Play Latents
-    base_mu = vec(Array(chain["inter.μ_base[1]"]))
+    base_mu = _has_param(chain, "inter.μ") ? vec(Array(chain["inter.μ"])) : (_has_param(chain, "inter.μ_base[1]") ? vec(Array(chain["inter.μ_base[1]"])) : zeros(n_samples))
     ha_val  = _has_param(chain, "ha.γ_global") ? vec(Array(chain["ha.γ_global"])) : zeros(n_samples)
 
     sigma_a = vec(Array(chain["dyn.σ_a"]))

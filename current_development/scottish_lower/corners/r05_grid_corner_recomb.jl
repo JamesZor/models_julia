@@ -50,7 +50,7 @@ mkpath(save_dir)
 # 3. Model Definition
 model_spec = TeamGoalsCornerRecombIntegratedModel(
     dynamics_config      = PreGame.TimeDecayDynamics(days_half_life = 365.0),
-    interception_config  = PreGame.SingleInterception(),
+    interception_config  = PreGame.GlobalInterception(),
     homeadvantage_config = PreGame.GlobalHomeAdvantage(),
     name                 = "recomb_corner_integrated_hl365_hs2"
 )
