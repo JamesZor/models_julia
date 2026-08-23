@@ -100,7 +100,8 @@ end
 
 metrics = Evaluation.AbstractScoringRule[
     Evaluation.RQR(),
-    Evaluation.CRPS()
+    Evaluation.CRPS(),
+    Evaluation.GLMEdge()
 ]
 append!(metrics, [Evaluation.LogLoss(s) for s in selections])
 
@@ -147,6 +148,22 @@ for (fname, sels) in fam
 end
 show(stdout, MIME("text/plain"), f_df)
 println()
+
+banner("🎯 3. GLM EDGE EVALUATION (Logistic Regression Spread vs De-Vigged Market Close)")
+
+if "glmedge_all_spread_fair_coef" in names(eval_df)
+    glm_df = DataFrame(
+        model       = eval_df.model,
+        spread_coef = [_col(eval_df, mm, "glmedge_all_spread_fair_coef") for mm in present_models],
+        std_err     = [_col(eval_df, mm, "glmedge_all_spread_fair_std_error") for mm in present_models],
+        z_score     = [_col(eval_df, mm, "glmedge_all_spread_fair_z_score") for mm in present_models],
+        p_value     = [_col(eval_df, mm, "glmedge_all_spread_fair_p_value") for mm in present_models],
+        n_obs       = [round(Int, _col(eval_df, mm, "glmedge_all_n_obs")) for mm in present_models]
+    )
+    sort!(glm_df, :z_score, rev = true)
+    show(stdout, MIME("text/plain"), glm_df)
+    println()
+end
 
 println("\n" * "="^85)
 println("📉 1X2 & BTTS LOGLOSS DIFF BY SELECTION")
