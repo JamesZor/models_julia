@@ -435,40 +435,49 @@ end
 function Predictions.compute_score_matrix(model::TeamGoalsCornerRecombIntegratedModel, params; max_goals::Int = 12)
     p = params isa DataFrameRow ? Predictions.extract_params(model, params) : params
 
-    # Extract mean parameters across posterior samples
-    μ_op_h = mean(p.λ_op_h)
-    μ_op_a = mean(p.λ_op_a)
-    λ_c_h  = mean(p.λ_c_h)
-    λ_c_a  = mean(p.λ_c_a)
-    q_c_h  = mean(p.q_c_h)
-    q_c_a  = mean(p.q_c_a)
+    n_samples = length(p.λ_h)
+    dim = max_goals + 1
+    S = zeros(Float64, dim, dim, n_samples)
 
     μ_pen = 0.78 * 0.219 # 0.1708
     μ_og  = 0.0630
-
-    # 1. PMFs for Open Play
-    p_op_h = _poisson_pmf_vec(μ_op_h, max_goals)
-    p_op_a = _poisson_pmf_vec(μ_op_a, max_goals)
-
-    # 2. PMFs for Penalties + Own Goals
     p_noise = _poisson_pmf_vec(μ_pen + μ_og, max_goals)
 
-    # 3. PMFs for Corner Goals
-    μ_cg_h = q_c_h * λ_c_h
-    μ_cg_a = q_c_a * λ_c_a
-    p_cg_h = _poisson_pmf_vec(μ_cg_h, max_goals)
-    p_cg_a = _poisson_pmf_vec(μ_cg_a, max_goals)
+    for k in 1:n_samples
+        μ_op_h = p.λ_op_h[k]
+        μ_op_a = p.λ_op_a[k]
+        λ_c_h  = p.λ_c_h[k]
+        λ_c_a  = p.λ_c_a[k]
+        q_c_h  = p.q_c_h[k]
+        q_c_a  = p.q_c_a[k]
 
-    # 4. Exact Discrete Poisson Convolution
-    p_tot_h = _convolve_pmfs(_convolve_pmfs(p_op_h, p_noise, max_goals), p_cg_h, max_goals)
-    p_tot_a = _convolve_pmfs(_convolve_pmfs(p_op_a, p_noise, max_goals), p_cg_a, max_goals)
+        # 1. PMFs for Open Play
+        p_op_h = _poisson_pmf_vec(μ_op_h, max_goals)
+        p_op_a = _poisson_pmf_vec(μ_op_a, max_goals)
 
-    # Normalize marginals
-    p_tot_h ./= sum(p_tot_h)
-    p_tot_a ./= sum(p_tot_a)
+        # 2. PMFs for Corner Goals
+        μ_cg_h = q_c_h * λ_c_h
+        μ_cg_a = q_c_a * λ_c_a
+        p_cg_h = _poisson_pmf_vec(μ_cg_h, max_goals)
+        p_cg_a = _poisson_pmf_vec(μ_cg_a, max_goals)
 
-    # 2D Joint Score Matrix under Independent Marginal Assumption
-    S = p_tot_h * p_tot_a'
+        # 3. Exact Discrete Poisson Convolution
+        p_tot_h = _convolve_pmfs(_convolve_pmfs(p_op_h, p_noise, max_goals), p_cg_h, max_goals)
+        p_tot_a = _convolve_pmfs(_convolve_pmfs(p_op_a, p_noise, max_goals), p_cg_a, max_goals)
+
+        # Normalize marginals
+        p_tot_h ./= sum(p_tot_h)
+        p_tot_a ./= sum(p_tot_a)
+
+        # 2D Joint Score Slice
+        for j in 1:dim
+            pj = p_tot_a[j]
+            for i in 1:dim
+                S[i, j, k] = p_tot_h[i] * pj
+            end
+        end
+    end
+
     return Predictions.ScoreMatrix(S)
 end
 
