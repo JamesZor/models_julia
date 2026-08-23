@@ -13,6 +13,11 @@ using Printf
 using Dates
 using Statistics
 using MCMCChains
+using ReverseDiff
+
+# Enable high-speed ReverseDiff compiled tape
+Turing.setadbackend(:reversediff)
+Turing.setrdcache(true)
 
 println("================================================================================")
 println(" TURING MCMC SMOKE TEST: 4-WAY CORNER RECOMBINATION BASELINE")
