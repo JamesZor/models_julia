@@ -10,8 +10,7 @@ using Dates
 using Statistics
 using MCMCChains
 using LinearAlgebra
-using SpecialFunctions
-using StatsFuns: logistic
+using SpecialFunctions: loggamma
 using LogExpFunctions: log1pexp
 
 # Reference the core types and components
@@ -55,6 +54,10 @@ end
     corners_a::Vector{Int},
     corner_goals_h::Vector{Int},
     corner_goals_a::Vector{Int},
+    loggamma_yh_1::Vector{Float64},
+    loggamma_ya_1::Vector{Float64},
+    loggamma_ch_1::Vector{Float64},
+    loggamma_ca_1::Vector{Float64},
     logbinom_h::Vector{Float64},
     logbinom_a::Vector{Float64},
     mask_c_h::Vector{Float64},
@@ -88,11 +91,13 @@ end
     log_μ_open_h = base_mu .+ month_eff .+ league_eff .+ ha_eff .+ att_h .- def_a
     log_μ_open_a = base_mu .+ month_eff .+ league_eff .+           att_a .- def_h
 
-    μ_open_h = exp.(clamp.(log_μ_open_h, -5.0, 4.0))
-    μ_open_a = exp.(clamp.(log_μ_open_a, -5.0, 4.0))
+    log_μ_open_h_clamped = clamp.(log_μ_open_h, -5.0, 4.0)
+    log_μ_open_a_clamped = clamp.(log_μ_open_a, -5.0, 4.0)
+    μ_open_h = exp.(log_μ_open_h_clamped)
+    μ_open_a = exp.(log_μ_open_a_clamped)
 
     # -------------------------------------------------------------
-    # 2. Corner Count Generation Submodel (RobustNegativeBinomial(r, μ))
+    # 2. Corner Count Generation Submodel (Robust Negative Binomial)
     # -------------------------------------------------------------
     μ_c_base ~ Normal(1.45, 0.20)
     γ_ha_c   ~ Normal(0.13, 0.05)
@@ -112,8 +117,10 @@ end
     log_λ_c_h = μ_c_base .+ γ_ha_c .+ α_c_h .- β_c_a
     log_λ_c_a = μ_c_base .+           α_c_a .- β_c_h
 
-    λ_c_h = exp.(clamp.(log_λ_c_h, -2.0, 4.0))
-    λ_c_a = exp.(clamp.(log_λ_c_a, -2.0, 4.0))
+    log_λ_c_h_clamped = clamp.(log_λ_c_h, -2.0, 4.0)
+    log_λ_c_a_clamped = clamp.(log_λ_c_a, -2.0, 4.0)
+    λ_c_h = exp.(log_λ_c_h_clamped)
+    λ_c_a = exp.(log_λ_c_a_clamped)
 
     # -------------------------------------------------------------
     # 3. Corner Goal Conversion Submodel (z-Score Parameterization)
@@ -136,22 +143,28 @@ end
     logit_q_a = const_logit_q_base .+ σ_conv_att .* z_att_a .- σ_conv_def .* z_def_h
 
     # -------------------------------------------------------------
-    # 4. Vectorized Likelihood Accumulation (Zero-Allocation SIMD)
+    # 4. Pure Vectorized Arithmetic Likelihood (0 Allocations)
     # -------------------------------------------------------------
-    # 1. Open Play Goals (Poisson)
-    ll_open_h = logpdf.(Poisson.(μ_open_h), y_open_h)
-    ll_open_a = logpdf.(Poisson.(μ_open_a), y_open_a)
+    # 1. Open Play Goals (Poisson LogPMF: y*log(μ) - μ - log(y!))
+    ll_open_h = y_open_h .* log_μ_open_h_clamped .- μ_open_h .- loggamma_yh_1
+    ll_open_a = y_open_a .* log_μ_open_a_clamped .- μ_open_a .- loggamma_ya_1
     Turing.@addlogprob! sum(ll_open_h .* match_weights)
     Turing.@addlogprob! sum(ll_open_a .* match_weights)
 
-    # 2. Corner Generation (RobustNegativeBinomial(r=ϕ_c, μ=λ_c))
-    ll_c_h = logpdf.(RobustNegativeBinomial.(ϕ_c, λ_c_h), corners_h)
-    ll_c_a = logpdf.(RobustNegativeBinomial.(ϕ_c, λ_c_a), corners_a)
+    # 2. Corner Generation (Robust NegBin: logΓ(k+r) - logΓ(k+1) - logΓ(r) + r*log(r/(r+μ)) + k*log(μ/(r+μ)))
+    log_ϕ = log(ϕ_c)
+    log_r_plus_μ_h = log.(ϕ_c .+ λ_c_h)
+    log_r_plus_μ_a = log.(ϕ_c .+ λ_c_a)
+    loggamma_r = loggamma(ϕ_c)
+
+    ll_c_h = loggamma.(corners_h .+ ϕ_c) .- loggamma_ch_1 .- loggamma_r .+ 
+             ϕ_c .* (log_ϕ .- log_r_plus_μ_h) .+ corners_h .* (log_λ_c_h_clamped .- log_r_plus_μ_h)
+    ll_c_a = loggamma.(corners_a .+ ϕ_c) .- loggamma_ca_1 .- loggamma_r .+ 
+             ϕ_c .* (log_ϕ .- log_r_plus_μ_a) .+ corners_a .* (log_λ_c_a_clamped .- log_r_plus_μ_a)
     Turing.@addlogprob! sum(ll_c_h .* match_weights)
     Turing.@addlogprob! sum(ll_c_a .* match_weights)
 
-    # 3. Corner Goal Conversion (Analytical Logit-Binomial)
-    # logpdf = logbinom + k * logit_q - n * log1pexp(logit_q)
+    # 3. Corner Goal Conversion (Analytical Logit-Binomial: logbinom + k*logit_q - n*log1pexp(logit_q))
     lq_h_clamped = clamp.(logit_q_h, -10.0, 5.0)
     lq_a_clamped = clamp.(logit_q_a, -10.0, 5.0)
     ll_cg_h = logbinom_h .+ corner_goals_h .* lq_h_clamped .- corners_h .* log1pexp.(lq_h_clamped)

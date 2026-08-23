@@ -57,10 +57,17 @@ max_train_date = maximum(df_train.match_datetime)
 decay_rate = log(2.0) / 365.0
 match_weights = [exp(-decay_rate * max(0.0, (max_train_date - r.match_datetime).value / (1000 * 3600 * 24))) for r in eachrow(df_train)]
 
+yh = Int.(df_train.open_goals_h)
+ya = Int.(df_train.open_goals_a)
 c_h = Int.(df_train.corners_h)
 cg_h = Int.(df_train.corner_goals_h)
 c_a = Int.(df_train.corners_a)
 cg_a = Int.(df_train.corner_goals_a)
+
+loggamma_yh_1 = Float64[loggamma(y + 1) for y in yh]
+loggamma_ya_1 = Float64[loggamma(y + 1) for y in ya]
+loggamma_ch_1 = Float64[loggamma(c + 1) for c in c_h]
+loggamma_ca_1 = Float64[loggamma(c + 1) for c in c_a]
 
 logbinom_h = [Float64(loggamma(c + 1) - loggamma(g + 1) - loggamma(c - g + 1)) for (c, g) in zip(c_h, cg_h)]
 logbinom_a = [Float64(loggamma(c + 1) - loggamma(g + 1) - loggamma(c - g + 1)) for (c, g) in zip(c_a, cg_a)]
@@ -72,12 +79,16 @@ turing_mod = build_corner_recomb_engine(
     a_idx_train,
     month_idx_train,
     league_idx_train,
-    Int.(df_train.open_goals_h),
-    Int.(df_train.open_goals_a),
+    yh,
+    ya,
     c_h,
     c_a,
     cg_h,
     cg_a,
+    loggamma_yh_1,
+    loggamma_ya_1,
+    loggamma_ch_1,
+    loggamma_ca_1,
     logbinom_h,
     logbinom_a,
     Float64.(df_train.corners_h .> 0),
