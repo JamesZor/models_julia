@@ -99,14 +99,14 @@ turing_mod = build_corner_recomb_engine(
     config
 )
 
-println("--- Starting Parallel NUTS MCMC Sampling (4 chains x 500 draws) with ReverseDiff compiled tape ---")
+println("--- Starting Parallel NUTS MCMC Sampling (4 chains x 300 draws) with ReverseDiff compiled tape ---")
 t_start = time()
 chains = Vector{Any}(undef, 4)
 Threads.@threads for c in 1:4
     chains[c] = sample(
         turing_mod,
-        NUTS(300, 0.65; max_depth=8, adtype=AutoReverseDiff(compile=true)),
-        500;
+        NUTS(150, 0.65; max_depth=6, adtype=AutoReverseDiff(compile=true)),
+        300;
         progress = false
     )
 end
