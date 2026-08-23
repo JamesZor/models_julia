@@ -374,8 +374,9 @@ function PreGame.extract_parameters(
         μ_cg_h = q_c_h .* λ_c_h
         μ_cg_a = q_c_a .* λ_c_a
 
-        μ_noise_h = fill(0.78 * 0.219 + 0.063, n_samples)
-        μ_noise_a = fill(0.78 * 0.219 + 0.063, n_samples)
+        # Baseline per-team noise rates: penalty goals (~0.0845) + own goals (~0.0276)
+        μ_noise_h = fill((0.768 * 0.110) + 0.0276, n_samples)
+        μ_noise_a = fill((0.768 * 0.110) + 0.0276, n_samples)
 
         # Total Goals
         λ_tot_h = λ_op_h .+ μ_cg_h .+ μ_noise_h
@@ -438,8 +439,8 @@ function Predictions.compute_score_matrix(model::TeamGoalsCornerRecombIntegrated
     n_samples = length(p.λ_h)
     S = zeros(Float64, max_goals, max_goals, n_samples)
 
-    μ_pen = 0.78 * 0.219 # 0.1708
-    μ_og  = 0.0630
+    μ_pen = 0.768 * 0.110 # 0.0845 penalty goals per team
+    μ_og  = 0.0276        # 0.0276 own goals per team
     p_noise = _poisson_pmf_vec(μ_pen + μ_og, max_goals)
 
     for k in 1:n_samples
