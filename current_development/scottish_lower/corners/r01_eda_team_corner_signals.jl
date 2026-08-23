@@ -25,12 +25,12 @@ println("Total Established Teams (>= 30 matches): ", nrow(team_df), "\n")
 sort!(team_df, :corner_rate_for, rev=true)
 println("--- 1. TOP 5 & BOTTOM 5 CORNER CREATING TEAMS ---")
 println("Top 5 Corner Creators (Attacking Pressure):")
-for r in first(team_df, 5)
+for r in eachrow(first(team_df, 5))
     @printf("  %-25s | Matches: %3d | Corners/G: %5.2f | Conceded/G: %5.2f | Corner Goals: %2d (Conv: %4.2f%%)\n",
             r.team, r.matches, r.corner_rate_for, r.corner_rate_against, r.corner_goals_for, r.corner_conv_for * 100)
 end
 println("\nBottom 5 Corner Creators:")
-for r in last(team_df, 5)
+for r in eachrow(last(team_df, 5))
     @printf("  %-25s | Matches: %3d | Corners/G: %5.2f | Conceded/G: %5.2f | Corner Goals: %2d (Conv: %4.2f%%)\n",
             r.team, r.matches, r.corner_rate_for, r.corner_rate_against, r.corner_goals_for, r.corner_conv_for * 100)
 end
@@ -39,12 +39,12 @@ end
 sort!(team_df, :corner_conv_for, rev=true)
 println("\n--- 2. CORNER OFFENSIVE CONVERSION EFFICIENCY (Goals / Corner Won) ---")
 println("Top 5 Deadliest Set-Piece Finishers:")
-for r in first(team_df, 5)
+for r in eachrow(first(team_df, 5))
     @printf("  %-25s | Corners: %4d | Goals: %2d | Conversion: %5.2f%%\n",
             r.team, r.corners_for, r.corner_goals_for, r.corner_conv_for * 100)
 end
 println("\nBottom 5 Set-Piece Finishers:")
-for r in last(team_df, 5)
+for r in eachrow(last(team_df, 5))
     @printf("  %-25s | Corners: %4d | Goals: %2d | Conversion: %5.2f%%\n",
             r.team, r.corners_for, r.corner_goals_for, r.corner_conv_for * 100)
 end
@@ -53,12 +53,12 @@ end
 sort!(team_df, :corner_conv_against)
 println("\n--- 3. CORNER DEFENSIVE RESISTANCE (Opponent Goals / Corner Conceded) ---")
 println("Top 5 Best Set-Piece Defending Teams (Lowest Opponent Conversion):")
-for r in first(team_df, 5)
+for r in eachrow(first(team_df, 5))
     @printf("  %-25s | Conceded: %4d | Opp Goals: %2d | Opp Conversion: %5.2f%%\n",
             r.team, r.corners_against, r.corner_goals_against, r.corner_conv_against * 100)
 end
 println("\nBottom 5 Worst Set-Piece Defending Teams (Highest Opponent Conversion):")
-for r in last(team_df, 5)
+for r in eachrow(last(team_df, 5))
     @printf("  %-25s | Conceded: %4d | Opp Goals: %2d | Opp Conversion: %5.2f%%\n",
             r.team, r.corners_against, r.corner_goals_against, r.corner_conv_against * 100)
 end
