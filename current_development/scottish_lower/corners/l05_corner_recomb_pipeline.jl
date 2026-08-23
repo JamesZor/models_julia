@@ -179,11 +179,16 @@ end
     inter ~ to_submodel(PreGame.build_interception(config.interception_config, 1, 12))
     ha    ~ to_submodel(PreGame.build_home_advantage(config.homeadvantage_config, n_teams))
 
-    ha_val = hasproperty(ha, :ha_vec) ? ha.ha_vec[home_indices] : ha.ha_val
+    ha_val = view(ha, home_indices)
     int_m  = inter.μ_base[1] .+ inter.δ_month[month_indices]
 
-    log_μ_op_h = int_m .+ ha_val .+ dyn.α[home_indices] .- dyn.β[away_indices]
-    log_μ_op_a = int_m .+           dyn.α[away_indices] .- dyn.β[home_indices]
+    att_h = view(dyn.α, home_indices)
+    def_h = view(dyn.β, home_indices)
+    att_a = view(dyn.α, away_indices)
+    def_a = view(dyn.β, away_indices)
+
+    log_μ_op_h = int_m .+ ha_val .+ att_h .- def_a
+    log_μ_op_a = int_m .+           att_a .- def_h
 
     ll_op_h = (y_op_h .* log_μ_op_h) .- exp.(log_μ_op_h)
     ll_op_a = (y_op_a .* log_μ_op_a) .- exp.(log_μ_op_a)
@@ -202,8 +207,13 @@ end
     α_c     = α_c_raw .- mean(α_c_raw)
     β_c     = β_c_raw .- mean(β_c_raw)
 
-    log_λ_c_h = μ_c_base .+ γ_ha_c .+ α_c[home_indices] .- β_c[away_indices]
-    log_λ_c_a = μ_c_base .+           α_c[away_indices] .- β_c[home_indices]
+    att_c_h = view(α_c, home_indices)
+    def_c_h = view(β_c, home_indices)
+    att_c_a = view(α_c, away_indices)
+    def_c_a = view(β_c, away_indices)
+
+    log_λ_c_h = μ_c_base .+ γ_ha_c .+ att_c_h .- def_c_a
+    log_λ_c_a = μ_c_base .+           att_c_a .- def_c_h
 
     λ_c_h = exp.(log_λ_c_h)
     λ_c_a = exp.(log_λ_c_a)
@@ -226,8 +236,13 @@ end
     z_att     = z_att_raw .- mean(z_att_raw)
     z_def     = z_def_raw .- mean(z_def_raw)
 
-    logit_q_h = -3.23 .+ (σ_conv_att .* z_att[home_indices]) .- (σ_conv_def .* z_def[away_indices])
-    logit_q_a = -3.23 .+ (σ_conv_att .* z_att[away_indices]) .- (σ_conv_def .* z_def[home_indices])
+    z_att_h = view(z_att, home_indices)
+    z_def_h = view(z_def, home_indices)
+    z_att_a = view(z_att, away_indices)
+    def_z_a = view(z_def, away_indices)
+
+    logit_q_h = -3.23 .+ (σ_conv_att .* z_att_h) .- (σ_conv_def .* def_z_a)
+    logit_q_a = -3.23 .+ (σ_conv_att .* z_att_a) .- (σ_conv_def .* z_def_h)
 
     ll_conv_h = log_binom_h .+ (corner_goals_h .* logit_q_h) .- (corners_h .* log1pexp.(logit_q_h))
     ll_conv_a = log_binom_a .+ (corner_goals_a .* logit_q_a) .- (corners_a .* log1pexp.(logit_q_a))
