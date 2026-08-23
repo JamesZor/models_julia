@@ -12,7 +12,8 @@ using HypothesisTests
 
 Computes mean, variance, index of dispersion (Var/Mean), and chi-squared p-value vs Poisson null.
 """
-function compute_dispersion_stats(counts::Vector{<:Real})
+function compute_dispersion_stats(raw_counts::AbstractVector)
+    counts = Float64.(collect(skipmissing(raw_counts)))
     n = length(counts)
     m = mean(counts)
     v = var(counts)
@@ -24,11 +25,13 @@ function compute_dispersion_stats(counts::Vector{<:Real})
 end
 
 """
-    test_corner_home_advantage(home_counts::Vector{<:Real}, away_counts::Vector{<:Real})
+    test_corner_home_advantage(home_counts::AbstractVector, away_counts::AbstractVector)
 
 Tests if home corners significantly exceed away corners via paired t-test.
 """
-function test_corner_home_advantage(home_counts::Vector{<:Real}, away_counts::Vector{<:Real})
+function test_corner_home_advantage(raw_h::AbstractVector, raw_a::AbstractVector)
+    home_counts = Float64.(coalesce.(raw_h, 0.0))
+    away_counts = Float64.(coalesce.(raw_a, 0.0))
     diffs = home_counts .- away_counts
     tt = OneSampleTTest(diffs)
     m_h = mean(home_counts)
