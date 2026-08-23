@@ -99,18 +99,10 @@ turing_mod = build_corner_recomb_engine(
     config
 )
 
-sampler_cfg = Samplers.NUTSConfig(
-    n_samples   = 500,
-    n_warmup    = 300,
-    n_chains    = 4,
-    accept_rate = 0.65,
-    max_depth   = 8,
-    show_progress = false
-)
-
-println("--- Starting NUTS MCMC Sampling (300 warmup, 500 samples, 4 chains) via Samplers ---")
+println("--- Starting NUTS MCMC Sampling (300 warmup, 500 samples, 4 chains) with ReverseDiff compiled tape ---")
 t_start = time()
-chain = Samplers.run_sampler(turing_mod, sampler_cfg)
+nuts_sampler = NUTS(300, 0.65; max_depth=8, adtype=AutoReverseDiff(compile=true))
+chain = sample(turing_mod, nuts_sampler, MCMCThreads(), 500, 4; progress=false)
 t_elapsed = time() - t_start
 @printf("✓ Sampling complete in %.2f seconds (%.2f s/chain)\n\n", t_elapsed, t_elapsed / 4)
 
