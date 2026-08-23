@@ -20,5 +20,14 @@ using DataFrames, Dates, InlineStrings # Add any other packages your tests need 
 
     println("Running Portfolio Module tests...")
     include("portfolio_tests.jl")
+
+    println("Running MatchDay Module tests...")
+    include("matchday_tests.jl")
+
+    println("Running Caching and OOS Predictions tests...")
+    include("caching_tests.jl")
+
+    println("Running Recombination and Squad Wealth Engine tests...")
+    include("recombination_tests.jl")
 end
 

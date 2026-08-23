@@ -12,6 +12,9 @@ abstract type AbstractDynamicsConfig <: AbstractModelComponent end
 abstract type AbstractInterceptionConfig <: AbstractModelComponent end
 abstract type AbstractCopulaConfig <: AbstractModelComponent end
 abstract type AbstractDixonColesConfig <: AbstractModelComponent end
+abstract type AbstractRecombinationConfig <: AbstractModelComponent end
+abstract type AbstractSquadWealthConfig <: AbstractModelComponent end
+abstract type AbstractPxGObservationConfig <: AbstractModelComponent end
 
 # ==========================================
 # 2. MASTER ARCHITECTURE TYPES

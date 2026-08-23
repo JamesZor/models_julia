@@ -8,6 +8,7 @@
 # not just what it returns.
 
 include("_setup.jl")
+include("current_development/portfolio_runbook/_setup.jl")
 
 # ===================================================================
 # 1. Describe the system you want to run
@@ -29,7 +30,7 @@ spec = PF.BookSpec(
 policy = PF.PolicySpec(
     trust    = PF.FlatTrust(0.25),       # believe the model 25%, the market 75%
     risk     = PF.SlateDrawdown(23.0),   # lambda; ~= 20% drawdown at 1% probability, see below
-    cap      = PF.FixedCap(0.25),        # never risk >25% of bankroll on one settlement window
+    cap      = PF.FixedCap(0.10),        # never risk >25% of bankroll on one settlement window
     filter   = PF.KeepAll(),             # no curation
     grouping = PF.DailySlate(),          # matches on the same date settle together
 )

@@ -23,5 +23,5 @@ include("diagnostics/diagnostics.jl")
 
 export ExperimentConfig, ExperimentResults, run_experiment
 export BENCHMARK_DEFAULTS, create_benchmark_config
-export LatentStates, extract_oos_predictions, Diagnostics
+export LatentStates, extract_oos_predictions, has_oos_predictions, load_oos_predictions, save_oos_predictions, Diagnostics
 end

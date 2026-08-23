@@ -18,6 +18,8 @@ export LastValueTracker, WindowAverageTracker, EWMATracker, BayesianTracker
 # Plus-minus (RAPM) rating family — one struct per PM target, all sharing one extractor.
 export AbstractPlusMinusFeature, ShotsPlusMinusFeature, ShotsOnTargetPlusMinusFeature,
        GoalsPlusMinusFeature, XGPlusMinusFeature, pm_target, rating_base
+# Recombination & Open-Play Features
+export OpenPlayGoalsFeature, OpenPlayPxGFeature, SquadWealthFeature, RefereeOfficiatingFeature
 
 # Core Architecture
 include("./model_requirements.jl")
@@ -40,6 +42,7 @@ include("./extractors/bbc_extractors.jl")
 include("./extractors/market_extractors.jl")
 include("./extractors/player_extractors.jl")
 include("./extractors/plus_minus_extractors.jl")
+include("./extractors/open_play_extractors.jl")
 include("./display.jl")
 
 end # module

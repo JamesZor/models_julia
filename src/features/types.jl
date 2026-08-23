@@ -171,3 +171,38 @@ family returns 0.0 and the centring is a no-op.
 rating_base(::AbstractFeatureConfig)      = 0.0
 rating_base(c::PlayerRatingsFeature)      = c.tracker.prior_mean
 rating_base(::AbstractPlusMinusFeature)   = 0.0
+
+# --- Recombination & Open-Play Features ---
+"""
+    OpenPlayGoalsFeature <: AbstractFeatureConfig
+
+Extracts non-penalty, non-own-goal open play score counts along with penalty awards and own goals.
+"""
+struct OpenPlayGoalsFeature <: AbstractFeatureConfig end
+
+"""
+    OpenPlayPxGFeature <: AbstractFeatureConfig
+
+Extracts zonal empirical-Bayes open-play proxy xG (excluding penalty kick shots).
+Provides binary observation masks for static ReverseDiff AD tape stability.
+"""
+Base.@kwdef struct OpenPlayPxGFeature <: AbstractFeatureConfig
+    k::Float64 = 25.0
+end
+
+"""
+    SquadWealthFeature <: AbstractFeatureConfig
+
+Extracts and standardizes starting-XI squad market valuation differentials (ΔW = W_home - W_away).
+"""
+Base.@kwdef struct SquadWealthFeature <: AbstractFeatureConfig
+    fallback_default::Float64 = 100_000.0
+end
+
+"""
+    RefereeOfficiatingFeature <: AbstractFeatureConfig
+
+Tracks match referee identity and penalty whistle assignments across matches.
+"""
+struct RefereeOfficiatingFeature <: AbstractFeatureConfig end
+

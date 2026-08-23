@@ -22,10 +22,12 @@ The foundational data layer that handles the extraction, transformation, and val
 
 ### Layer 1: Bayesian Engines (`src/Models/`)
 Standardized components ("Mathematical Lego Blocks") are assembled into Master Engines:
-- **`DynamicGoalsModel`**: Historical goals-only engine.
+- **`DynamicPxGRecombModel`**: **(Production Champion)** Multi-task continuous Proxy xG (`pxG`) and open-play goals engine co-training with Starting-XI squad market wealth ($\Delta W$) and hierarchical officiating penalty submodels. Recombines latents via exact discrete Poisson convolution. [Architecture Guide](file:///home/james/bet_project/BayesianFootball/docs/models/recombination_pxg_wealth_architecture.md).
+- **`DynamicRecombinedGoalsModel`**: Recombination engine decomposing gross scores into open-play goals, penalty awards, and own goals with squad wealth adjustment.
+- **`DynamicGoalsModel`**: Historical gross goals-only engine.
 - **`DynamicXGModel`**: Unified engine co-training on True xG and goals via a `Kappa` conversion rate.
 - **`DynamicCopulaGoalsModel`**: Evaluates match outcomes using a Frank Copula joint distribution over Negative Binomial marginals to capture team-specific match correlation styles.
-- **Components**: Interception (μ), Dispersion (variance), Home Advantage (hierarchical), Dynamics (multi-scale GRW), and Copula (hierarchical correlation).
+- **Components**: Interception (μ), Dispersion (variance), Home Advantage (hierarchical), Dynamics (multi-scale GRW), Squad Wealth (linear/none), Proxy xG (Gamma observation), Recombination (officiating/empirical), and Copula (hierarchical correlation).
 
 ### Layer 2: Calibration (`src/Calibration/`)
 Shifts scalar probabilities and MCMC posterior distributions to align with historical outcomes.
@@ -52,6 +54,13 @@ using ThreadPinning; pinthreads(:cores) # Must be run before sampling to lock OS
 3. **Create Task**: `task = Experiments.create_experiment_task(ds, model, "experiment_name", "./save_dir")`
 4. **Run Experiment**: `results = Experiments.run_experiment(task)`
 5. **Save**: `Experiments.save_experiment(results)`
+
+### 🖥️ Remote Compute Execution (`mcmc-beast` & `archpc`)
+Heavy MCMC sampling and evaluation grids run on the dedicated `mcmc-beast` compute node (32 cores) via nested tmux panels. Postgres database `betdb` runs on `archpc:5433`.
+- **Full Guide & Protocol:** [`docs/setup/agy_remote_execution_guide.md`](file:///home/james/bet_project/BayesianFootball/docs/setup/agy_remote_execution_guide.md)
+- **Outer Tmux Session:** `scottish_runner:1.1` (SSH to `mcmc-beast`)
+- **Inner Windows on Beast:** `0/3:julia` (REPL with pinned threads), `1:btop` (CPU/RAM), `2:bash` (git sync).
+- **Workflow:** Edit code locally -> `git push` -> `tmux send-keys` pull on beast (window 2) -> `include(...)` in REPL (window 3).
 
 ## 🧪 Prototyping & Iteration (`current_development/`)
 

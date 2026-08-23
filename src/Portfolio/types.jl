@@ -172,10 +172,6 @@ struct Trajectory
     bets::DataFrame
 end
 
-Base.show(io::IO, t::Trajectory) = print(io,
-    "Trajectory($(length(t.slate_pl)) slates, final $(round(t.bankroll[end], digits=3))x, " *
-    "$(nrow(t.bets)) bets)")
-
 # ===================================================================
 # 3. Configuration
 # ===================================================================

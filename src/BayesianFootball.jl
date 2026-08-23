@@ -56,9 +56,12 @@ include("./backtesting/backtesting-module.jl")
 # Portfolio depends on BackTesting's metric interface, so it must come after it.
 include("./Portfolio/portfolio-module.jl")
 
+# MatchDay hands its output to Portfolio.stake_sheet, so it must come after Portfolio.
+include("./MatchDay/matchday-module.jl")
+
 # Export the main modules and key functions/types for users
 # *** UPDATED EXPORTS ***
-export Data, Features, Models, Samplers, Training, Experiments, Predictions, Markets, Calibration, BackTesting, Evaluation, Portfolio
+export Data, Features, Models, Samplers, Training, Experiments, Predictions, Markets, Calibration, BackTesting, Evaluation, Portfolio, MatchDay
 export AbstractFootballModel, Vocabulary, FeatureSet, required_mapping_keys
 
 # Maybe export core config types too?

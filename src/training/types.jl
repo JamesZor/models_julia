@@ -61,12 +61,11 @@ end
 
 # Allow construction from a loosely typed vector by attempting to tighten types
 function TrainingResults(items::Vector)
-    # This comprehension forces Julia to look at the actual types of elements
-    # and infer the tightest common type (e.g., Vector{Tuple{Chains, Meta}})
-    tightened = [i for i in items] 
-    
-    if tightened isa Vector{<:Tuple}
-        return TrainingResults{eltype(tightened).parameters[1], eltype(tightened).parameters[2]}(tightened)
+    valid = [i for i in items if !isnothing(i) && i isa Tuple]
+    if !isempty(valid)
+        C = typeof(first(valid)[1])
+        M = typeof(first(valid)[2])
+        return TrainingResults{C, M}(Vector{Tuple{C, M}}(valid))
     else
         return TrainingResults{Any, Any}(Vector{Tuple{Any, Any}}())
     end

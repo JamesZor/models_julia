@@ -1,3 +1,0 @@
-# cached real L1 inputs (heavy; rebuilt by preflight_real.jl)
-results/_lat_ppd_cache.jls
-plots/

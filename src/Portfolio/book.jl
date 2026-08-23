@@ -139,10 +139,8 @@ established here, once, so nothing downstream has to remember to sort. Path metr
 an unsorted series are meaningless, and the prototype's `latents.df` order was neither
 chronological nor recoverable by sorting on `match_id`.
 """
-function build_books(spec::BookSpec, latents_df::DataFrame, expr, odds_df::DataFrame, ds;
-                    require_result::Bool = true)
-    fixtures = fixture_table(ds)
-
+function build_books(spec::BookSpec, latents_df::DataFrame, expr, odds_df::DataFrame,
+                    fixtures::Dict{Int,FixtureInfo}; require_result::Bool = true)
     n   = nrow(latents_df)
     buf = Vector{Union{Nothing,MatchBook}}(undef, n)
     Threads.@threads for i in 1:n
@@ -154,6 +152,24 @@ function build_books(spec::BookSpec, latents_df::DataFrame, expr, odds_df::DataF
     sort!(books, by = b -> (b.date, b.m_id))
     return books
 end
+
+"""
+    build_books(spec, latents_df, expr, odds_df, ds; require_result = true)
+
+Convenience method deriving the fixture table from a `DataStore`.
+
+**This method can only ever build settled books.** `ds.matches` is the curated store of
+*finished* matches, so `fixture_table(ds)` contains no entry whose score is `nothing` and an
+upcoming fixture is absent from it entirely -- `build_book` then returns `nothing` for every
+one. Passing `require_result = false` here is therefore a silent no-op that yields an empty
+vector.
+
+For match-day use pass a `Dict{Int,FixtureInfo}` built from the fixture list directly (see
+`MatchDay.fixture_info`), which is the method above.
+"""
+build_books(spec::BookSpec, latents_df::DataFrame, expr, odds_df::DataFrame, ds;
+            require_result::Bool = true) =
+    build_books(spec, latents_df, expr, odds_df, fixture_table(ds); require_result = require_result)
 
 """
     component_hash(x, h = UInt(0)) -> UInt
