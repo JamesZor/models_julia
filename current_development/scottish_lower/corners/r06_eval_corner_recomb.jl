@@ -178,20 +178,127 @@ show(stdout, MIME("text/plain"), tot_df)
 println()
 
 # ==============================================================================
-# 4. FULL-MARKET BOOKMAKER KELLY BACKTEST (All 710 Matches, ds.odds)
+# 4. MULTI-MARKET KELLY PORTFOLIO BENCHMARK (src/portfolio, Baker-McHale 800 Draws)
 # ==============================================================================
-banner("📈 4. FULL-MARKET BOOKMAKER BACKTEST (All 710 OOS Matches, Signals.BayesianKelly)")
+banner("💰 4. MULTI-MARKET KELLY PORTFOLIO BENCHMARK (src/portfolio, BM 800 Draws)")
 
-try
-    ledger = BackTesting.run_backtest(
-        ds, experiments, [Signals.BayesianKelly()];
-        market_config = Data.Markets.DEFAULT_MARKET_CONFIG
+using Serialization
+
+CACHE_DIR = joinpath(@__DIR__, "cache")
+mkpath(CACHE_DIR)
+
+MARKETS = Data.MarketConfig(reduce(vcat, (
+    Data.AbstractMarket[Data.Market1X2(), Data.MarketBTTS()],
+    [Data.MarketOverUnder(i + 0.5) for i in 0:4],
+)))
+
+spec = Portfolio.BookSpec(
+    markets   = MARKETS,
+    price     = Portfolio.DeArb(),
+    allocator = Portfolio.KellyLogUtility(),
+    shrink    = Portfolio.BakerMcHale(n_draws = 800),
+    exec      = Portfolio.ExecutionConfig(
+                    commission = Portfolio.PerBetCommission(0.02),
+                    max_selection_stake = 0.50,
+                    budget = 0.99,
+                    require_complete_markets = true
+                )
+)
+
+books_map = Dict{String, Vector{Portfolio.MatchBook}}()
+for exp in experiments
+    m_name = exp.config.name
+    cache_file = joinpath(CACHE_DIR, "books_$(m_name)_full_bm800.jls")
+    
+    if isfile(cache_file) && get(ENV, "REBUILD_BOOKS", "0") != "1"
+        @info "Reusing cached MatchBooks for: $m_name" cache_file
+        books_map[m_name] = deserialize(cache_file)
+    else
+        @info "Building MatchBooks for: $m_name across historical odds..."
+        oos_latents = Experiments.extract_oos_predictions(ds, exp)
+        t0 = time()
+        b = Portfolio.build_books(spec, oos_latents.df, exp, ds.odds, ds)
+        elapsed = round(time() - t0, digits = 1)
+        @info "Completed MatchBooks for $m_name in $(elapsed)s" n_books=length(b)
+        serialize(cache_file, b)
+        books_map[m_name] = b
+    end
+end
+
+all_slates = Dict{String, Vector{Portfolio.Slate}}()
+for (m_name, b) in books_map
+    all_slates[m_name] = Portfolio.group(Portfolio.DailySlate(), b)
+end
+
+policies = [
+    ("Balanced Growth (Cap 15%, λ=15)", Portfolio.PolicySpec(
+        trust    = Portfolio.FlatTrust(0.25),
+        risk     = Portfolio.SlateDrawdown(15.0),
+        cap      = Portfolio.FixedCap(0.15),
+        filter   = Portfolio.KeepAll(),
+        grouping = Portfolio.DailySlate()
+    )),
+    ("Aggressive (Cap 25%, λ=10)", Portfolio.PolicySpec(
+        trust    = Portfolio.FlatTrust(0.50),
+        risk     = Portfolio.SlateDrawdown(10.0),
+        cap      = Portfolio.FixedCap(0.25),
+        filter   = Portfolio.KeepAll(),
+        grouping = Portfolio.DailySlate()
+    )),
+    ("Conservative (Cap 10%, λ=23)", Portfolio.PolicySpec(
+        trust    = Portfolio.FlatTrust(0.25),
+        risk     = Portfolio.SlateDrawdown(23.0),
+        cap      = Portfolio.FixedCap(0.10),
+        filter   = Portfolio.KeepAll(),
+        grouping = Portfolio.DailySlate()
+    ))
+]
+
+for (pol_name, pol) in policies
+    println("\n", "="^95)
+    println("PORTFOLIO SIMULATION: $pol_name (2% Comm, Baker-McHale 800 Draws, Full Dataset)")
+    println("="^95)
+    
+    port_df = DataFrame(
+        model        = String[],
+        final_wealth = Float64[],
+        growth_slate = Float64[],
+        roi_pct      = Float64[],
+        mean_expo    = Float64[],
+        mdd_pct      = Float64[],
+        sharpe       = Float64[],
+        calmar       = Float64[],
+        total_bets   = Int[]
     )
-    tearsheet = BackTesting.generate_tearsheet(ledger; groupby_cols = [:model_name])
-    show(stdout, MIME("text/plain"), tearsheet)
+    
+    for exp in experiments
+        m_name = exp.config.name
+        haskey(all_slates, m_name) || continue
+        slates = all_slates[m_name]
+        traj = Portfolio.simulate(pol, slates; use_shrink = true)
+        m = Portfolio.path_metrics(traj)
+        
+        ret_series = traj.slate_pl
+        sh = length(ret_series) > 1 && std(ret_series) > 1e-6 ? (mean(ret_series) / std(ret_series)) * sqrt(35) : 0.0
+        calm = m.mdd > 0.0 ? (m.final - 1.0) / (m.mdd / 100.0) : 0.0
+        
+        total_bets = isempty(books_map[m_name]) ? 0 : sum(sum(b.a_kelly .> 1e-5) for b in books_map[m_name]; init = 0)
+        
+        push!(port_df, (
+            model        = m_name,
+            final_wealth = round(m.final, digits=3),
+            growth_slate = round(m.growth_per_slate, digits=5),
+            roi_pct      = round(m.roi, digits=2),
+            mean_expo    = round(m.mean_exposure * 100, digits=1),
+            mdd_pct      = round(m.mdd, digits=2),
+            sharpe       = round(sh, digits=2),
+            calmar       = round(calm, digits=2),
+            total_bets   = total_bets
+        ))
+    end
+    sort!(port_df, :final_wealth, rev = true)
+    show(stdout, MIME("text/plain"), port_df)
     println()
-catch e
-    @warn "Full bookmaker backtest skipped: $e"
 end
 
 banner("✓ 4-WAY CORNER RECOMBINATION BENCHMARK COMPLETE")
