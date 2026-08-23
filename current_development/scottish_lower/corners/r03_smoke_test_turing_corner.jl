@@ -68,6 +68,8 @@ turing_mod = build_corner_recomb_engine(
     Int.(df_train.corners_a),
     Int.(df_train.corner_goals_h),
     Int.(df_train.corner_goals_a),
+    Float64.(df_train.corners_h .> 0),
+    Float64.(df_train.corners_a .> 0),
     match_weights,
     n_teams,
     n_leagues,

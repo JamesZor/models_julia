@@ -11,6 +11,7 @@ using Statistics
 using MCMCChains
 using LinearAlgebra
 using SpecialFunctions
+using StatsFuns: logistic
 
 # Reference the core types and components
 using BayesianFootball
@@ -52,6 +53,8 @@ end
     corners_a::Vector{Int},
     corner_goals_h::Vector{Int},
     corner_goals_a::Vector{Int},
+    mask_c_h::Vector{Float64},
+    mask_c_a::Vector{Float64},
     match_weights::Vector{Float64},
     n_teams::Int,
     n_leagues::Int,
@@ -132,31 +135,29 @@ end
     q_c_a = logistic.(clamp.(logit_q_a, -6.0, 0.0))
 
     # -------------------------------------------------------------
-    # 4. Joint Likelihood Accumulation
+    # 4. Vectorized Likelihood Accumulation
     # -------------------------------------------------------------
-    N = length(home_team_indices)
-    for i in 1:N
-        w = match_weights[i]
-        
-        # 1. Open Play Goals (Poisson)
-        y_open_h[i] ~ Poisson(clamp(w * μ_open_h[i], 1e-6, 50.0))
-        y_open_a[i] ~ Poisson(clamp(w * μ_open_a[i], 1e-6, 50.0))
+    # 1. Open Play Goals (Poisson)
+    ll_open_h = logpdf.(Poisson.(μ_open_h), y_open_h)
+    ll_open_a = logpdf.(Poisson.(μ_open_a), y_open_a)
+    Turing.@addlogprob! sum(ll_open_h .* match_weights)
+    Turing.@addlogprob! sum(ll_open_a .* match_weights)
 
-        # 2. Corner Generation (Negative Binomial)
-        # Parameterization: r = phi, p = phi / (phi + lambda)
-        p_c_h = ϕ_c / (ϕ_c + λ_c_h[i])
-        p_c_a = ϕ_c / (ϕ_c + λ_c_a[i])
-        corners_h[i] ~ NegativeBinomial(ϕ_c, clamp(p_c_h, 1e-5, 0.99999))
-        corners_a[i] ~ NegativeBinomial(ϕ_c, clamp(p_c_a, 1e-5, 0.99999))
+    # 2. Corner Generation (Negative Binomial)
+    p_c_h = ϕ_c ./ (ϕ_c .+ λ_c_h)
+    p_c_a = ϕ_c ./ (ϕ_c .+ λ_c_a)
+    ll_c_h = logpdf.(NegativeBinomial.(ϕ_c, clamp.(p_c_h, 1e-5, 0.99999)), corners_h)
+    ll_c_a = logpdf.(NegativeBinomial.(ϕ_c, clamp.(p_c_a, 1e-5, 0.99999)), corners_a)
+    Turing.@addlogprob! sum(ll_c_h .* match_weights)
+    Turing.@addlogprob! sum(ll_c_a .* match_weights)
 
-        # 3. Corner Goal Conversion (Binomial)
-        if corners_h[i] > 0
-            corner_goals_h[i] ~ Binomial(corners_h[i], q_c_h[i])
-        end
-        if corners_a[i] > 0
-            corner_goals_a[i] ~ Binomial(corners_a[i], q_c_a[i])
-        end
-    end
+    # 3. Corner Goal Conversion (Binomial with zero-allocation mask)
+    c_h_safe = max.(1, corners_h)
+    c_a_safe = max.(1, corners_a)
+    ll_cg_h = logpdf.(Binomial.(c_h_safe, q_c_h), corner_goals_h)
+    ll_cg_a = logpdf.(Binomial.(c_a_safe, q_c_a), corner_goals_a)
+    Turing.@addlogprob! sum(ll_cg_h .* mask_c_h .* match_weights)
+    Turing.@addlogprob! sum(ll_cg_a .* mask_c_a .* match_weights)
 end
 
 """
