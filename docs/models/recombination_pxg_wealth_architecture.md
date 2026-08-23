@@ -3,6 +3,14 @@
 **Context & Engineering Guide for BayesianFootball.jl**  
 *Target Audience: Antigravity AI Agents, Quantitative Developers, and Bayesian Modelers*
 
+> 📖 **Modular Documentation Suite:** For detailed modular breakdowns, see:
+> - **[01. Theory & Goal Decomposition](recombination/01_theory_and_formulation.md)**
+> - **[02. Multi-Task Proxy xG Co-Training](recombination/02_proxy_xg_cotraining.md)**
+> - **[03. Starting-XI Squad Wealth Submodel](recombination/03_squad_wealth_submodel.md)**
+> - **[04. Exact Discrete Convolution Kernel](recombination/04_discrete_convolution_kernel.md)**
+> - **[05. AD Performance & Zero-Allocation Masking](recombination/05_ad_performance_and_masking.md)**
+> - **[06. Scottish Lower 40-Fold Benchmarks](recombination/06_scottish_lower_benchmarks.md)**
+
 ---
 
 ## 🎯 1. Executive Summary & Problem Motivation
