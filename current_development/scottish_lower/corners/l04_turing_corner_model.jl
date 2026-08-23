@@ -14,7 +14,13 @@ using SpecialFunctions
 
 # Reference the core types and components
 using BayesianFootball
+using BayesianFootball.Models
 using BayesianFootball.Models.PreGame
+import BayesianFootball.Models.PreGame: AbstractInterceptionConfig, HierarchicalMonthlyInterception,
+                                        AbstractDynamicsConfig, TimeDecayDynamics,
+                                        AbstractHomeAdvantageConfig, GlobalHomeAdvantage,
+                                        AbstractTimeDecayTeamModel, to_submodel,
+                                        build_interception, build_home_advantage, build_dynamics
 using BayesianFootball.Features
 
 """
