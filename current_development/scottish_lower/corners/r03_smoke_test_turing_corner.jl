@@ -99,12 +99,21 @@ turing_mod = build_corner_recomb_engine(
     config
 )
 
-println("--- Starting NUTS MCMC Sampling (300 warmup, 500 samples, 4 chains) with ReverseDiff compiled tape ---")
+println("--- Starting Parallel NUTS MCMC Sampling (4 chains x 500 draws) with ReverseDiff compiled tape ---")
 t_start = time()
-nuts_sampler = NUTS(300, 0.65; max_depth=8, adtype=AutoReverseDiff(compile=true))
-chain = sample(turing_mod, nuts_sampler, MCMCThreads(), 500, 4; progress=false)
+chains = Vector{Any}(undef, 4)
+Threads.@threads for c in 1:4
+    chains[c] = sample(
+        turing_mod,
+        NUTS(300, 0.65; max_depth=8),
+        500;
+        adtype = AutoReverseDiff(compile=true),
+        progress = false
+    )
+end
+chain = chainscat(chains...)
 t_elapsed = time() - t_start
-@printf("✓ Sampling complete in %.2f seconds (%.2f s/chain)\n\n", t_elapsed, t_elapsed / 4)
+@printf("✓ Parallel Sampling complete in %.2f seconds (%.2f s/chain)\n\n", t_elapsed, t_elapsed / 4)
 
 # 5. Diagnostic Assessment (R-hat & ESS)
 println("--- MCMC CONVERGENCE DIAGNOSTICS ---")
