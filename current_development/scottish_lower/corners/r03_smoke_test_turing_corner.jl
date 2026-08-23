@@ -14,6 +14,7 @@ using Dates
 using Statistics
 using MCMCChains
 using SpecialFunctions: loggamma
+using StatsFuns: logistic
 using BayesianFootball.Samplers
 
 println("================================================================================")
@@ -120,7 +121,7 @@ summary_df = DataFrame(MCMCChains.summarize(chain))
 rhat_df = DataFrame(MCMCChains.ess_rhat(chain))
 
 # Extract core scalar parameters
-core_params = ["μ_c_base", "γ_ha_c", "ϕ_c_inv", "σ_conv_att", "σ_conv_def", "ha.γ_global", "inter.μ_base[1]"]
+core_params = ["μ_c_base", "γ_ha_c", "log_ϕ_c", "σ_conv_att", "σ_conv_def", "ha.γ_global", "inter.μ_base[1]"]
 println("Core Latent Parameters:")
 for p in core_params
     row_idx = findfirst(==(Symbol(p)), summary_df[:, :parameters])

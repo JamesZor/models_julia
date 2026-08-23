@@ -101,8 +101,8 @@ end
     # -------------------------------------------------------------
     μ_c_base ~ Normal(1.45, 0.20)
     γ_ha_c   ~ Normal(0.13, 0.05)
-    ϕ_c_inv  ~ Exponential(0.15) # 1 / r dispersion scale
-    ϕ_c      = 1.0 / clamp(ϕ_c_inv, 0.01, 10.0)
+    log_ϕ_c  ~ Normal(2.0, 0.5) # Log overdispersion scale (phi ≈ 7.4)
+    ϕ_c      = exp(clamp(log_ϕ_c, -1.0, 4.0))
 
     α_c_raw ~ filldist(Normal(0, 0.25), n_teams)
     β_c_raw ~ filldist(Normal(0, 0.25), n_teams)
