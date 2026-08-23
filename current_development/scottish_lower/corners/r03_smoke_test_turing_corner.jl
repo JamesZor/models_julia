@@ -105,9 +105,8 @@ chains = Vector{Any}(undef, 4)
 Threads.@threads for c in 1:4
     chains[c] = sample(
         turing_mod,
-        NUTS(300, 0.65; max_depth=8),
+        NUTS(300, 0.65; max_depth=8, adtype=AutoReverseDiff(compile=true)),
         500;
-        adtype = AutoReverseDiff(compile=true),
         progress = false
     )
 end
