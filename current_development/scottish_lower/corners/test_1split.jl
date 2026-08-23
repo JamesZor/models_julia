@@ -41,5 +41,8 @@ try
     t_mod()
     println("✓ t_mod() evaluated successfully!")
 catch e
-    @error "Error in t_mod()" exception=(e, catch_backtrace())
+    println("\n!!! EXCEPTION CAUGHT IN t_mod(): !!!")
+    println(e)
+    showerror(stdout, e, catch_backtrace())
+    println("\n")
 end
