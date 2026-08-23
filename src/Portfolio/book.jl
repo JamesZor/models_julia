@@ -143,7 +143,7 @@ function build_books(spec::BookSpec, latents_df::DataFrame, expr, odds_df::DataF
                     fixtures::Dict{Int,FixtureInfo}; require_result::Bool = true)
     n   = nrow(latents_df)
     buf = Vector{Union{Nothing,MatchBook}}(undef, n)
-    Threads.@threads for i in 1:n
+    for i in 1:n
         buf[i] = build_book(spec, latents_df[i, :], expr, odds_df, fixtures;
                             require_result = require_result)
     end
