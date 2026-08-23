@@ -10,6 +10,9 @@
 
 using Revise
 using BayesianFootball
+using ThreadPinning
+pinthreads(:cores)
+
 using Turing, DynamicPPL, MCMCChains
 using DataFrames, Dates, Statistics, Printf
 
