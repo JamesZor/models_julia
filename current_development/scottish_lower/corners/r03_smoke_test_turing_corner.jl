@@ -14,10 +14,7 @@ using Dates
 using Statistics
 using MCMCChains
 using ReverseDiff
-
-# Enable high-speed ReverseDiff compiled tape
-Turing.setadbackend(:reversediff)
-Turing.setrdcache(true)
+using DynamicPPL: AutoReverseDiff
 
 println("================================================================================")
 println(" TURING MCMC SMOKE TEST: 4-WAY CORNER RECOMBINATION BASELINE")
@@ -83,7 +80,7 @@ turing_mod = build_corner_recomb_engine(
 
 println("--- Starting NUTS MCMC Sampling (500 warmup, 500 samples, 4 chains) ---")
 t_start = time()
-chain = sample(turing_mod, NUTS(500, 0.65), MCMCThreads(), 500, 4)
+chain = sample(turing_mod, NUTS(500, 0.65), MCMCThreads(), 500, 4; adtype = AutoReverseDiff(compile=true))
 t_elapsed = time() - t_start
 @printf("✓ Sampling complete in %.2f seconds (%.2f s/chain)\n\n", t_elapsed, t_elapsed / 4)
 
