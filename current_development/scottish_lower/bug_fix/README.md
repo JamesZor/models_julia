@@ -26,5 +26,6 @@ Each issue directory should contain:
 |---:|:---|:---|
 | 01 | OOS team effects silently disappear | Confirmed; existing-chain bridge validation ready |
 | 02 | Extraction omits hierarchical tau scales | Fixed and validated against three saved artifact types |
+| 05 | Legacy one-column league indexing (l05 pxG) | Phase-1 diagnostic ready; saved-chain validation pending |
 
 Additional issue directories should be added as each audit finding is started rather than creating empty placeholders.
