@@ -354,10 +354,8 @@ function PreGame.extract_parameters(
     w_wealth = vec(Array(chain["w_wealth"]))
     n_samples = length(base_mu)
     
-    raw_alpha_mat = Array(chain[["raw_alpha[$i]" for i in 1:n_teams]])
-    raw_beta_mat  = Array(chain[["raw_beta[$i]" for i in 1:n_teams]])
-    alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
-    beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
+    effects = _tau_scaled_team_effects(chain, n_teams; context="TeamPxGRecombWealthIntegratedModel extractor")
+    alpha_mat, beta_mat = effects.alpha, effects.beta
     
     raw_kappa_mat = _has_param(chain, "raw_kappa[1]") ? Array(chain[["raw_kappa[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
     kappa_mat = exp.(raw_kappa_mat)
@@ -471,10 +469,8 @@ function Predictions.extract_params(
     w_wealth = vec(Array(chain["w_wealth"]))
     n_samples = length(base_mu)
     
-    raw_alpha_mat = Array(chain[["raw_alpha[$i]" for i in 1:n_teams]])
-    raw_beta_mat  = Array(chain[["raw_beta[$i]" for i in 1:n_teams]])
-    alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
-    beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
+    effects = _tau_scaled_team_effects(chain, n_teams; context="TeamPxGRecombWealthIntegratedModel extractor")
+    alpha_mat, beta_mat = effects.alpha, effects.beta
     
     raw_kappa_mat = _has_param(chain, "raw_kappa[1]") ? Array(chain[["raw_kappa[$i]" for i in 1:n_teams]]) : zeros(n_samples, n_teams)
     kappa_mat = exp.(raw_kappa_mat)

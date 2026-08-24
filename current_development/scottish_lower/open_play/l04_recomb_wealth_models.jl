@@ -417,10 +417,8 @@ function PreGame.extract_parameters(
     w_wealth = vec(Array(chain["w_wealth"]))
     n_samples = length(base_mu)
     
-    raw_alpha_mat = Array(chain[["raw_alpha[$i]" for i in 1:n_teams]])
-    raw_beta_mat  = Array(chain[["raw_beta[$i]" for i in 1:n_teams]])
-    alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
-    beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
+    effects = _tau_scaled_team_effects(chain, n_teams; context="TeamGoalsRecombIntegratedPoisWealthModel extractor")
+    alpha_mat, beta_mat = effects.alpha, effects.beta
     
     delta_month_mat  = _has_param(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
     delta_league_mat = _has_param(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)
@@ -524,10 +522,8 @@ function Predictions.extract_params(
     w_wealth = vec(Array(chain["w_wealth"]))
     n_samples = length(base_mu)
     
-    raw_alpha_mat = Array(chain[["raw_alpha[$i]" for i in 1:n_teams]])
-    raw_beta_mat  = Array(chain[["raw_beta[$i]" for i in 1:n_teams]])
-    alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
-    beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
+    effects = _tau_scaled_team_effects(chain, n_teams; context="TeamGoalsRecombIntegratedPoisWealthModel extractor")
+    alpha_mat, beta_mat = effects.alpha, effects.beta
     
     delta_month_mat  = _has_param(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
     delta_league_mat = _has_param(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)

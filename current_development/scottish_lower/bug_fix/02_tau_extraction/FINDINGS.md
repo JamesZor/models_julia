@@ -1,6 +1,6 @@
 # Issue 02 findings — extraction omits hierarchical tau scales
 
-**Status:** Pending remote existing-chain validation.
+**Status:** Permanent patch implemented locally; pending remote saved-artifact validation (no sampling).
 
 ## Static affected-method manifest
 
@@ -33,6 +33,16 @@ known-team tau-only swap:
 - Do not apply the result to l03 Poisson methods; they have no tau parameters by design.
 - This does not validate the separate l03 NegBin penalty hierarchy, referee centering, issue-01 mapping deployment, or training/prediction league parity.
 
+## Permanent patch checklist
+
+- [x] Added `_tau_scaled_team_effects` in l03: saved-column-order preserving, read-only, shape/draw-count validating, and explicit about absent tau parameters.
+- [x] Routed both l03 integrated NegBin extractors through it.
+- [x] Routed both l04 wealth extractors through it.
+- [x] Routed both l05 pxG extractors through it.
+- [x] Left tau-free l03 Poisson extraction unchanged.
+- [x] Added `r02_validate_tau_patch.jl` for all three saved artifact types where available.
+- [ ] Run r02 on beast and paste output below.
+
 ## Decision
 
-Pending validation. If confirmed, the permanent extraction correction must scale centered raw attack/defence draw-wise before rate construction and have synthetic-chain regression coverage for each tau-required method.
+Code correction is ready for saved-artifact validation. It reconstructs `alpha=(raw_alpha-rowmean).*reshape(tau_alpha,:,1)` and beta analogously before existing rate construction. **DataFrame OOS mapping remains issue 01 until patched**; no result from this issue should be interpreted as an issue-01 mapping fix. League, clamp, penalty/referee, wealth, and kappa behavior remain intentionally untouched.

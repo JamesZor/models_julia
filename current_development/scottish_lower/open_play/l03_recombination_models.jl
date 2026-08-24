@@ -860,6 +860,42 @@ end
 
 _has_param(chain::Chains, p::String) = Symbol(p) in names(chain) || p in string.(names(chain))
 
+"""Reconstruct draw × team effects for a model that fits `tau_alpha/tau_beta`.
+Saved-chain labels are selected in order; the chain is never mutated.
+"""
+function _tau_scaled_team_effects(chain::Chains, n_teams::Integer; context::AbstractString="tau-scaled extractor")
+    n_teams > 0 || error("$context requires a positive n_teams; got $n_teams")
+    alpha_labels = ["raw_alpha[$i]" for i in 1:n_teams]
+    beta_labels = ["raw_beta[$i]" for i in 1:n_teams]
+    required = vcat(alpha_labels, beta_labels, ["tau_alpha", "tau_beta"])
+    missing = filter(p -> !_has_param(chain, p), required)
+    isempty(missing) || error("$context requires tau_alpha, tau_beta, and raw team effects; missing: $(join(missing, ", "))")
+    function draw_matrix(labels::Vector{String}, name::String)
+        a = Array(chain[labels])
+        if ndims(a) == 1
+            length(labels) == 1 || error("$context $name has 1-D shape $(size(a)); expected $n_teams team columns")
+            reshape(a, :, 1)
+        elseif ndims(a) == 2
+            size(a, 2) == length(labels) || error("$context $name has shape $(size(a)); expected draw × $(length(labels))")
+            Matrix(a)
+        elseif ndims(a) == 3
+            size(a, 2) == length(labels) || error("$context $name has shape $(size(a)); expected iteration × $(length(labels)) × chain")
+            reshape(permutedims(a, (1, 3, 2)), :, length(labels))
+        else
+            error("$context $name has unsupported chain-array shape $(size(a))")
+        end
+    end
+    raw_alpha, raw_beta = draw_matrix(alpha_labels, "raw_alpha"), draw_matrix(beta_labels, "raw_beta")
+    tau_alpha, tau_beta = vec(Array(chain["tau_alpha"])), vec(Array(chain["tau_beta"]))
+    draws = size(raw_alpha, 1)
+    size(raw_alpha, 2) == n_teams || error("$context raw_alpha has $(size(raw_alpha, 2)) columns; expected $n_teams")
+    size(raw_beta) == size(raw_alpha) || error("$context raw_alpha/raw_beta shape mismatch: $(size(raw_alpha)) vs $(size(raw_beta))")
+    length(tau_alpha) == draws || error("$context tau_alpha has $(length(tau_alpha)) draws; expected $draws")
+    length(tau_beta) == draws || error("$context tau_beta has $(length(tau_beta)) draws; expected $draws")
+    return (; alpha=(raw_alpha .- mean(raw_alpha, dims=2)) .* reshape(tau_alpha, :, 1),
+             beta=(raw_beta .- mean(raw_beta, dims=2)) .* reshape(tau_beta, :, 1))
+end
+
 function PreGame.extract_parameters(
     model::Union{TeamGoalsPoissonModel, TeamGoalsPoissonOpenPlayModel},
     df::AbstractDataFrame,
@@ -1119,11 +1155,8 @@ function PreGame.extract_parameters(model::TeamGoalsRecombIntegratedNegBinModel,
     alpha_dict = Dict{Int, Vector{Float64}}()
     beta_dict  = Dict{Int, Vector{Float64}}()
     
-    raw_alpha_mat = Array(chain[["raw_alpha[$i]" for i in 1:n_teams]])
-    raw_beta_mat  = Array(chain[["raw_beta[$i]" for i in 1:n_teams]])
-    
-    alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
-    beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
+    effects = _tau_scaled_team_effects(chain, n_teams; context="TeamGoalsRecombIntegratedNegBinModel chain extractor")
+    alpha_mat, beta_mat = effects.alpha, effects.beta
     
     for (team_id, idx) in team_map
         alpha_dict[team_id] = alpha_mat[:, idx]
@@ -1191,10 +1224,8 @@ function PreGame.extract_parameters(
     r_a          = exp.(log_r)
     r_h          = exp.(log_r .+ delta_r_home)
     
-    raw_alpha_mat = Array(chain[["raw_alpha[$i]" for i in 1:n_teams]])
-    raw_beta_mat  = Array(chain[["raw_beta[$i]" for i in 1:n_teams]])
-    alpha_mat = raw_alpha_mat .- mean(raw_alpha_mat, dims=2)
-    beta_mat  = raw_beta_mat  .- mean(raw_beta_mat, dims=2)
+    effects = _tau_scaled_team_effects(chain, n_teams; context="TeamGoalsRecombIntegratedNegBinModel DataFrame extractor")
+    alpha_mat, beta_mat = effects.alpha, effects.beta
     
     delta_month_mat  = _has_param(chain, "delta_month[1]") ? Array(chain[["delta_month[$i]" for i in 1:n_months]]) : zeros(n_samples, n_months)
     delta_league_mat = _has_param(chain, "delta_league[1]") ? Array(chain[["delta_league[$i]" for i in 1:n_leagues]]) : zeros(n_samples, n_leagues)
