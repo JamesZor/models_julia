@@ -23,6 +23,13 @@ and silently replace attack/defence (and related team-level effects) with zero v
 - `r01_confirm_oos_team_effects.jl` — notebook-style REPL investigation. Run one `# %%` section at a
   time in order.
 - `FINDINGS.md` — paste compact output tables and record the conclusion.
+- `l02_existing_chain_team_bridge.jl` — side-effect-free, saved-artifact-compatible name → existing
+  posterior-column bridge with two reconstructions: `reconstruct_pxg_mapping_only` reproduces the
+  current l05 dataframe extractor except for identity lookup; `reconstruct_pxg_fitted` applies the
+  actual fitted Turing transform. It never renumbers columns or overrides a production method.
+- `r02_validate_corrected_extraction.jl` — phase-2 notebook: first isolates old vs mapping-only
+  (issue 01), then reports mapping-only vs fitted as deferred extraction-parity evidence; its swap
+  acceptance test uses mapping-only.
 
 ## How to run remotely
 
@@ -62,6 +69,29 @@ The issue is confirmed if all are true:
 3. The current adapter lookup maps known OOS teams to `-1`.
 4. A name-to-index bridge maps those same teams to valid posterior columns.
 5. Posterior team contributions under the corrected lookup are materially nonzero.
+
+## Phase 2: validate existing chains remotely
+
+Run the r01 environment/artifact selection pattern, but send `r02_validate_corrected_extraction.jl`
+section-by-section. Set `BF_BUGFIX_EXPERIMENT` to the exact artifact basename. It performs no sampling;
+feature construction and artifact loading can still be expensive, so run it on beast, not locally.
+
+The bridge contract is deliberately strict:
+
+```julia
+bridge = build_name_to_existing_column(feature_set) # Dict{String,Int}
+@assert assert_bridge_invariants!(feature_set, bridge)
+mapping_only = reconstruct_pxg_mapping_only(oos_df, feature_set, chain; bridge)
+fitted = reconstruct_pxg_fitted(oos_df, feature_set, chain; bridge)
+```
+
+Its values are copied from the existing integer `team_map`, never sorted by name or rebuilt from a new
+team list. Thus a name mapped to `i` reads precisely posterior column `i`. Unknown names alone return
+`-1`; inspect each reconstruction's diagnostics before accepting output. `mapping_only` retains l05's
+unscaled centered raw alpha/beta, tournament-57 league attempt/fallback, and absence of prediction
+clamps/floors, so old vs mapping-only isolates issue 01. `fitted` adds tau scaling, training clamps and
+`+1e-6` floors, and training league index 1; its difference from mapping-only is deferred issue 02 /
+extraction-parity evidence, not a mapping-only result. Both are audit helpers—not global production patches.
 
 ## Fix acceptance criteria
 

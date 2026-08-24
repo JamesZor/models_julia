@@ -73,6 +73,32 @@ Record known and unknown OOS teams for the selected fold:
 
 ```
 
+## 7. Phase-2 existing-chain validation
+
+Run `r02_validate_corrected_extraction.jl` against the same pinned artifact/fold used in r01. Paste its
+block-10 template here. Do not describe this as a production rerun: it is a local bridge reconstruction.
+
+```text
+artifact:
+fold:
+unknown diagnostics:
+old vs mapping-only (issue 01):
+mapping-only score-matrix difference:
+mapping-only vs fitted (deferred issue 02/extraction parity):
+mapping-only swap sensitivity:
+```
+
+Acceptance checklist:
+
+- [ ] `assert_bridge_invariants!` passed (no posterior-column permutation).
+- [ ] Known OOS names resolve to their existing integer posterior columns.
+- [ ] Only genuinely unfitted/unseen names are in `unknown_names` and return `-1`.
+- [ ] Old vs mapping-only differs for a known-known fixture; this is the isolated issue-01 result.
+- [ ] Mapping-only swap of known names changes open and/or penalty latents.
+- [ ] Mapping-only vs fitted is recorded separately as tau/clamp/floor/league extraction-parity evidence.
+
+Do not attribute a mapping-only-vs-fitted difference solely to the name bridge.
+
 ## Conclusion
 
 - [ ] Issue reproduced.
