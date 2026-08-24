@@ -140,9 +140,11 @@ function _build_recomb_pxg_wealth_features(b::Data.SplitBoundary, ds::Data.DataS
     
     h_idx = [team_map[t] for t in home_ids]
     a_idx = [team_map[t] for t in away_ids]
+    team_name_to_index = _team_name_to_existing_index(team_map, df_clean)
+    league_map = _pooled_legacy_league_map(ds)
     
     month_indices  = month.(m.match_date)
-    league_indices = ones(Int, length(home_ids))
+    league_indices = [_oos_league_index(row, league_map, 1) for row in eachrow(m)]
     
     return Features.FeatureSet(
         Dict{Symbol, Any}(
@@ -169,6 +171,9 @@ function _build_recomb_pxg_wealth_features(b::Data.SplitBoundary, ds::Data.DataS
             :n_months            => 12,
             :n_leagues           => 1,
             :team_map            => team_map,
+            :team_name_to_index  => team_name_to_index,
+            :league_map          => league_map,
+            :league_encoding     => :pooled_legacy_one_column,
             :ref_map             => ref_map,
             :wealth_map          => wealth_map,
             :clean_df            => df_clean,
@@ -342,6 +347,9 @@ function PreGame.extract_parameters(
 )
     data = feature_set.data
     team_map   = data[:team_map]
+    team_name_to_index = _feature_team_name_to_index(data)
+    league_map = _feature_league_map(data)
+    unknowns = Dict{String,Int}()
     ref_map    = data[:ref_map]
     wealth_map = data[:wealth_map]
     n_teams    = data[:n_teams]
@@ -376,11 +384,8 @@ function PreGame.extract_parameters(
     results = Dict{Int, NamedTuple}()
     for row in eachrow(df)
         mid = Int(row.match_id)
-        h_id = hasproperty(row, :home_team_id) ? Int(row.home_team_id) : (hasproperty(row, :home_team) ? get(team_map, row.home_team, -1) : -1)
-        a_id = hasproperty(row, :away_team_id) ? Int(row.away_team_id) : (hasproperty(row, :away_team) ? get(team_map, row.away_team, -1) : -1)
-        
-        h_idx = get(team_map, h_id, -1)
-        a_idx = get(team_map, a_id, -1)
+        h_idx = _oos_team_index(row, :home, team_map, team_name_to_index, unknowns)
+        a_idx = _oos_team_index(row, :away, team_map, team_name_to_index, unknowns)
         
         α_h = h_idx > 0 ? alpha_mat[:, h_idx] : zeros(n_samples)
         β_h = h_idx > 0 ? beta_mat[:, h_idx]  : zeros(n_samples)
@@ -394,7 +399,7 @@ function PreGame.extract_parameters(
         w_shift = w_wealth .* dw
         
         m_idx = month(row.match_date)
-        l_idx = hasproperty(row, :tournament_id) && row.tournament_id == 57 ? 2 : 1
+        l_idx = _oos_league_index(row, league_map, n_leagues)
         
         δ_m = (m_idx >= 1 && m_idx <= n_months) ? delta_month_mat[:, m_idx] : zeros(n_samples)
         δ_l = (l_idx >= 1 && l_idx <= n_leagues) ? delta_league_mat[:, l_idx] : zeros(n_samples)
@@ -443,6 +448,7 @@ function PreGame.extract_parameters(
             lambda_open_a = mu_open_a
         )
     end
+    _warn_oos_unknown_teams!(unknowns, "$(typeof(model)) extraction")
     return results
 end
 
@@ -457,6 +463,9 @@ function Predictions.extract_params(
     target_matches = filter(r -> r.match_id in b.target_match_ids, df_clean)
     
     team_map   = F[:team_map]
+    team_name_to_index = _feature_team_name_to_index(F)
+    league_map = _feature_league_map(F)
+    unknowns = Dict{String,Int}()
     ref_map    = F[:ref_map]
     wealth_map = F[:wealth_map]
     n_teams    = F[:n_teams]
@@ -500,12 +509,9 @@ function Predictions.extract_params(
     
     for row in eachrow(target_matches)
         m_id = row.match_id
-        h_id = row.home_team_id
-        a_id = row.away_team_id
         r_id = row.referee_id
-        
-        h_idx = get(team_map, h_id, -1)
-        a_idx = get(team_map, a_id, -1)
+        h_idx = _oos_team_index(row, :home, team_map, team_name_to_index, unknowns)
+        a_idx = _oos_team_index(row, :away, team_map, team_name_to_index, unknowns)
         r_idx = get(ref_map, r_id, -1)
         
         α_h = h_idx > 0 ? alpha_mat[:, h_idx] : zeros(n_samples)
@@ -520,7 +526,7 @@ function Predictions.extract_params(
         w_shift = w_wealth .* dw
         
         m_idx = month(row.match_date)
-        l_idx = hasproperty(row, :tournament_id) && row.tournament_id == 57 ? 2 : 1
+        l_idx = _oos_league_index(row, league_map, n_leagues)
         
         δ_m = (m_idx >= 1 && m_idx <= n_months) ? delta_month_mat[:, m_idx] : zeros(n_samples)
         δ_l = (l_idx >= 1 && l_idx <= n_leagues) ? delta_league_mat[:, l_idx] : zeros(n_samples)
@@ -557,6 +563,7 @@ function Predictions.extract_params(
         ))
     end
     
+    _warn_oos_unknown_teams!(unknowns, "$(typeof(model)) FeatureSet prediction extraction")
     return Predictions.LatentStates(out_df, model)
 end
 

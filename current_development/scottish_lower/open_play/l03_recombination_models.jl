@@ -72,6 +72,87 @@ end
 
 const _TARGET_CACHE = Dict{UInt64, Tuple{DataFrame, Vector{Int}}}()
 
+"""Copy canonical names onto existing saved-chain columns; never create a new ordering."""
+function _team_name_to_existing_index(team_map::Dict{Int,Int}, df::AbstractDataFrame)
+    ids_by_name = Dict{String,Int}()
+    for (name_col, id_col) in ((:home_team, :home_team_id), (:away_team, :away_team_id))
+        (name_col in propertynames(df) && id_col in propertynames(df)) || error("team bridge requires $name_col and $id_col")
+        for row in eachrow(df)
+            ismissing(row[name_col]) && error("missing canonical team name in $name_col")
+            name, id = String(row[name_col]), Int(row[id_col])
+            if haskey(ids_by_name, name) && ids_by_name[name] != id
+                error("conflicting canonical team name $name maps to IDs $(ids_by_name[name]) and $id")
+            end
+            ids_by_name[name] = id
+        end
+    end
+    bridge = Dict{String,Int}()
+    for (name, id) in ids_by_name
+        haskey(team_map, id) && (bridge[name] = team_map[id])
+    end
+    length(unique(values(bridge))) == length(values(bridge)) || error("canonical team names conflict on saved-chain columns")
+    return bridge
+end
+
+"""Pooled legacy league encoding: all tournaments in this DataStore use delta_league[1]."""
+function _pooled_legacy_league_map(ds::Data.DataStore)
+    :tournament_id in propertynames(ds.matches) || error("DataStore matches lack tournament_id")
+    ids = unique(Int(t) for t in ds.matches.tournament_id if !ismissing(t))
+    all(t -> t in (56, 57), ids) || error("custom ScottishLower pooled league encoding only supports tournaments 56/57; found $(sort(ids))")
+    isempty(ids) && error("DataStore contains no tournament IDs")
+    return Dict(t => 1 for t in ids)
+end
+
+function _valid_oos_integer(value)
+    ismissing(value) && return nothing
+    value isa Integer && return Int(value)
+    value isa Real && isfinite(value) && value == round(value) && return Int(round(value))
+    return nothing
+end
+
+"""Resolve an OOS team without renumbering columns; record only genuine unseen identities."""
+function _oos_team_index(row, side::Symbol, team_map::Dict{Int,Int}, name_map::Dict{String,Int}, unknowns::Dict{String,Int})
+    id_col, name_col = Symbol(side, "_team_id"), Symbol(side, "_team")
+    raw_id = id_col in propertynames(row) ? row[id_col] : missing
+    id = _valid_oos_integer(raw_id)
+    name = name_col in propertynames(row) && !ismissing(row[name_col]) ? String(row[name_col]) : nothing
+    id !== nothing && haskey(team_map, id) && begin
+        idx = team_map[id]
+        name !== nothing && haskey(name_map, name) && name_map[name] != idx && error("OOS $side team ID/name schema mismatch: ID $id is column $idx but $name is column $(name_map[name])")
+        return idx
+    end
+    if id !== nothing && !haskey(team_map, id) && name !== nothing && haskey(name_map, name)
+        error("OOS $side team ID/name schema mismatch: unknown ID $id conflicts with known name $name")
+    end
+    if id === nothing && name !== nothing && haskey(name_map, name)
+        return name_map[name]
+    end
+    (id !== nothing || name !== nothing) || error("OOS $side team has neither a valid integer ID nor canonical name")
+    key = id !== nothing ? "id:$id" : "name:$name"
+    unknowns[key] = get(unknowns, key, 0) + 1
+    return -1
+end
+
+function _warn_oos_unknown_teams!(unknowns::Dict{String,Int}, context::AbstractString)
+    isempty(unknowns) || @warn "$context used population fallback for genuinely unseen teams" unknown_team_rows=sum(values(unknowns)) unknown_teams=unknowns
+    nothing
+end
+
+# Old serialized FeatureSets lack these metadata keys; derive the same bridge without touching
+# their chain columns. New builders always persist both maps above.
+_feature_team_name_to_index(d) = haskey(d, :team_name_to_index) ? d[:team_name_to_index] : _team_name_to_existing_index(d[:team_map], d[:clean_df])
+_feature_league_map(d) = haskey(d, :league_map) ? d[:league_map] : Dict(56 => 1, 57 => 1)
+
+function _oos_league_index(row, league_map::Dict{Int,Int}, n_leagues::Integer)
+    :tournament_id in propertynames(row) || error("OOS row lacks tournament_id; cannot select saved league column")
+    tid = _valid_oos_integer(row.tournament_id)
+    tid === nothing && error("OOS row has invalid tournament_id $(row.tournament_id)")
+    haskey(league_map, tid) || error("unknown tournament_id $tid; pooled ScottishLower model only knows $(sort(collect(keys(league_map))))")
+    n_leagues == 1 || error("pooled legacy league helper requires exactly one delta_league column; got $n_leagues")
+    league_map[tid] == 1 || error("invalid pooled league map for tournament $tid")
+    return 1
+end
+
 # ==============================================================================
 # 0. OPEN-PLAY DATASET BUILDER
 # ==============================================================================
@@ -388,9 +469,11 @@ function _build_recomb_features(b::Data.SplitBoundary, ds::Data.DataStore, model
     
     h_idx = [team_map[t] for t in home_ids]
     a_idx = [team_map[t] for t in away_ids]
+    team_name_to_index = _team_name_to_existing_index(team_map, df_clean)
+    league_map = _pooled_legacy_league_map(ds)
     
     month_indices  = month.(m.match_date)
-    league_indices = ones(Int, length(home_ids))
+    league_indices = [_oos_league_index(row, league_map, 1) for row in eachrow(m)]
     
     return Features.FeatureSet(
         Dict{Symbol, Any}(
@@ -414,6 +497,9 @@ function _build_recomb_features(b::Data.SplitBoundary, ds::Data.DataStore, model
             :n_months            => 12,
             :n_leagues           => 1,
             :team_map            => team_map,
+            :team_name_to_index  => team_name_to_index,
+            :league_map          => league_map,
+            :league_encoding     => :pooled_legacy_one_column,
             :ref_map             => ref_map,
             :clean_df            => df_clean,
             :boundary            => b
@@ -904,6 +990,9 @@ function PreGame.extract_parameters(
 )
     data = _get_recomb_data(feature_set)
     team_map = data[:team_map]
+    team_name_to_index = _feature_team_name_to_index(data)
+    league_map = _feature_league_map(data)
+    unknowns = Dict{String,Int}()
     n_teams = data[:n_teams]
     n_months = data[:n_months]
     n_leagues = data[:n_leagues]
@@ -923,11 +1012,8 @@ function PreGame.extract_parameters(
     results = Dict{Int, NamedTuple}()
     for row in eachrow(df)
         mid = Int(row.match_id)
-        h_id = hasproperty(row, :home_team_id) ? Int(row.home_team_id) : (hasproperty(row, :home_team) ? get(team_map, row.home_team, -1) : -1)
-        a_id = hasproperty(row, :away_team_id) ? Int(row.away_team_id) : (hasproperty(row, :away_team) ? get(team_map, row.away_team, -1) : -1)
-        
-        h_idx = get(team_map, h_id, -1)
-        a_idx = get(team_map, a_id, -1)
+        h_idx = _oos_team_index(row, :home, team_map, team_name_to_index, unknowns)
+        a_idx = _oos_team_index(row, :away, team_map, team_name_to_index, unknowns)
         
         α_h = h_idx > 0 ? alpha_mat[:, h_idx] : zeros(n_samples)
         β_h = h_idx > 0 ? beta_mat[:, h_idx]  : zeros(n_samples)
@@ -935,7 +1021,7 @@ function PreGame.extract_parameters(
         β_a = a_idx > 0 ? beta_mat[:, a_idx]  : zeros(n_samples)
         
         m_idx = month(row.match_date)
-        l_idx = hasproperty(row, :tournament_id) && row.tournament_id == 57 ? 2 : 1
+        l_idx = _oos_league_index(row, league_map, n_leagues)
         
         δ_m = (m_idx >= 1 && m_idx <= n_months) ? delta_month_mat[:, m_idx] : zeros(n_samples)
         δ_l = (l_idx >= 1 && l_idx <= n_leagues) ? delta_league_mat[:, l_idx] : zeros(n_samples)
@@ -953,6 +1039,7 @@ function PreGame.extract_parameters(
             true_xg_a = λ_a
         )
     end
+    _warn_oos_unknown_teams!(unknowns, "$(typeof(model)) extraction")
     return results
 end
 
@@ -964,6 +1051,9 @@ function PreGame.extract_parameters(
 )
     data = _get_recomb_data(feature_set)
     team_map = data[:team_map]
+    team_name_to_index = _feature_team_name_to_index(data)
+    league_map = _feature_league_map(data)
+    unknowns = Dict{String,Int}()
     ref_map  = data[:ref_map]
     n_teams  = data[:n_teams]
     n_refs   = data[:n_refs]
@@ -995,11 +1085,8 @@ function PreGame.extract_parameters(
     results = Dict{Int, NamedTuple}()
     for row in eachrow(df)
         mid = Int(row.match_id)
-        h_id = hasproperty(row, :home_team_id) ? Int(row.home_team_id) : (hasproperty(row, :home_team) ? get(team_map, row.home_team, -1) : -1)
-        a_id = hasproperty(row, :away_team_id) ? Int(row.away_team_id) : (hasproperty(row, :away_team) ? get(team_map, row.away_team, -1) : -1)
-        
-        h_idx = get(team_map, h_id, -1)
-        a_idx = get(team_map, a_id, -1)
+        h_idx = _oos_team_index(row, :home, team_map, team_name_to_index, unknowns)
+        a_idx = _oos_team_index(row, :away, team_map, team_name_to_index, unknowns)
         
         α_h = h_idx > 0 ? alpha_mat[:, h_idx] : zeros(n_samples)
         β_h = h_idx > 0 ? beta_mat[:, h_idx]  : zeros(n_samples)
@@ -1007,7 +1094,7 @@ function PreGame.extract_parameters(
         β_a = a_idx > 0 ? beta_mat[:, a_idx]  : zeros(n_samples)
         
         m_idx = month(row.match_date)
-        l_idx = hasproperty(row, :tournament_id) && row.tournament_id == 57 ? 2 : 1
+        l_idx = _oos_league_index(row, league_map, n_leagues)
         
         δ_m = (m_idx >= 1 && m_idx <= n_months) ? delta_month_mat[:, m_idx] : zeros(n_samples)
         δ_l = (l_idx >= 1 && l_idx <= n_leagues) ? delta_league_mat[:, l_idx] : zeros(n_samples)
@@ -1053,6 +1140,7 @@ function PreGame.extract_parameters(
             lambda_noise_a = lambda_noise_a
         )
     end
+    _warn_oos_unknown_teams!(unknowns, "$(typeof(model)) extraction")
     return results
 end
 
@@ -1209,6 +1297,9 @@ function PreGame.extract_parameters(
 )
     data = _get_recomb_data(feature_set)
     team_map = data[:team_map]
+    team_name_to_index = _feature_team_name_to_index(data)
+    league_map = _feature_league_map(data)
+    unknowns = Dict{String,Int}()
     ref_map  = data[:ref_map]
     n_teams  = data[:n_teams]
     n_refs   = data[:n_refs]
@@ -1243,11 +1334,8 @@ function PreGame.extract_parameters(
     results = Dict{Int, NamedTuple}()
     for row in eachrow(df)
         mid = Int(row.match_id)
-        h_id = hasproperty(row, :home_team_id) ? Int(row.home_team_id) : (hasproperty(row, :home_team) ? get(team_map, row.home_team, -1) : -1)
-        a_id = hasproperty(row, :away_team_id) ? Int(row.away_team_id) : (hasproperty(row, :away_team) ? get(team_map, row.away_team, -1) : -1)
-        
-        h_idx = get(team_map, h_id, -1)
-        a_idx = get(team_map, a_id, -1)
+        h_idx = _oos_team_index(row, :home, team_map, team_name_to_index, unknowns)
+        a_idx = _oos_team_index(row, :away, team_map, team_name_to_index, unknowns)
         
         α_h = h_idx > 0 ? alpha_mat[:, h_idx] : zeros(n_samples)
         β_h = h_idx > 0 ? beta_mat[:, h_idx]  : zeros(n_samples)
@@ -1255,7 +1343,7 @@ function PreGame.extract_parameters(
         β_a = a_idx > 0 ? beta_mat[:, a_idx]  : zeros(n_samples)
         
         m_idx = month(row.match_date)
-        l_idx = hasproperty(row, :tournament_id) && row.tournament_id == 57 ? 2 : 1
+        l_idx = _oos_league_index(row, league_map, n_leagues)
         
         δ_m = (m_idx >= 1 && m_idx <= n_months) ? delta_month_mat[:, m_idx] : zeros(n_samples)
         δ_l = (l_idx >= 1 && l_idx <= n_leagues) ? delta_league_mat[:, l_idx] : zeros(n_samples)
@@ -1301,6 +1389,7 @@ function PreGame.extract_parameters(
             lambda_noise_a = lambda_noise_a
         )
     end
+    _warn_oos_unknown_teams!(unknowns, "$(typeof(model)) extraction")
     return results
 end
 

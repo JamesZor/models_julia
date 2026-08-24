@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase-1 diagnostic ready; no open_play code is changed and no sampling is performed.
+Permanent pooled one-column extraction semantics are implemented in l03 and used by l04/l05. `r02_validate_cumulative_patch.jl` validates saved chains without sampling. No OOS latents or books have been rebuilt yet.
 
 ## Scope
 
@@ -32,7 +32,10 @@ Include `r01_validate_league_indexing.jl` block-by-block in the remote persisten
 ## Future chain-aware contract
 
 - **1 league column:** legacy pooled artifact; 56 and 57 both map to column 1.
-- **2 league columns:** canonical stored map; 56=>1 and 57=>2.
+- **2 league columns (future refitted model):** canonical stored map; 56=>1 and 57=>2.
 - **Any other/missing tournament ID:** explicit error.
 
-`LeagueIndexDiagnostics` keeps the contract and reconstruction independent of l05-specific artifact selection so l03/l04 artifacts can be added later. This is a diagnostic contract, not a production behavior change.
+The permanent patch currently implements only the validated one-column pooled contract used by
+existing custom artifacts. A genuine two-column model needs a separately versioned FeatureSet/model
+change and resampling. `LeagueIndexDiagnostics` already represents that future interpretation, but
+the production helper intentionally rejects non-one-column inputs until such a model exists.
