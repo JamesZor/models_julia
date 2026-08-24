@@ -66,8 +66,18 @@ function extract_primitive_draws(chain::Chains, J::Integer)
     return bundle
 end
 
+function _validate_global_registry(model::ScottishLowerNPNOGRecombinedPoissonModel, fs)
+    registry_fingerprint(model.registry) == model.registry_fingerprint ||
+        throw(ArgumentError("global model registry fingerprint changed after construction"))
+    get(fs, :model_registry_fingerprint, nothing) == model.registry_fingerprint ||
+        throw(ArgumentError("FeatureSet/global model registry fingerprint mismatch"))
+    get(fs, :registry_fingerprint, nothing) == get(get(fs, :registry_manifest, nothing), :registry_fingerprint, nothing) ||
+        throw(ArgumentError("FeatureSet fold registry manifest mismatch"))
+    nothing
+end
+
 function PreGame.extract_parameters(model::ScottishLowerNPNOGRecombinedPoissonModel, chain::Chains, fs)
-    get(fs, :registry_fingerprint, nothing) == model.registry_fingerprint || throw(ArgumentError("FeatureSet/model registry fingerprint mismatch"))
+    _validate_global_registry(model, fs)
     return extract_primitive_draws(chain, Int(fs[:n_teams]))
 end
 
@@ -88,7 +98,7 @@ end
 """OOS extraction uses registry identity and stored history maps only; no outcome column is read."""
 function PreGame.extract_parameters(model::ScottishLowerNPNOGRecombinedPoissonModel,
     df::AbstractDataFrame, fs, chain::Chains)::Dict
-    get(fs, :registry_fingerprint, nothing) == model.registry_fingerprint || throw(ArgumentError("FeatureSet/model registry fingerprint mismatch"))
+    _validate_global_registry(model, fs)
     primitive = PreGame.extract_parameters(model, chain, fs)
     registry = Dict(Int(r.match_id) => r for r in eachrow(model.registry))
     out = Dict{Int,Any}()
@@ -125,7 +135,9 @@ function PreGame.extract_parameters(model::ScottishLowerNPNOGRecombinedPoissonMo
             :lambda_converted_penalty_home=>cph, :lambda_converted_penalty_away=>cpa,
             :lambda_og_home=>λog, :lambda_og_away=>copy(λog),
             :lambda_h=>λYh .+ cph .+ λog, :lambda_a=>λYa .+ cpa .+ λog,
-            :registry_fingerprint=>model.registry_fingerprint, :provenance=>:registry_stored_history_map)
+            :registry_fingerprint=>model.registry_fingerprint,
+            :fold_registry_fingerprint=>fs[:registry_fingerprint],
+            :provenance=>:global_registry_stored_history_map)
     end
     # Repeat one immutable summary on each latent row so standard Dict→DataFrame callers
     # retain diagnostics without a side channel or an outcome-derived lookup.

@@ -58,12 +58,21 @@ function Features.create_features(boundary::BayesianFootball.Data.SplitBoundary,
     model::ScottishLowerNPNOGRecombinedPoissonModel, dynamics_col::Symbol)
     # dynamics_col is accepted for the common Features API; this model's fixed day-decay
     # builder derives all time information from the boundary/cutoff instead.
+    # `model.registry` is the one immutable canonical registry for the entire run.
+    # A FeatureSet must nevertheless carry only its explicit fit boundary rows: the
+    # fitted history plus the genuine next-step OOS target.  This preserves the
+    # builder's strict no-extra-rows contract without creating per-fold models.
     registry_fingerprint(model.registry) == model.registry_fingerprint ||
-        throw(ArgumentError("model registry fingerprint changed after construction"))
-    fs = build_rebuild_feature_set(boundary, ds, model.registry;
+        throw(ArgumentError("global model registry fingerprint changed after construction"))
+    ids = sort!(unique(vcat(Int.(boundary.history_match_ids), Int.(boundary.target_match_ids))))
+    subset = filter(:match_id => x -> Int(x) in Set(ids), model.registry)
+    checked = validate_canonical_registry(subset, ids; ds=ds)
+    fs = build_rebuild_feature_set(boundary, ds, checked.registry;
         half_life_days=model.half_life_days, own_goal_policy=model.own_goal_policy)
-    fs[:registry_fingerprint] == model.registry_fingerprint ||
-        throw(ArgumentError("feature registry fingerprint differs from model snapshot"))
+    fs[:registry_fingerprint] == checked.manifest.registry_fingerprint ||
+        throw(ArgumentError("FeatureSet registry is not the exact fit-boundary subset"))
+    # Distinguish the fold subset identity from the immutable global model identity.
+    fs[:model_registry_fingerprint] = model.registry_fingerprint
     return fs
 end
 
@@ -97,9 +106,13 @@ end
 """Validate the FeatureSet outside AD and bake its typed array contract into the Turing model."""
 function PreGame.build_turing_model(model::ScottishLowerNPNOGRecombinedPoissonModel, fs)
     registry_fingerprint(model.registry) == model.registry_fingerprint ||
-        throw(ArgumentError("model registry fingerprint changed after construction"))
-    get(fs, :registry_fingerprint, nothing) == model.registry_fingerprint ||
-        throw(ArgumentError("FeatureSet/model registry fingerprint mismatch"))
+        throw(ArgumentError("global model registry fingerprint changed after construction"))
+    get(fs, :model_registry_fingerprint, nothing) == model.registry_fingerprint ||
+        throw(ArgumentError("FeatureSet/global model registry fingerprint mismatch"))
+    # The fold fingerprint is intentionally different for a global model, but it
+    # must still be an exact fingerprint of the FeatureSet's stored manifest.
+    get(fs, :registry_fingerprint, nothing) == get(get(fs, :registry_manifest, nothing), :registry_fingerprint, nothing) ||
+        throw(ArgumentError("FeatureSet fold registry manifest mismatch"))
     data = equation_data(fs)
     data.n_teams == length(fs[:team_ids]) || throw(DimensionMismatch("team IDs and equation team dimension differ"))
     return rebuild_turing_engine(data)
