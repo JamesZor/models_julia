@@ -1,9 +1,3 @@
-# Stage 6 pending findings
-
-**Status:** implementation is present locally but has not been executed against the local cached DataStore/read-only registry. The runner uses a deterministic synthetic two-chain `MCMCChains.Chains` fixture only; it performs no MCMC, persistence, remote execution, or writes. Results will be recorded after the local manifest, OOS identity/fallback, equation-parity, convolution-tail, and ordinary `model_inference` gates run.
-
-**API risk for manager review:** this prototype extends `PreGame.extract_parameters` and `Predictions` by loader-local dispatch. The current generic latent DataFrame flattener assumes all per-match dictionary values are columns; scalar provenance/status diagnostics may therefore need an explicit production serialization policy if Stage 6 is promoted. `MCMCChains` parameter-section label ordering is intentionally treated as an exact contract and should be smoke-tested against the project-pinned version before any real sampler output is used.
-
 # Stage 2 findings
 
 **Status:** history-only component audit completed on `mcmc-beast` at commit `63785ab`; no sampling and no files written by the runner.
@@ -134,3 +128,30 @@ classification:            target met (<1 ms)
 
 Stage-4 scalar likelihood and gradient parity were rerun after optimization and remained exact to
 the configured tolerances.
+
+# Stage 6 findings
+
+**Status:** deterministic multi-chain extraction, OOS recombination, and standard inference validated
+remotely at commit `6b59173`; no MCMC, persistence, or writes.
+
+```text
+synthetic posterior: 12 iterations × 2 chains = 24 draws
+primitive parameters: 66
+OOS fixtures: 3 across tournaments 56 and 57
+score tensor: 30 × 30 × 24
+explicit-convolution vs direct-Poisson maximum difference: 8.67e-17
+PPD rows: 201
+```
+
+The fixtures included known-known teams in both leagues and target-only East Kilbride against a
+history-seen team. East Kilbride received the explicit population fallback. Exact chain-label/order,
+iteration×chain stacking, every primitive and transformed shape, draw-wise centering, no chain
+mutation, Stage-4 OOS equation parity, team-swap sensitivity, score-tail support, nonnegativity,
+per-draw normalization, and ordinary `Predictions.model_inference` all passed. Markets exercised
+were 1X2, BTTS, DoubleChance, DrawNoBet, CorrectScore, OverUnder, and AsianHandicap.
+
+**Promotion note:** loader-local dispatch currently returns scalar identity/status/provenance fields
+alongside draw vectors. Before generic experiment persistence is used in Stage 7, the latent
+serialization contract must explicitly preserve those scalar diagnostics. Real sampler output must
+also pass the exact 66-column parameter-manifest check already validated on the pinned synthetic
+`MCMCChains` representation.
