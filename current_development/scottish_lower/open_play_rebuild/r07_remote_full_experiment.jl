@@ -85,14 +85,23 @@ else
 
     # Homogeneous metadata is required by FeatureCollection and is also the checkpoint
     # provenance wrapper.  Native split checkpoints are exactly `(chain, metadata)`.
+    match_dates = Dict(Int(r.match_id) => RebuildFeatures._date(r) for r in eachrow(ds.matches))
     function build_fold_context(x)
-        fit_boundary=BFData.SplitBoundary(x.boundary.fold_id,x.boundary.target_step,boundary_ids(x.boundary),x.ids)
+        cutoff = minimum(RebuildFeatures._date(r) for r in eachrow(x.rows))
+        raw_fit_ids = boundary_ids(x.boundary)
+        # `match_biweek` labels can overlap in actual kickoff time because of postponements.
+        # Enforce the design contract by fitting only observations strictly before the
+        # earliest next-step fixture; later-labelled-but-not-yet-played matches are excluded.
+        fit_ids = sort!(Int[id for id in raw_fit_ids if match_dates[id] < cutoff])
+        excluded_fit_ids = sort!(collect(setdiff(Set(raw_fit_ids), Set(fit_ids))))
+        fit_boundary=BFData.SplitBoundary(x.boundary.fold_id,x.boundary.target_step,fit_ids,x.ids)
         fs=BFFeatures.create_features(fit_boundary,ds,global_model,:match_biweek)
         validate_feature_set(fs); fs[:model_registry_fingerprint] == registry_sha || error("fold $(x.fold) lost global registry identity")
         bh=boundary_sha256(fit_boundary)
-        provenance=(true_oos_ids=Int.(x.ids),true_oos_ids_sha256=x.ids_sha256,prediction_step=Int(x.prediction_step),target_season=x.meta.target_season,target_time_step=Int(x.meta.time_step))
+        provenance=(true_oos_ids=Int.(x.ids),true_oos_ids_sha256=x.ids_sha256,prediction_step=Int(x.prediction_step),target_season=x.meta.target_season,target_time_step=Int(x.meta.time_step),cutoff_date=cutoff,excluded_not_yet_played_ids=excluded_fit_ids)
         meta=(original_meta=x.meta,fold_index=Int(x.fold),boundary_sha256=bh,oos_provenance=provenance)
-        return (x=x,fit_boundary=fit_boundary,fs=fs,meta=meta,boundary_sha256=bh)
+        return (x=x,fit_boundary=fit_boundary,fs=fs,meta=meta,boundary_sha256=bh,excluded_fit_ids=excluded_fit_ids)
+
     end
     fold_context=build_fold_context.(oos_folds)
     feature_items=[(ctx.fs,ctx.meta) for ctx in fold_context]
@@ -154,7 +163,7 @@ else
             stored_meta == ctx.meta || error("native checkpoint fold metadata mismatch")
             validate_primitive_chain(chain,Int(ctx.fs[:n_teams])); size(chain,1)==samples && size(chain,3)==4 || error("combined chain shape mismatch")
             diag=diagnostics(chain;max_depth=10)
-            fold_manifest=(;stage=8,fold=ctx.x.fold,boundary_sha256=ctx.boundary_sha256,registry_fingerprint=ctx.fs[:registry_fingerprint],model_registry_fingerprint=registry_sha,fitted_match_ids=Int.(ctx.fit_boundary.history_match_ids),true_oos_ids=Int.(ctx.x.ids),true_oos_ids_sha256=ctx.x.ids_sha256,sampler=sampler_metadata(cfg.sampler),diagnostics=diag,native_checkpoint=joinpath("queued_checkpoints","split_$(lpad(i,3,'0')).jls"))
+            fold_manifest=(;stage=8,fold=ctx.x.fold,boundary_sha256=ctx.boundary_sha256,registry_fingerprint=ctx.fs[:registry_fingerprint],model_registry_fingerprint=registry_sha,fitted_match_ids=Int.(ctx.fit_boundary.history_match_ids),excluded_not_yet_played_ids=ctx.excluded_fit_ids,true_oos_ids=Int.(ctx.x.ids),true_oos_ids_sha256=ctx.x.ids_sha256,sampler=sampler_metadata(cfg.sampler),diagnostics=diag,native_checkpoint=joinpath("queued_checkpoints","split_$(lpad(i,3,'0')).jls"))
             isfile(joinpath(fdir,"diagnostics.jls")) || atomic_serialize(joinpath(fdir,"diagnostics.jls"),fold_manifest)
             if !hard_smoke_pass(diag)
                 isfile(joinpath(fdir,"hard_gate_failure.jls")) || atomic_serialize(joinpath(fdir,"hard_gate_failure.jls"),(;fold_manifest,status=:hard_gate_failed))
