@@ -82,6 +82,21 @@ The normal feature builder consumed the validated registry DataFrame and perform
 
 # Stage 4 findings
 
-**Status:** pure maths implementation completed and passed a local static synthetic FeatureSet test; the `BF_DB_URL` read-only parity notebook has not been run remotely. No model, sampling, database query, file write, commit, or push occurred for Stage 4.
+**Status:** pure maths implementation validated remotely at commit `02a4414`; no Turing model, sampling, or writes.
 
-The implementation freezes the primitive/deterministic manifest, validates support and dimensions outside differentiable functions, and keeps the hot likelihood broadcast-vectorized with priors explicitly excluded. The local test covered vectorized/scalar weighted likelihood agreement and a finite `ForwardDiff` gradient. Remote Stage-3 FeatureSet parity, both-league observations, clamp stress, and central-difference checks are intentionally pending runner execution.
+The production-shaped Stage-3 FeatureSet contained 718 reconciled rows and 22 history-seen teams
+across both leagues. The deterministic interior point produced weighted data-only log likelihood
+`-1500.1880932674035`. All checks passed:
+
+- primitive manifest, support, dimensions, and flatten/unflatten parity;
+- exactly centered attack, defensive-vulnerability, month, and league effects;
+- vectorized versus independent scalar per-row rate equations;
+- vectorized versus scalar complete weighted likelihood within `1e-10`;
+- Poisson-thinning identities for converted penalties;
+- no mutation of parameters or FeatureSet data;
+- finite clamp/floor behavior under extreme log rates; and
+- finite ForwardDiff gradient with central finite-difference spot checks.
+
+The implementation freezes the primitive/deterministic manifest, validates support and dimensions
+outside differentiable functions, and keeps the hot likelihood broadcast-vectorized with priors
+explicitly excluded.
