@@ -19,7 +19,7 @@ inference_ids(boundary, oos_ids) = sort!(unique(vcat(boundary_ids(boundary), Int
 _ids_sha256(ids) = bytes2hex(sha256(codeunits(join(string.(sort(Int.(ids))), "\n"))))
 
 """Take an exact registry snapshot; builders reject both missing and extra rows."""
-function registry_subset(registry::DataFrame, ids)
+function registry_subset(registry::DataFrame, ids::AbstractVector{<:Integer})
     wanted = sort!(unique(Int.(ids)))
     out = filter(:match_id => x -> Int(x) in Set(wanted), registry)
     nrow(out) == length(wanted) || throw(ArgumentError("registry snapshot lacks requested match IDs"))
@@ -27,7 +27,7 @@ function registry_subset(registry::DataFrame, ids)
     Int.(out.match_id) == wanted || throw(ArgumentError("registry snapshot is not an exact requested-ID registry"))
     out
 end
-registry_subset(registry::DataFrame, boundary) = registry_subset(registry, boundary_ids(boundary))
+registry_subset(registry::DataFrame, boundary::BayesianFootball.Data.SplitBoundary) = registry_subset(registry, boundary_ids(boundary))
 
 """Return and validate genuine next-step OOS metadata for every `(boundary, meta)` fold."""
 function true_oos_inventory(ds, boundaries, splitter)
