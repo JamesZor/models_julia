@@ -33,7 +33,8 @@ boundary_tuple=boundaries[fold_index]; boundary=first(boundary_tuple)
 oos_df=DataFrame(BFData.get_next_matches(ds,boundary_tuple,experiment.config.splitter))
 feature_set=BFFeatures.create_features(boundary,ds,experiment.config.model,experiment.config.splitter.dynamics_col)
 chain=experiment.training_results.items[fold_index][1]
-println("fold=$fold_index, OOS matches=$(nrow(oos_df)), draws=$(length(vec(Array(chain[\"base_mu\"]))))")
+n_draws=length(vec(Array(chain["base_mu"])))
+println("fold=$fold_index, OOS matches=$(nrow(oos_df)), draws=$n_draws")
 
 # %% BLOCK 4 -- old versus corrected identity maps and unknown-team report
 bridge=build_name_to_existing_column(feature_set)
