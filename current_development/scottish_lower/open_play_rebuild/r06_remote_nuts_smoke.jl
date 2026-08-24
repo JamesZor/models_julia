@@ -58,7 +58,7 @@ chain = cat(chains...; dims=3); validate_primitive_chain(chain, J)
 size(chain, 1) == nsamples && size(chain, 3) == 4 || error("combined chain draw/chain shape mismatch: $(size(chain))")
 bundle = BFPreGame.extract_parameters(model, chain, fs); bundle[:draw_count] == 4nsamples || error("primitive draw count mismatch")
 all(size(bundle[k]) == (4nsamples, J) for k in (:zA,:zD,:alpha,:beta)) || error("team primitive/derived shape mismatch")
-all(abs.(vec(sum(bundle[k]; dims=2))) .< 1e-10 for k in (:alpha,:beta,:M)) || error("derived centered sums failed")
+all(all(abs.(vec(sum(bundle[k]; dims=2))) .< 1e-10) for k in (:alpha,:beta,:M)) || error("derived centered sums failed")
 atomic_serialize(joinpath(outdir, "combined_chain.jls"), chain)
 diag = diagnostics(chain; max_depth=10)
 
