@@ -100,6 +100,7 @@ end
 # Chain extraction explicitly requests [1:n] in fitted column order and stacks chains as draw rows.
 function _matrix(chain::Chains, labels::Vector{String})
     a = Array(chain[labels])
+    ndims(a) == 1 && length(labels) == 1 && return reshape(a, :, 1)
     ndims(a) == 2 && return Matrix(a)
     ndims(a) == 3 && return reshape(permutedims(a, (1, 3, 2)), :, length(labels))
     error("unexpected chain dimensions $(size(a))")
