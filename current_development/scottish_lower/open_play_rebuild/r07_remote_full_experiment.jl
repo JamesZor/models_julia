@@ -79,21 +79,18 @@ else
 
     # Homogeneous metadata is required by FeatureCollection and is also the checkpoint
     # provenance wrapper.  Native split checkpoints are exactly `(chain, metadata)`.
-    feature_items=nothing; fold_context=Any[]
-    for x in oos_folds
+    function build_fold_context(x)
         fit_boundary=BFData.SplitBoundary(x.boundary.fold_id,x.boundary.target_step,boundary_ids(x.boundary),x.ids)
         fs=BFFeatures.create_features(fit_boundary,ds,global_model,:match_biweek)
         validate_feature_set(fs); fs[:model_registry_fingerprint] == registry_sha || error("fold $(x.fold) lost global registry identity")
         bh=boundary_sha256(fit_boundary)
         provenance=(true_oos_ids=Int.(x.ids),true_oos_ids_sha256=x.ids_sha256,prediction_step=Int(x.prediction_step),target_season=x.meta.target_season,target_time_step=Int(x.meta.time_step))
         meta=(original_meta=x.meta,fold_index=Int(x.fold),boundary_sha256=bh,oos_provenance=provenance)
-        if isnothing(feature_items)
-            feature_items=Tuple{typeof(fs),typeof(meta)}[]
-        else
-            typeof(meta) == eltype(feature_items).parameters[2] || error("FeatureCollection metadata must be homogeneous")
-        end
-        push!(feature_items,(fs,meta)); push!(fold_context,(x=x,fit_boundary=fit_boundary,fs=fs,meta=meta,boundary_sha256=bh))
+        return (x=x,fit_boundary=fit_boundary,fs=fs,meta=meta,boundary_sha256=bh)
     end
+    fold_context=build_fold_context.(oos_folds)
+    feature_items=[(ctx.fs,ctx.meta) for ctx in fold_context]
+    length(unique(typeof(ctx.meta) for ctx in fold_context)) == 1 || error("FeatureCollection metadata must be homogeneous")
     collection=BFFeatures.FeatureCollection(feature_items)
 
     # Reject stale/corrupt native checkpoints before Training sees them.  A valid old
