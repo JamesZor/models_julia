@@ -100,3 +100,9 @@ across both leagues. The deterministic interior point produced weighted data-onl
 The implementation freezes the primitive/deterministic manifest, validates support and dimensions
 outside differentiable functions, and keeps the hot likelihood broadcast-vectorized with priors
 explicitly excluded.
+
+# Stage 5 findings
+
+**Status:** implementation added locally; remote AD profile is pending. No sampling, extraction/recombination, writes, or artifacts have been run/created.
+
+`l04_rebuild_turing_model.jl` adds the exact-design-prior Turing wrapper, a fingerprint-checked model-owned `Features.create_features` adapter, concrete `equation_data(fs)` hot inputs, and a primitive sampled-variable manifest. `r04_profile_turing_gradients.jl` is prepared to validate compiled/uncompiled ReverseDiff, ForwardDiff, finite differences, perturbation stability, and benchmark allocation/timing gates on the established Stage-3 registry path.

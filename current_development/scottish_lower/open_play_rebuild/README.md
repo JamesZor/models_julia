@@ -1,6 +1,6 @@
 # Scottish Lower open-play rebuild
 
-A clean-room rebuild of the Scottish Lower score-component model. Stages 1–4 now include the audited data/features contract and pure generic-number equations; no Turing model, experiment, saved chain, or leaderboard is implemented or reused yet.
+A clean-room rebuild of the Scottish Lower score-component model. Stages 1–5 now include the audited data/features contract, pure generic-number equations, and a Turing/AD smoke layer; no sampling, extraction/recombination, experiment, saved chain, or leaderboard is implemented or reused yet.
 
 The model reconstructs a score from three explicitly observed components:
 
@@ -31,11 +31,11 @@ Stage 2 is implemented as a read-only audit only. Stage 3 is also implemented (s
 | 1–2 | `l01_rebuild_data_contract.jl` | `r01_audit_component_history.jl` |
 | 3 | `l02_rebuild_features.jl` | `r02_validate_maps_and_filtration.jl` |
 | 4 | `l03_rebuild_equations.jl` | `r03_validate_equation_parity.jl` |
-| 5 | model loader (not started) | AD/model smoke runner (not started) |
+| 5 | `l04_rebuild_turing_model.jl` | `r04_profile_turing_gradients.jl` |
 | 6 | extraction/recombination loader (not started) | OOS recombination runner (not started) |
 | 7 | experiment-config loader (not started) | remote NUTS smoke runner (not started) |
 | 8 | evaluation loader (not started) | OOS evaluation runner (not started) |
 
-Stage 3's runner requires `BF_DB_URL`, performs no writes by default, and checks leakage, reconciliation quarantine exclusion, stable 56→1/57→2 indexing, concrete vectors, and OOS identity fallback. Stage 4's runner reuses that exact registry/FeatureSet path and performs equation parity, clamp, thinning, and ForwardDiff checks; it contains no model or sampling. Loaders contain structs, pure builders, model/extraction/recombination helpers, and no sampling. Runners will use numbered, independently sendable REPL blocks and record observed results in a future `FINDINGS.md`.
+Stage 5 adds only a model-owned `Features.create_features` adapter (it preserves generic feature behavior), validates the registry fingerprint before building, and passes a concrete array-only `equation_data(fs)` tuple into a branch-free, vectorized Turing likelihood. Its runner requires `BF_DB_URL` for the existing Stage-3 registry path and performs no writes or sampling; it checks DynamicPPL sampled-site labels, ReverseDiff tape correctness against uncompiled ReverseDiff/ForwardDiff/finite differences, perturbation stability, and reports timing/allocation gates. Stage 3's runner requires `BF_DB_URL`, performs no writes by default, and checks leakage, reconciliation quarantine exclusion, stable 56→1/57→2 indexing, concrete vectors, and OOS identity fallback. Stage 4's runner reuses that exact registry/FeatureSet path and performs equation parity, clamp, thinning, and ForwardDiff checks; it contains no model or sampling. Loaders contain structs, pure builders, model/extraction/recombination helpers, and no sampling. Runners will use numbered, independently sendable REPL blocks and record observed results in a future `FINDINGS.md`.
 
 See [DESIGN.md](DESIGN.md) for the complete auditable design and acceptance gates.

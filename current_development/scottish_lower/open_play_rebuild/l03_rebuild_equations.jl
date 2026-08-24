@@ -5,7 +5,7 @@ using Statistics: mean
 
 export PRIMITIVE_PARAMETER_FIELDS, DERIVED_PARAMETER_FIELDS, validate_primitive_parameters,
        validate_feature_set, primitive_parameter_length, flatten_primitives, unflatten_primitives,
-       transformed_parameters, component_rates, weighted_data_loglikelihood,
+       transformed_parameters, equation_data, component_rates, weighted_data_loglikelihood,
        weighted_data_loglikelihood_scalar, predictive_component_rates
 
 """The complete sampled-parameter contract; all other quantities are deterministic."""
@@ -75,11 +75,28 @@ function transformed_parameters(p)
         sigma_M=sigma_M, M=month)
 end
 
-"""Vectorized training component rates from concrete Stage-3 indices. No validation or branching."""
-function component_rates(fs, p)
+"""Extract the concrete, array-only data contract used by differentiable equations and Turing.
+
+This is the sole `FeatureSet`/dictionary boundary. Call it before AD tracing; the
+hot methods below accept this typed `NamedTuple` and never look up `fs[:key]`.
+"""
+function equation_data(fs)
+    validate_feature_set(fs)
+    data = (home_team=fs[:home_team], away_team=fs[:away_team],
+        Y_home=fs[:Y_home], Y_away=fs[:Y_away], A_home=fs[:A_home], A_away=fs[:A_away],
+        C_home=fs[:C_home], C_away=fs[:C_away], O_home=fs[:O_home], O_away=fs[:O_away],
+        month_ids=fs[:month_ids], league_ids=fs[:league_ids], weights=fs[:weights],
+        n_teams=Int(fs[:n_teams]))
+    all(v isa Vector{Int} for v in values(data)[1:12]) || throw(ArgumentError("equation indices/observations must be concrete Vector{Int}"))
+    data.weights isa Vector{Float64} || throw(ArgumentError("equation weights must be concrete Vector{Float64}"))
+    return data
+end
+
+"""Vectorized training component rates; `data` is a concrete `equation_data` NamedTuple."""
+function component_rates(data::NamedTuple, p)
     t = transformed_parameters(p)
-    home, away = fs[:home_team], fs[:away_team]
-    common = p.mu_Y .+ getindex.(Ref(t.L), fs[:league_ids]) .+ view(t.M, fs[:month_ids])
+    home, away = data.home_team, data.away_team
+    common = p.mu_Y .+ getindex.(Ref(t.L), data.league_ids) .+ view(t.M, data.month_ids)
     eta_home = common .+ p.b_Y .+ view(t.alpha, home) .+ view(t.beta, away)
     eta_away = common .+ view(t.alpha, away) .+ view(t.beta, home)
     lambda_Y_home = exp.(clamp.(eta_home, _LOG_RATE_LO, _LOG_RATE_HI)) .+ _RATE_FLOOR
@@ -91,17 +108,19 @@ function component_rates(fs, p)
         lambda_pen_home=lambda_pen_home, lambda_pen_away=lambda_pen_away,
         q_pen=p.q_pen, lambda_og=p.lambda_og)
 end
+component_rates(fs, p) = component_rates(equation_data(fs), p)
 
 _poisson_ll(y, lambda) = y .* log.(lambda) .- lambda .- loggamma.(y .+ 1)
 _binomial_ll(c, a, q) = loggamma.(a .+ 1) .- loggamma.(c .+ 1) .- loggamma.(a .- c .+ 1) .+ c .* log(q) .+ (a .- c) .* log1p(-q)
 
-"""Complete weighted *data* likelihood only: all six side terms receive each match weight; priors are excluded."""
-function weighted_data_loglikelihood(fs, p)
-    r = component_rates(fs, p); w = fs[:weights]
-    side_home = _poisson_ll(fs[:Y_home], r.lambda_Y_home) .+ _poisson_ll(fs[:A_home], r.lambda_pen_home) .+ _binomial_ll(fs[:C_home], fs[:A_home], r.q_pen) .+ _poisson_ll(fs[:O_home], r.lambda_og)
-    side_away = _poisson_ll(fs[:Y_away], r.lambda_Y_away) .+ _poisson_ll(fs[:A_away], r.lambda_pen_away) .+ _binomial_ll(fs[:C_away], fs[:A_away], r.q_pen) .+ _poisson_ll(fs[:O_away], r.lambda_og)
+"""Complete weighted data likelihood only; `data` is `equation_data(fs)` in AD hot paths."""
+function weighted_data_loglikelihood(data::NamedTuple, p)
+    r = component_rates(data, p); w = data.weights
+    side_home = _poisson_ll(data.Y_home, r.lambda_Y_home) .+ _poisson_ll(data.A_home, r.lambda_pen_home) .+ _binomial_ll(data.C_home, data.A_home, r.q_pen) .+ _poisson_ll(data.O_home, r.lambda_og)
+    side_away = _poisson_ll(data.Y_away, r.lambda_Y_away) .+ _poisson_ll(data.A_away, r.lambda_pen_away) .+ _binomial_ll(data.C_away, data.A_away, r.q_pen) .+ _poisson_ll(data.O_away, r.lambda_og)
     return sum(w .* (side_home .+ side_away))
 end
+weighted_data_loglikelihood(fs, p) = weighted_data_loglikelihood(equation_data(fs), p)
 
 """Float64 scalar reference only; it intentionally uses loops and is not an AD/model hot path."""
 function weighted_data_loglikelihood_scalar(fs, p)
