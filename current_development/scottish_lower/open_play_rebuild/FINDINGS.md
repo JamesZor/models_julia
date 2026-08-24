@@ -44,7 +44,12 @@ match 11395473 (tournament 57, 23/24): official 2-0; ordinary incidents 2-1
 match 12477131 (tournament 56, 24/25): official 1-3; ordinary incidents 2-3
 ```
 
-Both have zero recorded penalties and own goals. Their incident rows include excess `goal/regular` events despite official scores. For match `12477131`, two distinct home regular-goal incidents occur at minute 86; match `11395473` contains an away regular-goal event despite the official away score being zero. Provider fields do not mark these rows rescinded. They remain quarantined rather than being guessed, clipped, or residual-adjusted.
+Both have zero recorded penalties and own goals. Read-only BBC/SofaScore database reconciliation established:
+
+- For `11395473`, SofaScore's official score is 2–0 while both the SofaScore incident progression and BBC report a third, away goal and 2–1. BBC text contains no explicit disallowed/VAR explanation. This unresolved provider disagreement remains quarantined.
+- For `12477131`, SofaScore and BBC agree on 1–3. SofaScore incident `206671` duplicates the minute-86 score state of player-bearing incident `206670`, has no player, and has no BBC counterpart. It is strong duplicate evidence, but the match remains quarantined until a versioned semantic-deduplication policy is approved.
+
+See `DATABASE_EVIDENCE.md`. Neither row is guessed, clipped, residual-adjusted, or silently overridden from another provider.
 
 ## Decision
 

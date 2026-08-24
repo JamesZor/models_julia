@@ -10,7 +10,7 @@ The model reconstructs a score from three explicitly observed components:
 
 V1 intentionally keeps only NP-NOG hierarchical: penalties use global Poisson awards plus shared Binomial conversion, and own goals use one global Poisson rate.
 
-`DESIGN.md` is the implementation contract: data provenance and QA, mathematical model, posterior extraction, recombination, AD constraints, and staged validation are specified before code is written.
+`DESIGN.md` is the implementation contract: data provenance and QA, mathematical model, posterior extraction, recombination, AD constraints, and staged validation are specified before code is written. `DATABASE_EVIDENCE.md` records bounded BBC/SofaScore reconciliation evidence without connection credentials.
 
 ## Scope and non-goals
 
