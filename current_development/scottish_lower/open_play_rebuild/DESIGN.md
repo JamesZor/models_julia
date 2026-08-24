@@ -1,6 +1,6 @@
 # Open-play rebuild: auditable v1 design contract
 
-**Status:** Stages 1–2 are validated and Stage 3 is implemented pending remote validation; no Turing model exists yet. V1 is deliberately small: **only the NP-NOG component has team, league, month, and home effects.**
+**Status:** Stages 1–3 are remotely validated; no Turing model exists yet. V1 is deliberately small: **only the NP-NOG component has team, league, month, and home effects.**
 
 ## 1. Objective and notation
 

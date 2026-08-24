@@ -54,3 +54,28 @@ See `DATABASE_EVIDENCE.md`. Neither row is guessed, clipped, residual-adjusted, 
 ## Decision
 
 Approve the beneficiary own-goal convention for the audited snapshot and proceed to Stage 3 using 718 reconciled rows for this boundary. Preserve the two-match quarantine, snapshot/boundary provenance, and all reconciliation checks in every future split.
+
+# Stage 3 findings
+
+**Status:** history-only canonical identity and feature validation passed remotely at commit `9ddc398`; no model, sampling, or default file writes.
+
+```text
+boundary: 38
+history IDs: 720
+target IDs: 339
+registry SHA256: 5405533c43583627caf87ef2bb6a53b12a31e7c3a493a7cc3e9fd0c4651cd3af
+canonical aliases: 46
+included reconciled history rows: 718
+quarantined history rows: 2
+history-seen posterior teams: 22
+```
+
+All history/target disjointness, outcome filtration, sorted posterior-column, concrete vector,
+finite weight, and `56→1`/`57→2` league assertions passed. Target-only East Kilbride (canonical
+SofaScore ID `170622`) correctly resolved to column zero with `:target_only_population_fallback`;
+a history-seen team resolved to its stored column, an unknown identity resolved explicitly to
+`:unknown_identity`, and a conflicting ID/name pair raised an error.
+
+The only two unique name/slug diagnostics were benign display-name punctuation differences:
+`Edinburgh City F.C.` and `Kelty Hearts F.C.` both matched their DataStore/provider slugs exactly.
+The normal feature builder consumed the validated registry DataFrame and performed no database I/O.
