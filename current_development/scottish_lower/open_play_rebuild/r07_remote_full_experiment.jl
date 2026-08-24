@@ -10,7 +10,9 @@ include(joinpath(@__DIR__, "l07_rebuild_full_experiment.jl")); using .RebuildFul
 using .RebuildFullExperiment.RebuildSampling
 include(joinpath(@__DIR__, "l05_rebuild_extraction_recombination.jl")); using .RebuildExtractionRecombination
 const RebuildFeatures = RebuildExtractionRecombination.RebuildFeatures
+const RebuildEquations = RebuildExtractionRecombination.RebuildEquations
 using .RebuildExtractionRecombination.RebuildFeatures
+using .RebuildExtractionRecombination.RebuildEquations
 
 Threads.nthreads() == 16 || error("Stage 8 is remote-only: launch julia --project -t16 (got $(Threads.nthreads()))")
 BLAS.set_num_threads(1); BLAS.get_num_threads() == 1 || error("Stage 8 requires BLAS=1")
