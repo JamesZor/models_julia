@@ -190,7 +190,7 @@ hard gate:          passed
 ```
 
 The exact real-chain primitive manifest, transformed extraction shapes, and centered sums passed.
-Real posterior OOS inference covered three metadata-only fixtures across both leagues, including
+The three metadata-only fixtures were boundary-held extraction/recombination checks, not genuine walk-forward OOS (the cumulative `target_match_ids` semantic was corrected in Stage 8); this does not invalidate the reported convergence diagnostics. They included
 East Kilbride with `:target_only_population_fallback`. All latent vectors had 3,200 finite draws.
 Adaptive score tensors had shapes `17×17×3200`, `19×19×3200`, and `17×17×3200`; ordinary
 `model_inference` produced 201 PPD rows.
@@ -204,3 +204,7 @@ Durable credential-free artifacts are stored remotely at:
 The directory contains four per-chain checkpoints, `combined_chain.jls`,
 `manifest_diagnostics.jls`, and `oos_smoke.jls`. No full temporal experiment, old leaderboard,
 or production OOS cache was created.
+
+## Stage 8 implementation status (not run)
+
+`l07_rebuild_full_experiment.jl` and `r07_remote_full_experiment.jl` now provide the planned 40-fold pooled temporal orchestration and the first genuine walk-forward OOS generation. They validate and persist nonempty t+1 metadata-only OOS inventory (alignment, non-overlap, IDs/count/hash), use one registry query over training plus OOS IDs, and separate the exact training registry from the immutable inference registry. This is implementation status only: no Stage 8 sampling, outcome evaluation, leaderboard, or new remote artifact has been produced. The runner has a `STAGE8_DRY_RUN=1` inventory mode and retains per-fold diagnostics/error artifacts for a future remote execution.

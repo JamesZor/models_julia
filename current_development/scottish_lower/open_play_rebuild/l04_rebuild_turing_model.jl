@@ -64,6 +64,9 @@ function Features.create_features(boundary::BayesianFootball.Data.SplitBoundary,
         half_life_days=model.half_life_days, own_goal_policy=model.own_goal_policy)
     fs[:registry_fingerprint] == model.registry_fingerprint ||
         throw(ArgumentError("feature registry fingerprint differs from model snapshot"))
+    # Preserve immutable fitting configuration for separately-registered OOS inference.
+    fs[:model_version] = model.version
+    fs[:own_goal_policy] = model.own_goal_policy
     return fs
 end
 
