@@ -80,18 +80,34 @@ end
 
 """Extract the concrete, array-only data contract used by differentiable equations and Turing.
 
-This is the sole `FeatureSet`/dictionary boundary. Call it before AD tracing; the
-hot methods below accept this typed `NamedTuple` and never look up `fs[:key]`.
+This is the sole `FeatureSet`/dictionary boundary.  Besides source arrays it holds
+Float64-only observation sufficient statistics, so the AD hot path traces no league
+lookup, `loggamma`, or row-wise likelihood terms with global scalar rates.
 """
 function equation_data(fs)
     validate_feature_set(fs)
+    w = fs[:weights]
+    Yh, Ya, Ah, Aa = fs[:Y_home], fs[:Y_away], fs[:A_home], fs[:A_away]
+    Ch, Ca, Oh, Oa = fs[:C_home], fs[:C_away], fs[:O_home], fs[:O_away]
+    league_sign = ifelse.(fs[:league_ids] .== 1, 1.0, -1.0)
     data = (home_team=fs[:home_team], away_team=fs[:away_team],
-        Y_home=fs[:Y_home], Y_away=fs[:Y_away], A_home=fs[:A_home], A_away=fs[:A_away],
-        C_home=fs[:C_home], C_away=fs[:C_away], O_home=fs[:O_home], O_away=fs[:O_away],
-        month_ids=fs[:month_ids], league_ids=fs[:league_ids], weights=fs[:weights],
-        n_teams=Int(fs[:n_teams]))
-    all(v isa Vector{Int} for v in values(data)[1:12]) || throw(ArgumentError("equation indices/observations must be concrete Vector{Int}"))
+        Y_home=Yh, Y_away=Ya, A_home=Ah, A_away=Aa, C_home=Ch, C_away=Ca,
+        O_home=Oh, O_away=Oa, month_ids=fs[:month_ids], league_sign=league_sign,
+        weights=w, n_teams=Int(fs[:n_teams]),
+        npnog_logfactorial_constant=sum(w .* (loggamma.(Yh .+ 1) .+ loggamma.(Ya .+ 1))),
+        penalty_award_home_weighted_count=sum(w .* Ah),
+        penalty_award_away_weighted_count=sum(w .* Aa),
+        sum_weights=sum(w),
+        penalty_award_logfactorial_constant=sum(w .* (loggamma.(Ah .+ 1) .+ loggamma.(Aa .+ 1))),
+        binomial_converted_weighted_total=sum(w .* (Ch .+ Ca)),
+        binomial_unconverted_weighted_total=sum(w .* ((Ah .- Ch) .+ (Aa .- Ca))),
+        binomial_logcoefficient_constant=sum(w .* (loggamma.(Ah .+ 1) .- loggamma.(Ch .+ 1) .- loggamma.(Ah .- Ch .+ 1) .+ loggamma.(Aa .+ 1) .- loggamma.(Ca .+ 1) .- loggamma.(Aa .- Ca .+ 1))),
+        own_goal_weighted_total=sum(w .* (Oh .+ Oa)),
+        own_goal_logfactorial_constant=sum(w .* (loggamma.(Oh .+ 1) .+ loggamma.(Oa .+ 1))))
+    all(v isa Vector{Int} for v in values(data)[1:11]) || throw(ArgumentError("equation indices/observations must be concrete Vector{Int}"))
+    data.league_sign isa Vector{Float64} || throw(ArgumentError("equation league signs must be concrete Vector{Float64}"))
     data.weights isa Vector{Float64} || throw(ArgumentError("equation weights must be concrete Vector{Float64}"))
+    all(x -> x isa Float64, values(data)[15:end]) || throw(ArgumentError("equation sufficient statistics must be concrete Float64"))
     return data
 end
 
@@ -99,7 +115,7 @@ end
 function component_rates(data::NamedTuple, p)
     t = transformed_parameters(p)
     home, away = data.home_team, data.away_team
-    common = p.mu_Y .+ getindex.(Ref(t.L), data.league_ids) .+ view(t.M, data.month_ids)
+    common = p.mu_Y .+ (p.Delta / 2) .* data.league_sign .+ view(t.M, data.month_ids)
     eta_home = common .+ p.b_Y .+ view(t.alpha, home) .+ view(t.beta, away)
     eta_away = common .+ view(t.alpha, away) .+ view(t.beta, home)
     lambda_Y_home = exp.(_saturate_log_rate.(eta_home)) .+ _RATE_FLOOR
@@ -113,15 +129,26 @@ function component_rates(data::NamedTuple, p)
 end
 component_rates(fs, p) = component_rates(equation_data(fs), p)
 
-_poisson_ll(y, lambda) = y .* log.(lambda) .- lambda .- loggamma.(y .+ 1)
-_binomial_ll(c, a, q) = loggamma.(a .+ 1) .- loggamma.(c .+ 1) .- loggamma.(a .- c .+ 1) .+ c .* log(q) .+ (a .- c) .* log1p(-q)
+"""Complete weighted data likelihood only; `data` is `equation_data(fs)` in AD hot paths.
 
-"""Complete weighted data likelihood only; `data` is `equation_data(fs)` in AD hot paths."""
+NP-NOG remains a row-vectorized likelihood because its rates vary by fixture. The
+penalty-award, conversion, and own-goal terms use exactly equivalent weighted
+sufficient statistics for their global scalar rates.
+"""
 function weighted_data_loglikelihood(data::NamedTuple, p)
     r = component_rates(data, p); w = data.weights
-    side_home = _poisson_ll(data.Y_home, r.lambda_Y_home) .+ _poisson_ll(data.A_home, r.lambda_pen_home) .+ _binomial_ll(data.C_home, data.A_home, r.q_pen) .+ _poisson_ll(data.O_home, r.lambda_og)
-    side_away = _poisson_ll(data.Y_away, r.lambda_Y_away) .+ _poisson_ll(data.A_away, r.lambda_pen_away) .+ _binomial_ll(data.C_away, data.A_away, r.q_pen) .+ _poisson_ll(data.O_away, r.lambda_og)
-    return sum(w .* (side_home .+ side_away))
+    npnog = sum(w .* (data.Y_home .* log.(r.lambda_Y_home) .- r.lambda_Y_home .+
+        data.Y_away .* log.(r.lambda_Y_away) .- r.lambda_Y_away)) - data.npnog_logfactorial_constant
+    awards = data.penalty_award_home_weighted_count * log(r.lambda_pen_home) -
+        data.sum_weights * r.lambda_pen_home +
+        data.penalty_award_away_weighted_count * log(r.lambda_pen_away) -
+        data.sum_weights * r.lambda_pen_away - data.penalty_award_logfactorial_constant
+    conversions = data.binomial_logcoefficient_constant +
+        data.binomial_converted_weighted_total * log(r.q_pen) +
+        data.binomial_unconverted_weighted_total * log1p(-r.q_pen)
+    own_goals = data.own_goal_weighted_total * log(r.lambda_og) -
+        (2 * data.sum_weights) * r.lambda_og - data.own_goal_logfactorial_constant
+    return npnog + awards + conversions + own_goals
 end
 weighted_data_loglikelihood(fs, p) = weighted_data_loglikelihood(equation_data(fs), p)
 

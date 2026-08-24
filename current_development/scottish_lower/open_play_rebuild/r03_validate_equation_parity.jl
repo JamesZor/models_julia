@@ -8,6 +8,33 @@ const BFData = BayesianFootball.Data
 include(joinpath(@__DIR__, "l02_rebuild_features.jl")); using .RebuildFeatures
 include(joinpath(@__DIR__, "l03_rebuild_equations.jl")); using .RebuildEquations
 
+# %% BLOCK 0 — self-contained synthetic oracle/parity gate (no database access)
+synthetic = Dict{Symbol,Any}(
+    :n_teams => 2, :home_team => [1, 2, 1], :away_team => [2, 1, 2],
+    :Y_home => [1, 0, 2], :Y_away => [0, 3, 1],
+    :A_home => [1, 0, 2], :A_away => [0, 1, 1],
+    :C_home => [1, 0, 1], :C_away => [0, 1, 0],
+    :O_home => [0, 1, 0], :O_away => [1, 0, 0],
+    :month_ids => [1, 6, 12], :league_ids => [1, 2, 1],
+    :weights => [1.0, 0.7, 0.25])
+p_synthetic = (zA=[-0.2, 0.2], zD=[0.1, -0.1], kappa_A=log(0.36),
+    kappa_D=log(0.32), mu_Y=log(1.2), Delta=0.14,
+    zM=collect(range(-0.22, 0.25; length=12)), xi_M=log(0.20), b_Y=0.08,
+    pen_base=log(0.12), pen_home=0.04, q_pen=0.80, lambda_og=0.03)
+data_synthetic = equation_data(synthetic)
+@assert data_synthetic.league_sign == [1.0, -1.0, 1.0]
+@assert all(x -> x isa Float64, values(data_synthetic)[15:end])
+ll_synthetic = weighted_data_loglikelihood(data_synthetic, p_synthetic)
+ll_synthetic_raw = weighted_data_loglikelihood_scalar(synthetic, p_synthetic)
+@assert isapprox(ll_synthetic, ll_synthetic_raw; rtol=0, atol=1e-12)
+θ_synthetic = collect(flatten_primitives(p_synthetic))
+f_hot = x -> weighted_data_loglikelihood(data_synthetic, unflatten_primitives(x, 2))
+f_raw = x -> weighted_data_loglikelihood_scalar(synthetic, unflatten_primitives(x, 2))
+@assert isapprox(f_hot(θ_synthetic), f_raw(θ_synthetic); rtol=0, atol=1e-12)
+@assert all(isapprox.(ForwardDiff.gradient(f_hot, θ_synthetic), ForwardDiff.gradient(f_raw, θ_synthetic);
+    rtol=1e-10, atol=1e-10))
+println("Synthetic raw-row likelihood and ForwardDiff gradient parity passed.")
+
 ds = BFData.load_datastore_cached(BFData.ScottishLower(), max_age_hours=10_000)
 splitter = BFData.GroupedCVConfig(tournament_groups=[[56,57]], target_seasons=["24/25","25/26"],
     history_seasons=2, dynamics_col=:match_biweek, warmup_period=0, stop_early=true)
@@ -20,7 +47,10 @@ haskey(ENV, "BF_DB_URL") || error("BF_DB_URL is required for the validated Stage
 registry = fetch_canonical_registry(vcat(Int.(boundary.history_match_ids), Int.(boundary.target_match_ids)))
 fs = build_rebuild_feature_set(boundary, ds, registry; half_life_days=365, own_goal_policy=:beneficiary)
 validate_feature_set(fs)
+data = equation_data(fs)
 @assert Set(fs[:league_ids]) == Set([1,2])
+@assert data.league_sign == ifelse.(fs[:league_ids] .== 1, 1.0, -1.0)
+@assert data.weights isa Vector{Float64} && all(x -> x isa Float64, values(data)[15:end])
 println("Stage 4 boundary $fold: $(length(fs[:history_match_ids])) reconciled rows; $(fs[:n_teams]) teams.")
 
 # %% BLOCK 2 — deterministic interior primitive contract and transforms
@@ -40,7 +70,7 @@ t = transformed_parameters(p)
 println("Primitive manifest, dimensions/support, flattening, and centered transforms passed.")
 
 # %% BLOCK 3 — vectorized rates versus independent scalar per-row equations
-r = component_rates(fs, p)
+r = component_rates(data, p)
 for i in eachindex(fs[:weights]) # validation reference only, never a model hot path
     h, a, l, m = fs[:home_team][i], fs[:away_team][i], fs[:league_ids][i], fs[:month_ids][i]
     ηh = p.mu_Y + t.L[l] + t.M[m] + p.b_Y + t.alpha[h] + t.beta[a]
@@ -56,7 +86,7 @@ end
 println("Both-league vectorized per-row rate parity and no-mutation checks passed.")
 
 # %% BLOCK 4 — complete weighted data likelihood and thinning identities
-ll_vector = weighted_data_loglikelihood(fs, p)
+ll_vector = weighted_data_loglikelihood(data, p)
 ll_scalar = weighted_data_loglikelihood_scalar(fs, p)
 @assert isfinite(ll_vector) && abs(ll_vector - ll_scalar) <= 1e-10
 pred = predictive_component_rates(p, fs[:league_ids], fs[:month_ids],
