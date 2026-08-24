@@ -72,7 +72,7 @@ For months, use a non-centred hierarchy: `z^M_m∼Normal(0,1)`, `σ_M=exp(ξ_M)`
 
 `η_iA=μ_Y+L_ℓi+M_mi+α_j(a_i)+β_j(h_i)`,
 
-`λ^Y_is=exp(clamp(η_is,-20,20))+10^-6`, and `Y_is|θ∼Poisson(λ^Y_is)`.
+Define the branch-free smooth saturation `s(x)=20 tanh(x/20)`. Then `λ^Y_is=exp(s(η_is))+10^-6`, and `Y_is|θ∼Poisson(λ^Y_is)`. Unlike a hard clamp, `s` remains valid when a compiled ReverseDiff tape is evaluated across saturation regimes.
 
 There are no NP-NOG loading parameters: attack and defence enter with unit coefficients by definition.
 
@@ -82,9 +82,9 @@ Penalty awards have no team, league, month, or NP-NOG loading. Let
 
 `pen_base∼Normal(log(0.12),1.0)`, `pen_home∼Normal(0,0.35)`,
 
-`λ_pen,H=exp(clamp(pen_base+pen_home,-20,20))+10^-6`,
+`λ_pen,H=exp(s(pen_base+pen_home))+10^-6`,
 
-`λ_pen,A=exp(clamp(pen_base,-20,20))+10^-6`.
+`λ_pen,A=exp(s(pen_base))+10^-6`.
 
 For every match and side,
 
@@ -120,7 +120,7 @@ Conditional on parameters, the two sides and the three components are independen
 
 ## 5. Extraction, fallback, and predictive score reconstruction
 
-For each posterior draw, extraction re-evaluates the exact Section 3 transforms: stored source-league map, history-seen posterior-column map/order, centered effects, month convention, clamp/floor, and home term. A parity test compares builder and extracted deterministic rates on selected training and OOS rows to `≤1e-10`.
+For each posterior draw, extraction re-evaluates the exact Section 3 transforms: stored source-league map, history-seen posterior-column map/order, centered effects, month convention, smooth saturation/floor, and home term. A parity test compares builder and extracted deterministic rates on selected training and OOS rows to `≤1e-10`.
 
 For inference, use `α=β=0` for a side whose canonical ID has no entry in the split’s authoritative history-seen posterior map, including target-only canonical teams. Retain global NP-NOG posterior uncertainty and all applicable league/month/home terms. Report `team_status∈{history_seen,population_fallback}` per side; never drop, alias, or generate a new team coordinate.
 
@@ -149,7 +149,7 @@ The future Turing implementation follows `docs/turing_ad_performance_guide.md`:
 1. The feature builder performs filtration, reconciliation, map validation, history-seen column lookup/fallback flags, concrete `Vector{Int}`/`Vector{Float64}` conversion, weights, and all conditional logic.
 2. `@model` has no scalar `for`/comprehension likelihoods, `if`/`else`, `isnan`, or parameter-dependent control flow. Use broadcasts, `logpdf.`, masks, weighted sums, and `@addlogprob!`.
 3. Do not subset tracked intermediates; select sampled team vectors with `view`, avoid allocating `A[indices]`, and do not mutate tracked arrays.
-4. Clamp log rates and add floors. Numerical guards must be ReverseDiff-safe; avoid early returns.
+4. Smoothly saturate log rates with `s(x)=20tanh(x/20)` and add floors. Stage-5 testing demonstrated that hard `clamp` records stale parameter-dependent control flow in a compiled ReverseDiff tape; it is therefore prohibited here. Numerical guards must be branch-free and avoid early returns.
 5. Compile a production-shaped `ReverseDiff.GradientTape`; gate on finite gradients, tape compilation, near-zero allocations, target `<1 ms` gradient evaluation (investigate `>5 ms`), finite-difference agreement, and repeatability.
 6. Change parameters across regimes and require compiled/uncompiled log density and gradients to agree, catching sampled-parameter branches.
 
@@ -164,7 +164,7 @@ NUTS chains are single-threaded. Four tasks leave 16-core headroom for runtime, 
 1. **Contract freeze.** Approve source columns, provider semantics, snapshot policy, and quarantine ownership. *(Approved for the audited snapshot.)*
 2. **Component audit.** Build history-only audit/reconciliation ledger; hand-check own-goal beneficiary conversion and publish league/season counts/errors. *(Completed: 718/720 reconciled; beneficiary convention supported 39–0; two matches quarantined.)*
 3. **Identity/features.** *(Implemented in `l02_rebuild_features.jl`.)* Canonical registry access is parameterized, transaction-read-only, timeout-bounded, and uses only `BF_DB_URL`; the pure builder accepts its already-fetched DataFrame. It validates one row per requested match, provider IDs/slugs/names and explicit alias conflicts, fingerprints deterministic match-ID-sorted serialization, audits history only, excludes all quarantines, and stores history-only maps/manifest. `resolve_oos_identity` returns a stored column or explicit population fallback. `r02_validate_maps_and_filtration.jl` tests mapping and leakage. Do not extend `Features.create_features` until l03 defines a model type; add a thin adapter then, never a monkey patch.
-4. **Pure equations.** *(Remotely validated at commit `02a4414`.)* `l03_rebuild_equations.jl` defines the exact primitive parameter contract, generic non-mutating transforms, vectorized component rates, data-only weighted likelihood, scalar validation reference, predictive component rates, and flatten/unflatten helpers. `r03_validate_equation_parity.jl` passed centering, support, both-league, rate/likelihood parity, clamp, thinning, no-mutation, ForwardDiff, and central-difference checks on the 718-row Stage-3 FeatureSet. Priors remain deliberately outside `weighted_data_loglikelihood`.
+4. **Pure equations.** *(Remotely validated at commit `02a4414`.)* `l03_rebuild_equations.jl` defines the exact primitive parameter contract, generic non-mutating transforms, vectorized component rates, data-only weighted likelihood, scalar validation reference, predictive component rates, and flatten/unflatten helpers. `r03_validate_equation_parity.jl` passed centering, support, both-league, rate/likelihood parity, smooth-saturation safety, thinning, no-mutation, ForwardDiff, and central-difference checks on the 718-row Stage-3 FeatureSet. Priors remain deliberately outside `weighted_data_loglikelihood`.
 5. **AD/model smoke.** *(Implementation pending remote profile results.)* `l04_rebuild_turing_model.jl` supplies the exact-prior, one-`@addlogprob!` wrapper and model-owned feature adapter; `r04_profile_turing_gradients.jl` gates DynamicPPL primitive sites, finite density, compiled/uncompiled ReverseDiff (`≤1e-8`), ForwardDiff (`≤1e-6`), finite differences (`≤1e-4`), perturbations, and performance/allocation reporting. No sampling is performed.
 6. **Extraction/recombination.** Implement manifest-driven extraction and explicit convolution; pass deterministic train/OOS parity and normalized tensor tests.
 7. **Remote sampling smoke.** Run the specified `-t16`, pinning, four-chain `800+800` protocol; archive commands/configuration/diagnostics and no-local-MCMC claim.

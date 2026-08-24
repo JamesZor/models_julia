@@ -13,8 +13,11 @@ const PRIMITIVE_PARAMETER_FIELDS = (:zA, :zD, :kappa_A, :kappa_D, :mu_Y, :Delta,
     :zM, :xi_M, :b_Y, :pen_base, :pen_home, :q_pen, :lambda_og)
 const DERIVED_PARAMETER_FIELDS = (:tau_A, :tau_D, :alpha, :beta, :L, :sigma_M, :M)
 const _RATE_FLOOR = 1e-6
-const _LOG_RATE_LO = -20
-const _LOG_RATE_HI = 20
+const _LOG_RATE_BOUND = 20.0
+
+# Hard clamp has parameter-dependent control flow that a compiled ReverseDiff tape records
+# statically. Smooth saturation is branch-free and keeps log rates in (-bound, bound).
+_saturate_log_rate(x) = _LOG_RATE_BOUND * tanh(x / _LOG_RATE_BOUND)
 
 """Validate dimensions and supports before entering generic differentiable functions."""
 function validate_primitive_parameters(p; n_teams::Integer)
@@ -99,10 +102,10 @@ function component_rates(data::NamedTuple, p)
     common = p.mu_Y .+ getindex.(Ref(t.L), data.league_ids) .+ view(t.M, data.month_ids)
     eta_home = common .+ p.b_Y .+ view(t.alpha, home) .+ view(t.beta, away)
     eta_away = common .+ view(t.alpha, away) .+ view(t.beta, home)
-    lambda_Y_home = exp.(clamp.(eta_home, _LOG_RATE_LO, _LOG_RATE_HI)) .+ _RATE_FLOOR
-    lambda_Y_away = exp.(clamp.(eta_away, _LOG_RATE_LO, _LOG_RATE_HI)) .+ _RATE_FLOOR
-    lambda_pen_home = exp(clamp(p.pen_base + p.pen_home, _LOG_RATE_LO, _LOG_RATE_HI)) + _RATE_FLOOR
-    lambda_pen_away = exp(clamp(p.pen_base, _LOG_RATE_LO, _LOG_RATE_HI)) + _RATE_FLOOR
+    lambda_Y_home = exp.(_saturate_log_rate.(eta_home)) .+ _RATE_FLOOR
+    lambda_Y_away = exp.(_saturate_log_rate.(eta_away)) .+ _RATE_FLOOR
+    lambda_pen_home = exp(_saturate_log_rate(p.pen_base + p.pen_home)) + _RATE_FLOOR
+    lambda_pen_away = exp(_saturate_log_rate(p.pen_base)) + _RATE_FLOOR
     return (transforms=t, eta_Y_home=eta_home, eta_Y_away=eta_away,
         lambda_Y_home=lambda_Y_home, lambda_Y_away=lambda_Y_away,
         lambda_pen_home=lambda_pen_home, lambda_pen_away=lambda_pen_away,
@@ -139,10 +142,10 @@ function predictive_component_rates(p, league_ids, month_ids, alpha_home, beta_h
     common = p.mu_Y .+ getindex.(Ref(t.L), league_ids) .+ view(t.M, month_ids)
     eta_home = common .+ p.b_Y .+ alpha_home .+ beta_away
     eta_away = common .+ alpha_away .+ beta_home
-    lambda_Y_home = exp.(clamp.(eta_home, _LOG_RATE_LO, _LOG_RATE_HI)) .+ _RATE_FLOOR
-    lambda_Y_away = exp.(clamp.(eta_away, _LOG_RATE_LO, _LOG_RATE_HI)) .+ _RATE_FLOOR
-    lambda_pen_home = exp(clamp(p.pen_base + p.pen_home, _LOG_RATE_LO, _LOG_RATE_HI)) + _RATE_FLOOR
-    lambda_pen_away = exp(clamp(p.pen_base, _LOG_RATE_LO, _LOG_RATE_HI)) + _RATE_FLOOR
+    lambda_Y_home = exp.(_saturate_log_rate.(eta_home)) .+ _RATE_FLOOR
+    lambda_Y_away = exp.(_saturate_log_rate.(eta_away)) .+ _RATE_FLOOR
+    lambda_pen_home = exp(_saturate_log_rate(p.pen_base + p.pen_home)) + _RATE_FLOOR
+    lambda_pen_away = exp(_saturate_log_rate(p.pen_base)) + _RATE_FLOOR
     return (lambda_Y_home=lambda_Y_home, lambda_Y_away=lambda_Y_away,
         lambda_converted_pen_home=p.q_pen * lambda_pen_home,
         lambda_converted_pen_away=p.q_pen * lambda_pen_away, lambda_og=p.lambda_og)

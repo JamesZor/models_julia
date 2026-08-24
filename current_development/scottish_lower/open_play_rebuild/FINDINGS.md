@@ -94,7 +94,7 @@ across both leagues. The deterministic interior point produced weighted data-onl
 - vectorized versus scalar complete weighted likelihood within `1e-10`;
 - Poisson-thinning identities for converted penalties;
 - no mutation of parameters or FeatureSet data;
-- finite clamp/floor behavior under extreme log rates; and
+- finite smooth-saturation/floor behavior under extreme log rates; and
 - finite ForwardDiff gradient with central finite-difference spot checks.
 
 The implementation freezes the primitive/deterministic manifest, validates support and dimensions
@@ -103,6 +103,11 @@ explicitly excluded.
 
 # Stage 5 findings
 
-**Status:** implementation added locally; remote AD profile is pending. No sampling, extraction/recombination, writes, or artifacts have been run/created.
+**Status:** first remote AD run found hard-clamp compiled-tape invalidation; branch-free smooth saturation is implemented and pending rerun. No sampling, extraction/recombination, or writes occurred.
 
-`l04_rebuild_turing_model.jl` adds the exact-design-prior Turing wrapper, a fingerprint-checked model-owned `Features.create_features` adapter, concrete `equation_data(fs)` hot inputs, and a primitive sampled-variable manifest. `r04_profile_turing_gradients.jl` is prepared to validate compiled/uncompiled ReverseDiff, ForwardDiff, finite differences, perturbation stability, and benchmark allocation/timing gates on the established Stage-3 registry path.
+At commit `9d35609`, adapter parity, the 13 sampled groups/66-parameter manifest, finite log density,
+initial gradient comparisons, and three nearby probes passed. A deliberately forced hard-clamp
+regime failed fresh-versus-compiled ReverseDiff agreement. This confirms that hard `clamp` records
+parameter-dependent control flow in the compiled tape. The shared equation layer now uses
+`s(x)=20tanh(x/20)` for all NP-NOG and penalty log-rate bounding; training and future extraction
+therefore retain one branch-free equation.

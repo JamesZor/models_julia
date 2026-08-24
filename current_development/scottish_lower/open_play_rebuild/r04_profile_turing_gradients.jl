@@ -80,11 +80,11 @@ for k in unique([1, J, 2J + 1, 2J + 5, length(θ)])
 end
 println("Finite log density; compiled/uncompiled ≤1e-8; ReverseDiff/ForwardDiff ≤1e-6; finite differences ≤1e-4.")
 
-# %% BLOCK 4 — static-tape safety at nearby points and across the log-rate clamp regime
+# %% BLOCK 4 — static-tape safety at nearby points and across the log-rate saturation regime
 probe_points = [θ .+ δ .* sin.(collect(eachindex(θ))) for δ in (0.001, -0.002, 0.003)]
-θ_clamped = copy(θ)
-θ_clamped[2J + 3] = 25.0 # mu_Y: force the NP-NOG log-rate upper clamp
-push!(probe_points, θ_clamped)
+θ_saturated = copy(θ)
+θ_saturated[2J + 3] = 25.0 # mu_Y: exercise the smooth upper saturation regime
+push!(probe_points, θ_saturated)
 for (point, θp) in enumerate(probe_points)
     @assert isfinite(f(θp))
     gp_fresh = ReverseDiff.gradient(f, θp) # newly recorded branch/control-flow oracle

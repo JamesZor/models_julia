@@ -46,8 +46,9 @@ for i in eachindex(fs[:weights]) # validation reference only, never a model hot 
     ηh = p.mu_Y + t.L[l] + t.M[m] + p.b_Y + t.alpha[h] + t.beta[a]
     ηa = p.mu_Y + t.L[l] + t.M[m] + t.alpha[a] + t.beta[h]
     @assert abs(r.eta_Y_home[i] - ηh) <= 1e-10 && abs(r.eta_Y_away[i] - ηa) <= 1e-10
-    @assert abs(r.lambda_Y_home[i] - (exp(clamp(ηh, -20, 20)) + 1e-6)) <= 1e-10
-    @assert abs(r.lambda_Y_away[i] - (exp(clamp(ηa, -20, 20)) + 1e-6)) <= 1e-10
+    smooth_bound(x) = 20.0 * tanh(x / 20.0)
+    @assert abs(r.lambda_Y_home[i] - (exp(smooth_bound(ηh)) + 1e-6)) <= 1e-10
+    @assert abs(r.lambda_Y_away[i] - (exp(smooth_bound(ηa)) + 1e-6)) <= 1e-10
 end
 @assert all(isfinite, r.lambda_Y_home) && all(isfinite, r.lambda_Y_away)
 @assert all(fs[:C_home] .<= fs[:A_home]) && all(fs[:C_away] .<= fs[:A_away])
@@ -66,7 +67,7 @@ pred = predictive_component_rates(p, fs[:league_ids], fs[:month_ids],
 @assert pred.lambda_converted_pen_away == p.q_pen * r.lambda_pen_away && pred.lambda_og == p.lambda_og
 println("Weighted data-only likelihood parity: $ll_vector; Poisson-thinning identities passed.")
 
-# %% BLOCK 5 — extreme finite clamp safety (interior q/lambda supports retained)
+# %% BLOCK 5 — extreme finite smooth-saturation safety (interior supports retained)
 p_extreme = merge(p, (mu_Y=1e6, Delta=-1e6, b_Y=1e6, pen_base=1e6, pen_home=-2e6,
     kappa_A=8.0, kappa_D=8.0, xi_M=8.0))
 validate_primitive_parameters(p_extreme; n_teams=J)
@@ -74,7 +75,7 @@ r_extreme = component_rates(fs, p_extreme)
 @assert all(isfinite, r_extreme.lambda_Y_home) && all(isfinite, r_extreme.lambda_Y_away)
 @assert isfinite(r_extreme.lambda_pen_home) && isfinite(r_extreme.lambda_pen_away)
 @assert all(>=(1e-6), r_extreme.lambda_Y_home) && r_extreme.lambda_pen_home >= 1e-6
-println("Extreme log-rate clamp/floor safety passed.")
+println("Extreme smooth-saturation/floor safety passed.")
 
 # %% BLOCK 6 — ForwardDiff gradient and central-difference spot checks for the pure likelihood
 θ = collect(flatten_primitives(p))
