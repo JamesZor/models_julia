@@ -79,3 +79,9 @@ a history-seen team resolved to its stored column, an unknown identity resolved 
 The only two unique name/slug diagnostics were benign display-name punctuation differences:
 `Edinburgh City F.C.` and `Kelty Hearts F.C.` both matched their DataStore/provider slugs exactly.
 The normal feature builder consumed the validated registry DataFrame and performed no database I/O.
+
+# Stage 4 findings
+
+**Status:** pure maths implementation completed and passed a local static synthetic FeatureSet test; the `BF_DB_URL` read-only parity notebook has not been run remotely. No model, sampling, database query, file write, commit, or push occurred for Stage 4.
+
+The implementation freezes the primitive/deterministic manifest, validates support and dimensions outside differentiable functions, and keeps the hot likelihood broadcast-vectorized with priors explicitly excluded. The local test covered vectorized/scalar weighted likelihood agreement and a finite `ForwardDiff` gradient. Remote Stage-3 FeatureSet parity, both-league observations, clamp stress, and central-difference checks are intentionally pending runner execution.

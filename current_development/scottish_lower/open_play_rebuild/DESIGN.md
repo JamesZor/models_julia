@@ -1,6 +1,6 @@
 # Open-play rebuild: auditable v1 design contract
 
-**Status:** Stages 1–3 are remotely validated; no Turing model exists yet. V1 is deliberately small: **only the NP-NOG component has team, league, month, and home effects.**
+**Status:** Stages 1–3 are remotely validated. Stage 4 pure equations are implemented and locally synthetic-validated; its read-only remote FeatureSet parity notebook is intentionally not yet run. No Turing model exists yet. V1 is deliberately small: **only the NP-NOG component has team, league, month, and home effects.**
 
 ## 1. Objective and notation
 
@@ -164,7 +164,7 @@ NUTS chains are single-threaded. Four tasks leave 16-core headroom for runtime, 
 1. **Contract freeze.** Approve source columns, provider semantics, snapshot policy, and quarantine ownership. *(Approved for the audited snapshot.)*
 2. **Component audit.** Build history-only audit/reconciliation ledger; hand-check own-goal beneficiary conversion and publish league/season counts/errors. *(Completed: 718/720 reconciled; beneficiary convention supported 39–0; two matches quarantined.)*
 3. **Identity/features.** *(Implemented in `l02_rebuild_features.jl`.)* Canonical registry access is parameterized, transaction-read-only, timeout-bounded, and uses only `BF_DB_URL`; the pure builder accepts its already-fetched DataFrame. It validates one row per requested match, provider IDs/slugs/names and explicit alias conflicts, fingerprints deterministic match-ID-sorted serialization, audits history only, excludes all quarantines, and stores history-only maps/manifest. `resolve_oos_identity` returns a stored column or explicit population fallback. `r02_validate_maps_and_filtration.jl` tests mapping and leakage. Do not extend `Features.create_features` until l03 defines a model type; add a thin adapter then, never a monkey patch.
-4. **Pure equations.** Implement typed vectorised priors/transforms/likelihood; test centering, support, thinning, weighted likelihood, and scalar references outside `@model`.
+4. **Pure equations.** *(Implemented in `l03_rebuild_equations.jl`; local synthetic validation passed.)* Defines the exact primitive parameter contract, generic non-mutating transforms, vectorized component rates, data-only weighted likelihood, scalar validation reference, predictive component rates, and flatten/unflatten helpers. `r03_validate_equation_parity.jl` reuses the Stage-3 read-only registry/FeatureSet path for centering, support, both-league, rate/likelihood parity, clamp, thinning, no-mutation, and ForwardDiff checks; remote execution remains pending. Priors remain deliberately outside `weighted_data_loglikelihood`.
 5. **AD/model smoke.** Add Turing wrapper and pass all Section 7 tape, finite-difference, safety, and benchmark gates.
 6. **Extraction/recombination.** Implement manifest-driven extraction and explicit convolution; pass deterministic train/OOS parity and normalized tensor tests.
 7. **Remote sampling smoke.** Run the specified `-t16`, pinning, four-chain `800+800` protocol; archive commands/configuration/diagnostics and no-local-MCMC claim.
