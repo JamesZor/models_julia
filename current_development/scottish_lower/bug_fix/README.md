@@ -24,8 +24,8 @@ Each issue directory should contain:
 
 | ID | Issue | Status |
 |---:|:---|:---|
-| 01 | OOS team effects silently disappear | Confirmed; existing-chain bridge validation ready |
+| 01 | OOS team effects silently disappear | Fixed and cumulatively saved-chain validated; latent rebuild pending |
 | 02 | Extraction omits hierarchical tau scales | Fixed and validated against three saved artifact types |
-| 05 | Legacy one-column league indexing (l05 pxG) | Phase-1 diagnostic ready; saved-chain validation pending |
+| 05 | Legacy one-column league indexing | Pooled legacy fix validated; latent rebuild pending |
 
 Additional issue directories should be added as each audit finding is started rather than creating empty placeholders.

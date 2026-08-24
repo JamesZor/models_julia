@@ -1,6 +1,6 @@
 # Issue 01 — OOS team effects silently disappear
 
-**Status:** Permanent extraction patch implemented in `open_play/l03_recombination_models.jl` and consumed by l04/l05; cumulative saved-chain validation is `bug_fix/05_league_indexing/r02_validate_cumulative_patch.jl`. No OOS latents or books have been rebuilt yet.
+**Status:** Permanent extraction patch implemented and saved-chain validated in l03/l04/l05, together with tau and pooled-league corrections via `bug_fix/05_league_indexing/r02_validate_cumulative_patch.jl`. No OOS latents or books have been rebuilt yet.
 **Audit source:** `open_play/AUDIT_2026-08-24.md`, blocker 1.
 
 ## Hypothesis

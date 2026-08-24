@@ -40,6 +40,22 @@ over 2.5: -0.00620 to -0.00529
 The mean draw-wise multiplier was `0.99627`; posterior-mean fixture rates moved somewhat more
 because `delta_league[1]` is correlated with the remaining posterior rate terms.
 
+## Cumulative permanent-patch validation
+
+At commit `324b227`, the saved-chain validator composed all three corrections:
+
+```text
+l03 NegBin: 22 known OOS sides activated; mapping/league/tau passed;
+              full route blocked by independent referee artifact drift
+l04 wealth:  22 known OOS sides activated; mapping/league/tau and full route passed
+l05 pxG:     22 known OOS sides activated; mapping/league/tau and full route passed
+l05 parity:  tournament 56 stable; tournament 57 exactly matched the pooled candidate
+```
+
+The l03 warning was quantified as one fitted referee column versus 57 refs in the reconstructed
+FeatureSet. It occurs after the mapping, tau, and league assertions and is tracked separately.
+No OOS latents, books, backtests, or Layer-2 outputs have been rebuilt.
+
 ## Caveats
 
 - This empirical magnitude is for the l05 pxG champion and selected fold; l03/l04 artifact magnitudes still require validation.

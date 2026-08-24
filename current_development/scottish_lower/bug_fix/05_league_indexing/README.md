@@ -2,7 +2,7 @@
 
 ## Status
 
-Permanent pooled one-column extraction semantics are implemented in l03 and used by l04/l05. `r02_validate_cumulative_patch.jl` validates saved chains without sampling. No OOS latents or books have been rebuilt yet.
+Permanent pooled one-column extraction semantics are implemented and validated for l03/l04/l05 saved chains. `r02_validate_cumulative_patch.jl` composes issues 01, 02, and 05 without sampling. No OOS latents or books have been rebuilt yet.
 
 ## Scope
 
