@@ -1,9 +1,5 @@
 # Stage 2 findings
 
-## Stage 7 status (pending)
-
-Stage 7's remote-only runner and loader are implemented but have **not** been executed. No real posterior chain, diagnostics, OOS artifact, or convergence claim exists yet. The future remote run must use `julia --project -t16` and record its emitted `FINAL_STAGE7_SUMMARY` plus the credential-free serialized manifest.
-
 **Status:** history-only component audit completed on `mcmc-beast` at commit `63785ab`; no sampling and no files written by the runner.
 
 ## Boundary and integrity
@@ -159,3 +155,52 @@ alongside draw vectors. Before generic experiment persistence is used in Stage 7
 serialization contract must explicitly preserve those scalar diagnostics. Real sampler output must
 also pass the exact 66-column parameter-manifest check already validated on the pinned synthetic
 `MCMCChains` representation.
+
+# Stage 7 findings
+
+**Status:** four-chain mid-size NUTS smoke and real-chain OOS inference passed remotely at commit
+`580c82d`. This is a single-split diagnostic artifact, not a leaderboard experiment.
+
+Runtime contract:
+
+```text
+Julia threads: 16, pinned to physical cores
+BLAS threads: 1
+concurrent NUTS chains: 4
+warmup / retained per chain: 800 / 800
+sampling wall time: approximately 79 s
+combined chain: 800 × 80 columns × 4 chains
+primitive model parameters: 66
+posterior draws used by extraction: 3,200
+```
+
+Convergence and sampler diagnostics:
+
+```text
+maximum Rhat:       1.00525  (zD[20])
+minimum bulk ESS:   1874.98  (kappa_A)
+minimum tail ESS:   1853.59  (lambda_og)
+divergences:        0
+mean acceptance:    0.90120
+maximum tree depth: 7
+depth-cap hits:     0
+BFMI by chain:      0.7641, 0.7819, 0.8698, 0.8085
+preferred gate:     passed
+hard gate:          passed
+```
+
+The exact real-chain primitive manifest, transformed extraction shapes, and centered sums passed.
+Real posterior OOS inference covered three metadata-only fixtures across both leagues, including
+East Kilbride with `:target_only_population_fallback`. All latent vectors had 3,200 finite draws.
+Adaptive score tensors had shapes `17×17×3200`, `19×19×3200`, and `17×17×3200`; ordinary
+`model_inference` produced 201 PPD rows.
+
+Durable credential-free artifacts are stored remotely at:
+
+```text
+/root/BayesianFootball/data/scottish_open_play_rebuild/stage7_midsize_580c82d
+```
+
+The directory contains four per-chain checkpoints, `combined_chain.jls`,
+`manifest_diagnostics.jls`, and `oos_smoke.jls`. No full temporal experiment, old leaderboard,
+or production OOS cache was created.
