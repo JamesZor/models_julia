@@ -103,7 +103,7 @@ explicitly excluded.
 
 # Stage 5 findings
 
-**Status:** first remote AD run found hard-clamp compiled-tape invalidation; branch-free smooth saturation is implemented and pending rerun. No sampling, extraction/recombination, or writes occurred.
+**Status:** Turing wrapper and compiled ReverseDiff profile remotely validated at commit `c929bf0`. No sampling, extraction/recombination, or writes occurred.
 
 At commit `9d35609`, adapter parity, the 13 sampled groups/66-parameter manifest, finite log density,
 initial gradient comparisons, and three nearby probes passed. A deliberately forced hard-clamp
@@ -111,3 +111,20 @@ regime failed fresh-versus-compiled ReverseDiff agreement. This confirms that ha
 parameter-dependent control flow in the compiled tape. The shared equation layer now uses
 `s(x)=20tanh(x/20)` for all NP-NOG and penalty log-rate bounding; training and future extraction
 therefore retain one branch-free equation.
+
+After precomputing observation-only likelihood constants and exact weighted sufficient statistics
+for global penalty/own-goal rates, the final production-shaped profile passed all manifest,
+finite-density, fresh/compiled ReverseDiff, ForwardDiff, finite-difference, nearby-point, and
+smooth-saturation probes:
+
+```text
+rows / teams / parameters: 718 / 22 / 66
+tape compilation:          1.024 s
+median gradient:           0.633 ms
+p95 gradient:              0.695 ms
+allocations / bytes:       18 / 1,920
+classification:            target met (<1 ms)
+```
+
+Stage-4 scalar likelihood and gradient parity were rerun after optimization and remained exact to
+the configured tolerances.
