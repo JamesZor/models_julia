@@ -22,7 +22,15 @@ nsamples = parse(Int, get(ENV, "STAGE7_SAMPLES", "800")); nwarmup = parse(Int, g
 nsamples > 0 && nwarmup > 0 || error("samples and warmup must be positive")
 runid = get(ENV, "STAGE7_RUN_ID", Dates.format(now(UTC), "yyyymmddTHHMMSS") * "_" * string(rand(UInt), base=16))
 outroot = abspath(get(ENV, "STAGE7_OUTPUT_DIR", joinpath("data", "scottish_open_play_rebuild")))
-outdir = joinpath(outroot, "stage7_" * runid); ispath(outdir) && error("run directory already exists: $outdir"); mkpath(outdir)
+resume_dir = get(ENV, "STAGE7_RESUME_DIR", "")
+outdir = isempty(resume_dir) ? joinpath(outroot, "stage7_" * runid) : abspath(resume_dir)
+if isempty(resume_dir)
+    ispath(outdir) && error("run directory already exists: $outdir")
+    mkpath(outdir)
+else
+    isdir(outdir) || error("resume directory does not exist: $outdir")
+    ispath(joinpath(outdir, "manifest_diagnostics.jls")) && error("resume directory already has diagnostics manifest")
+end
 
 ds = BFData.load_datastore_cached(BFData.ScottishLower(), max_age_hours=10_000)
 splitter = BFData.GroupedCVConfig(tournament_groups=[[56,57]], target_seasons=["24/25","25/26"], history_seasons=2, dynamics_col=:match_biweek, warmup_period=0, stop_early=true)
@@ -37,29 +45,40 @@ J = Int(fs[:n_teams]); labels = primitive_turing_var_labels(J)
 # %% 2 — four independent *single-threaded* project QueuedNUTS tasks and atomic checkpoints
 cfg = BFTraining.TrainingConfig(BFSamplers.QueuedNUTSConfig(n_samples=nsamples, n_chains=4, n_warmup=nwarmup, accept_rate=0.8, max_depth=10, initialisation=PriorInit(), show_progress=false), BFTraining.Independent(parallel=true, max_concurrent_tasks=4), nothing, false)
 seeds = [parse(Int, get(ENV, "STAGE7_SEED_$c", string(70_600 + c))) for c in 1:4]
-chains = Vector{Any}(undef, 4); elapsed = fill(NaN, 4); lock = ReentrantLock(); sem = Base.Semaphore(4)
-sampling_wall_start = time()
-@sync for c in 1:4
-    Threads.@spawn begin
-        Base.acquire(sem); t0=time()
-        try
-            Random.seed!(seeds[c])
-            ch = BFTraining.train(model, cfg, fs; chain_id=c)
-            validate_primitive_chain(ch, J); size(ch, 1) == nsamples || error("chain $c retained wrong draw count")
-            atomic_serialize(joinpath(outdir, "chain_$(c).jls"), (; chain=ch, chain_id=c, seed=seeds[c], elapsed_seconds=time()-t0))
-            Base.lock(lock) do; chains[c]=ch; elapsed[c]=time()-t0; end
-        finally
-            Base.release(sem)
+elapsed = fill(NaN, 4)
+if isempty(resume_dir)
+    chains = Vector{Any}(undef, 4); lock = ReentrantLock(); sem = Base.Semaphore(4)
+    sampling_wall_start = time()
+    @sync for c in 1:4
+        Threads.@spawn begin
+            Base.acquire(sem); t0=time()
+            try
+                Random.seed!(seeds[c])
+                ch = BFTraining.train(model, cfg, fs; chain_id=c)
+                validate_primitive_chain(ch, J); size(ch, 1) == nsamples || error("chain $c retained wrong draw count")
+                atomic_serialize(joinpath(outdir, "chain_$(c).jls"), (; chain=ch, chain_id=c, seed=seeds[c], elapsed_seconds=time()-t0))
+                Base.lock(lock) do; chains[c]=ch; elapsed[c]=time()-t0; end
+            finally
+                Base.release(sem)
+            end
         end
     end
+    sampling_wall_seconds = time() - sampling_wall_start
+    chain = cat(chains...; dims=3)
+    atomic_serialize(joinpath(outdir, "combined_chain.jls"), chain)
+else
+    chain = deserialize(joinpath(outdir, "combined_chain.jls"))
+    for c in 1:4
+        checkpoint = deserialize(joinpath(outdir, "chain_$(c).jls"))
+        elapsed[c] = checkpoint.elapsed_seconds
+    end
+    sampling_wall_seconds = maximum(elapsed)
 end
-sampling_wall_seconds = time() - sampling_wall_start
-chain = cat(chains...; dims=3); validate_primitive_chain(chain, J)
+validate_primitive_chain(chain, J)
 size(chain, 1) == nsamples && size(chain, 3) == 4 || error("combined chain draw/chain shape mismatch: $(size(chain))")
 bundle = BFPreGame.extract_parameters(model, chain, fs); bundle[:draw_count] == 4nsamples || error("primitive draw count mismatch")
 all(size(bundle[k]) == (4nsamples, J) for k in (:zA,:zD,:alpha,:beta)) || error("team primitive/derived shape mismatch")
 all(all(abs.(vec(sum(bundle[k]; dims=2))) .< 1e-10) for k in (:alpha,:beta,:M)) || error("derived centered sums failed")
-atomic_serialize(joinpath(outdir, "combined_chain.jls"), chain)
 diag = diagnostics(chain; max_depth=10)
 
 # %% 3 — persist diagnostic manifest before any OOS promotion

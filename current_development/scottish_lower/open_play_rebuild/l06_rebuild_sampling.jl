@@ -64,7 +64,7 @@ function diagnostics(chain::Chains; max_depth::Int)
         good = filter(x -> !ismissing(x[2]) && isfinite(x[2]), vals)
         isempty(good) ? (value=missing, label=missing) : begin x = op(good; by=last); (value=x[2], label=x[1]) end
     end
-    maxr = metric(:rhat, (:rhat,), max); bulk = metric(:bulk, (:ess_bulk,:ess), min); tail = metric(:tail, (:ess_tail,), min)
+    maxr = metric(:rhat, (:rhat,), maximum); bulk = metric(:bulk, (:ess_bulk,:ess), minimum); tail = metric(:tail, (:ess_tail,), minimum)
     available(s) = s in Symbol.(MCMCChains.names(chain))
     flat(s) = available(s) ? vec(Float64.(Array(chain[s]))) : Float64[]
     div = available(:numerical_error) ? sum(flat(:numerical_error) .!= 0) : missing
