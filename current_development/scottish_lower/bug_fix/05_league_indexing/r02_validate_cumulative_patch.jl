@@ -101,7 +101,10 @@ if !isnothing(experiment)
             got, want = production[Int(row.match_id)], candidate[Int(row.match_id)]
             # Candidate and production differ only in container field spelling, not arithmetic.
             @assert got.lambda_open_h == want.lambda_open_h && got.lambda_open_a == want.lambda_open_a
-            @assert got.λ_h == want.λ_h && got.λ_a == want.λ_a
+            # Production groups additive penalty noise before adding open play; the independent
+            # candidate uses an algebraically identical expression with a different FP grouping.
+            @assert isapprox(got.λ_h, want.λ_h; rtol=2eps(Float64), atol=2eps(Float64))
+            @assert isapprox(got.λ_a, want.λ_a; rtol=2eps(Float64), atol=2eps(Float64))
         end
         println("PASS l05: tournament 56 stable and tournament 57 equals pooled issue-05 candidate")
     else
