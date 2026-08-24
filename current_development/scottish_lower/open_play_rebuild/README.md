@@ -22,7 +22,9 @@ V1 intentionally keeps only NP-NOG hierarchical: penalties use global Poisson aw
 
 ## Planned notebook layout
 
-The implementation is intentionally deferred. Once Stage 1 is approved, files will be added as REPL-sendable pairs:
+Stage 2 is now implemented as a read-only audit only; it contains no Turing/model code, feature builder, artifact output, or sampling. `l01_rebuild_data_contract.jl` deduplicates provider incident IDs and derives NP-NOG separately for each own-goal convention as `official − converted penalties − own goals`; ordinary-goal incidents are reconciliation evidence, not the NP-NOG target. Missing-side/rescinded defects remain explicit quarantines. An alternative own-goal convention failing does not quarantine a match when the other validates; reconciliation quarantines occur only when neither validates. The returned report and `r01_audit_component_history.jl` also show informative own-goal evidence (own-goal matches with exactly one valid convention), without selecting a global convention. The runner chooses a pooled 56/57 temporal boundary and audits **only its history IDs**, writing nothing by default. Results still require execution and review in [FINDINGS.md](FINDINGS.md).
+
+## Notebook layout
 
 | Stage | Loader (definitions only) | Runner (execution only) |
 |---:|---|---|
