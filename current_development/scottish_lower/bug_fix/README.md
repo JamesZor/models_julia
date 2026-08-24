@@ -4,6 +4,10 @@ This directory turns each finding from
 [`../open_play/AUDIT_2026-08-24.md`](../open_play/AUDIT_2026-08-24.md) into an isolated,
 REPL-driven investigation.
 
+The clean-room successor design is documented in
+[`../open_play_rebuild/README.md`](../open_play_rebuild/README.md). It does not
+modify, reuse, or supersede the diagnostic artifacts in this directory.
+
 Each issue directory should contain:
 
 - `README.md` — hypothesis, acceptance criteria, and current status.
