@@ -25,6 +25,6 @@ Each issue directory should contain:
 | ID | Issue | Status |
 |---:|:---|:---|
 | 01 | OOS team effects silently disappear | Confirmed; existing-chain bridge validation ready |
-| 02 | Extraction omits hierarchical tau scales | Phase-1 existing-chain diagnostics ready |
+| 02 | Extraction omits hierarchical tau scales | Fixed and validated against three saved artifact types |
 
 Additional issue directories should be added as each audit finding is started rather than creating empty placeholders.

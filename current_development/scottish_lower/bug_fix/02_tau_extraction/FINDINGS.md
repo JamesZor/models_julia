@@ -1,6 +1,6 @@
 # Issue 02 findings — extraction omits hierarchical tau scales
 
-**Status:** Permanent patch implemented locally; pending remote saved-artifact validation (no sampling).
+**Status:** Permanent tau patch validated against saved artifacts on `mcmc-beast`; no resampling performed.
 
 ## Static affected-method manifest
 
@@ -13,18 +13,31 @@
 
 ## Remote validation record
 
-Paste block 8 output here:
+Phase-1 isolated pxG validation used fold 39 (11 matches, 3,600 draws) from
+`recomb_pxg_wealth_integrated_hl365_hs2_20260823_075833`:
 
 ```text
-artifact:
-fold:
-unknowns:
-tau posterior:
-team-effect/rate-multiplier posterior:
-current-unscaled vs tau-only:
-score matrix:
-known-team tau-only swap:
+unknowns: none
+tau_alpha: q05=0.05209, median=0.10813, mean=0.11021, q95=0.17286
+tau_beta:  q05=0.11021, median=0.15228, mean=0.15509, q95=0.21065
+exact log team effect: q05=-0.18968, median=-0.01064, mean≈0, q95=0.23396
+exact rate multiplier: q05=0.82723, median=0.98941, mean=1.00823, q95=1.26359
+unscaled mean open rates: (0.42764, 1.04412)
+tau-scaled mean open rates: (1.08075, 0.96318)
+score-matrix maximum difference: 0.58859; both masses=1.0
+tau-only swap max open change: (0.94253, 0.71899)
 ```
+
+Permanent helper validation at commit `7463d80`:
+
+| Artifact | Fold | Matches | Draws | Teams | Tau equals independent diagnostic | Feature route | DataFrame route |
+|---|---:|---:|---:|---:|:---:|:---:|:---:|
+| `recomb_negbin_integrated_hl365_hs2_20260822_160843` | 39 | 11 | 3,600 | 22 | yes | blocked by existing referee-parameter drift | blocked by existing referee-parameter drift |
+| `recomb_pois_wealth_integrated_hl365_hs2_20260822_213446` | 39 | 11 | 3,600 | 22 | yes | passed | passed |
+| `recomb_pxg_wealth_integrated_hl365_hs2_20260823_075833` | 39 | 11 | 3,600 | 22 | yes | passed | passed |
+
+The NegBin artifact reached and passed the tau equality assertion before its independent
+`raw_gamma_ref[2:57]` artifact/feature-dimension error.
 
 ## Required interpretation
 
@@ -41,8 +54,14 @@ known-team tau-only swap:
 - [x] Routed both l05 pxG extractors through it.
 - [x] Left tau-free l03 Poisson extraction unchanged.
 - [x] Added `r02_validate_tau_patch.jl` for all three saved artifact types where available.
-- [ ] Run r02 on beast and paste output below.
+- [x] Ran r02 on beast: all three artifacts matched the independent tau matrices.
 
 ## Decision
 
-Code correction is ready for saved-artifact validation. It reconstructs `alpha=(raw_alpha-rowmean).*reshape(tau_alpha,:,1)` and beta analogously before existing rate construction. **DataFrame OOS mapping remains issue 01 until patched**; no result from this issue should be interpreted as an issue-01 mapping fix. League, clamp, penalty/referee, wealth, and kappa behavior remain intentionally untouched.
+Accept the tau extraction correction. It reconstructs
+`alpha=(raw_alpha-rowmean).*reshape(tau_alpha,:,1)` and beta analogously before existing rate
+construction, and matches an independent reconstruction for all three available artifact types.
+
+**DataFrame OOS mapping remains issue 01 until patched.** League, clamp, penalty/referee, wealth, and
+kappa behavior remain intentionally untouched. The NegBin referee-dimension failure is a separate
+confirmed artifact-drift/penalty-extraction issue and does not invalidate the tau matrix result.
