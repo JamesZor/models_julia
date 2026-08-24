@@ -110,10 +110,18 @@ else
 
     # Reject stale/corrupt native checkpoints before Training sees them.  A valid old
     # custom combined chain is imported once into the project's atomic split checkpoint.
+    function checkpoint_metadata_matches(stored, expected)
+        stored isa NamedTuple || return false
+        return get(stored,:fold_index,nothing) == expected.fold_index &&
+            get(stored,:boundary_sha256,nothing) == expected.boundary_sha256 &&
+            get(stored,:oos_provenance,nothing) == expected.oos_provenance
+        # Do not compare `original_meta` by object identity: project metadata structs do
+        # not define structural `==`, so a valid deserialized checkpoint would fail.
+    end
     function valid_native_checkpoint(path, ctx)
         isfile(path) || return nothing
         z=try deserialize(path) catch; return nothing end
-        (z isa Tuple && length(z)==2 && z[2] == ctx.meta && z[1] isa Chains) || return nothing
+        (z isa Tuple && length(z)==2 && checkpoint_metadata_matches(z[2],ctx.meta) && z[1] isa Chains) || return nothing
         try
             validate_primitive_chain(z[1],Int(ctx.fs[:n_teams]))
             # `names(chain)` defaults to the parameter section and deliberately omits
@@ -127,6 +135,17 @@ else
         native=joinpath(checkpoint_dir,"split_$(lpad(i,3,'0')).jls")
         if isfile(native) && isnothing(valid_native_checkpoint(native,ctx))
             mv(native,native*".invalid-"*string(uuid4()))
+        end
+        # Recover audit-preserved checkpoints that an older identity-based metadata
+        # validator incorrectly renamed. Restore only one uniquely valid candidate.
+        if !isfile(native)
+            candidates = filter(p -> startswith(basename(p), basename(native) * ".invalid-"), readdir(checkpoint_dir; join=true))
+            candidates = filter(p -> !isnothing(valid_native_checkpoint(p,ctx)), candidates)
+            length(candidates) == 1 && begin
+                mv(only(candidates),native)
+                println("Stage8 recovered native checkpoint for fold $(ctx.x.fold)")
+            end
+            length(candidates) > 1 && error("multiple valid recovery checkpoints for fold $(ctx.x.fold)")
         end
         isfile(native) && continue
         # Migration source is the pre-native runner's immutable combined artifact.
@@ -166,7 +185,7 @@ else
         end
         chain, stored_meta=result
         try
-            stored_meta == ctx.meta || error("native checkpoint fold metadata mismatch")
+            checkpoint_metadata_matches(stored_meta,ctx.meta) || error("native checkpoint fold metadata mismatch")
             validate_primitive_chain(chain,Int(ctx.fs[:n_teams])); size(chain,1)==samples && size(chain,3)==4 || error("combined chain shape mismatch")
             diag=diagnostics(chain;max_depth=10)
             fold_manifest=(;stage=8,fold=ctx.x.fold,boundary_sha256=ctx.boundary_sha256,registry_fingerprint=ctx.fs[:registry_fingerprint],model_registry_fingerprint=registry_sha,fitted_match_ids=Int.(ctx.fit_boundary.history_match_ids),excluded_not_yet_played_ids=ctx.excluded_fit_ids,true_oos_ids=Int.(ctx.x.ids),true_oos_ids_sha256=ctx.x.ids_sha256,sampler=sampler_metadata(cfg.sampler),diagnostics=diag,native_checkpoint=joinpath("queued_checkpoints","split_$(lpad(i,3,'0')).jls"))
