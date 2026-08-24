@@ -58,6 +58,12 @@ else
     atomic_serialize(manifest_path, run_manifest)
 end
 queue_manifest_path = joinpath(outdir, "native_queue_manifest.jls")
+if isfile(queue_manifest_path)
+    queued_manifest = deserialize(queue_manifest_path)
+    if get(queued_manifest, :git_commit, nothing) != commit || get(queued_manifest, :max_concurrent_tasks, nothing) != max_tasks
+        mv(queue_manifest_path, queue_manifest_path * ".superseded-" * string(uuid4()))
+    end
+end
 isfile(queue_manifest_path) || atomic_serialize(queue_manifest_path,
     (; stage=8, git_commit=commit, created_utc=string(now(UTC)), max_concurrent_tasks=max_tasks,
        queue_seed, source_run_manifest=basename(manifest_path), registry_fingerprint=registry_sha))
