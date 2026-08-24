@@ -77,10 +77,10 @@ else
     only(matches)
 end
 
-exp = only(BFExperiments.load_experiments([selected_folder]))
-println("Selected experiment: ", exp.config.name)
+selected_experiment = only(BFExperiments.load_experiments([selected_folder]))
+println("Selected experiment: ", selected_experiment.config.name)
 println("Artifact folder:      ", selected_folder)
-println("Saved folds:          ", length(exp.training_results.items))
+println("Saved folds:          ", length(selected_experiment.training_results.items))
 
 # %%
 # BLOCK 3 — Recreate temporal boundaries and select one genuine OOS fold
@@ -88,14 +88,14 @@ println("Saved folds:          ", length(exp.training_results.items))
 # `target_match_ids` belong to the fitted fold. Production OOS extraction instead calls
 # `get_next_matches`, which returns time_step + 1. We deliberately use that same production route.
 
-boundaries = BFData.create_id_boundaries(ds, exp.config.splitter)
-length(boundaries) == length(exp.training_results.items) ||
+boundaries = BFData.create_id_boundaries(ds, selected_experiment.config.splitter)
+length(boundaries) == length(selected_experiment.training_results.items) ||
     error("Datastore/experiment fold count mismatch")
 
 fold_sizes = DataFrame(fold = Int[], history = Int[], training_target = Int[], next_oos = Int[])
 for i in eachindex(boundaries)
     boundary, _ = boundaries[i]
-    next_df = BFData.get_next_matches(ds, boundaries[i], exp.config.splitter)
+    next_df = BFData.get_next_matches(ds, boundaries[i], selected_experiment.config.splitter)
     push!(fold_sizes, (i, length(boundary.history_match_ids),
                        length(boundary.target_match_ids), nrow(next_df)))
 end
@@ -108,8 +108,8 @@ isnothing(fold_index) && error("No fold has next-period OOS matches")
 
 boundary_tuple = boundaries[fold_index]
 boundary = first(boundary_tuple)
-oos_df = DataFrame(BFData.get_next_matches(ds, boundary_tuple, exp.config.splitter))
-chain = exp.training_results.items[fold_index][1]
+oos_df = DataFrame(BFData.get_next_matches(ds, boundary_tuple, selected_experiment.config.splitter))
+chain = selected_experiment.training_results.items[fold_index][1]
 
 println("Selected fold $fold_index with $(nrow(oos_df)) genuine OOS matches")
 display(first(oos_df, min(5, nrow(oos_df))))
@@ -122,7 +122,7 @@ display(first(oos_df, min(5, nrow(oos_df))))
 # an integer-keyed map.
 
 feature_set = BFFeatures.create_features(
-    boundary, ds, exp.config.model, exp.config.splitter.dynamics_col)
+    boundary, ds, selected_experiment.config.model, selected_experiment.config.splitter.dynamics_col)
 team_map = team_index_map(feature_set)
 
 schema_report = (
@@ -168,9 +168,9 @@ probe_swapped.home_team[1], probe_swapped.away_team[1] =
     probe_original.away_team[1], probe_original.home_team[1]
 
 pred_original = BFPreGame.extract_parameters(
-    exp.config.model, probe_original, feature_set, chain)[Int(probe_original.match_id[1])]
+    selected_experiment.config.model, probe_original, feature_set, chain)[Int(probe_original.match_id[1])]
 pred_swapped = BFPreGame.extract_parameters(
-    exp.config.model, probe_swapped, feature_set, chain)[Int(probe_swapped.match_id[1])]
+    selected_experiment.config.model, probe_swapped, feature_set, chain)[Int(probe_swapped.match_id[1])]
 
 swap_test = (
     teams_original = (probe_original.home_team[1], probe_original.away_team[1]),
@@ -203,7 +203,7 @@ all_fold_mapping = DataFrame(
 for i in eachindex(boundaries)
     btuple = boundaries[i]
     b = first(btuple)
-    next_df = DataFrame(BFData.get_next_matches(ds, btuple, exp.config.splitter))
+    next_df = DataFrame(BFData.get_next_matches(ds, btuple, selected_experiment.config.splitter))
     isempty(next_df) && continue
 
     history_ids = Set(Int.(b.history_match_ids))
