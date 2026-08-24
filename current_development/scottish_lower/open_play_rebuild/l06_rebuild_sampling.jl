@@ -59,12 +59,19 @@ end
 function diagnostics(chain::Chains; max_depth::Int)
     labels = Symbol.(MCMCChains.names(chain, :parameters)); summary = DataFrame(MCMCChains.summarize(chain))
     parameter_rows = filter(r -> Symbol(r.parameters) in labels, eachrow(summary))
-    metric(which, syms, op) = begin
+    metric(syms, direction::Symbol) = begin
         vals = [(String(r.parameters), _get(r, syms)) for r in parameter_rows]
         good = filter(x -> !ismissing(x[2]) && isfinite(x[2]), vals)
-        isempty(good) ? (value=missing, label=missing) : begin x = op(good; by=last); (value=x[2], label=x[1]) end
+        if isempty(good)
+            (value=missing, label=missing)
+        else
+            metric_values = last.(good)
+            idx = direction === :max ? argmax(metric_values) : argmin(metric_values)
+            x = good[idx]
+            (value=x[2], label=x[1])
+        end
     end
-    maxr = metric(:rhat, (:rhat,), maximum); bulk = metric(:bulk, (:ess_bulk,:ess), minimum); tail = metric(:tail, (:ess_tail,), minimum)
+    maxr = metric((:rhat,), :max); bulk = metric((:ess_bulk,:ess), :min); tail = metric((:ess_tail,), :min)
     available(s) = s in Symbol.(MCMCChains.names(chain))
     flat(s) = available(s) ? vec(Float64.(Array(chain[s]))) : Float64[]
     div = available(:numerical_error) ? sum(flat(:numerical_error) .!= 0) : missing
