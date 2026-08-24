@@ -1,5 +1,10 @@
 # Scottish Lower Open-Play & Recombination Benchmark Leaderboard
 
+> [!CAUTION]
+> **Results invalidated pending rebuild (audit 2026-08-24).** Custom OOS adapters silently dropped
+> team effects and failed to reconstruct hierarchical scales; pxG/wealth features also contain temporal
+> leakage. Do not use this ranking for model selection. See [`AUDIT_2026-08-24.md`](AUDIT_2026-08-24.md).
+
 > **Evaluation Dataset:** 710 Out-of-Sample Matches (Seasons 2024/25 & 2025/26) across Scottish Championship, League One, and League Two.  
 > **Betfair Backtest Configuration:** Closed Betfair Exchange historical orderbooks (`Data.summarize_betfair_market`), **2.0% net exchange commission**, **800 Baker-McHale posterior draws** per match, multi-market convex Kelly allocation across 7 market families (1X2, BTTS, O/U 0.5 to 4.5).
 

@@ -1,5 +1,10 @@
 # Scottish Lower Leagues: Open-Play & Noise-Reduction Pillar
 
+> [!CAUTION]
+> **Audit status: blocked.** Critical prediction-reconstruction and temporal-leakage defects were found
+> on 2026-08-24. Do not reuse existing rankings or portfolio outputs until the remediation gates in
+> [`AUDIT_2026-08-24.md`](AUDIT_2026-08-24.md) pass.
+
 **Tournament Segment:** Scottish League One (`#56`) & Scottish League Two (`#57`)  
 **Directory:** `current_development/scottish_lower/open_play/`  
 **Core Hypothesis:** Penalties (high xG dead balls awarded on isolated referee whistles) and Own Goals (pure defensive bounce noise) introduce non-systemic variance into team ratings. By filtering both from historical training targets ($y_{\text{np\_nog}}$) and proxy xG ($\text{pxG}_{\text{np}}$), the Bayesian engines learn higher-fidelity attack/defense dynamics, reducing observation noise and improving betting market edge.

@@ -1,5 +1,10 @@
 # Scottish Lower League: Two-Stage Recombination & Noise-Reduction Experiment Notes
 
+> [!CAUTION]
+> **Historical findings are not validated.** The 2026-08-24 audit found critical OOS reconstruction
+> defects and temporal leakage. Existing latents, books, and leaderboards must be rebuilt after fixes.
+> See [`AUDIT_2026-08-24.md`](AUDIT_2026-08-24.md).
+
 **Tournament Segment:** Scottish League One (`#56`) & Scottish League Two (`#57`)  
 **Research Focus:** Noise-Reduction Decomposition (Open Play $y_{\text{np\_nog}}$ vs. Referee Penalty Whistles vs. Own Goals) & Discrete Convolution Recombination  
 **Evaluation Grid:** 40-Fold Walk-Forward Rolling MCMC Grid (1,990 historical matches, 710 target test slates in 2024/25 & 2025/26, 1,900+ Betfair trades)  
