@@ -1,6 +1,6 @@
 # Open-play rebuild: auditable v1 design contract
 
-**Status:** design only. This document specifies no executable Julia implementation. V1 is deliberately small: **only the NP-NOG component has team, league, month, and home effects.**
+**Status:** Stages 1–2 are validated and Stage 3 is implemented pending remote validation; no Turing model exists yet. V1 is deliberately small: **only the NP-NOG component has team, league, month, and home effects.**
 
 ## 1. Objective and notation
 
@@ -163,7 +163,7 @@ NUTS chains are single-threaded. Four tasks leave 16-core headroom for runtime, 
 
 1. **Contract freeze.** Approve source columns, provider semantics, snapshot policy, and quarantine ownership. *(Approved for the audited snapshot.)*
 2. **Component audit.** Build history-only audit/reconciliation ledger; hand-check own-goal beneficiary conversion and publish league/season counts/errors. *(Completed: 718/720 reconciled; beneficiary convention supported 39–0; two matches quarantined.)*
-3. **Identity/features.** Implement canonical crosswalk, per-split history-seen posterior map, `56→1/57→2` map, manifests, cutoff filtration, month/weight vectors, and fallback flags. Test mapping and no leakage.
+3. **Identity/features.** *(Implemented in `l02_rebuild_features.jl`.)* Canonical registry access is parameterized, transaction-read-only, timeout-bounded, and uses only `BF_DB_URL`; the pure builder accepts its already-fetched DataFrame. It validates one row per requested match, provider IDs/slugs/names and explicit alias conflicts, fingerprints deterministic match-ID-sorted serialization, audits history only, excludes all quarantines, and stores history-only maps/manifest. `resolve_oos_identity` returns a stored column or explicit population fallback. `r02_validate_maps_and_filtration.jl` tests mapping and leakage. Do not extend `Features.create_features` until l03 defines a model type; add a thin adapter then, never a monkey patch.
 4. **Pure equations.** Implement typed vectorised priors/transforms/likelihood; test centering, support, thinning, weighted likelihood, and scalar references outside `@model`.
 5. **AD/model smoke.** Add Turing wrapper and pass all Section 7 tape, finite-difference, safety, and benchmark gates.
 6. **Extraction/recombination.** Implement manifest-driven extraction and explicit convolution; pass deterministic train/OOS parity and normalized tensor tests.
