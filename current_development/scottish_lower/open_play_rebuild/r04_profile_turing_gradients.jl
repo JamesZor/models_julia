@@ -100,8 +100,8 @@ end
 # %% BLOCK 5 — compiled-tape performance report (correctness is never hidden by timing)
 g_bench = similar(θ)
 trial = @benchmark ReverseDiff.gradient!($g_bench, $compiled_tape, $θ)
-med_ms = median(trial).time / 1e6
-p95_ms = quantile(trial, 0.95).time / 1e6
+med_ms = median(trial.times) / 1e6
+p95_ms = quantile(trial.times, 0.95) / 1e6
 println("compile=$(round(compile_seconds; digits=3)) s, median=$(round(med_ms; digits=3)) ms, p95=$(round(p95_ms; digits=3)) ms, allocations=$(trial.allocs), bytes=$(trial.memory)")
 if med_ms < 1
     println("Performance target met (<1 ms).")
