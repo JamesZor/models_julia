@@ -1,5 +1,9 @@
 # Stage 2 findings
 
+## Stage 7 status (pending)
+
+Stage 7's remote-only runner and loader are implemented but have **not** been executed. No real posterior chain, diagnostics, OOS artifact, or convergence claim exists yet. The future remote run must use `julia --project -t16` and record its emitted `FINAL_STAGE7_SUMMARY` plus the credential-free serialized manifest.
+
 **Status:** history-only component audit completed on `mcmc-beast` at commit `63785ab`; no sampling and no files written by the runner.
 
 ## Boundary and integrity
