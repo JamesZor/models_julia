@@ -114,7 +114,13 @@ else
         isfile(path) || return nothing
         z=try deserialize(path) catch; return nothing end
         (z isa Tuple && length(z)==2 && z[2] == ctx.meta && z[1] isa Chains) || return nothing
-        try validate_primitive_chain(z[1],Int(ctx.fs[:n_teams])); size(z[1]) == (samples,length(MCMCChains.names(z[1])),4) || return nothing; z
+        try
+            validate_primitive_chain(z[1],Int(ctx.fs[:n_teams]))
+            # `names(chain)` defaults to the parameter section and deliberately omits
+            # sampler internals, so validate only retained iterations/chains here; the
+            # exact primitive parameter manifest is already enforced above.
+            size(z[1],1) == samples && size(z[1],3) == 4 || return nothing
+            z
         catch; nothing end
     end
     for (i,ctx) in enumerate(fold_context)
