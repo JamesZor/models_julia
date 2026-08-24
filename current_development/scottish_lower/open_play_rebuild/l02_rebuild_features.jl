@@ -94,21 +94,26 @@ function validate_canonical_registry(registry::DataFrame, requested_ids; ds=noth
         end
     end
     # These are diagnostics, intentionally not a normalization or a validation criterion.
-    name_slug_diagnostics = NamedTuple[]
+    name_slug_diagnostics = Set{NamedTuple}()
     if ds !== nothing
         m = Dict(Int(r.match_id) => r for r in eachrow(ds.matches))
         for r in eachrow(registry), side in (:home,:away)
             haskey(m, Int(r.match_id)) || continue
             observed = _text(m[Int(r.match_id)][Symbol(side, "_team")]); provider = _text(r[Symbol(side, "_name")]); slug = _text(r[Symbol(side, "_slug")])
-            name_match = observed == provider
-            slug_name_match = _slugish(provider) == slug
-            (name_match && slug_name_match) || push!(name_slug_diagnostics, (match_id=Int(r.match_id), side=side, datastore_name=observed, provider_name=provider, provider_slug=slug, datastore_name_matches_provider=name_match, provider_name_matches_slug=slug_name_match))
+            datastore_matches_slug = observed == slug
+            provider_name_matches_slug = _slugish(provider) == slug
+            # DataStore team fields are SofaScore slugs, not display names. Record each unique
+            # identity discrepancy once rather than emitting one row per match appearance.
+            (datastore_matches_slug && provider_name_matches_slug) || push!(name_slug_diagnostics,
+                (datastore_name=observed, provider_name=provider, provider_slug=slug,
+                 datastore_matches_slug=datastore_matches_slug,
+                 provider_name_matches_slug=provider_name_matches_slug))
         end
     end
     manifest = (schema_version=SCHEMA_VERSION, registry_fingerprint=registry_fingerprint(registry), requested_match_ids=ids,
         registry_match_ids=sort!(Int.(registry.match_id)), alias_count=length(aliases), aliases=Dict(k => sort!(collect(v)) for (k,v) in id_aliases))
     return (registry=sort(registry, :match_id), aliases=aliases, canonical_aliases=id_aliases,
-            name_slug_diagnostics=DataFrame(name_slug_diagnostics), manifest=manifest)
+            name_slug_diagnostics=DataFrame(collect(name_slug_diagnostics)), manifest=manifest)
 end
 
 _date(r) = :match_date in propertynames(r) ? Date(r.match_date) : Date(r.start_timestamp)
