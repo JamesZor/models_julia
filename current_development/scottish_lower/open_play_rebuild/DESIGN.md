@@ -20,7 +20,7 @@ For match `i`, at kickoff `t_i`, with home/away teams `h_i,a_i`, source league `
 
 A goal is in `Y` iff it is credited to that side and is neither a converted penalty nor an own goal. It therefore includes ordinary non-penalty goals and non-penalty set pieces; “open play” is historical shorthand, not an event-taxonomy assertion.
 
-Raw own-goal events can be recorded under the committing team. Canonicalise them to the beneficiary/scoring-side convention: `O_iH=OG_committed_by_away` and `O_iA=OG_committed_by_home`. A provider beneficiary field takes precedence only after reconciliation. Ambiguous events are never guessed into `Y`.
+Raw own-goal events can be recorded under either the committing or benefiting team. Stage-2 reconciliation established that this snapshot's provider `is_home` value denotes the **beneficiary/scoring side**: all 39 informative own-goal matches uniquely reconciled under that convention and none under the committing-side interpretation. Therefore canonical `O_iH` counts `ownGoal` events with `is_home=true`, and `O_iA` counts those with `is_home=false`. This remains a snapshot-tested contract, not an undocumented assumption: every future split/snapshot must retain reconciliation and must quarantine ambiguity rather than guessing it into `Y`.
 
 ## 2. History-only filtration, identities, and reconciliation
 
@@ -161,8 +161,8 @@ NUTS chains are single-threaded. Four tasks leave 16-core headroom for runtime, 
 
 ## 8. Numbered implementation and validation stages
 
-1. **Contract freeze.** Approve source columns, provider semantics, snapshot policy, and quarantine ownership.
-2. **Component audit.** Build history-only audit/reconciliation ledger; hand-check own-goal beneficiary conversion and publish league/season counts/errors.
+1. **Contract freeze.** Approve source columns, provider semantics, snapshot policy, and quarantine ownership. *(Approved for the audited snapshot.)*
+2. **Component audit.** Build history-only audit/reconciliation ledger; hand-check own-goal beneficiary conversion and publish league/season counts/errors. *(Completed: 718/720 reconciled; beneficiary convention supported 39–0; two matches quarantined.)*
 3. **Identity/features.** Implement canonical crosswalk, per-split history-seen posterior map, `56→1/57→2` map, manifests, cutoff filtration, month/weight vectors, and fallback flags. Test mapping and no leakage.
 4. **Pure equations.** Implement typed vectorised priors/transforms/likelihood; test centering, support, thinning, weighted likelihood, and scalar references outside `@model`.
 5. **AD/model smoke.** Add Turing wrapper and pass all Section 7 tape, finite-difference, safety, and benchmark gates.
