@@ -82,7 +82,7 @@ println(league_posterior)
 bridge = build_name_to_existing_column(feature_set)
 @assert assert_bridge_invariants!(feature_set, bridge)
 reconstruction = reconstruct_l05_league_paths(oos_df, feature_set, chain; bridge=bridge)
-legacy, candidate = reconstruction.paths.legacy_l05, reconstruction.paths.artifact
+legacy, candidate = reconstruction.paths[:legacy_l05], reconstruction.paths[:artifact]
 println((unknown_teams=reconstruction.unknown_teams, tau_shapes=(size(reconstruction.effects.alpha), size(reconstruction.effects.beta))))
 
 # %% BLOCK 7 -- exact semantic assertions: 56 unchanged; 57 open rates differ by exp(delta)
