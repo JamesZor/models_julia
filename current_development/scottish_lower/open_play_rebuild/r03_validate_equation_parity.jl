@@ -93,7 +93,9 @@ pred = predictive_component_rates(p, fs[:league_ids], fs[:month_ids],
     view(t.alpha, fs[:home_team]), view(t.beta, fs[:home_team]),
     view(t.alpha, fs[:away_team]), view(t.beta, fs[:away_team]))
 @assert pred.lambda_Y_home == r.lambda_Y_home && pred.lambda_Y_away == r.lambda_Y_away
-@assert pred.lambda_converted_pen_home == p.q_pen * r.lambda_pen_home
+@assert pred.lambda_penalty_award_home == r.lambda_pen_home
+@assert pred.lambda_penalty_award_away == r.lambda_pen_away
+@assert pred.q_pen == p.q_pen && pred.lambda_converted_pen_home == p.q_pen * r.lambda_pen_home
 @assert pred.lambda_converted_pen_away == p.q_pen * r.lambda_pen_away && pred.lambda_og == p.lambda_og
 println("Weighted data-only likelihood parity: $ll_vector; Poisson-thinning identities passed.")
 

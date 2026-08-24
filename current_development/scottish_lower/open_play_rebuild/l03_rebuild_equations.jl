@@ -174,7 +174,8 @@ function predictive_component_rates(p, league_ids, month_ids, alpha_home, beta_h
     lambda_pen_home = exp(_saturate_log_rate(p.pen_base + p.pen_home)) + _RATE_FLOOR
     lambda_pen_away = exp(_saturate_log_rate(p.pen_base)) + _RATE_FLOOR
     return (lambda_Y_home=lambda_Y_home, lambda_Y_away=lambda_Y_away,
-        lambda_converted_pen_home=p.q_pen * lambda_pen_home,
+        lambda_penalty_award_home=lambda_pen_home, lambda_penalty_award_away=lambda_pen_away,
+        q_pen=p.q_pen, lambda_converted_pen_home=p.q_pen * lambda_pen_home,
         lambda_converted_pen_away=p.q_pen * lambda_pen_away, lambda_og=p.lambda_og)
 end
 

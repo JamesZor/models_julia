@@ -1,3 +1,9 @@
+# Stage 6 pending findings
+
+**Status:** implementation is present locally but has not been executed against the local cached DataStore/read-only registry. The runner uses a deterministic synthetic two-chain `MCMCChains.Chains` fixture only; it performs no MCMC, persistence, remote execution, or writes. Results will be recorded after the local manifest, OOS identity/fallback, equation-parity, convolution-tail, and ordinary `model_inference` gates run.
+
+**API risk for manager review:** this prototype extends `PreGame.extract_parameters` and `Predictions` by loader-local dispatch. The current generic latent DataFrame flattener assumes all per-match dictionary values are columns; scalar provenance/status diagnostics may therefore need an explicit production serialization policy if Stage 6 is promoted. `MCMCChains` parameter-section label ordering is intentionally treated as an exact contract and should be smoke-tested against the project-pinned version before any real sampler output is used.
+
 # Stage 2 findings
 
 **Status:** history-only component audit completed on `mcmc-beast` at commit `63785ab`; no sampling and no files written by the runner.
