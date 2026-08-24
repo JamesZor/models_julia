@@ -19,7 +19,7 @@ import BayesianFootball.Predictions
 
 export ScottishLowerNPNOGRecombinedPoissonModel, primitive_turing_var_labels,
        validate_primitive_chain, stack_chain_draws, extract_primitive_draws,
-       validate_inference_registry, direct_total_poisson_reference
+       direct_total_poisson_reference
 
 """Parameter-section labels must be exactly the model primitive manifest.
 Sampler internals are deliberately not inspected or extracted."""
@@ -85,34 +85,12 @@ function _checked_oos_identity(row, registry_row, side::Symbol, fs)
     return resolve_oos_identity(fs; canonical_id=id, slug=slug, name=name)
 end
 
-"""Validate the immutable OOS registry without requiring it to equal training `fs`.
-
-Training must retain its exact boundary-only registry for the feature adapter.  Inference
-uses a separate immutable boundary∪next-step registry, but it must be the same model
-version and configuration; only its registry fingerprint is intentionally different.
-"""
-function validate_inference_registry(inference_model::ScottishLowerNPNOGRecombinedPoissonModel,
-    training_model::ScottishLowerNPNOGRecombinedPoissonModel, fs)
-    registry_fingerprint(training_model.registry) == training_model.registry_fingerprint || throw(ArgumentError("training registry mutated"))
-    registry_fingerprint(inference_model.registry) == inference_model.registry_fingerprint || throw(ArgumentError("inference registry mutated"))
-    get(fs, :registry_fingerprint, nothing) == training_model.registry_fingerprint || throw(ArgumentError("FeatureSet/training registry fingerprint mismatch"))
-    get(fs, :half_life_days, nothing) == training_model.half_life_days || throw(ArgumentError("FeatureSet/training half-life mismatch"))
-    get(fs, :model_version, nothing) == training_model.version || throw(ArgumentError("FeatureSet/training model version mismatch"))
-    get(fs, :own_goal_policy, nothing) == training_model.own_goal_policy || throw(ArgumentError("FeatureSet/training policy mismatch"))
-    inference_model.version == training_model.version == get(fs, :model_version, nothing) || throw(ArgumentError("inference model version mismatch"))
-    inference_model.half_life_days == training_model.half_life_days == get(fs, :half_life_days, nothing) || throw(ArgumentError("inference model half-life mismatch"))
-    inference_model.own_goal_policy == training_model.own_goal_policy == get(fs, :own_goal_policy, nothing) || throw(ArgumentError("inference model policy mismatch"))
-    return inference_model.registry_fingerprint
-end
-
 """OOS extraction uses registry identity and stored history maps only; no outcome column is read."""
-function PreGame.extract_parameters(inference_model::ScottishLowerNPNOGRecombinedPoissonModel,
-    df::AbstractDataFrame, fs, chain::Chains, training_model::ScottishLowerNPNOGRecombinedPoissonModel)::Dict
-    validate_inference_registry(inference_model, training_model, fs)
-    # Do not use the model/chain/fs overload: its exact training fingerprint check is correct
-    # for fitting but deliberately cannot apply to the separate inference registry.
-    primitive = extract_primitive_draws(chain, Int(fs[:n_teams]))
-    registry = Dict(Int(r.match_id) => r for r in eachrow(inference_model.registry))
+function PreGame.extract_parameters(model::ScottishLowerNPNOGRecombinedPoissonModel,
+    df::AbstractDataFrame, fs, chain::Chains)::Dict
+    get(fs, :registry_fingerprint, nothing) == model.registry_fingerprint || throw(ArgumentError("FeatureSet/model registry fingerprint mismatch"))
+    primitive = PreGame.extract_parameters(model, chain, fs)
+    registry = Dict(Int(r.match_id) => r for r in eachrow(model.registry))
     out = Dict{Int,Any}()
     fallback_counts = Dict{Symbol,Int}(:history_seen => 0, :target_only_population_fallback => 0, :unknown_identity => 0)
     for row in eachrow(df)
@@ -147,7 +125,7 @@ function PreGame.extract_parameters(inference_model::ScottishLowerNPNOGRecombine
             :lambda_converted_penalty_home=>cph, :lambda_converted_penalty_away=>cpa,
             :lambda_og_home=>λog, :lambda_og_away=>copy(λog),
             :lambda_h=>λYh .+ cph .+ λog, :lambda_a=>λYa .+ cpa .+ λog,
-            :registry_fingerprint=>inference_model.registry_fingerprint, :provenance=>:registry_stored_history_map)
+            :registry_fingerprint=>model.registry_fingerprint, :provenance=>:registry_stored_history_map)
     end
     # Repeat one immutable summary on each latent row so standard Dict→DataFrame callers
     # retain diagnostics without a side channel or an outcome-derived lookup.
@@ -158,13 +136,6 @@ function PreGame.extract_parameters(inference_model::ScottishLowerNPNOGRecombine
         latent[:fallback_diagnostics] = diagnostic
     end
     return out
-end
-
-# Backward-compatible exact-registry path used by Stages 6–7. Genuine Stage-8 OOS
-# passes distinct fitting and inference models through the five-argument method above.
-function PreGame.extract_parameters(model::ScottishLowerNPNOGRecombinedPoissonModel,
-    df::AbstractDataFrame, fs, chain::Chains)::Dict
-    return PreGame.extract_parameters(model, df, fs, chain, model)
 end
 
 Predictions.extract_params(::ScottishLowerNPNOGRecombinedPoissonModel, row) = (

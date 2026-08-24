@@ -81,12 +81,16 @@ for oos_fold in oos_folds
     isfile(joinpath(fdir,"fold_result.jls")) && (println("Stage8 fold=$fold already PASS"); update_progress!(); continue)
     isfile(joinpath(fdir,"hard_gate_failure.jls")) && (println("Stage8 fold=$fold already HARDFAIL"); update_progress!(); continue)
     try
-        # The training adapter requires the exact boundary registry; inference additionally
-        # needs the true t+1 fixtures and therefore gets its own immutable registry.
-        model=ScottishLowerNPNOGRecombinedPoissonModel(registry_subset(registry, boundary_ids(boundary)))
-        inference_model=ScottishLowerNPNOGRecombinedPoissonModel(registry_subset(registry, inference_ids(boundary, oos_ids)); half_life_days=model.half_life_days, own_goal_policy=model.own_goal_policy, version=model.version)
-        fs = BFFeatures.create_features(boundary, ds, model, :match_biweek)
-        validate_feature_set(fs); J=Int(fs[:n_teams]); bh=boundary_sha256(boundary)
+        # Generic SplitBoundary.target_match_ids are cumulative observations through t.
+        # The rebuild contract instead expects fitted IDs in `history` and held-out IDs in
+        # `target`, so construct the exact walk-forward boundary explicitly: fit through t,
+        # hold out only t+1, and derive decay cutoff from those genuine next fixtures.
+        fit_boundary = BFData.SplitBoundary(boundary.fold_id, boundary.target_step,
+            boundary_ids(boundary), oos_ids)
+        fit_ids = inference_ids(boundary, oos_ids)
+        model=ScottishLowerNPNOGRecombinedPoissonModel(registry_subset(registry, fit_ids))
+        fs = BFFeatures.create_features(fit_boundary, ds, model, :match_biweek)
+        validate_feature_set(fs); J=Int(fs[:n_teams]); bh=boundary_sha256(fit_boundary)
         seeds=[parse(Int,get(ENV,"STAGE8_SEED_$(fold)_$c",string(80_000+100fold+c))) for c in 1:4]
         checkpoints=Vector{Any}(undef,4); chains=Vector{Any}(undef,4); missing=Int[]
         for c in 1:4
@@ -117,7 +121,7 @@ for oos_fold in oos_folds
         end
         isfile(combined_path) || atomic_serialize(combined_path,chain)
         diag=diagnostics(chain;max_depth=10)
-        fold_manifest=(;stage=8,fold, boundary_sha256=bh, registry_fingerprint=fs[:registry_fingerprint], inference_registry_fingerprint=inference_model.registry_fingerprint, history_ids=Int.(boundary.history_match_ids), target_ids=Int.(boundary.target_match_ids), true_oos_ids=oos_ids, true_oos_count=length(oos_ids), true_oos_ids_sha256=oos_fold.ids_sha256, target_season=meta.target_season, target_time_step=meta.time_step, prediction_step=oos_fold.prediction_step, sampler=sampler_metadata(cfg.sampler),seeds,diagnostics=diag,chain_elapsed_seconds=[x.elapsed_seconds for x in checkpoints],sampling_wall_seconds=time()-t0)
+        fold_manifest=(;stage=8,fold, boundary_sha256=bh, registry_fingerprint=fs[:registry_fingerprint], frozen_history_ids=Int.(boundary.history_match_ids), cumulative_target_training_ids=Int.(boundary.target_match_ids), fitted_match_ids=Int.(fit_boundary.history_match_ids), true_oos_ids=oos_ids, true_oos_count=length(oos_ids), true_oos_ids_sha256=oos_fold.ids_sha256, cutoff_date=fs[:cutoff_date], target_season=meta.target_season, target_time_step=meta.time_step, prediction_step=oos_fold.prediction_step, sampler=sampler_metadata(cfg.sampler),seeds,diagnostics=diag,chain_elapsed_seconds=[x.elapsed_seconds for x in checkpoints],sampling_wall_seconds=time()-t0)
         diagnostics_path=joinpath(fdir,"diagnostics.jls")
         if isfile(diagnostics_path) && !isempty(missing)
             mv(diagnostics_path, diagnostics_path * ".superseded-" * string(uuid4()))
@@ -130,7 +134,7 @@ for oos_fold in oos_folds
 
         # %% 4 — genuine metadata-only t+1 OOS, generic persistence, score validation, and ordinary inference
         # `oos_rows` came only from get_next_matches above; never use cumulative target_match_ids here.
-        preds=BFPreGame.extract_parameters(inference_model, oos_rows, fs, chain, model)
+        preds=BFPreGame.extract_parameters(model, oos_rows, fs, chain)
         rows=NamedTuple[]
         for (mid,x) in preds
             push!(rows,(;match_id=mid,league_id=x[:league_id],home_team_status=x[:home_team_status],away_team_status=x[:away_team_status],provenance="stage8_true_next_step_metadata_only",fold_index=fold,boundary_sha256=bh,target_season=String(meta.target_season),target_time_step=Int(meta.time_step),prediction_step=Int(oos_fold.prediction_step),lambda_h=x[:lambda_h],lambda_a=x[:lambda_a],lambda_Y_home=x[:lambda_Y_home],lambda_Y_away=x[:lambda_Y_away],lambda_converted_penalty_home=x[:lambda_converted_penalty_home],lambda_converted_penalty_away=x[:lambda_converted_penalty_away],lambda_og_home=x[:lambda_og_home],lambda_og_away=x[:lambda_og_away]))
@@ -139,11 +143,11 @@ for oos_fold in oos_folds
         latent=generic_dataframe(rows); dataframe_roundtrip_ok(latent) || error("fold $fold generic DataFrame roundtrip failed")
         score_shapes=Tuple{Int,Int,Int}[]
         for row in eachrow(latent)
-            S=BFPred.score_matrix_data(BFPred.compute_score_matrix(inference_model,BFPred.extract_params(inference_model,row);max_goals=12)) # adaptive tail is model-owned
+            S=BFPred.score_matrix_data(BFPred.compute_score_matrix(model,BFPred.extract_params(model,row);max_goals=12)) # adaptive tail is model-owned
             all(isfinite,S) && all(>=(0),S) && all(isapprox(sum(S[:,:,d]),1;atol=1e-10) for d in axes(S,3)) || error("fold $fold score mass failure match $(row.match_id)")
             push!(score_shapes,size(S))
         end
-        ppd=BFPred.model_inference(BayesianFootball.Experiments.LatentStates(latent,inference_model);verbose=false)
+        ppd=BFPred.model_inference(BayesianFootball.Experiments.LatentStates(latent,model);verbose=false)
         all(length(d)==4samples for d in ppd.df.distribution) || error("fold $fold PPD draw count failure")
         statuses=vcat(Symbol.(latent.home_team_status),Symbol.(latent.away_team_status)); fallback=count(==(:target_only_population_fallback),statuses)
         atomic_serialize(joinpath(fdir,"fold_result.jls"),(;fold_manifest,status=:pass,latent,ppd,score_shapes,fallback_audit=(fallback=fallback,total=length(statuses),rate=fallback/length(statuses))))
