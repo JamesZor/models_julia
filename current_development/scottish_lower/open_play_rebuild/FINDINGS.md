@@ -205,6 +205,8 @@ The directory contains four per-chain checkpoints, `combined_chain.jls`,
 `manifest_diagnostics.jls`, and `oos_smoke.jls`. No full temporal experiment, old leaderboard,
 or production OOS cache was created.
 
-## Stage 8 implementation status (not run)
+## Stage 8 implementation status (inventory validated; sampling not run)
 
-`l07_rebuild_full_experiment.jl` and `r07_remote_full_experiment.jl` now provide the planned 40-fold pooled temporal orchestration and the first genuine walk-forward OOS generation. They validate and persist nonempty t+1 metadata-only OOS inventory (alignment, non-overlap, IDs/count/hash), use one registry query over training plus OOS IDs, and separate the exact training registry from the immutable inference registry. This is implementation status only: no Stage 8 sampling, outcome evaluation, leaderboard, or new remote artifact has been produced. The runner has a `STAGE8_DRY_RUN=1` inventory mode and retains per-fold diagnostics/error artifacts for a future remote execution.
+`l07_rebuild_full_experiment.jl` and `r07_remote_full_experiment.jl` provide pooled temporal orchestration and the first genuine walk-forward OOS generation. The remote dry run at commit `cde5844` found **38 folds**, not the previously assumed 40: 19 folds for `24/25` and 19 for `25/26`. Their next-step OOS sets contain 710 fixtures in total (360 and 350 respectively), ranging from 10 to 25 fixtures per fold, over one 1,430-match canonical registry snapshot. All season/tournament/step and training-overlap checks passed.
+
+The runner persists nonempty t+1 metadata-only OOS inventory (alignment, non-overlap, IDs/count/hash), uses one registry query over training plus OOS IDs, and separates the exact training registry from the immutable inference registry. No Stage 8 sampling, outcome evaluation, or leaderboard has yet run. It retains per-fold diagnostics/error artifacts and supports exact checkpoint resume.

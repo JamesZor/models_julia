@@ -17,7 +17,7 @@ BLAS.set_num_threads(1); BLAS.get_num_threads() == 1 || error("Stage 8 requires 
 ThreadPinning.pinthreads(:cores)
 haskey(ENV, "BF_DB_URL") || error("BF_DB_URL is required for read-only registry access and is never saved")
 samples = parse(Int, get(ENV, "STAGE8_SAMPLES", "800")); warmup = parse(Int, get(ENV, "STAGE8_WARMUP", "800"))
-expected_folds = parse(Int, get(ENV, "STAGE8_EXPECTED_FOLDS", "40")); fail_fast = get(ENV, "STAGE8_FAIL_FAST", "0") == "1"
+expected_folds = parse(Int, get(ENV, "STAGE8_EXPECTED_FOLDS", "38")); fail_fast = get(ENV, "STAGE8_FAIL_FAST", "0") == "1"
 dry_run = get(ENV, "STAGE8_DRY_RUN", "0") == "1"
 stop_after_fold = parse(Int, get(ENV, "STAGE8_STOP_AFTER_FOLD", "0"))
 samples > 0 && warmup > 0 && expected_folds > 0 || error("positive samples, warmup, and expected folds required")
