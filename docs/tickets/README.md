@@ -23,7 +23,7 @@ only that ticket. Update `Status` here when it lands.
 
 | ID | Title | Severity | Area | Status | Raised |
 |---|---|---|---|---|---|
-| [T001](T001-pooled-tournament-clock.md) | Pooled tournament groups walk a per-tournament clock | high | `src/Data/splitting`, `src/Data/preprocessing.jl` | open | 2026-08-25 |
+| [T001](T001-pooled-tournament-clock.md) | Pooled tournament groups walk a per-tournament clock | high | `src/Data/splitting`, `src/Data/preprocessing.jl` | in progress | 2026-08-25 |
 
 ## Closed
 

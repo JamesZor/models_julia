@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | open |
+| **Status** | in progress |
 | **Severity** | high — causes genuine train/predict contamination |
 | **Area** | `src/Data/preprocessing.jl`, `src/Data/fetchers/sql/matches.jl`, `src/Data/splitting/` |
 | **Raised** | 2026-08-25, by model 01 gate 2 in `current_development/scottish_lower/` |
