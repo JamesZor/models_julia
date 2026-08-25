@@ -12,6 +12,7 @@ Canonical brief: [`docs/tickets/T001-pooled-tournament-clock.md`](../../docs/tic
 - Reproducer: `tickets/t001/reproduce.jl`.
 - Calendar-clock prototype: `tickets/t001/prototype.jl`.
 - Kaimon comparison report: `tickets/t001/PROTOTYPE_REPORT.md`.
+- End-to-end feature-time research: `tickets/t001/FEATURE_TIME_ALIGNMENT.md`.
 
 ## Confirmed code path
 
@@ -45,13 +46,15 @@ makes calendar clock selection explicit.
 
 ## Open decisions
 
-- Whether to expose a new stored/configured column or keep the shared clock as a splitter
-  implementation detail. The latter is narrower and preserves all existing data schemas.
+- Unsupported custom `dynamics_col` behavior for multi-tournament groups: preserve only behind
+  the strict kickoff assertion, or reject clearly.
 - Whether the safety invariant should throw during boundary creation, next-match retrieval, or
   both. Boundary creation has enough information to validate dynamic target rows; next-match
   retrieval is the public point where the held-out set is materialized.
 - Clarify acceptance criterion 3: calendar bins guarantee equal temporal width, not equal match
   counts (real leagues can legitimately schedule different numbers of fixtures).
+- A separate `MultiScaleGRW` sampled-versus-reconstructed target-increment mismatch should be
+  verified and ticketed, not folded into T001.
 
 ## Measurement log
 
