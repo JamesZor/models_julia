@@ -32,6 +32,7 @@ include("fetchers/datastore.jl")
 include("betfair_util.jl")
 include("preprocessing.jl")
 include("splitting/types.jl")
+include("splitting/clock.jl")
 include("splitting/methods.jl")
 include("splitting/display.jl")
 

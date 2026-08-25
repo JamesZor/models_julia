@@ -16,8 +16,8 @@ function extract_chains(ds::Data.DataStore, exp_results::Experiments.ExperimentR
     feature_sets = Features.create_features(
         boundaries_with_meta, 
         ds, 
-        config.model, 
-        config.splitter.dynamics_col
+        config.model,
+        config.splitter
     )
     
     results_array = exp_results.training_results.items

@@ -374,7 +374,7 @@ function matchday_latents(spec::MatchDaySpec, expr, ds, cards::Vector{<:FixtureC
     sel = select_split(expr, boundaries; exclude = ids,
                        ds = ds, config = expr.config.splitter, fixture_ids = ids)
 
-    fcol = Features.create_features(boundaries, ds, model)
+    fcol = Features.create_features(boundaries, ds, model, expr.config.splitter)
     fs   = deepcopy(fcol[sel.idx][1])          # never mutate the cached FeatureSet
 
     lineups = Dict(c.fixture.m_id => c.lineup for c in cards if c.lineup !== nothing)

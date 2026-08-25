@@ -150,8 +150,8 @@ function extract_oos_predictions(ds::Data.DataStore, exp_results::ExperimentResu
     feature_sets = Features.create_features(
         boundaries_with_meta, 
         ds, 
-        config.model, 
-        config.splitter.dynamics_col
+        config.model,
+        config.splitter
     )
 
     # 2. Extract (Multi-threaded across splits)
