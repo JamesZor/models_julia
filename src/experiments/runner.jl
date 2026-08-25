@@ -54,8 +54,8 @@ function run_experiment(data_store::Data.DataStore, config::ExperimentConfig)
     feature_sets = Features.create_features(
             boundaries_with_meta,
             data_store,
-            config.model,                
-            config.splitter.dynamics_col
+            config.model,
+            config.splitter
         )
 
     # 3. Training

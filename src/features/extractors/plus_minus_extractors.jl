@@ -15,7 +15,7 @@
 #    A `SplitBoundary` splits the FOLD's own matches into a frozen history block and an expanding
 #    target block; BOTH are training data for that fold (`create_features` builds `ordered_ids =
 #    [history; target]`, and the engine's likelihood runs over all of them). The out-of-sample
-#    matches live at `dynamics_col == time_step + 1` and are fetched separately by
+#    matches are fetched separately from the next observed effective step by
 #    `Data.get_next_matches` — they are never in `ordered_ids`.
 #    So `fit_on = :training` (the default) fits the ridge on history ∪ target, i.e. EXACTLY the
 #    information set the Turing model itself is trained on. That is leak-free by construction and
@@ -95,8 +95,8 @@ function add_feature!(F_data::Dict, config::AbstractPlusMinusFeature, ordered_id
 
     # --- 3. positional aggregation over the STARTING XI --------------------------------------
     # Built over EVERY match in the store, not just this fold's. `extract_parameters` reads this map
-    # for the OUT-OF-SAMPLE matches (`dynamics_col == time_step + 1`), which are by construction not
-    # in `ordered_ids` — restricting the map to the fold would hand every prediction a zero pillar
+    # for the OUT-OF-SAMPLE matches (the next observed effective step), which are by construction
+    # not in `ordered_ids` — restricting the map to the fold would hand every prediction a zero pillar
     # and silently collapse the engine onto its no-APM twin. `player_extractors.jl` does the same
     # for the same reason. Only the RATING VECTOR is leak-controlled; applying it to a future
     # teamsheet is precisely the pre-match rating being tested.

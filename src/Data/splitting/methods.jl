@@ -204,9 +204,23 @@ end
 function create_data_splits(data_store, config::GroupedCVConfig)::Vector{Tuple{SubDataFrame, GroupedSplitMetaData}}
     splits = Vector{Tuple{SubDataFrame, GroupedSplitMetaData}}()
     for group in config.tournament_groups
-        group_splits = _process_tournament_group(data_store.matches, group, config, GroupedSplitMetaData)
-        for (v, m) in group_splits
-            push!(splits, (v, m::GroupedSplitMetaData))
+        if !_uses_shared_calendar(group)
+            group_splits = _process_tournament_group(
+                data_store.matches, group, config, GroupedSplitMetaData)
+            for (view_df, meta) in group_splits
+                push!(splits, (view_df, meta::GroupedSplitMetaData))
+            end
+            continue
+        end
+
+        # Keep the legacy view API consistent with relational boundaries. The legacy API has
+        # never emitted the history-only baseline, so omit only metadata step zero here.
+        group_splits = _process_pooled_group_ids(data_store.matches, group, config)
+        for (boundary, meta) in group_splits
+            meta.time_step == 0 && continue
+            fitted_ids = Set(vcat(boundary.history_match_ids, boundary.target_match_ids))
+            row_indices = findall(id -> Int(id) in fitted_ids, data_store.matches.match_id)
+            push!(splits, (view(data_store.matches, row_indices, :), meta))
         end
     end
     return splits
@@ -259,15 +273,32 @@ end
 
 # 2. Base Logic for Grouped Tournaments
 function get_next_matches(
-    ds::Data.DataStore, 
-    meta::Data.GroupedSplitMetaData, 
-    config::Data.GroupedCVConfig
-)::AbstractDataFrame 
-    return subset(ds.matches, 
-           :tournament_id => ByRow(in(meta.tournament_ids)), 
-           :season => ByRow(isequal(meta.target_season)),
-           config.dynamics_col => ByRow(isequal(meta.time_step + 1)) 
+    ds::Data.DataStore,
+    meta::Data.GroupedSplitMetaData,
+    config::Data.GroupedCVConfig,
+)::AbstractDataFrame
+    if !_uses_shared_calendar(meta.tournament_ids)
+        return subset(
+            ds.matches,
+            :tournament_id => ByRow(in(meta.tournament_ids)),
+            :season => ByRow(isequal(meta.target_season)),
+            config.dynamics_col => ByRow(isequal(meta.time_step + 1)),
+        )
+    end
+
+    predict_step = _next_observed_effective_step(
+        ds.matches,
+        meta.tournament_ids,
+        meta.target_season,
+        config.dynamics_col,
+        meta.time_step,
     )
+    isnothing(predict_step) && return ds.matches[Int[], :]
+
+    step_by_id = _effective_step_map(
+        ds.matches, meta.tournament_ids, meta.target_season, config.dynamics_col)
+    heldout_ids = Set(id for (id, step) in step_by_id if step == predict_step)
+    return subset(ds.matches, :match_id => ByRow(id -> Int(id) in heldout_ids))
 end
 
 # 3. The "Catch-All" Tuple Wrapper (Replaces all the redundant functions!)
@@ -379,8 +410,97 @@ function _process_tournament_group_ids(
         end
       end
     return splits
-end 
+end
 
+"Build leak-safe relational boundaries for one multi-tournament group."
+function _process_pooled_group_ids(
+    df::DataFrame,
+    group_ids::Vector{Int},
+    config::GroupedCVConfig,
+)
+    splits = Vector{Tuple{SplitBoundary,GroupedSplitMetaData}}()
+    group_mask = in.(df.tournament_id, Ref(group_ids))
+    any(group_mask) || return splits
+    all_seasons = sort(unique(collect(skipmissing(df[group_mask, :season]))))
+
+    for target_season in config.target_seasons
+        target_index = findfirst(==(target_season), all_seasons)
+        if isnothing(target_index)
+            @warn "Target season $target_season not found for tournament group $group_ids. Skipping."
+            continue
+        end
+
+        history_start = max(1, target_index - config.history_seasons)
+        history_seasons = all_seasons[history_start:(target_index - 1)]
+        history_ids = Int.(df[
+            group_mask .& in.(df.season, Ref(history_seasons)), :match_id])
+
+        step_by_id = _effective_step_map(
+            df, group_ids, target_season, config.dynamics_col)
+        if isempty(step_by_id)
+            @warn "No data found for target season $target_season (Tournament group $group_ids)."
+            continue
+        end
+
+        target_mask = group_mask .& coalesce.(df.season .== target_season, false)
+        target_rows = df[target_mask, :]
+        target_ids = Int.(target_rows.match_id)
+        target_steps = Int[step_by_id[id] for id in target_ids]
+        observed_steps = sort(unique(target_steps))
+        ids_at(step) = target_ids[target_steps .== step]
+        ids_through(step) = target_ids[target_steps .<= step]
+
+        fold_counter = 1
+
+        # The season-opening baseline fits only prior seasons and predicts the first observed
+        # target-season calendar bin. It exists only when history exists.
+        if !isempty(history_ids)
+            predict_step = first(observed_steps)
+            heldout_ids = ids_at(predict_step)
+            _assert_temporal_safety(
+                df, history_ids, heldout_ids;
+                group_ids, season=target_season, train_step=0, predict_step)
+
+            boundary = SplitBoundary(fold_counter, 0, copy(history_ids), Int[])
+            meta = GroupedSplitMetaData(
+                group_ids, target_season, target_season,
+                config.history_seasons, 0, config.warmup_period)
+            push!(splits, (boundary, meta))
+            fold_counter += 1
+        end
+
+        # A predictive fold needs a next observed bin. Calendar labels may contain holes; move
+        # directly to the next observed value and never emit an empty terminal/blank-bin fold.
+        for position in 1:(length(observed_steps) - 1)
+            train_step = observed_steps[position]
+            train_step >= config.warmup_period || continue
+            if !isnothing(config.end_dynamics) && train_step > config.end_dynamics
+                continue
+            end
+
+            predict_step = observed_steps[position + 1]
+            current_target_ids = ids_through(train_step)
+            heldout_ids = ids_at(predict_step)
+            fitted_ids = vcat(history_ids, current_target_ids)
+            _assert_temporal_safety(
+                df, fitted_ids, heldout_ids;
+                group_ids, season=target_season, train_step, predict_step)
+
+            boundary = SplitBoundary(
+                fold_counter,
+                train_step,
+                copy(history_ids),
+                copy(current_target_ids),
+            )
+            meta = GroupedSplitMetaData(
+                group_ids, target_season, target_season,
+                config.history_seasons, train_step, config.warmup_period)
+            push!(splits, (boundary, meta))
+            fold_counter += 1
+        end
+    end
+    return splits
+end
 
 
 # 2. The Public APIs
@@ -396,17 +516,22 @@ function create_id_boundaries(data_store, config::CVConfig)
 end
 
 function create_id_boundaries(data_store, config::GroupedCVConfig)
-    splits = Vector{Tuple{SplitBoundary, GroupedSplitMetaData}}()
-    
-    # Iterate over the groups (e.g., [[1, 2], [3]])
+    splits = Vector{Tuple{SplitBoundary,GroupedSplitMetaData}}()
+
     for group in config.tournament_groups
-        group_splits = _process_tournament_group_ids(data_store.matches, group, config, GroupedSplitMetaData)
-        
-        for (b, m) in group_splits
-            push!(splits, (b, m::GroupedSplitMetaData))
+        group_splits = if _uses_shared_calendar(group)
+            _process_pooled_group_ids(data_store.matches, group, config)
+        else
+            # Preserve singleton behavior exactly, including its stored clock and terminal fold.
+            _process_tournament_group_ids(
+                data_store.matches, group, config, GroupedSplitMetaData)
+        end
+
+        for (boundary, meta) in group_splits
+            push!(splits, (boundary, meta::GroupedSplitMetaData))
         end
     end
-    
+
     return splits
 end
 

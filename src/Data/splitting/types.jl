@@ -96,14 +96,27 @@ Base.@kwdef struct CVConfig <: AbstractSplitter
     stop_early::Bool = false                     
 end
 
+"""
+    GroupedCVConfig
+
+Walk-forward configuration for one or more tournament groups. Groups containing multiple
+tournaments use a shared calendar clock for `:match_week`, `:match_biweek`, or `:match_month`;
+one-member groups preserve the stored tournament-local clock.
+
+Pooled boundaries are predictive only: blank calendar periods and the terminal state with no
+next observed fixtures do not emit empty folds. Consequently `stop_early` is retained for API
+compatibility but has no additional effect on multi-tournament groups. A history-only step-zero
+baseline is still emitted whenever `history_seasons > 0` and history exists, independently of
+`warmup_period`; warmup applies to target-season training steps.
+"""
 Base.@kwdef struct GroupedCVConfig <: AbstractSplitter
-    tournament_groups::Vector{Vector{Int}} = [[1]] 
+    tournament_groups::Vector{Vector{Int}} = [[1]]
     target_seasons::Vector{String}
     history_seasons::Int = 0
     dynamics_col::Symbol = :match_week
     warmup_period::Int = 5
-    end_dynamics::Union{Int, Nothing} = nothing 
-    stop_early::Bool = false                     
+    end_dynamics::Union{Int,Nothing} = nothing
+    stop_early::Bool = false
 end
 
 # --- Iterator Structs ---

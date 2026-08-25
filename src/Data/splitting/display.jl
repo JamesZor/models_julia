@@ -78,7 +78,11 @@ function Base.show(io::IO, ::MIME"text/plain", config::GroupedCVConfig)
     printstyled(io, "[Dynamics]\n", color=:magenta)
     println(io, "  History Depth:  $(config.history_seasons) season(s)")
     println(io, "  Dynamics Col:   :$(config.dynamics_col)")
-    
+    has_pooled_group = any(length(unique(group)) > 1 for group in config.tournament_groups)
+    if has_pooled_group
+        println(io, "  Pooled Clock:   shared calendar (blank/terminal empty steps skipped)")
+    end
+
     # Details (Constraints)
     details = String[]
     push!(details, "warmup=$(config.warmup_period)")
@@ -86,9 +90,9 @@ function Base.show(io::IO, ::MIME"text/plain", config::GroupedCVConfig)
         push!(details, "end=$(config.end_dynamics)")
     end
     if config.stop_early
-        push!(details, "stop_early=true")
+        push!(details, has_pooled_group ? "stop_early=true (pooled no-op)" : "stop_early=true")
     end
-    
+
     if !isempty(details)
         print(io, "  Constraints:    ")
         printstyled(io, join(details, ", "), "\n", color=:light_black)

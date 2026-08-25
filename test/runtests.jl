@@ -9,14 +9,14 @@ using DataFrames, Dates, InlineStrings # Add any other packages your tests need 
     println("running data module tests...")
     include("data_tests.jl")
 
+    println("Running grouped splitting tests...")
+    include("splitting_tests.jl")
+
     println("Running Features Module tests...")
     include("features_tests.jl")
 
     println("Running Pre Game Module tests...")
     include("pregame_tests.jl")
-
-    println("Running Momentum Features tests...")
-    include("momentum_tests.jl")
 
     println("Running Portfolio Module tests...")
     include("portfolio_tests.jl")
