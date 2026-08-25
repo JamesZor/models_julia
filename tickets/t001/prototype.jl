@@ -149,7 +149,7 @@ scottish_ds = nothing
 for segment in pooled_segments
     summaries, ds = compare_pooled(segment)
     append!(all_summaries, summaries)
-    segment isa Data.ScottishLower && (scottish_ds = ds)
+    segment isa Data.ScottishLower && (global scottish_ds = ds)
 end
 
 pooled_report = [
