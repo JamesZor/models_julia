@@ -11,6 +11,7 @@ they affect work outside this stream and should not be rediscovered.
 **Severity:** real, data-dependent. Caused genuine train/predict contamination in
 1 of 19 Scottish `24/25` folds.
 **Status:** mitigated in this stream, **not fixed in `src`**.
+**Ticket:** [`docs/tickets/T001-pooled-tournament-clock.md`](../../../docs/tickets/T001-pooled-tournament-clock.md)
 
 ### Mechanism
 
