@@ -331,10 +331,13 @@ function tp_gate_features(ds, folds::Vector{TPFold}, model, contract::SLContract
     splitter = sl_splitter(contract)
 
     # --- build every fold's FeatureSet ---------------------------------------
-    feature_sets = [
-        Features.create_features(f.boundary, ds, model, contract.dynamics_col)
-        for f in folds
-    ]
+    # Splitter-aware collection API: the complete splitter must be passed so feature
+    # time is assigned on the same pooled effective clock the boundaries were cut on,
+    # and observed calendar bins are compressed to consecutive model states.
+    # The symbol-only overload skips that alignment — see docs/guides/grouped_splitting.md.
+    tp_splits    = [(f.boundary, f.meta) for f in folds]
+    tp_collection = Features.create_features(tp_splits, ds, model, splitter)
+    feature_sets  = [fs for (fs, _) in tp_collection]
 
     # --- (a) kickoff filtration ----------------------------------------------
     kickoff = tp_kickoff_map(ds)
@@ -364,7 +367,8 @@ function tp_gate_features(ds, folds::Vector{TPFold}, model, contract::SLContract
     # --- (b) perturbation ----------------------------------------------------
     f  = folds[perturb_fold]
     ds_trunc = tp_truncate_datastore(ds, vcat(f.fitted_ids, f.oos_df.match_id))
-    fs_trunc = Features.create_features(f.boundary, ds_trunc, model, contract.dynamics_col)
+    fc_trunc = Features.create_features([(f.boundary, f.meta)], ds_trunc, model, splitter)
+    fs_trunc = fc_trunc[1][1]
     same, differing = tp_featureset_equal(feature_sets[perturb_fold], fs_trunc)
     push!(results, (
         name   = "perturbation (future cannot alter past)",
@@ -406,7 +410,24 @@ function tp_gate_features(ds, folds::Vector{TPFold}, model, contract::SLContract
                  "wrong key type in folds $bad_maps",
     ))
 
-    # --- (e) OOS team coverage ------------------------------------------------
+    # --- (e) contiguous model time states -------------------------------------
+    # The splitter-aware builder promises observed calendar bins are compressed to
+    # consecutive model indices (1, 2, 3...) with no empty latent states.
+    ragged = Int[]
+    for (i, fs) in enumerate(feature_sets)
+        haskey(fs.data, :time_indices) || continue
+        ti = sort(unique(Vector{Int}(fs.data[:time_indices])))
+        ti == collect(1:length(ti)) || push!(ragged, i)
+    end
+    push!(results, (
+        name   = "contiguous model time states",
+        pass   = isempty(ragged),
+        detail = isempty(ragged) ?
+                 "time_indices are 1..K with no gaps in all $(length(feature_sets)) folds" :
+                 "gaps present in folds $ragged",
+    ))
+
+    # --- (f) OOS team coverage ------------------------------------------------
     unmapped = Tuple{Int, String}[]
     for (i, fs) in enumerate(feature_sets)
         tm = fs.data[:team_map]
