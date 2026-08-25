@@ -13,6 +13,7 @@ Canonical brief: [`docs/tickets/T001-pooled-tournament-clock.md`](../../docs/tic
 - Calendar-clock prototype: `tickets/t001/prototype.jl`.
 - Kaimon comparison report: `tickets/t001/PROTOTYPE_REPORT.md`.
 - End-to-end feature-time research: `tickets/t001/FEATURE_TIME_ALIGNMENT.md`.
+- Scoped production plan: `tickets/t001/IMPLEMENTATION_PLAN.md`.
 
 ## Confirmed code path
 
