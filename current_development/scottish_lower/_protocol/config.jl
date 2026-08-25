@@ -40,7 +40,7 @@ Base.@kwdef struct SLContract
     # --- Data scope -----------------------------------------------------------
     tournaments::Vector{Int}       = [56, 57]      # League One, League Two — pooled
     dev_seasons::Vector{String}    = ["24/25"]     # development + selection
-    sealed_seasons::Vector{String} = ["25/26"]     # untouched until selection is frozen
+    sealed_seasons::Vector{String} = ["25/26", "26/27"]  # untouched until selection is frozen
 
     # --- Fold construction ----------------------------------------------------
     history_seasons::Int  = 2
