@@ -23,10 +23,10 @@ only that ticket. Update `Status` here when it lands.
 
 | ID | Title | Severity | Area | Status | Raised |
 |---|---|---|---|---|---|
-| [T001](T001-pooled-tournament-clock.md) | Pooled tournament groups walk a per-tournament clock | high | `src/Data/splitting`, `src/Data/preprocessing.jl` | in progress | 2026-08-25 |
+| — | — | — | — | — | — |
 
 ## Closed
 
 | ID | Title | Resolution | Closed |
 |---|---|---|---|
-| — | — | — | — |
+| [T001](T001-pooled-tournament-clock.md) | Pooled tournament groups use a shared calendar clock with strict kickoff safety | 2026-08-25 |

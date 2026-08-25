@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | in progress |
+| **Status** | done |
 | **Severity** | high — causes genuine train/predict contamination |
 | **Area** | `src/Data/preprocessing.jl`, `src/Data/fetchers/sql/matches.jl`, `src/Data/splitting/` |
 | **Raised** | 2026-08-25, by model 01 gate 2 in `current_development/scottish_lower/` |
@@ -166,3 +166,66 @@ assertion is cheap, and it catches postponements too, which no clock design prev
 
 Update `Status` in [`README.md`](README.md), and record what changed plus the measured
 blast radius (criterion 5) in this file under a `## Resolution` heading.
+
+## Resolution
+
+Resolved on branch `fix/t001-pooled-tournament-clock`; production implementation commit
+`50d8bad`.
+
+### What changed
+
+- Added `src/Data/splitting/clock.jl`, the single effective-clock implementation used by
+  multi-tournament grouped splitting. It derives fixed 7/14/28-day calendar bins for
+  `:match_week`, `:match_biweek`, and `:match_month` without changing the stored
+  tournament-local columns.
+- Updated relational boundaries, legacy split views, and `get_next_matches` to use the same
+  clock. Blank labels and terminal states with no next observed card emit no empty fold.
+- Added a strict date-plus-hour assertion that every fitted kickoff precedes the first held-out
+  kickoff.
+- Preserved history-only step zero: prior seasons fit the first target-season block. Frozen
+  history remains in every later fold.
+- Changed feature time assignment from positional group counts to a row-wise match-ID lookup.
+  Grouped production callers now pass the complete splitter contract; observed raw bins are
+  compressed to consecutive model states, so no empty dynamics state is introduced.
+- Updated experiment training, OOS reconstruction, diagnostics, and MatchDay to use that
+  splitter-aware feature API.
+- Added deterministic regressions in `test/splitting_tests.jl` and repaired three stale test
+  harness entries so the package suite once again executes current APIs.
+- Documented the contract in `docs/guides/grouped_splitting.md` and the root README.
+
+### Measured blast radius
+
+Production APIs were run through Kaimon against every shared season in the current caches with
+`:match_biweek`:
+
+| Segment | Incumbent evaluated folds | Incumbent contaminated | Fixed folds | Fixed contaminated | Fixed max held-out span |
+|---|---:|---:|---:|---:|---:|
+| ScottishLower (56, 57) | 99 | 53 | 105 | 0 | 12 days |
+| ScottishUpper (54, 55) | 103 | 75 | 116 | 0 | 12 days |
+| IrelandAll (79, 718) | 91 | 72 | 102 | 0 | 13 days |
+| SouthKorea (3284, 6230) | 86 | 44 | 94 | 0 | 13 days |
+| Norway (5, 6) | 74 | 51 | 86 | 0 | 13 days |
+
+The incumbent also emitted one terminal empty fold per season (32 total in this measurement).
+The fixed implementation emitted zero empty pooled folds. Every fixed biweek was strictly less
+than 14 elapsed days at DateTime resolution; the table reports whole-day spans.
+
+Fixture counts within a shared bin can legitimately differ between tournaments. “Comparable
+step size” now means both tournaments occupy the same fixed calendar interval, rather than
+requiring equal match counts.
+
+### Controls and gates
+
+- Exact singleton boundary and next-match snapshots remained identical:
+  Ireland 97 folds, IrelandFirstDivision 94, Veikkausliiga 62.
+- The 56/57 synthetic regression proves the incumbent can fit a 16:00 match while predicting a
+  14:00 match on 2024-10-19, then proves the fixed API holds both in the same safe calendar bin.
+- Weekly, biweekly, and four-week bounds; blank bins; history baseline; warmup/end semantics;
+  duplicate groups; strict kickoff errors; legacy/relational parity; feature-state contiguity;
+  and shuffled-row invariance are covered.
+- The unchanged Scottish `tp_build_folds` mitigation produced 20 folds, zero empty OOS cards,
+  and dropped **0** matches, so it is now a no-op as required.
+- Local and Kaimon package suites passed: **403/403 tests**.
+
+Pooled fold counts and composition changed as expected. Historical pooled experiments are not
+comparable with experiments produced after this fix.

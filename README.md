@@ -372,7 +372,7 @@ boundaries = Data.create_id_boundaries(ds, cv_config)
 # 4. Extract Features! 
 # The builder asks the model what traits it needs, and maps the boundaries to the DataStore.
 test_model = PreGame.DynamicXGModel(...)
-feature_collection = Features.create_features(boundaries, ds, test_model)
+feature_collection = Features.create_features(boundaries, ds, test_model, cv_config)
 ```
 
 ## 📦 Core Architecture: The SplitBoundary
@@ -383,7 +383,39 @@ The new architecture uses `Data.SplitBoundary`. A boundary does **not** contain 
 * `history_match_ids`: Static list of match IDs used for burn-in/history.
 * `target_match_ids`: Expanding list of match IDs for the current temporal step.
 
-When you call `create_features(boundary, ds, model)`, the builder merges these IDs, creates an ordered temporal sequence, and passes them to specific extractors which query the `DataStore` on the fly.
+When you call `create_features(boundaries, ds, model, cv_config)`, the builder merges these IDs,
+creates an ordered temporal sequence using the **same clock contract as the splitter**, and passes
+them to specific extractors which query the `DataStore` on the fly. Pass the splitter object—not
+only `dynamics_col`—for grouped experiments.
+
+### Pooled calendar splitting
+
+A `GroupedCVConfig` group containing multiple tournaments uses one shared calendar clock:
+
+- `:match_week` = fixed 7-day bins;
+- `:match_biweek` = fixed 14-day bins;
+- `:match_month` = fixed 28-day bins (the historical name is retained).
+
+Stored match columns remain tournament-local for compatibility. The shared clock exists inside
+the splitter. Blank calendar bins keep their position but produce no empty fold; the splitter
+moves to the next observed bin.
+
+A boundary's IDs are all **fitted** data:
+
+- `history_match_ids` is the frozen prior-season block;
+- `target_match_ids` is the expanding observed block in the target season;
+- neither is the held-out test set.
+
+Retrieve the fixtures the fold predicts with:
+
+```julia
+heldout = Data.get_next_matches(ds, boundaries[i], cv_config)
+```
+
+With `history_seasons > 0`, step zero fits only prior seasons and predicts the first observed
+block of the target season. Every pooled fold enforces `latest fitted kickoff < earliest held-out
+kickoff` using match date and hour. See
+[`docs/guides/grouped_splitting.md`](docs/guides/grouped_splitting.md) for the full contract.
 
 ## 🤝 The Contract: `required_features`
 

@@ -1,11 +1,11 @@
-# T001 working notes — pooled tournament clock
+# T001 working notes — pooled tournament clock (resolved)
 
 Canonical brief: [`docs/tickets/T001-pooled-tournament-clock.md`](../../docs/tickets/T001-pooled-tournament-clock.md)
 
 ## Branch and baseline
 
 - Branch: `fix/t001-pooled-tournament-clock`, based on `feat/scottish-lower-protocol` at
-  `45798bb` (the ticket is not yet on `main`).
+  `45798bb`; production fix implemented at `50d8bad`.
 - Local checkout has no data cache suitable for the blast-radius measurement.
 - Kaimon checkout: `/root/BayesianFootball`; it contains unrelated untracked research files,
   which must not be modified or cleaned.
@@ -58,6 +58,13 @@ makes calendar clock selection explicit.
   counts (real leagues can legitimately schedule different numbers of fixtures).
 - A separate `MultiScaleGRW` sampled-versus-reconstructed target-increment mismatch should be
   verified and ticketed, not folded into T001.
+
+## Production outcome
+
+The package implementation now lives in `src/Data/splitting/clock.jl`, the grouped paths in
+`src/Data/splitting/methods.jl`, and splitter-aware time alignment in
+`src/features/builder.jl`. The durable user/agent contract is
+`docs/guides/grouped_splitting.md`; the canonical ticket contains the final resolution table.
 
 ## Measurement log
 

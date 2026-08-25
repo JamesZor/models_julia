@@ -108,8 +108,9 @@ end
 #
 # `fit_on` picks which of the fold's matches the ridge may learn from:
 #   :training (default) — history ∪ target, i.e. EXACTLY the matches the engine's own likelihood
-#                         runs over. Out-of-sample matches sit at `dynamics_col == time_step + 1`
-#                         and are never in the fold, so this is leak-free and the rating keeps
+#                         runs over. Out-of-sample matches come from `Data.get_next_matches`
+#                         (the next observed effective step) and are never in the fold, so this is
+#                         leak-free and the rating keeps
 #                         updating through the target season.
 #   :history            — the frozen history block only. Also leak-free, but the rating is stale by
 #                         up to a season on the later folds. Kept so the difference is measurable.

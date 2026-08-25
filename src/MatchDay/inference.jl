@@ -102,9 +102,10 @@ boundary list has since grown, the correspondence survives only when the splitte
 There are three rules, tried in this order.
 
 **1. `ds` + `config` + `fixture_ids` — POSITIVE IDENTIFICATION. Prefer this.**
-`Data.get_next_matches(ds, boundaries[i], config)` returns the matches at `time_step + 1`: the
-round fold `i` was built to predict. So the fold for a match day is simply the one whose *next
-round is this card*, and the answer is keyed on `(target_season, time_step)` — stable facts about
+`Data.get_next_matches(ds, boundaries[i], config)` returns the next observed block that fold `i`
+was built to predict. (For pooled calendar clocks this can skip blank period labels.) So the fold
+for a match day is simply the one whose *next block is this card*, and the answer is keyed on
+`(target_season, time_step)` — stable facts about
 the fold — rather than on its position in a list that gets recomputed. This is the same call
 `Experiments.post_processing` uses to generate out-of-sample predictions, which is what makes
 train and serve consistent by construction instead of by coincidence.
