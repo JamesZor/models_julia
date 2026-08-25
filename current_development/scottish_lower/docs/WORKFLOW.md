@@ -26,7 +26,8 @@ NN_model_name/
 ├── FINDINGS.md         Dated gate results + config hashes. Append-only.
 ├── l01_model.jl        Config struct / adapter into the src engine. Definitions only.
 ├── l02_equations.jl    Independent pure-Julia reimplementation of λ, for the parity gate
-├── l03_gates.jl        Gate implementations for THIS model (lifted to _protocol/ on second use)
+├── l03_gates.jl        Gates 0-2 for THIS model (lifted to _protocol/ on second use)
+├── l04_sampling_gates.jl  Gate 3: equation parity, gradients, smoke run
 ├── v01_walkthrough.jl  ★ Gates 0–5 as numbered REPL blocks. Cheap. Run this first, always.
 ├── r01_train.jl        Full walk-forward grid (James launches)
 ├── r02_evaluate.jl     Gate 6 — OOS scoring vs market on identical fixtures

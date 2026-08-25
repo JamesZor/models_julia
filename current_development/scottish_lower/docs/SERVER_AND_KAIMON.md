@@ -11,10 +11,44 @@ and they are used for different things.
 ## The box
 
 - Repo checkout: `/root/BayesianFootball` — a **separate clone** from the local working copy.
-- 32 hyperthreads / 16 physical cores; `Threads.nthreads() = 16` in the kaimon sessions.
-- Start Julia with `julia --project -t 16`, pin cores (`using ThreadPinning; pinthreads(:cores)`),
-  and set `BLAS.set_num_threads(1)` before sampling.
+- **16 physical cores / 32 hyperthreads.**
 - Prototype artifacts written by this stream go under `data/scottish_lower/<model>/<config_hash>/`.
+
+### Required setup before ANY sampling
+
+```julia
+# shell
+julia --project -t 16
+
+# session, before sampling
+using ThreadPinning
+pinthreads(:cores)
+
+using LinearAlgebra
+BLAS.set_num_threads(1)
+```
+
+Each line matters, and getting one wrong costs real wall-clock time:
+
+**`-t 16`, not `-t 32`.** Use physical cores, not hyperthreads. NUTS is a latency-bound
+gradient loop, not a throughput workload — two chains sharing one physical core's execution
+units run each slower than one chain per core, and the queue is only as fast as its slowest
+chain. `Threads.nthreads()` should read 16.
+
+**`pinthreads(:cores)`.** Without pinning, the OS migrates threads between cores mid-run.
+Each migration throws away the L1/L2 cache the gradient tape was replaying against, and a
+long queue drifts into a state where several chains contend for the same core while others
+idle. Pin before spawning any sampling task — pinning after the threads are running does not
+move existing work.
+
+**`BLAS.set_num_threads(1)`.** BLAS defaults to spawning its own thread pool. With 16 Julia
+threads each launching a multi-threaded BLAS call, the machine oversubscribes badly and
+throughput collapses. This model's linear algebra is small enough that single-threaded BLAS
+is faster anyway; parallelism belongs at the chain level, which is where the queue puts it.
+
+**Queue tasks.** `QueuedNUTSConfig` flattens folds × chains into one global queue, so a slow
+chain does not leave cores idle waiting for its fold to finish. Set
+`max_concurrent_tasks = 16` to match the physical cores (the contract's `queue_tasks`).
 
 ## Getting local edits onto the server
 

@@ -323,6 +323,7 @@ function tp_smoke_config(model, contract::SLContract; save_dir::AbstractString)
         n_warmup       = contract.smoke_warmup,
         accept_rate    = contract.accept_rate,
         max_depth      = contract.max_depth,
+        initialisation = Samplers.UniformInit(-contract.init_range, contract.init_range),
         show_progress  = false,
     )
 

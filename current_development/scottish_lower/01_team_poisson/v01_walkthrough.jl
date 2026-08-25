@@ -20,8 +20,13 @@
 #
 # GATE COVERAGE IN THIS FILE
 #   [x] 0. Contract        [x] 1. Config        [x] 2. Features
-#   [ ] 3. Sampling        [ ] 4. Extraction    [ ] 5. Score matrix
-#   Blocks 3-5 are not yet written — see FINDINGS.md.
+#   [x] 3. Sampling        [ ] 4. Extraction    [ ] 5. Score matrix
+#   Blocks 4-5 are not yet written — see FINDINGS.md.
+#
+# BEFORE THE SMOKE RUN (block 7), the session must be started as
+#   julia --project -t 16
+# and set up with ThreadPinning + single-threaded BLAS. See
+# docs/SERVER_AND_KAIMON.md § "Required setup before ANY sampling".
 #
 # ==============================================================================
 
@@ -42,6 +47,7 @@ include(joinpath(TP_ROOT, "_protocol/config.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l01_model.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l02_equations.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l03_gates.jl"))
+include(joinpath(TP_ROOT, "01_team_poisson/l04_sampling_gates.jl"))
 
 
 # %%
@@ -118,3 +124,81 @@ tp_gate2, tp_features = tp_gate_features(tp_ds, tp_folds, tp_engine, tp_contract
 # Poke at one fold:
 #   tp_features[1].data[:n_teams]
 #   sort(collect(tp_features[1].data[:team_map]), by = last)
+
+
+# %%
+# ==============================================================================
+# 5. GATE 3a — Equation parity
+# ==============================================================================
+#
+# The load-bearing gate. DynamicPPL scores the Turing model; l02_equations.jl
+# scores an independent implementation written from MODEL.md. If these agree, the
+# model being fitted is the model that is documented.
+#
+# Several independent prior draws, not one — a single point can agree by accident,
+# for instance if a scale that should multiply a parameter happens to sit near 1.
+#
+# Verified 2026-08-25: max |Δ| = 0.0. Exact, not merely within tolerance.
+
+tp_gate3a = tp_gate_equation_parity(tp_engine, tp_features[1])
+@assert sl_gate_table("3a. Equation parity", tp_gate3a)
+
+
+# %%
+# ==============================================================================
+# 6. GATE 3b — Gradient health
+# ==============================================================================
+#
+# Four independent routes to the same gradient: fresh ReverseDiff, the compiled
+# tape NUTS will actually replay, ForwardDiff, and finite differences.
+#
+# The compiled tape is a STATIC recording. A data-dependent branch inside the
+# model would leave the tape frozen on whichever branch was taken at record time —
+# still returning plausible numbers at other parameter values. That is why
+# agreement is also checked at perturbed points, not only where it was recorded.
+#
+# Latency is reported, never gating: a slow model is a cost, a wrong one is a bug.
+
+tp_gate3b, tp_grad = tp_gate_gradients(tp_engine, tp_features[1])
+@assert sl_gate_table("3b. Gradient health", tp_gate3b)
+
+# tp_grad.median_ms is fold 1 (720 rows). Later folds carry ~1060.
+
+
+# %%
+# ==============================================================================
+# 7. GATE 3c — Smoke run   ***THIS ONE SAMPLES***
+# ==============================================================================
+#
+# One fold, four chains, persisted through src/experiments. The saved artifact is
+# the input to gate 4 — do not delete it.
+#
+# REQUIRES the session to have been started with `julia --project -t 16` and set
+# up as follows. Run this cell BEFORE tp_run_smoke; pinning after threads are
+# already working does not move existing tasks.
+
+using ThreadPinning
+using LinearAlgebra
+pinthreads(:cores)
+BLAS.set_num_threads(1)
+@assert Threads.nthreads() == 16   # physical cores, not the 32 hyperthreads
+
+
+# %%
+# The fold here is the season-opening one (end_dynamics = 0): fitted on prior
+# seasons only, predicting the first observed block. It is the smallest and least
+# representative fold in the set, chosen because it is the only way to get exactly
+# one fold through the real run_experiment path.
+#
+# So: passing this is NECESSARY, not sufficient.
+
+tp_smoke_results, tp_smoke_path = tp_run_smoke(tp_ds, tp_engine, tp_contract)
+
+tp_gate3c = tp_gate_convergence(tp_smoke_results, tp_contract)
+@assert sl_gate_table("3c. Smoke convergence", tp_gate3c)
+
+println("saved to: ", tp_smoke_path)
+
+# Poke at the chain:
+#   tp_chain = first(tp_smoke_results.training_results)[1]
+#   DataFrame(MCMCChains.summarystats(tp_chain))

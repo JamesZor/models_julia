@@ -62,6 +62,12 @@ Base.@kwdef struct SLContract
     max_depth::Int       = 10
     seed::Int            = 20260825
 
+    # NUTS initialisation half-width, in VALUE space (not unconstrained space).
+    # Stated explicitly because QueuedNUTSConfig otherwise defaults to +/-0.001,
+    # which is far tighter than the repository's own presets use (+/-0.1) and
+    # starts positive-constrained scales almost on their boundary.
+    init_range::Float64  = 0.1
+
     # --- Pricing --------------------------------------------------------------
     max_goals::Int              = 12               # score-matrix truncation
     totals_lines::Vector{Float64} = [0.5, 1.5, 2.5, 3.5]
@@ -162,6 +168,7 @@ function sl_describe(contract::SLContract = sl_contract())
     println("  smoke  (gate 3)    : $(contract.smoke_chains) chains x $(contract.smoke_warmup)/$(contract.smoke_samples)")
     println("  grid   (gate 6-7)  : $(contract.grid_chains) chains x $(contract.grid_warmup)/$(contract.grid_samples), $(contract.queue_tasks) tasks")
     println("  accept/depth/seed  : $(contract.accept_rate) / $(contract.max_depth) / $(contract.seed)")
+    println("  init (value space) : ±$(contract.init_range)")
     println("-" ^ 74)
     println("  book               : 1X2, O/U $(contract.totals_lines), BTTS")
     println("  score matrix       : 0..$(contract.max_goals) goals")
