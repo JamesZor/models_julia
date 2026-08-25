@@ -167,3 +167,70 @@ Calendar bins are ragged in a new way: OOS block sizes now range from **2** (fol
 international breaks — but a fold predicting 2 matches contributes very little evidence
 while still costing a full fit. Worth remembering when gate 6 weights folds; an unweighted
 mean over folds would over-weight fold 9 by a factor of ~12 relative to its information.
+
+---
+
+## 2026-08-25 — Gate 3a/3b executed, config `54080fde`
+
+Fold 1 (season-opening, 720 rows, 23 teams, 51 parameters). Gate 3c (smoke) not
+yet run — it samples, and is James's to launch.
+
+| Gate | Result |
+|---|---|
+| 3a. Equation parity | **PASS 3/3** |
+| 3b. Gradient health | **PASS 7/7** |
+
+### 3a — the load-bearing result
+
+```
+log density parity (Turing vs l02)   max |Δ| = 0.000e+00 over 3 prior draws
+sampled-site manifest                7 sites, as documented
+parameter count                      51 = 5 scalars + 2 x 23 team effects
+```
+
+**The difference is exactly zero, not merely within tolerance.** DynamicPPL's log
+density and the independent `l02_equations.jl` implementation — written from
+MODEL.md rather than from the engine — agree bit-for-bit at three independent
+prior draws (e.g. `-1140.8620713133826` both ways).
+
+So for this configuration the fitted model and the documented model are the same
+object. Gate 4 can now use `l02` as its reference for the priced model.
+
+This also settles the open question flagged in `l02_equations.jl`:
+`DynamicPPL.VarInfo(model)` is **unlinked**, so the log density is in the original
+constrained space and no Jacobian correction is needed for the Gamma-distributed
+scales. Had the space been linked, parity would have failed by exactly those
+log-Jacobian terms.
+
+### 3b — gradients
+
+```
+compiled tape == fresh ReverseDiff    relerr = 0.000e+00
+ReverseDiff == ForwardDiff            relerr = 3.387e-15
+finite differences agree              max |Δ| = 2.379e-07
+static tape safe at perturbed points  max relerr = 0.000e+00 over 3 probes
+compiled gradient latency             median 1.448 ms (compile 6.70 s)
+```
+
+All four routes agree. The static-tape probe is clean, which is what licenses
+using a compiled tape at all: the model has no data-dependent branch that would
+freeze the tape on one path.
+
+**Latency is 1.448 ms against the guide's < 1 ms target** — inside "acceptable"
+(< 3 ms) but not at target. That figure is fold 1's 720 rows; later folds carry
+~1060, so expect roughly 2.1 ms there. Reported, not gated: a slow model is a
+cost, a wrong one is a bug. Worth revisiting only if the full grid proves painful.
+
+### Sampler initialisation was a hidden default
+
+`QueuedNUTSConfig` defaults to `UniformInit(-0.001, 0.001)` — far tighter than the
+repository's own presets (`±0.1`), and it starts the positive-constrained scales
+`σ_a`/`σ_d` almost on their support boundary. Now stated explicitly in the
+contract as `init_range = 0.1`, since gate 1's premise is that no configuration is
+invisible.
+
+### Next
+
+Gate 3c: run the smoke (block 7 of the walkthrough) with `-t 16`, ThreadPinning
+and single-threaded BLAS. It persists a chain to
+`data/scottish_lower/01_team_poisson/54080fde/`, which gate 4 then reloads.
