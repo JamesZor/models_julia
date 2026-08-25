@@ -251,6 +251,22 @@ feature_gate = (
     row_order_invariant=row_order_invariant,
 )
 
+# The older SubDataFrame API must describe the same fitted dynamic folds as the relational API.
+legacy_views = Data.create_data_splits(scottish_ds, scottish_config)
+relational_dynamic = filter(pair -> last(pair).time_step != 0, scottish_boundaries)
+legacy_ids = Dict(
+    meta.time_step => Set(Int.(view_df.match_id)) for (view_df, meta) in legacy_views)
+relational_ids = Dict(
+    meta.time_step => Set(vcat(boundary.history_match_ids, boundary.target_match_ids))
+    for (boundary, meta) in relational_dynamic
+)
+legacy_gate = (
+    legacy_folds=length(legacy_views),
+    relational_dynamic_folds=length(relational_dynamic),
+    same_steps=Set(keys(legacy_ids)) == Set(keys(relational_ids)),
+    same_ids=legacy_ids == relational_ids,
+)
+
 # %%
 # ===================================================================
 # 8. Final gates and report object
@@ -261,23 +277,27 @@ pooled_no_empty = all(row.empty == 0 for row in patched_pooled)
 pooled_bounded = all(row.maximum_span_hours < 14 * 24 for row in patched_pooled)
 singletons_identical = all(row.exactly_identical for row in singleton_controls)
 features_aligned = same_bin_same_state && contiguous_states && row_order_invariant
+legacy_consistent = legacy_gate.same_steps && legacy_gate.same_ids
 
 @assert pooled_safe
 @assert pooled_no_empty
 @assert pooled_bounded
 @assert singletons_identical
 @assert features_aligned
+@assert legacy_consistent
 
 t001_dev_report = (
     incumbent=incumbent_pooled,
     patched=patched_pooled,
     singleton_controls=singleton_controls,
     feature_gate=feature_gate,
+    legacy_gate=legacy_gate,
     gates=(;
         pooled_safe,
         pooled_no_empty,
         pooled_bounded,
         singletons_identical,
         features_aligned,
+        legacy_consistent,
     ),
 )

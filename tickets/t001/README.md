@@ -14,6 +14,8 @@ Canonical brief: [`docs/tickets/T001-pooled-tournament-clock.md`](../../docs/tic
 - Kaimon comparison report: `tickets/t001/PROTOTYPE_REPORT.md`.
 - End-to-end feature-time research: `tickets/t001/FEATURE_TIME_ALIGNMENT.md`.
 - Scoped production plan: `tickets/t001/IMPLEMENTATION_PLAN.md`.
+- Package-interface monkey patch: `tickets/t001/l01_dev_patch.jl` + `r01_dev_patch.jl`.
+- Monkey-patch Kaimon report: `tickets/t001/DEV_PATCH_REPORT.md`.
 
 ## Confirmed code path
 
@@ -60,7 +62,9 @@ makes calendar clock selection explicit.
 ## Measurement log
 
 Kaimon baseline and prototype comparison completed on all five pooled segments. Across the
-shared seasons in the current caches, the incumbent had 295 contaminated transitions out of
-453; the prototype had 0 out of 503, no empty folds, and every held-out biweek was shorter than
-14 elapsed days. All 235 singleton control folds were exactly unchanged. See
-`PROTOTYPE_REPORT.md` for the segment table and side-by-side 2024-10-19 fold.
+shared seasons in the current caches, the incumbent had 295 contaminated evaluated transitions;
+the standalone prototype and package-interface monkey patch both reduced this to 0, produced no
+empty patched folds, and kept every held-out biweek shorter than 14 elapsed days. The package
+snapshot comparison preserved all 253 singleton API folds exactly. Its feature gate was
+row-order invariant, its legacy/relational fitted ID sets agreed, and the unchanged Scottish
+local mitigation dropped 0 matches. See `PROTOTYPE_REPORT.md` and `DEV_PATCH_REPORT.md`.
