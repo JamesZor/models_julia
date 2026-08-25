@@ -263,3 +263,198 @@ function tp_gate_gradients(model, fs; seed::Int = 20260825, probes = [0.001, -0.
 
     return (results, (; θ, tape, f, median_ms = med_ms))
 end
+
+
+# ==============================================================================
+# 4. GATE 3c — Smoke run
+# ==============================================================================
+#
+# One fold, sampled and PERSISTED through src/experiments. The saved artifact is
+# the input to gate 4, so this is not a throwaway check.
+#
+# This is the only MCMC in the walkthrough. James runs it.
+
+using MCMCChains
+using DataFrames
+using Statistics
+
+const Experiments = BayesianFootball.Experiments
+const Training    = BayesianFootball.Training
+const Samplers    = BayesianFootball.Samplers
+
+"""
+    tp_smoke_splitter(contract) -> GroupedCVConfig
+
+The contract's splitter bounded to a SINGLE fold via `end_dynamics = 0`.
+
+This yields the season-opening fold: fitted on prior seasons only, predicting the
+first observed block of the target season. It is the smallest and least
+representative fold in the set, and it is chosen because it is the only way to get
+exactly one fold through the real `run_experiment` path rather than assembling a
+one-element FeatureCollection by hand.
+
+Consequence for reading the result: a passing smoke here is NECESSARY, not
+sufficient. Later folds carry ~1060 rows against this one's 720, so both gradient
+cost and sampling time scale up from whatever this reports.
+"""
+function tp_smoke_splitter(contract::SLContract)
+    return Data.GroupedCVConfig(
+        tournament_groups = [contract.tournaments],
+        target_seasons    = contract.dev_seasons,
+        history_seasons   = contract.history_seasons,
+        dynamics_col      = contract.dynamics_col,
+        warmup_period     = contract.warmup_period,
+        stop_early        = contract.stop_early,
+        end_dynamics      = 0,
+    )
+end
+
+"""
+    tp_smoke_config(model, contract; save_dir) -> ExperimentConfig
+
+`ExperimentConfig` is built directly rather than through `create_experiment_task`,
+because that helper does not expose `end_dynamics` and would therefore run every
+fold.
+"""
+function tp_smoke_config(model, contract::SLContract; save_dir::AbstractString)
+    sampler = Samplers.QueuedNUTSConfig(
+        n_samples      = contract.smoke_samples,
+        n_chains       = contract.smoke_chains,
+        n_warmup       = contract.smoke_warmup,
+        accept_rate    = contract.accept_rate,
+        max_depth      = contract.max_depth,
+        show_progress  = false,
+    )
+
+    execution = Training.Independent(
+        parallel             = true,
+        max_concurrent_tasks = contract.smoke_chains,
+    )
+
+    return Experiments.ExperimentConfig(
+        name            = "tp01_smoke_$(sl_hash(model))",
+        model           = model,
+        splitter        = tp_smoke_splitter(contract),
+        training_config = Training.TrainingConfig(sampler, execution, nothing, false),
+        save_dir        = save_dir,
+        description     = "Model 01 gate-3 smoke: one fold, persisted for gate 4.",
+    )
+end
+
+"""
+    tp_run_smoke(ds, model, contract) -> (results, path)
+
+RUNS MCMC. Roughly `smoke_chains` chains x `smoke_warmup + smoke_samples`
+iterations on one fold.
+
+Saves through `Experiments.save_experiment`, so gate 4 can reload the exact
+artifact rather than a hand-built object.
+"""
+function tp_run_smoke(ds, model, contract::SLContract)
+    save_dir = sl_artifact_dir(contract, "01_team_poisson", sl_hash(model))
+    config   = tp_smoke_config(model, contract; save_dir = save_dir)
+
+    results = Experiments.run_experiment(ds, config)
+    path    = Experiments.save_experiment(results)
+
+    return (results, path)
+end
+
+
+# ==============================================================================
+# 5. Convergence diagnostics
+# ==============================================================================
+
+"""
+    tp_bfmi(chain) -> Vector{Float64}
+
+Bayesian fraction of missing information, per chain, from the sampler's
+`hamiltonian_energy` internal:
+
+    BFMI = Σ (E_t − E_{t−1})² / (N · Var(E))
+
+Computed here because `MCMCDiagnosticTools` is not a direct dependency. Values
+below ~0.3 indicate the sampler is exploring the energy distribution poorly,
+usually a sign of a badly scaled posterior.
+"""
+function tp_bfmi(chain)
+    :hamiltonian_energy in names(chain, :internals) || return Float64[]
+    E = Array(chain[:hamiltonian_energy])
+    out = Float64[]
+    for c in axes(E, 2)
+        e = vec(E[:, c])
+        v = var(e)
+        push!(out, v > 0 ? sum(diff(e) .^ 2) / (length(e) * v) : NaN)
+    end
+    return out
+end
+
+"""
+    tp_gate_convergence(results, contract; rhat_max, ess_min)
+
+Did it converge, and did the sampler behave?
+
+Rhat and ESS are the "did the chains agree" questions; divergences and depth-cap
+hits are the "did the geometry fight back" questions. A run can pass the first
+pair and still be untrustworthy if it fails the second, so all four are reported.
+"""
+function tp_gate_convergence(results, contract::SLContract;
+                             rhat_max::Float64 = 1.01, ess_min::Float64 = 400.0)
+    chains = [c for (c, _) in results.training_results]
+    out = []
+
+    push!(out, (
+        name   = "fold sampled",
+        pass   = length(chains) == 1,
+        detail = "$(length(chains)) chain object(s) returned",
+    ))
+    isempty(chains) && return out
+
+    chain = first(chains)
+    stats = DataFrame(MCMCChains.summarystats(chain))
+
+    max_rhat = maximum(skipmissing(stats.rhat))
+    push!(out, (
+        name   = "Rhat",
+        pass   = max_rhat <= rhat_max,
+        detail = @sprintf("max %.5f (threshold %.2f)", max_rhat, rhat_max),
+    ))
+
+    min_bulk = minimum(skipmissing(stats.ess_bulk))
+    min_tail = minimum(skipmissing(stats.ess_tail))
+    push!(out, (
+        name   = "effective sample size",
+        pass   = min_bulk >= ess_min && min_tail >= ess_min,
+        detail = @sprintf("min bulk %.0f, min tail %.0f (threshold %.0f)", min_bulk, min_tail, ess_min),
+    ))
+
+    internals = names(chain, :internals)
+
+    n_div = :numerical_error in internals ? Int(sum(Array(chain[:numerical_error]))) : -1
+    push!(out, (
+        name   = "divergences",
+        pass   = n_div == 0,
+        detail = n_div < 0 ? "numerical_error not recorded" : "$n_div divergent transitions",
+    ))
+
+    if :tree_depth in internals
+        depths = Array(chain[:tree_depth])
+        n_cap  = count(>=(contract.max_depth), depths)
+        push!(out, (
+            name   = "tree depth",
+            pass   = n_cap == 0,
+            detail = "max $(Int(maximum(depths))), $n_cap hits at cap $(contract.max_depth)",
+        ))
+    end
+
+    bfmi = tp_bfmi(chain)
+    if !isempty(bfmi)
+        push!(out, (
+            name   = "BFMI",
+            pass   = minimum(bfmi) >= 0.3,
+            detail = @sprintf("min %.3f across %d chains (threshold 0.30)", minimum(bfmi), length(bfmi)),
+        ))
+    end
+
+    return out
+end
