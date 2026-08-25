@@ -10,6 +10,8 @@ Canonical brief: [`docs/tickets/T001-pooled-tournament-clock.md`](../../docs/tic
 - Kaimon checkout: `/root/BayesianFootball`; it contains unrelated untracked research files,
   which must not be modified or cleaned.
 - Reproducer: `tickets/t001/reproduce.jl`.
+- Calendar-clock prototype: `tickets/t001/prototype.jl`.
+- Kaimon comparison report: `tickets/t001/PROTOTYPE_REPORT.md`.
 
 ## Confirmed code path
 
@@ -53,6 +55,8 @@ makes calendar clock selection explicit.
 
 ## Measurement log
 
-Pending remote baseline run for ScottishUpper, IrelandAll, SouthKorea, and Norway. Record exact
-season/fold contamination counts and maximum held-out span here, then copy durable results into
-the canonical ticket's `## Resolution` section.
+Kaimon baseline and prototype comparison completed on all five pooled segments. Across the
+shared seasons in the current caches, the incumbent had 295 contaminated transitions out of
+453; the prototype had 0 out of 503, no empty folds, and every held-out biweek was shorter than
+14 elapsed days. All 235 singleton control folds were exactly unchanged. See
+`PROTOTYPE_REPORT.md` for the segment table and side-by-side 2024-10-19 fold.
