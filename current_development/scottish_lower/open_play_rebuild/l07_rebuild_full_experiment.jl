@@ -1,12 +1,14 @@
 module RebuildFullExperiment
 
-using BayesianFootball, DataFrames, Serialization, UUIDs, SHA, Dates
+using BayesianFootball, DataFrames, MCMCChains, Serialization, UUIDs, SHA, Dates, Random
 include(joinpath(@__DIR__, "l06_rebuild_sampling.jl"))
 using .RebuildSampling
 
-export boundary_sha256, registry_subset, atomic_replace_serialize, sanitized_error,
-       checkpoint_valid, fold_inventory, true_oos_inventory, immutable_manifest,
-       boundary_ids, inference_ids
+export Stage8RunConfig, stage8_config_from_env, stage8_output_directory,
+       boundary_sha256, registry_subset, atomic_replace_serialize, sanitized_error,
+       checkpoint_valid, checkpoint_metadata_matches, valid_native_checkpoint,
+       prepare_native_checkpoints!, stage8_progress!, fold_inventory,
+       true_oos_inventory, immutable_manifest, boundary_ids, inference_ids
 
 """Credential-free stable identity for a temporal boundary's training observations."""
 function boundary_sha256(boundary)
@@ -95,5 +97,193 @@ function fold_inventory(oos_folds)
       tournament_ids=sort(Int.(x.meta.tournament_ids))) for x in oos_folds]
 end
 immutable_manifest(; kwargs...) = (; schema_version=1, stage=8, created_utc=string(now(UTC)), kwargs...)
+
+# -------------------------------------------------------------------
+# Human-facing Stage 8 runner configuration
+# -------------------------------------------------------------------
+
+Base.@kwdef struct Stage8RunConfig
+    samples::Int = 800
+    warmup::Int = 800
+    chains::Int = 4
+    max_depth::Int = 10
+    expected_folds::Int = 38
+    max_concurrent_tasks::Int = 16
+    queue_seed::Int = 80_808
+    dry_run::Bool = false
+    prepare_only::Bool = false
+    run_id::String = Dates.format(now(UTC), "yyyymmddTHHMMSS") * "_" * string(rand(UInt), base=16)
+    output_root::String = abspath(joinpath("data", "scottish_open_play_rebuild"))
+    resume_directory::Union{Nothing,String} = nothing
+end
+
+_env_bool(name, default="0") = get(ENV, name, default) == "1"
+_env_int(name, default) = parse(Int, get(ENV, name, string(default)))
+
+function stage8_config_from_env()
+    resume = get(ENV, "STAGE8_RESUME_DIR", "")
+    config = Stage8RunConfig(
+        samples = _env_int("STAGE8_SAMPLES", 800),
+        warmup = _env_int("STAGE8_WARMUP", 800),
+        expected_folds = _env_int("STAGE8_EXPECTED_FOLDS", 38),
+        max_concurrent_tasks = _env_int("STAGE8_MAX_CONCURRENT_TASKS", 16),
+        queue_seed = _env_int("STAGE8_SEED", 80_808),
+        dry_run = _env_bool("STAGE8_DRY_RUN"),
+        prepare_only = _env_bool("STAGE8_PREPARE_ONLY"),
+        run_id = get(ENV, "STAGE8_RUN_ID",
+            Dates.format(now(UTC), "yyyymmddTHHMMSS") * "_" * string(rand(UInt), base=16)),
+        output_root = abspath(get(ENV, "STAGE8_OUTPUT_DIR",
+            joinpath("data", "scottish_open_play_rebuild"))),
+        resume_directory = isempty(resume) ? nothing : abspath(resume),
+    )
+    config.samples > 0 || throw(ArgumentError("samples must be positive"))
+    config.warmup > 0 || throw(ArgumentError("warmup must be positive"))
+    config.expected_folds > 0 || throw(ArgumentError("expected folds must be positive"))
+    config.max_concurrent_tasks > 0 || throw(ArgumentError("queue concurrency must be positive"))
+    return config
+end
+
+function stage8_output_directory(config::Stage8RunConfig)
+    if isnothing(config.resume_directory)
+        outdir = joinpath(config.output_root, "stage8_" * config.run_id)
+        ispath(outdir) && throw(ArgumentError("run directory already exists: $outdir"))
+        mkpath(outdir)
+        return outdir
+    end
+    isdir(config.resume_directory) ||
+        throw(ArgumentError("resume directory does not exist: $(config.resume_directory)"))
+    return config.resume_directory
+end
+
+# -------------------------------------------------------------------
+# Native queued-checkpoint validation and recovery
+# -------------------------------------------------------------------
+
+function checkpoint_metadata_matches(stored, expected)
+    stored isa NamedTuple || return false
+    return get(stored, :fold_index, nothing) == expected.fold_index &&
+        get(stored, :boundary_sha256, nothing) == expected.boundary_sha256 &&
+        get(stored, :oos_provenance, nothing) == expected.oos_provenance
+end
+
+function valid_native_checkpoint(path, context, samples::Int, validate_chain)
+    isfile(path) || return nothing
+    saved = try
+        deserialize(path)
+    catch
+        return nothing
+    end
+    saved isa Tuple && length(saved) == 2 || return nothing
+    chain, metadata = saved
+    chain isa Chains || return nothing
+    checkpoint_metadata_matches(metadata, context.meta) || return nothing
+    try
+        validate_chain(chain, Int(context.fs[:n_teams]))
+        size(chain, 1) == samples || return nothing
+        size(chain, 3) == 4 || return nothing
+        return saved
+    catch
+        return nothing
+    end
+end
+
+_checkpoint_name(index) = "split_$(lpad(index, 3, '0')).jls"
+_fold_directory(outdir, fold) = joinpath(outdir, "fold_$(lpad(fold, 2, '0'))")
+
+"""Validate, recover, or migrate native split checkpoints without sampling."""
+function prepare_native_checkpoints!(contexts, checkpoint_dir, outdir, samples, validate_chain)
+    mkpath(checkpoint_dir)
+    recovered = Int[]
+    migrated = Int[]
+    invalidated = Int[]
+
+    for (index, context) in enumerate(contexts)
+        native_path = joinpath(checkpoint_dir, _checkpoint_name(index))
+        if isfile(native_path) &&
+                isnothing(valid_native_checkpoint(native_path, context, samples, validate_chain))
+            mv(native_path, native_path * ".invalid-" * string(uuid4()))
+            push!(invalidated, context.x.fold)
+        end
+
+        if !isfile(native_path)
+            prefix = basename(native_path) * ".invalid-"
+            candidates = filter(
+                path -> startswith(basename(path), prefix),
+                readdir(checkpoint_dir; join=true),
+            )
+            valid_candidates = filter(
+                path -> !isnothing(valid_native_checkpoint(path, context, samples, validate_chain)),
+                candidates,
+            )
+            length(valid_candidates) > 1 &&
+                error("multiple valid recovery checkpoints for fold $(context.x.fold)")
+            if length(valid_candidates) == 1
+                mv(only(valid_candidates), native_path)
+                push!(recovered, context.x.fold)
+            end
+        end
+
+        isfile(native_path) && continue
+
+        fold_dir = _fold_directory(outdir, context.x.fold)
+        old_chain_path = joinpath(fold_dir, "combined_chain.jls")
+        old_diagnostics_path = joinpath(fold_dir, "diagnostics.jls")
+        isfile(old_chain_path) && isfile(old_diagnostics_path) || continue
+
+        old_metadata = try deserialize(old_diagnostics_path) catch; nothing end
+        old_chain = try deserialize(old_chain_path) catch; nothing end
+        exact = old_metadata isa NamedTuple &&
+            get(old_metadata, :boundary_sha256, nothing) == context.boundary_sha256 &&
+            get(old_metadata, :registry_fingerprint, nothing) == context.fs[:registry_fingerprint]
+        exact && old_chain isa Chains || continue
+
+        try
+            validate_chain(old_chain, Int(context.fs[:n_teams]))
+            size(old_chain, 1) == samples || error("legacy retained-draw mismatch")
+            size(old_chain, 3) == 4 || error("legacy chain-count mismatch")
+            BayesianFootball.Training.save_split_checkpoint(
+                checkpoint_dir,
+                index,
+                (old_chain, context.meta),
+            )
+            push!(migrated, context.x.fold)
+        catch err
+            @warn "did not migrate invalid legacy chain for fold $(context.x.fold)" exception=(err, catch_backtrace())
+        end
+    end
+
+    valid = count(eachindex(contexts)) do index
+        path = joinpath(checkpoint_dir, _checkpoint_name(index))
+        !isnothing(valid_native_checkpoint(path, contexts[index], samples, validate_chain))
+    end
+    return (valid=valid, total=length(contexts), recovered, migrated, invalidated)
+end
+
+function stage8_progress!(outdir, inventory)
+    states = Symbol[]
+    for item in inventory
+        fold_dir = _fold_directory(outdir, item.fold)
+        state = if isfile(joinpath(fold_dir, "fold_result.jls"))
+            :pass
+        elseif isfile(joinpath(fold_dir, "hard_gate_failure.jls"))
+            :hardfail
+        elseif isfile(joinpath(fold_dir, "error.jls"))
+            :error
+        else
+            :pending
+        end
+        push!(states, state)
+    end
+    summary = (
+        updated_utc = string(now(UTC)),
+        pass = count(==(:pass), states),
+        hardfail = count(==(:hardfail), states),
+        error = count(==(:error), states),
+        pending = count(==(:pending), states),
+        total = length(states),
+    )
+    atomic_replace_serialize(joinpath(outdir, "progress.jls"), (; summary, states))
+    return summary
+end
 
 end

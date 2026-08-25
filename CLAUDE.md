@@ -64,6 +64,11 @@ New features are prototyped here **before** being moved to `src/`. Always create
 
 Only graduate code to `src/` once the prototype is validated in the runner.
 
+Before creating or substantially refactoring a prototype runner, read
+`docs/prototype_runner_style_guide.md`. Runners must remain human-readable research
+notebooks with numbered package/configuration/data/model/training/diagnostic/inference
+sections; move technical checkpoint and persistence machinery into the paired loader.
+
 Active research streams currently living under `current_development/` (kept after
 the validated work graduated to `src/`):
 - `MetaModels/` — Layer 3 meta-model (see Layer 3 above).
