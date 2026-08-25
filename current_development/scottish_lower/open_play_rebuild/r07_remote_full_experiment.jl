@@ -605,8 +605,7 @@ if SL8_CONFIG.dry_run
     @printf("FINAL_STAGE8_DRY_RUN folds=%d registry=%s output=%s\n",
         length(SL8_BOUNDARIES), SL8_REGISTRY_SHA, SL8_OUT_DIR)
 elseif SL8_CONFIG.prepare_only
-    @printf("FINAL_STAGE8_PREPARE_ONLY folds=%d valid_checkpoints=%d queue_tasks=%d " *
-            "concurrency=%d output=%s\n",
+    @printf("FINAL_STAGE8_PREPARE_ONLY folds=%d valid_checkpoints=%d queue_tasks=%d concurrency=%d output=%s\n",
         length(SL8_FEATURES),
         SL8_CHECKPOINT_REPORT.valid,
         SL8_CONFIG.chains * length(SL8_FEATURES),
