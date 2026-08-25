@@ -115,3 +115,55 @@ gate 1's "nothing is hidden" claim was not actually being met.
 
 Gates 3–5: equation parity against `l02`, gradient diff, smoke run persisted via
 `src/experiments`, synthetic-chain extraction parity, score matrix.
+
+---
+
+## 2026-08-25 — Gates 0–2 re-run on the T001 shared calendar clock, config `54080fde`
+
+T001 was fixed in `src` and merged to main (`edd5eba`): pooled groups now step through
+fixed calendar bins anchored to each season's first kickoff, with a temporal-safety
+assertion, and feature construction takes the splitter so feature time uses the same
+effective clock.
+
+Re-run at `ae8b3a6` after a REPL restart (new `clock.jl` in the module, so Revise cannot
+pick it up).
+
+| | before T001 | after T001 |
+|---|---|---|
+| folds (`24/25`) | 19 | **20** |
+| OOS fixtures | 360 | 360 |
+| dropped by local trim | 5 (all fold 6) | **0** |
+| Gate 0 | 5/5 | **5/5** |
+| Gate 1 | 4/4 | **4/4** |
+| Gate 2 | 6/6 *after mitigation* | **7/7 unmitigated** |
+
+The local kickoff trim is now a clean no-op, kept as a defensive check.
+
+### What changed in the folds
+
+Fold count moved 19 → 20 and composition changed, because calendar bins are not
+dense-rank bins. Total OOS coverage is unchanged at 360 fixtures, so no matches were
+lost or double-counted.
+
+Fit→predict gaps are much tighter. Previously fold 6's held-out block spanned 15 days;
+now the largest gap between last fitted and first held-out kickoff is a normal
+inter-round interval (e.g. fold 10: fitted to 2024-11-30, predicts from 2024-12-03).
+
+### Code change required
+
+Gate 2 moved from `Features.create_features(boundary, ds, model, dynamics_col)` to the
+collection overload `Features.create_features(splits, ds, model, splitter)`. The
+symbol-only overload skips `_align_splitter_time!`, so per-fold construction would have
+produced time indices off the pooled effective clock — silently, since it still returns a
+valid FeatureSet. Grouped paths must pass the complete splitter object.
+
+Added a gate for the new contiguity promise: `time_indices` must be `1..K` with no gaps.
+Passes in all 20 folds.
+
+### Observation worth carrying forward
+
+Calendar bins are ragged in a new way: OOS block sizes now range from **2** (fold 9) to
+**24** (fold 16) fixtures. That is honest — thin bins are real calendar gaps, e.g.
+international breaks — but a fold predicting 2 matches contributes very little evidence
+while still costing a full fit. Worth remembering when gate 6 weights folds; an unweighted
+mean over folds would over-weight fold 9 by a factor of ~12 relative to its information.

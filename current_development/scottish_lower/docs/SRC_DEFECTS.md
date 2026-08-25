@@ -10,7 +10,7 @@ they affect work outside this stream and should not be rediscovered.
 **Found:** 2026-08-25, by model 01 gate 2.
 **Severity:** real, data-dependent. Caused genuine train/predict contamination in
 1 of 19 Scottish `24/25` folds.
-**Status:** mitigated in this stream, **not fixed in `src`**.
+**Status:** **RESOLVED** in `src` 2026-08-25 (merged to main as `edd5eba`). Kept here as the record of how it was found.
 **Ticket:** [`docs/tickets/T001-pooled-tournament-clock.md`](../../../docs/tickets/T001-pooled-tournament-clock.md)
 
 ### Mechanism
@@ -98,3 +98,32 @@ SouthKorea and Norway — funnel, APM, smile, staking backtests included.
 It therefore needs to be its own scoped piece of work with its own validation, not
 a side effect of building model 01. The gate-enforced trim is sufficient and
 provably so in the meantime: gate 2 fails loudly if it ever stops being enough.
+
+
+### Resolution (2026-08-25)
+
+Fixed in `src` under T001. `src/Data/splitting/clock.jl` gives multi-tournament pooled
+groups fixed calendar bins (7 / 14 / 28 days) anchored to each season's first kickoff,
+plus a temporal-safety assertion on `match_date + match_hour`. Feature construction takes
+the splitter (`Features.create_features(splits, ds, model, config)`) so feature time uses
+the same effective clock, and observed bins compress to consecutive model states.
+Contract: `docs/guides/grouped_splitting.md`.
+
+Verified against this stream's gates on 2026-08-25:
+
+| | before | after |
+|---|---|---|
+| folds (`24/25`) | 19 | 20 |
+| OOS fixtures | 360 | 360 |
+| observations dropped by the local trim | 5 (fold 6) | **0** |
+| gate 2 | 6/6 after mitigation | **7/7 unmitigated** |
+
+The local kickoff trim in `tp_build_folds` is now a clean no-op and is retained purely as
+a defensive check. Fold composition changed, so nothing computed under the old splitter is
+comparable — this stream had produced no results yet, which is why fixing it before model
+01's leaderboard was the cheaper order.
+
+Note the T001 report measures contamination across cached pooled segments at 50–70% before
+the fix. This stream independently measured only 1 fold in 19 for Scottish `24/25` at
+`:match_biweek`; the wider figure spans more segments, seasons and bin widths and has not
+been reproduced here.

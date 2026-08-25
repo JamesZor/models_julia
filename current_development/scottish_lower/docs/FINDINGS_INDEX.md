@@ -6,7 +6,8 @@ One line per completed gate run or result, newest first. Details live in each mo
 | Date | Model | Config hash | What | Result |
 |---|---|---|---|---|
 | 2026-08-25 | 01_team_poisson | `54080fde` | Gates 0–2 on 19 dev folds | **PASS** 5/5, 4/4, 6/6 |
-| 2026-08-25 | src (via model 01) | — | Pooled groups walk a per-tournament clock → contaminated fold 6 | **Defect**, see [SRC_DEFECTS](SRC_DEFECTS.md); mitigated, not fixed |
+| 2026-08-25 | src (via model 01) | — | Pooled groups walk a per-tournament clock → contaminated fold 6 | **Fixed** in src as T001 (`edd5eba`); re-verified 20 folds, 0 dropped |
+| 2026-08-25 | 01_team_poisson | `54080fde` | Gates 0–2 re-run on the T001 shared calendar clock | **PASS** 5/5, 4/4, 7/7 |
 
 ## Carried forward from `archive/` (pre-protocol, not gated)
 
