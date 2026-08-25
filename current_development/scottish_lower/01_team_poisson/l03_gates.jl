@@ -42,37 +42,84 @@ struct TPFold
     idx::Int
     step::Int
     season::String
-    boundary::Data.SplitBoundary
+    boundary::Data.SplitBoundary      # TRIMMED — safe to fit on
     meta::Any
-    fitted_ids::Vector{Int}
+    fitted_ids::Vector{Int}           # trimmed: kickoff strictly before first OOS kickoff
+    dropped_ids::Vector{Int}          # removed by kickoff filtration; reported, never silent
     oos_df::DataFrame
+end
+
+"""
+    tp_kickoff_map(ds) -> Dict{Int, DateTime}
+
+Kickoff instant per match, from `match_date` + `match_hour`.
+
+Day resolution is not enough. On 2024-10-19 tournament 56 sits at biweek 5 while
+tournament 57 sits at biweek 6, so a pooled fold can fit on a 16:00 match and
+predict a 14:00 match on the same date. Only the hour distinguishes them.
+"""
+function tp_kickoff_map(ds)
+    m = ds.matches
+    return Dict{Int, DateTime}(
+        Int(row.match_id) => DateTime(row.match_date) + Hour(row.match_hour)
+        for row in eachrow(m)
+    )
 end
 
 """
     tp_build_folds(ds, contract) -> Vector{TPFold}
 
-Cut the development folds and attach each fold's true `t+1` fixtures.
+Cut the development folds, attach each fold's true `t+1` fixtures, and apply
+KICKOFF FILTRATION: any nominally-prior observation whose kickoff is not strictly
+before the earliest OOS kickoff is removed from the fitted set and recorded in
+`dropped_ids`.
+
+Two distinct things make this necessary:
+
+  * pooled 56/57 biweeks are misaligned by one, so a pooled step mixes League One
+    biweek `k` with League Two biweek `k+1` on the same calendar day;
+  * postponements move individual matches across the cutoff.
+
+Both produce the same failure — fitting on a match that has not been played at
+prediction time — and both are handled here rather than trusted to the splitter.
 """
 function tp_build_folds(ds, contract::SLContract)
     sl_assert_not_sealed(contract, contract.dev_seasons)
 
     splitter   = sl_splitter(contract)
     boundaries = Data.create_id_boundaries(ds, splitter)
+    kickoff    = tp_kickoff_map(ds)
 
     folds = TPFold[]
     for (i, (boundary, meta)) in enumerate(boundaries)
-        fitted_ids = vcat(boundary.history_match_ids, boundary.target_match_ids)
-        oos_df     = Data.get_next_matches(ds, (boundary, meta), splitter)
+        oos_df = DataFrame(Data.get_next_matches(ds, (boundary, meta), splitter))
 
-        push!(folds, TPFold(
-            i,
-            meta.time_step,
-            meta.target_season,
-            boundary,
-            meta,
-            fitted_ids,
-            DataFrame(oos_df),
-        ))
+        if nrow(oos_df) == 0
+            push!(folds, TPFold(i, meta.time_step, meta.target_season, boundary, meta,
+                                vcat(boundary.history_match_ids, boundary.target_match_ids),
+                                Int[], oos_df))
+            continue
+        end
+
+        cutoff = minimum(kickoff[Int(id)] for id in oos_df.match_id)
+        keep(id) = haskey(kickoff, Int(id)) && kickoff[Int(id)] < cutoff
+
+        history_keep = [id for id in boundary.history_match_ids if keep(id)]
+        target_keep  = [id for id in boundary.target_match_ids  if keep(id)]
+
+        all_nominal = vcat(boundary.history_match_ids, boundary.target_match_ids)
+        fitted_ids  = vcat(history_keep, target_keep)
+        dropped_ids = setdiff(all_nominal, fitted_ids)
+
+        trimmed = Data.SplitBoundary(
+            boundary.fold_id,
+            boundary.target_step,
+            history_keep,
+            target_keep,
+        )
+
+        push!(folds, TPFold(i, meta.time_step, meta.target_season, trimmed, meta,
+                            fitted_ids, dropped_ids, oos_df))
     end
     return folds
 end
@@ -88,7 +135,7 @@ function tp_fold_table(ds, folds::Vector{TPFold})
     println("-" ^ 74)
     println("FOLD INVENTORY   ($(length(folds)) folds)")
     println("-" ^ 74)
-    println("  fold  season   step   fitted    t+1   last fitted   first OOS")
+    println("  fold  season   step   fitted  dropped    t+1   last fitted   first OOS")
     for f in folds
         fitted_last = tp_last_kickoff(ds, f.fitted_ids)
         oos_first   = tp_first_kickoff(f.oos_df)
@@ -97,6 +144,7 @@ function tp_fold_table(ds, folds::Vector{TPFold})
             rpad(f.season, 8),
             rpad(f.step, 6),
             lpad(length(f.fitted_ids), 6), " ",
+            lpad(length(f.dropped_ids), 7), " ",
             lpad(nrow(f.oos_df), 6), "   ",
             rpad(string(fitted_last), 13), " ",
             string(oos_first))
@@ -289,19 +337,28 @@ function tp_gate_features(ds, folds::Vector{TPFold}, model, contract::SLContract
     ]
 
     # --- (a) kickoff filtration ----------------------------------------------
-    violations = Tuple{Int, Any, Any}[]
+    kickoff = tp_kickoff_map(ds)
+    violations = Int[]
     for f in folds
-        last_fit  = tp_last_kickoff(ds, f.fitted_ids)
-        first_oos = tp_first_kickoff(f.oos_df)
-        if last_fit !== nothing && first_oos !== nothing && !(last_fit < first_oos)
-            push!(violations, (f.idx, last_fit, first_oos))
-        end
+        nrow(f.oos_df) == 0 && continue
+        cutoff = minimum(kickoff[Int(id)] for id in f.oos_df.match_id)
+        any(kickoff[Int(id)] >= cutoff for id in f.fitted_ids) && push!(violations, f.idx)
     end
     push!(results, (
-        name   = "kickoff filtration",
+        name   = "kickoff filtration holds",
         pass   = isempty(violations),
-        detail = isempty(violations) ? "max fitted kickoff < min OOS kickoff in all $(length(folds)) folds" :
-                                       "VIOLATED in folds $([v[1] for v in violations])",
+        detail = isempty(violations) ?
+                 "every fitted kickoff strictly precedes its fold's first OOS kickoff" :
+                 "VIOLATED in folds $violations",
+    ))
+
+    dropped_by_fold = [(f.idx, length(f.dropped_ids)) for f in folds if !isempty(f.dropped_ids)]
+    n_dropped = sum(length(f.dropped_ids) for f in folds; init = 0)
+    push!(results, (
+        name   = "kickoff filtration drops",
+        pass   = true,   # reported, not enforced — a drop is correct behaviour
+        detail = n_dropped == 0 ? "nothing dropped" :
+                 "$n_dropped observations removed as not-yet-played: $dropped_by_fold",
     ))
 
     # --- (b) perturbation ----------------------------------------------------

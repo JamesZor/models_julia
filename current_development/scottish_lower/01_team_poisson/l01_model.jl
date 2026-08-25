@@ -97,10 +97,28 @@ function tp_menu()
 end
 
 """
+    tp_component_fields(label, cfg)
+
+Print a component AND its priors.
+
+The package defines a compact `show` for these configs (`pregame/display.jl`), so
+`GlobalInterception()` prints with no fields at all. Gate 1 promises that nothing
+about the configuration is hidden, so the fields are read out explicitly rather
+than left to `show`.
+"""
+function tp_component_fields(label::AbstractString, cfg)
+    println("  ", rpad(label, 18), ": ", typeof(cfg).name.name)
+    for fname in fieldnames(typeof(cfg))
+        println("      ", rpad(String(fname), 16), " = ", getfield(cfg, fname))
+    end
+    return nothing
+end
+
+"""
     tp_describe(model)
 
-Print every hyperparameter the model carries. Gate 1 requires that nothing about
-the config is invisible.
+Print every hyperparameter the model carries, priors included. Gate 1 requires
+that nothing about the config is invisible.
 """
 function tp_describe(model)
     println("=" ^ 74)
@@ -108,12 +126,11 @@ function tp_describe(model)
     println("=" ^ 74)
     println("  engine            : $(typeof(model).name.name)")
     println("-" ^ 74)
-    println("  interception      : $(model.interception_config)")
-    println("  dispersion        : $(model.dispersion_config)")
-    println("  home advantage    : $(model.homeadvantage_config)")
-    println("  dynamics          : $(model.dynamics_config)")
+    tp_component_fields("interception",   model.interception_config)
+    tp_component_fields("dispersion",     model.dispersion_config)
+    tp_component_fields("home advantage", model.homeadvantage_config)
+    tp_component_fields("dynamics",       model.dynamics_config)
     println("-" ^ 74)
-    println("  half-life (days)  : $(model.dynamics_config.days_half_life)")
     println("  required features : ")
     for f in Features.required_features(model)
         println("      - $(typeof(f).name.name)")
