@@ -1,7 +1,7 @@
 # Mesh Swarm Topology & Operational Findings
 
 **BayesianFootball.jl Swarm Architecture**  
-**Version:** 1.1.0  
+**Version:** 1.2.0  
 **Status:** Active Standard  
 **Workspace:** `scottish_runner:1`
 
@@ -21,18 +21,30 @@
 │ PANE 1.4: MANAGER / REVIEWER      │ PANE 1.5: SCOUT (ARCHIVE & CODEBASE AUDITOR)                         │
 │ • Model: gpt-5.6-sol (lead)       │ • Model: gpt-5.6-luna (fast lookups)                                 │
 │ • Role: Gate verification, code   │ • Role: Query archive/experiments, retrieve baseline parameters      │
-│   reviews, test execution, commits│   and historical findings                                            │
+│   reviews, test execution, commits│   and output findings to /tmp/*.md artifacts                         │
 └───────────────────────────────────┴──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. Inter-Agent Communication Protocol
+## 2. Inter-Agent Communication & Artifact Drop Protocol
 
-All agents communicate via the local mesh CLI tools:
+All agents communicate via the local mesh CLI tools and structured file drops:
+
+### A. CLI Commands
 - **Send instruction:** `agent-send scottish_runner:<target_pane> "<message>"`
 - **Capture status:** `agent-capture scottish_runner:<target_pane> --wait-idle --timeout <sec>`
 - **Dispatch compute to Beast:** `tmux send-keys -t scottish_runner:1.1 "git pull && julia --project <test>" Enter`
+
+### B. Scout File-Drop Handoff Pattern (`/tmp/*.md`)
+Instead of reading raw, unformatted tmux pane buffers which can truncate long tables or pollute text with ANSI escapes:
+1. The requester passes a target file path in the query:
+   ```bash
+   agent-send scottish_runner:1.5 "Investigate wealth prior in archive. Save detailed report to /tmp/scout_wealth.md"
+   ```
+2. The Scout writes its complete, unclipped, structured markdown report directly to `/tmp/scout_wealth.md` and signals completion.
+3. The requester (Manager, Modeller, or Builder) reads `/tmp/scout_wealth.md` directly via native file reading.
+4. **Key Benefits:** Full preservation of mathematical equations, code snippets, and parameter tables without buffer truncation.
 
 ---
 
