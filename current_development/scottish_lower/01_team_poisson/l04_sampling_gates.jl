@@ -30,6 +30,7 @@ using LinearAlgebra
 using Random
 using Statistics
 using Printf
+using Profile
 
 const PGm = BayesianFootball.Models.PreGame
 
@@ -458,4 +459,170 @@ function tp_gate_convergence(results, contract::SLContract;
     end
 
     return out
+end
+
+
+# ==============================================================================
+# 6. Gradient profile report  (diagnostic — NOT a gate)
+# ==============================================================================
+#
+# Gate 3b answers "is the gradient correct, and roughly how fast". This section
+# answers "where does the time actually go", which is the question you ask once
+# the answer to the second half of 3b is disappointing.
+#
+# It is deliberately not a gate. A slow model is a cost to be traded off; only a
+# WRONG model is a defect. Nothing here can fail the walkthrough.
+#
+# The AD backend measured here is the one the sampler really uses:
+# `AutoReverseDiff(compile=true)`, hardcoded at src/samplers/engines/nuts.jl:101
+# and defaulted at src/samplers/types.jl:31. If that ever changes, this report
+# silently stops being representative — hence `tp_ad_backend_matches_src`.
+#
+# ==============================================================================
+
+"""
+    tp_ad_backend_matches_src() -> Bool
+
+The profile below compiles its own ReverseDiff tape. That is only informative if
+NUTS does the same thing, so assert the src default rather than assume it.
+"""
+function tp_ad_backend_matches_src()
+    ad = Samplers.QueuedNUTSConfig().adtype
+    return occursin("ReverseDiff", string(typeof(ad)))
+end
+
+"""
+    tp_hot_frames(; top) -> Vector{(; pct, func, loc)}
+
+Self-time leaders from the last `Profile.@profile` run.
+
+Reads the sample buffer directly instead of calling `Profile.print`, for two
+reasons: the kaimon bridge strips `print` calls out of agent-submitted code, and
+a returned Vector can be asserted on and stored in FINDINGS.md, whereas printed
+text cannot.
+
+Profile buffer layout: samples are separated by `0`, and within a sample index 1
+is the INNERMOST frame. Counting first-frames therefore gives self time, which is
+what identifies the expensive kernel; cumulative time would just re-report the
+top of the call stack.
+"""
+function tp_hot_frames(; top::Int = 12)
+    data   = Profile.fetch(include_meta = false)
+    lidict = Profile.getdict(data)
+
+    counts  = Dict{Tuple{Symbol,String},Int}()
+    total   = 0
+    at_leaf = true
+    for ip in data
+        if ip == 0
+            at_leaf = true
+            continue
+        end
+        if at_leaf
+            total += 1
+            frames = get(lidict, ip, nothing)
+            if frames !== nothing && !isempty(frames)
+                fr  = first(frames)
+                key = (fr.func, string(basename(string(fr.file)), ":", fr.line))
+                counts[key] = get(counts, key, 0) + 1
+            end
+            at_leaf = false
+        end
+    end
+
+    total == 0 && return NamedTuple{(:pct, :func, :loc)}[]
+    ranked = sort(collect(counts); by = last, rev = true)
+    return [(pct = 100 * c / total, func = k[1], loc = k[2])
+            for (k, c) in first(ranked, min(top, length(ranked)))]
+end
+
+"""
+    tp_grad_profile(model, fs; ...) -> NamedTuple
+
+Full AD cost report for one FeatureSet: parameter count, tape compile time,
+primal and gradient latency, allocations, and the self-time leaders.
+
+`primal_ms` is reported alongside `grad_ms` because the RATIO is the diagnostic
+number. Reverse-mode AD should cost roughly 3–5x the primal. A much larger ratio
+means the reverse pass is not running a hand-written adjoint — it has fallen back
+to ReverseDiff's generic broadcast rule, which re-evaluates the kernel per element
+under ForwardDiff duals. That is a fixable cost; a slow primal is not.
+"""
+function tp_grad_profile(model, fs;
+                         seed::Int      = 20260825,
+                         n_bench::Int   = 200,
+                         n_profile::Int = 1500,
+                         top::Int       = 12)
+
+    draw = tp_prior_draw(model, fs; seed = seed)
+    θ    = draw.θ
+    f    = tp_logdensity_fn(draw.turing_model)
+
+    compile_s = @elapsed tape = ReverseDiff.compile(ReverseDiff.GradientTape(f, θ))
+    g = similar(θ)
+    ReverseDiff.gradient!(g, tape, θ)          # warm
+
+    med(xs) = median(xs) * 1e3
+    for _ in 1:5; f(θ); ReverseDiff.gradient!(g, tape, θ); end
+    primal_ms = med([@elapsed f(θ)                          for _ in 1:n_bench])
+    grad_all  = [@elapsed ReverseDiff.gradient!(g, tape, θ) for _ in 1:n_bench]
+    bytes     = @allocated ReverseDiff.gradient!(g, tape, θ)
+
+    Profile.clear()
+    Profile.init(n = 10^7, delay = 0.00002)
+    Profile.@profile for _ in 1:n_profile
+        ReverseDiff.gradient!(g, tape, θ)
+    end
+    hot = tp_hot_frames(top = top)
+    Profile.clear()
+
+    n_rows = length(fs.data[:flat_home_goals])
+
+    return (
+        n_params      = length(θ),
+        n_rows        = n_rows,
+        n_obs         = 2 * n_rows,
+        ad_matches_src = tp_ad_backend_matches_src(),
+        compile_s     = compile_s,
+        primal_ms     = primal_ms,
+        grad_ms       = median(grad_all) * 1e3,
+        grad_min_ms   = minimum(grad_all) * 1e3,
+        grad_max_ms   = maximum(grad_all) * 1e3,
+        ratio         = (median(grad_all) * 1e3) / primal_ms,
+        bytes         = bytes,
+        us_per_obs    = median(grad_all) * 1e6 / (2 * n_rows),
+        hot           = hot,
+    )
+end
+
+"""
+    tp_profile_table(rep; label)
+
+Render `tp_grad_profile` output. Same headline fields as the archived benchmark
+table (parameters / tape compile / gradient eval) so the numbers are directly
+comparable, plus the ratio and self-time breakdown that table lacked — which is
+what tells you WHY a number is what it is.
+"""
+function tp_profile_table(rep; label::AbstractString = "")
+    line = "-"^74
+    @printf("\n%s\nGRADIENT PROFILE   %s\n%s\n", line, label, line)
+    @printf("  matches / observations      %d / %d\n", rep.n_rows, rep.n_obs)
+    @printf("  sampled parameters          %d\n", rep.n_params)
+    @printf("  AD backend matches src      %s\n",
+            rep.ad_matches_src ? "yes — ReverseDiff, compiled tape" : "NO — report is not representative")
+    @printf("  tape compile                %.2f s\n", rep.compile_s)
+    @printf("  primal   (log density)      %.3f ms\n", rep.primal_ms)
+    @printf("  gradient (compiled tape)    %.3f ms   [%.3f .. %.3f]\n",
+            rep.grad_ms, rep.grad_min_ms, rep.grad_max_ms)
+    @printf("  gradient / primal           %.1fx   (reverse-mode should be ~3-5x)\n", rep.ratio)
+    @printf("  per observation             %.2f us\n", rep.us_per_obs)
+    @printf("  allocations per gradient    %d bytes\n", rep.bytes)
+    @printf("  guide target                < 1 ms   (docs/turing_ad_performance_guide.md)\n")
+    println(line)
+    println("SELF TIME (share of gradient evaluation)")
+    for h in rep.hot
+        @printf("  %5.1f%%  %-28s %s\n", h.pct, string(h.func), h.loc)
+    end
+    println(line)
+    return rep
 end
