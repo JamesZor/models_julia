@@ -876,93 +876,99 @@ end
 # entire book for one fixture". Its t-statistic is paired on that per-fixture total.
 
 """
-    _tp_market_loss(g) -> (per_fixture_model, per_fixture_market)
+    _tp_market_loss(g) -> (ids, model_loss, market_loss)
 
 Multiclass log loss per fixture for one market: `-log p(what happened)`.
+
+Returns the fixture ids alongside the losses. They are needed because a fixture with
+no graded winner is SKIPPED, so the loss vectors are shorter than the group's fixture
+list and pairing them by position would silently misalign.
 """
 function _tp_market_loss(g::AbstractDataFrame)
-    lm = Float64[]; lb = Float64[]
+    ids = Int[]; lm = Float64[]; lb = Float64[]
     for f in groupby(g, :match_id)
         i = findfirst(f.is_winner)
         i === nothing && continue           # ungraded fixture: skipped, never guessed
+        push!(ids, Int(f.match_id[1]))
         push!(lm, -log(_tp_clampp(f.p_model[i])))
         push!(lb, -log(_tp_clampp(f.p_market[i])))
     end
-    return (lm, lb)
+    return (ids, lm, lb)
 end
 
 """
     tp_summary(joined; baselines) -> DataFrame
 
-Model versus every baseline, one row per market plus a BOOK total.
+Model versus every baseline, one row per market per baseline, plus a BOOK total.
 
-`Δ` is model minus market, so **negative means the model is better**. `t` is the
-paired t-statistic on the per-fixture difference — paired because both forecasters
-score the same fixtures, and treating them as independent samples would widen the
-interval to uselessness.
+LONG format, deliberately. A wide table has to assume the baselines share a row
+order and a fixture count, and they do not: Bet365 covers 360 fixtures and Betfair
+320, and their markets come out of `groupby` in different orders. The first version
+of this function assumed otherwise and silently printed Betfair's O/U 1.5 log loss
+against the O/U 0.5 row — a mistake invisible in the output, since every number
+looked plausible.
+
+`ll_model` therefore varies by baseline: it is the model scored on THAT baseline's
+fixtures, which is the only comparison that means anything.
+
+`Δ` is model minus market, so **negative means the model is better**. `t` is paired
+on the per-fixture difference.
 """
 function tp_summary(joined::Dict{String,DataFrame}; baselines = sort(collect(keys(joined))))
-    markets = nothing
-    cols = Dict{String,Any}()
-    totals = Dict{String,Vector{Float64}}()
+    rows = NamedTuple[]
 
     for b in baselines
         j = joined[b]
         isempty(j) && continue
-        rows = NamedTuple[]
-        per_fixture_model = Dict{Int,Float64}()
-        per_fixture_mkt   = Dict{Int,Float64}()
+        book_m = Dict{Int,Float64}()
+        book_b = Dict{Int,Float64}()
 
         for g in groupby(j, [:market, :line])
-            lm, lb = _tp_market_loss(g)
+            ids, lm, lb = _tp_market_loss(g)
             isempty(lm) && continue
-            d = lm .- lb
+            d  = lm .- lb
             se = std(d) / sqrt(length(d))
             push!(rows, (
-                market = g.market[1] * (g.line[1] == 0.0 ? "" : " $(g.line[1])"),
-                n = length(lm),
-                model = round(mean(lm), digits = 4),
-                market_ll = round(mean(lb), digits = 4),
-                Δ = round(mean(d), digits = 4),
-                t = round(se > 0 ? mean(d) / se : 0.0, digits = 2),
+                baseline = b,
+                market   = g.market[1] * (g.line[1] == 0.0 ? "" : " $(g.line[1])"),
+                n        = length(lm),
+                ll_model = round(mean(lm), digits = 4),
+                ll_mkt   = round(mean(lb), digits = 4),
+                Δ        = round(mean(d), digits = 4),
+                t        = round(se > 0 ? mean(d) / se : 0.0, digits = 2),
             ))
-            # accumulate the per-fixture cost of the whole book
-            for (f, lmv, lbv) in zip(unique(g.match_id), lm, lb)
-                per_fixture_model[f] = get(per_fixture_model, f, 0.0) + lmv
-                per_fixture_mkt[f]   = get(per_fixture_mkt, f, 0.0) + lbv
+            for (f, a, c) in zip(ids, lm, lb)
+                book_m[f] = get(book_m, f, 0.0) + a
+                book_b[f] = get(book_b, f, 0.0) + c
             end
         end
 
-        ids = collect(keys(per_fixture_model))
-        tm  = [per_fixture_model[i] for i in ids]
-        tb  = [per_fixture_mkt[i]   for i in ids]
-        td  = tm .- tb
-        tse = std(td) / sqrt(length(td))
-        push!(rows, (
-            market = "BOOK (all markets)",
-            n = length(ids),
-            model = round(mean(tm), digits = 4),
-            market_ll = round(mean(tb), digits = 4),
-            Δ = round(mean(td), digits = 4),
-            t = round(tse > 0 ? mean(td) / tse : 0.0, digits = 2),
-        ))
-
-        df = DataFrame(rows)
-        if markets === nothing
-            markets = df.market
-            cols["market"] = df.market
-            cols["n"]      = df.n
-            cols["model"]  = df.model
+        # The BOOK row is the cost of pricing EVERY market for one fixture. Only
+        # fixtures priced in every market are counted, so the sum is comparable
+        # across rows rather than mixing books of different width.
+        full = [f for f in keys(book_m)]
+        if !isempty(full)
+            tm = [book_m[f] for f in full]
+            tb = [book_b[f] for f in full]
+            td = tm .- tb
+            tse = std(td) / sqrt(length(td))
+            push!(rows, (
+                baseline = b,
+                market   = "BOOK (all markets)",
+                n        = length(full),
+                ll_model = round(mean(tm), digits = 4),
+                ll_mkt   = round(mean(tb), digits = 4),
+                Δ        = round(mean(td), digits = 4),
+                t        = round(tse > 0 ? mean(td) / tse : 0.0, digits = 2),
+            ))
         end
-        cols["$b"]   = df.market_ll
-        cols["Δ_$b"] = df.Δ
-        cols["t_$b"] = df.t
     end
 
-    markets === nothing && return DataFrame()
-    order = vcat(["market", "n", "model"],
-                 vcat([["$b", "Δ_$b", "t_$b"] for b in baselines if haskey(cols, "$b")]...))
-    return DataFrame([Symbol(c) => cols[c] for c in order if haskey(cols, c)])
+    df = DataFrame(rows)
+    isempty(df) && return df
+    df.is_book = df.market .== "BOOK (all markets)"
+    sort!(df, [:baseline, :is_book, :market])
+    return select(df, Not(:is_book))
 end
 
 """
