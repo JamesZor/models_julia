@@ -139,9 +139,19 @@ and does it beat the closing line?*
 
 ### Decisions this gate needs, which gate 6 does not
 
-1. **Entry price and time.** CLV is entry price versus closing price, so "when do we bet"
-   must be defined. Betfair data is tick-level with `minutes_to_kickoff`. Prior work anchored
-   per match because that field is wall-clock, not match-clock.
+1. ~~**Entry price and time.**~~ **Settled 2026-08-26: there is no entry price.** Bets are
+   staked and graded at **Betfair closing prices**. "CLV" in this protocol therefore means
+   *performance measured against the closing line*, not entry-versus-close capture — the
+   closing line is the benchmark the model's probabilities are judged against, not a price
+   to be beaten in time.
+
+   This also removes the dependency on `summarize_betfair_market`'s open window, which is
+   what T005 is about, and raises coverage from 317 to **322 of 360** fixtures.
+
+   Recorded because the alternative was measured and is unattractive anyway: 1X2 line
+   movement on this league averages only **1.8-2.2 percentage points** (p95 ~5pp) against 2%
+   commission, so entry-versus-close capture would have had very little dynamic range here
+   regardless.
 2. **Curation.** Prior results are unambiguous that this dominates the model: on the full
    book every Kelly variant lost, and curating to totals + BTTS inverted the result. Which
    lines are eligible is a gate-7 parameter, and must be **declared before** the numbers are
