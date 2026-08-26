@@ -231,7 +231,7 @@ function tp00_pnl_concentration(traj)
             win_rate = mean(traj.bets.pnl .> 0))
 end
 
-function tp00_growth_table(books, contract::SLContract;
+function tp00_growth_table(books::AbstractVector, contract::SLContract;
                           lambda::Float64 = contract.drawdown_lambda,
                           trust::Float64  = contract.trust_w,
                           B::Int = 4000)
@@ -258,6 +258,10 @@ function tp00_growth_table(books, contract::SLContract;
         ))
     end
     return DataFrame(rows)
+end
+
+function tp00_growth_table(books_bf::Vector{BayesianFootball.Portfolio.MatchBook}, contract::SLContract)
+    return tp00_growth_table(books_bf, contract; lambda = contract.drawdown_lambda, trust = contract.trust_w)
 end
 
 function tp00_gate_growth(growth::AbstractDataFrame)
