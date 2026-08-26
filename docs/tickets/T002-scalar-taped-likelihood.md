@@ -187,13 +187,15 @@ and `archive/open_play/r04_benchmark_ad_recomb.jl` use `@belapsed`, which report
 
 ## Reproduction
 
+Deterministic reproducer and full baseline matrix: **`tickets/t002/reproduce.jl`**.
+Working notes and open decisions: **`tickets/t002/README.md`**.
+
 ```julia
-include("current_development/scottish_lower/01_team_poisson/v01_walkthrough.jl")  # blocks 0-5
-rep = tp_grad_profile(tp_engine, tp_features[1])
-print(tp_profile_table(rep; label = "T002 baseline"))
+julia --project -t 16
+include("tickets/t002/reproduce.jl")
 ```
 
-Baseline to beat: 35,421 instructions, 1.150 ms median / 1.140 ms min.
+Baseline to beat: 35,421 instructions, 1.150 ms median / 1.140 ms min on fold 1.
 
 ## Acceptance criteria
 
