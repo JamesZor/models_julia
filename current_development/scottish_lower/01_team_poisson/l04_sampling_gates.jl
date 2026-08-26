@@ -527,14 +527,47 @@ function tp_gate_convergence(results, contract::SLContract;
                           count(b -> b >= ess_min, bulks), n, ess_min),
     ))
 
-    bad_div = [i for (i, d) in enumerate(divs) if d > 0]
+    bad_div   = [i for (i, d) in enumerate(divs) if d > 0]
+    n_draws   = sum(size(ch, 1) * size(ch, 3) for ch in chains)
+    div_rate  = sum(max.(divs, 0)) / n_draws
     push!(out, (
         name   = "divergences",
         pass   = all(==(0), divs),
         detail = any(<(0), divs) ? "numerical_error not recorded" :
-                 isempty(bad_div) ? "0 across all $n folds" :
-                 "$(sum(divs)) total, in folds $(bad_div)",
+                 isempty(bad_div) ? "0 across all $n folds ($n_draws draws)" :
+                 @sprintf("%d total (%.4f%% of %d draws), in folds %s",
+                          sum(divs), 100 * div_rate, n_draws, string(bad_div)),
     ))
+
+    # A divergence COUNT does not say whether the posterior is compromised. What
+    # matters is whether divergent draws cluster in the hierarchical scales: that is
+    # the funnel signature, and it means the sampler is systematically failing to
+    # reach a region rather than occasionally stumbling.
+    #
+    # Reported, never gating. It is a diagnosis of a failure the line above already
+    # caught, and a clean result here is what licenses treating a small count as
+    # integrator noise instead of bias.
+    if !isempty(bad_div)
+        ratios = Float64[]
+        for i in bad_div
+            ch  = chains[i]
+            d   = vec(Array(ch[:numerical_error])) .> 0
+            any(d) && all(d) && continue
+            for site in ("dyn.σ_a", "dyn.σ_d")
+                v = vec(Array(ch[Symbol(site)]))
+                push!(ratios, mean(v[d]) / mean(v[.!d]))
+            end
+        end
+        worst = isempty(ratios) ? 1.0 : minimum(ratios)
+        push!(out, (
+            name   = "divergences not a funnel",
+            pass   = true,
+            detail = @sprintf("σ at divergent draws is %.2f-%.2fx the bulk mean%s",
+                              minimum(ratios), maximum(ratios),
+                              worst < 0.5 ? "  ⚠ CLUSTERED AT SMALL σ — funnel" :
+                                            "  (no clustering ⇒ integrator noise)"),
+        ))
+    end
 
     if !isempty(depth_max)
         push!(out, (
