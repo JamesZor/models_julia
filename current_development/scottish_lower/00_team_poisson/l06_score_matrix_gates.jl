@@ -296,3 +296,7 @@ function tp00_market_summary(model::DynamicPoissonGoalsTimeDecayModel, df::Abstr
     end
     return DataFrame(rows)
 end
+
+function tp00_market_summary(model::DynamicPoissonGoalsTimeDecayModel, df::DataFrame, contract::SLContract; n_rows::Int = 8)
+    return invoke(tp00_market_summary, Tuple{DynamicPoissonGoalsTimeDecayModel, AbstractDataFrame, SLContract}, model, df, contract; n_rows = n_rows)
+end
