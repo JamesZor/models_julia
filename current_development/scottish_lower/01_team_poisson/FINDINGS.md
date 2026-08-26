@@ -622,9 +622,45 @@ baselines into one table cut the evaluation from 4,658 rows to 96 while reportin
 PASS, and coverage measured in rows rather than fixtures failed a legitimate baseline
 for being a thin book.
 
+### Book-level summary
+
+Multiclass log loss per market — `-log p(what happened)` — so binary markets are not
+double-counted through their yes/no legs. Negative Δ means the model is better.
+
+| baseline | market | n | model | market | Δ | t |
+|---|---|---|---|---|---|---|
+| bet365 | 1X2 | 360 | 1.0637 | 1.0656 | -0.0018 | -0.18 |
+| bet365 | BTTS | 359 | 0.6947 | 0.6927 | +0.0021 | +0.65 |
+| bet365 | O/U 0.5 | 357 | 0.2598 | 0.2682 | **-0.0083** | -1.82 |
+| bet365 | O/U 1.5 | 357 | 0.5541 | 0.5540 | 0.0000 | +0.01 |
+| bet365 | O/U 2.5 | 359 | 0.6942 | 0.6964 | -0.0021 | -0.61 |
+| bet365 | O/U 3.5 | 357 | 0.5903 | 0.5933 | -0.0030 | -0.79 |
+| **bet365** | **BOOK (6 markets)** | **357** | **3.8591** | **3.8728** | **-0.0137** | **-0.93** |
+| betfair | 1X2 | 304 | 1.0622 | 1.0648 | -0.0026 | -0.20 |
+| betfair | O/U 2.5 | 188 | 0.6890 | 0.6894 | -0.0004 | -0.07 |
+| betfair | O/U 3.5 | 110 | 0.5790 | 0.5820 | -0.0030 | -0.43 |
+| betfair | BOOK (6 markets) | **2** | — | — | — | — |
+
+Pricing the whole six-market book costs the model **3.8591 nats per fixture against
+the closing line's 3.8728** — 0.0137 better, t = -0.93. Not significant, and not
+expected to be on 357 fixtures.
+
+**The Betfair BOOK row is n = 2.** Only two fixtures of 320 have all six markets
+priced on the exchange. The exchange book on this league is thin, so book-level
+comparison against Betfair is meaningless while its per-market rows are sound. This
+matters for gate 7: a staking book built on Betfair is mostly 1X2 (304 fixtures) and
+O/U 2.5 (188), with BTTS essentially absent (42).
+
+Three bugs in the summary table itself, each caught by its own output:
+positional column assignment printed Betfair's O/U 1.5 log loss on the O/U 0.5 row;
+a `zip` against `unique(match_id)` desynced whenever an ungraded fixture was skipped;
+and the BOOK row summed however many markets each fixture happened to have, which
+made the thin baseline look 2 nats cheaper. All three produced entirely plausible
+numbers.
+
 ### Next
 
-Gate 7, growth and CLV. T005 must land first, or it runs on 30 fixtures. — OOS blocks range from 2 to 24
+Gate 7, staking and grading at Betfair closing prices. — OOS blocks range from 2 to 24
 fixtures, so a fold average would let a 2-fixture block outvote a 24-fixture one.
 Then gate 7, growth and CLV against Betfair closing prices.
 

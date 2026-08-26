@@ -490,6 +490,32 @@ tp_scores_b365
 
 # %%
 # ------------------------------------------------------------------------------
+# 11e-summary. The whole book on one screen
+# ------------------------------------------------------------------------------
+#
+# One row per market per baseline, scored with MULTICLASS log loss — minus the log
+# of the probability given to whatever actually happened. Not per selection: for a
+# two-outcome market yes/no give identical log loss, so listing both double-counts.
+#
+# Δ is model minus market, so NEGATIVE MEANS THE MODEL IS BETTER.
+#
+# Read the `n` column on every row. The BOOK row is only meaningful over fixtures
+# priced in all six markets — on Betfair that is 2 of 320, because the exchange book
+# is thin, so its BOOK row is noise while its per-market rows are fine.
+
+tp_summary(tp_j)
+
+
+# %%
+# The market-free metrics. No baseline column because no baseline produces them: a
+# bookmaker quotes market probabilities, not a distribution over scorelines. These
+# exist to rank model VARIANTS against each other.
+
+tp_summary_shape(tp_fx)
+
+
+# %%
+# ------------------------------------------------------------------------------
 # 11f. glm_edge — does the model know anything the market does not?
 # ------------------------------------------------------------------------------
 #
