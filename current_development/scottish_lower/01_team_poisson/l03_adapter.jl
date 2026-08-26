@@ -31,6 +31,7 @@ const TP01Features = BayesianFootball.Features
 struct TP01Adapter{M} <: AbstractSLModelAdapter
     model::M
 end
+TP01Adapter(; kwargs...) = TP01Adapter(tp_model(; kwargs...))
 TP01Adapter() = TP01Adapter(tp_model())
 
 # -- Identity, production calls, and independent l02 equation route ------------
