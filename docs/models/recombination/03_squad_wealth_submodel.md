@@ -16,9 +16,11 @@ By calculating the total Transfermarkt valuation of the **11 confirmed starting 
 ## 📐 Mathematical Formulation
 
 ### 1. Match Wealth Differential ($\Delta W_m$)
-For match $m$ with home Starting-XI market value $V_{\text{home}, m}$ and away Starting-XI market value $V_{\text{away}, m}$:
-$$\text{Raw Differential: } D_m = \log(V_{\text{home}, m} + \epsilon) - \log(V_{\text{away}, m} + \epsilon)$$
-$$\Delta W_m = \frac{D_m - \bar{D}}{\sigma_D} \quad (\text{Standardized to Mean 0, Std 1})$$
+For match $m$, let $L_{h,m}$ and $L_{a,m}$ be the mean log values of the confirmed home and away starters after fixed-value player imputation:
+$$D_m = L_{h,m} - L_{a,m}$$
+$$\Delta W_m = \frac{D_m}{s_W}$$
+
+Here $s_W$ is the fixed `SquadWealthFeature.log_scale` configuration (default 1.0). It is deliberately **not** estimated from the fixture sample: adding or deleting future matches must not change historical features.
 
 ### 2. Linear Latent Rate Shift
 Squad wealth acts as an additive linear shift inside the log-rate of open-play intensity:
@@ -33,10 +35,12 @@ $$w_{\text{wealth}} \sim \text{TruncatedNormal}(0.10, 0.05, a=0.0)$$
 
 ## 🔍 Feature Extraction Pipeline (`SquadWealthFeature`)
 
-1. **Extractor:** `src/features/extractors/open_play_extractors.jl`
-2. **Data Source:** `ds.lineups` filtered by `is_substitute == false`.
-3. **Imputation:** If a player has a missing or zero valuation, the tier median is imputed.
-4. **Fallback:** If a match has no lineup data, $\Delta W_m = 0.0$ (neutral match).
+1. **Extractor:** `src/features/extractors/open_play_extractors.jl`.
+2. **Data Source:** Only match-scoped rows in `ds.lineups` for the requested fold IDs, filtered by `is_substitute == false`.
+3. **Point-in-time contract:** By default each observed value requires a valuation timestamp strictly preceding kickoff. Values from global/latest-player catalogs are not backfilled into historical matches.
+4. **Player imputation:** Missing or invalid players use the fixed `fallback_default` value.
+5. **Match fallback:** Both clubs must have at least one timestamp-safe observed value. Otherwise $\Delta W_m = 0.0$ and `flat_wealth_fallback = 1`.
+6. **Perturbation safety:** No normalization moment or lookup map is fitted over future fixture rows.
 
 ---
 

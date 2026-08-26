@@ -159,59 +159,144 @@ end
 # 3. STARTING-XI SQUAD WEALTH DIFFERENTIAL
 # ==============================================================================
 
-function add_feature!(F_data::Dict, config::SquadWealthFeature, ordered_ids, team_map::Dict, ds::Data.DataStore)
-    fallback_default = config.fallback_default
+function _wealth_kickoff_map(matches::AbstractDataFrame)
+    result = Dict{Int32, DateTime}()
+    for row in eachrow(matches)
+        kickoff = if :start_timestamp in propertynames(row)
+            DateTime(row.start_timestamp)
+        elseif :match_date in propertynames(row)
+            hour = :match_hour in propertynames(row) ? Int(coalesce(row.match_hour, 0)) : 0
+            DateTime(row.match_date) + Hour(hour)
+        else
+            continue
+        end
+        result[Int32(row.match_id)] = kickoff
+    end
+    return result
+end
+
+function _wealth_as_datetime(value)
+    ismissing(value) && return nothing
+    value isa DateTime && return value
+    value isa Date && return DateTime(value)
+    try
+        return DateTime(String(value))
+    catch
+        return nothing
+    end
+end
+
+function _wealth_is_home(row, side_col::Symbol)
+    side_col == :team_side && return lowercase(String(row[side_col])) == "home"
+    return Bool(row[side_col])
+end
+
+"""Build a fold-local, point-in-time starting-XI wealth lookup."""
+function _build_match_wealth_lookup(
+    lineups::AbstractDataFrame,
+    matches::AbstractDataFrame,
+    ordered_ids,
+    config::SquadWealthFeature,
+)
+    config.fallback_default > 0.0 || throw(ArgumentError("fallback_default must be positive"))
+    config.log_scale > 0.0 || throw(ArgumentError("log_scale must be positive"))
+
+    selected_ids = Set(Int32.(ordered_ids))
     wealth_map = Dict{Int32, Float64}()
+    isempty(selected_ids) && return wealth_map
+    isempty(lineups) && return wealth_map
 
-    if hasproperty(ds, :lineups) && !isempty(ds.lineups)
-        lineups = copy(ds.lineups)
-        lineup_sub_col = :is_substitute in propertynames(lineups) ? :is_substitute : (:substitute in propertynames(lineups) ? :substitute : nothing)
-        starters = lineup_sub_col !== nothing ? filter(r -> !coalesce(r[lineup_sub_col], false), lineups) : lineups
+    lineup_columns = propertynames(lineups)
+    value_col = :market_value in lineup_columns ? :market_value :
+                (:proposed_market_value in lineup_columns ? :proposed_market_value : nothing)
+    value_col === nothing && return wealth_map
 
-        pos_medians = Dict("G" => 80_000.0, "D" => 100_000.0, "M" => 110_000.0, "F" => 120_000.0)
-        pos_col = :position in propertynames(starters) ? :position : nothing
-        val_col = :market_value in propertynames(starters) ? :market_value : (:proposed_market_value in propertynames(starters) ? :proposed_market_value : nothing)
+    timestamp_col = if :valuation_timestamp in lineup_columns
+        :valuation_timestamp
+    elseif :market_value_timestamp in lineup_columns
+        :market_value_timestamp
+    elseif :valuation_date in lineup_columns
+        :valuation_date
+    else
+        nothing
+    end
+    config.require_valuation_timestamp && timestamp_col === nothing && return wealth_map
 
-        starters.val = [
-            let v = (val_col !== nothing && !ismissing(r[val_col])) ? Float64(r[val_col]) : NaN
-                if !isnan(v) && v > 0.0
-                    v
-                elseif pos_col !== nothing && !ismissing(r[pos_col])
-                    get(pos_medians, String(r[pos_col]), fallback_default)
-                else
-                    fallback_default
-                end
+    substitute_col = :is_substitute in lineup_columns ? :is_substitute :
+                     (:substitute in lineup_columns ? :substitute : nothing)
+    side_col = :team_side in lineup_columns ? :team_side :
+               (:is_home_team in lineup_columns ? :is_home_team :
+                (:is_home in lineup_columns ? :is_home : nothing))
+    side_col === nothing && return wealth_map
+
+    kickoffs = _wealth_kickoff_map(matches)
+    values = Dict{Tuple{Int32, Bool}, Vector{Float64}}()
+    known = Dict{Tuple{Int32, Bool}, Int}()
+
+    for row in eachrow(lineups)
+        match_id = Int32(row.match_id)
+        match_id in selected_ids || continue
+        substitute_col !== nothing && coalesce(row[substitute_col], false) && continue
+
+        is_home = _wealth_is_home(row, side_col)
+        key = (match_id, is_home)
+        side_values = get!(values, key, Float64[])
+
+        raw_value = row[value_col]
+        market_value = if ismissing(raw_value)
+            NaN
+        else
+            try
+                Float64(raw_value)
+            catch
+                NaN
             end
-            for r in eachrow(starters)
-        ]
+        end
 
-        team_side_col = :team_side in propertynames(starters) ? :team_side : (:is_home_team in propertynames(starters) ? :is_home_team : :is_home)
-        is_home_expr(r) = (team_side_col == :team_side) ? (r.team_side == "home") : Bool(r[team_side_col])
-        starters.is_home_bool = is_home_expr.(eachrow(starters))
+        timestamp_safe = if timestamp_col === nothing
+            !config.require_valuation_timestamp
+        else
+            valuation_time = _wealth_as_datetime(row[timestamp_col])
+            kickoff = get(kickoffs, match_id, nothing)
+            valuation_time !== nothing && kickoff !== nothing && valuation_time < kickoff
+        end
 
-        home_starters = filter(r -> r.is_home_bool, starters)
-        away_starters = filter(r -> !r.is_home_bool, starters)
-
-        if !isempty(home_starters) && !isempty(away_starters)
-            home_agg = combine(groupby(home_starters, :match_id), :val => (v -> mean(log.(v))) => :log_w_h)
-            away_agg = combine(groupby(away_starters, :match_id), :val => (v -> mean(log.(v))) => :log_w_a)
-            joined = innerjoin(home_agg, away_agg, on = :match_id)
-
-            all_log_w = vcat(joined.log_w_h, joined.log_w_a)
-            mu_w  = isempty(all_log_w) ? 0.0 : mean(all_log_w)
-            std_w = isempty(all_log_w) ? 1.0 : std(all_log_w)
-            std_w = std_w == 0.0 || isnan(std_w) ? 1.0 : std_w
-
-            for r in eachrow(joined)
-                w_h_std = (r.log_w_h - mu_w) / std_w
-                w_a_std = (r.log_w_a - mu_w) / std_w
-                wealth_map[Int32(r.match_id)] = Float64(w_h_std - w_a_std)
-            end
+        if isfinite(market_value) && market_value > 0.0 && timestamp_safe
+            push!(side_values, market_value)
+            known[key] = get(known, key, 0) + 1
+        else
+            push!(side_values, config.fallback_default)
         end
     end
 
+    for match_id in selected_ids
+        home_key = (match_id, true)
+        away_key = (match_id, false)
+        home_values = get(values, home_key, Float64[])
+        away_values = get(values, away_key, Float64[])
+
+        # If either club has no safe point-in-time valuation, treat the match as
+        # unmapped and return the neutral population fallback.
+        isempty(home_values) && continue
+        isempty(away_values) && continue
+        get(known, home_key, 0) > 0 || continue
+        get(known, away_key, 0) > 0 || continue
+
+        delta = (mean(log, home_values) - mean(log, away_values)) / config.log_scale
+        isfinite(delta) && (wealth_map[match_id] = Float64(delta))
+    end
+    return wealth_map
+end
+
+function add_feature!(F_data::Dict, config::SquadWealthFeature, ordered_ids, team_map::Dict, ds::Data.DataStore)
+    wealth_map = _build_match_wealth_lookup(ds.lineups, ds.matches, ordered_ids, config)
     flat_delta_w = Float64[get(wealth_map, Int32(id), 0.0) for id in ordered_ids]
+    flat_fallback = Int[haskey(wealth_map, Int32(id)) ? 0 : 1 for id in ordered_ids]
+
     F_data[:flat_delta_wealth] = flat_delta_w
+    F_data[:flat_wealth_fallback] = flat_fallback
+    F_data[:wealth_by_match_id] = Dict(
+        Int32(id) => flat_delta_w[i] for (i, id) in enumerate(ordered_ids))
 end
 
 # ==============================================================================

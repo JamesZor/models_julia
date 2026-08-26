@@ -194,10 +194,17 @@ end
 """
     SquadWealthFeature <: AbstractFeatureConfig
 
-Extracts and standardizes starting-XI squad market valuation differentials (ΔW = W_home - W_away).
+Extracts starting-XI log market-valuation differentials from match-scoped,
+point-in-time values. A valuation timestamp must strictly precede kickoff by
+default; matches without safe valuation coverage receive neutral ΔW = 0.
+
+`log_scale` is fixed configuration rather than a moment fitted over fixture rows,
+so adding future matches cannot alter historical features.
 """
 Base.@kwdef struct SquadWealthFeature <: AbstractFeatureConfig
     fallback_default::Float64 = 100_000.0
+    log_scale::Float64 = 1.0
+    require_valuation_timestamp::Bool = true
 end
 
 """
