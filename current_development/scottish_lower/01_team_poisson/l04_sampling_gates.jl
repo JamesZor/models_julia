@@ -481,14 +481,28 @@ end
 # ==============================================================================
 
 """
-    tp_ad_backend_matches_src() -> Bool
+    tp_ad_backend_matches_src() -> (; ok, detail)
 
 The profile below compiles its own ReverseDiff tape. That is only informative if
-NUTS does the same thing, so assert the src default rather than assume it.
+NUTS does the same thing, so assert it rather than assume it.
+
+Checked by reading src, NOT by inspecting a config object: `QueuedNUTSConfig` has
+**no `adtype` field**. Both `run_sampler` methods hardcode
+`adtype = AutoReverseDiff(compile=true)` (nuts.jl:101 and :120), so the backend is
+not configurable from the contract at all. Recorded here because gate 1 claims
+nothing about the fitted model is hidden, and an un-overridable sampler default is
+exactly the kind of thing that claim has to cover.
 """
 function tp_ad_backend_matches_src()
-    ad = Samplers.QueuedNUTSConfig().adtype
-    return occursin("ReverseDiff", string(typeof(ad)))
+    src = joinpath(dirname(dirname(pathof(BayesianFootball))),
+                   "src", "samplers", "engines", "nuts.jl")
+    isfile(src) || return (ok = false, detail = "nuts.jl not found at $src")
+    txt = read(src, String)
+    n   = length(collect(eachmatch(r"AutoReverseDiff\(compile\s*=\s*true\)", txt)))
+    n_methods = length(collect(eachmatch(r"function run_sampler", txt)))
+    ok = n >= n_methods && n_methods > 0
+    return (ok = ok,
+            detail = "$n of $n_methods run_sampler methods hardcode AutoReverseDiff(compile=true)")
 end
 
 """
@@ -609,7 +623,8 @@ function tp_profile_table(rep; label::AbstractString = "")
     @printf("  matches / observations      %d / %d\n", rep.n_rows, rep.n_obs)
     @printf("  sampled parameters          %d\n", rep.n_params)
     @printf("  AD backend matches src      %s\n",
-            rep.ad_matches_src ? "yes — ReverseDiff, compiled tape" : "NO — report is not representative")
+            rep.ad_matches_src.ok ? "yes — $(rep.ad_matches_src.detail)" :
+                                    "NO — $(rep.ad_matches_src.detail)")
     @printf("  tape compile                %.2f s\n", rep.compile_s)
     @printf("  primal   (log density)      %.3f ms\n", rep.primal_ms)
     @printf("  gradient (compiled tape)    %.3f ms   [%.3f .. %.3f]\n",
