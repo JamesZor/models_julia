@@ -33,3 +33,4 @@ scottish_lower/
 A model is not "done" because it ran. It is done when it has passed gates 0–7 in
 [`docs/PROTOCOL.md`](docs/PROTOCOL.md) and every result is written into that model's
 `FINDINGS.md` next to its config hash.
+| [docs/GATES_6_7_PLAN.md](docs/GATES_6_7_PLAN.md) | Design of record for evaluation and growth/CLV, written before the code |
