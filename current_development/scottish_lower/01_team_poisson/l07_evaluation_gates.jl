@@ -853,3 +853,136 @@ function tp_gate_not_broken(scores::AbstractDataFrame, edges::AbstractDataFrame;
 
     return out
 end
+
+
+# ==============================================================================
+# 7. Summary — the whole book on one screen
+# ==============================================================================
+#
+# The per-selection tables are precise and hard to read. This is the glance version.
+#
+# One row per MARKET, scored with multiclass log loss — minus the log of the
+# probability the model gave to whatever actually happened. Not per selection:
+# for a two-outcome market `yes` and `no` produce identical log loss, so listing
+# both double-counts them, and for 1X2 the three selections are three views of one
+# event rather than three independent questions.
+#
+# This is the aggregation the protocol warns about done SAFELY. The rule is never to
+# pool across the selections of one market as if they were separate observations —
+# which is what reversed the APM headline. Collapsing them into one multiclass score
+# per fixture is the opposite operation: it respects that exactly one of them happens.
+#
+# The BOOK row sums the per-market losses, so it reads as "what it costs to price the
+# entire book for one fixture". Its t-statistic is paired on that per-fixture total.
+
+"""
+    _tp_market_loss(g) -> (per_fixture_model, per_fixture_market)
+
+Multiclass log loss per fixture for one market: `-log p(what happened)`.
+"""
+function _tp_market_loss(g::AbstractDataFrame)
+    lm = Float64[]; lb = Float64[]
+    for f in groupby(g, :match_id)
+        i = findfirst(f.is_winner)
+        i === nothing && continue           # ungraded fixture: skipped, never guessed
+        push!(lm, -log(_tp_clampp(f.p_model[i])))
+        push!(lb, -log(_tp_clampp(f.p_market[i])))
+    end
+    return (lm, lb)
+end
+
+"""
+    tp_summary(joined; baselines) -> DataFrame
+
+Model versus every baseline, one row per market plus a BOOK total.
+
+`Δ` is model minus market, so **negative means the model is better**. `t` is the
+paired t-statistic on the per-fixture difference — paired because both forecasters
+score the same fixtures, and treating them as independent samples would widen the
+interval to uselessness.
+"""
+function tp_summary(joined::Dict{String,DataFrame}; baselines = sort(collect(keys(joined))))
+    markets = nothing
+    cols = Dict{String,Any}()
+    totals = Dict{String,Vector{Float64}}()
+
+    for b in baselines
+        j = joined[b]
+        isempty(j) && continue
+        rows = NamedTuple[]
+        per_fixture_model = Dict{Int,Float64}()
+        per_fixture_mkt   = Dict{Int,Float64}()
+
+        for g in groupby(j, [:market, :line])
+            lm, lb = _tp_market_loss(g)
+            isempty(lm) && continue
+            d = lm .- lb
+            se = std(d) / sqrt(length(d))
+            push!(rows, (
+                market = g.market[1] * (g.line[1] == 0.0 ? "" : " $(g.line[1])"),
+                n = length(lm),
+                model = round(mean(lm), digits = 4),
+                market_ll = round(mean(lb), digits = 4),
+                Δ = round(mean(d), digits = 4),
+                t = round(se > 0 ? mean(d) / se : 0.0, digits = 2),
+            ))
+            # accumulate the per-fixture cost of the whole book
+            for (f, lmv, lbv) in zip(unique(g.match_id), lm, lb)
+                per_fixture_model[f] = get(per_fixture_model, f, 0.0) + lmv
+                per_fixture_mkt[f]   = get(per_fixture_mkt, f, 0.0) + lbv
+            end
+        end
+
+        ids = collect(keys(per_fixture_model))
+        tm  = [per_fixture_model[i] for i in ids]
+        tb  = [per_fixture_mkt[i]   for i in ids]
+        td  = tm .- tb
+        tse = std(td) / sqrt(length(td))
+        push!(rows, (
+            market = "BOOK (all markets)",
+            n = length(ids),
+            model = round(mean(tm), digits = 4),
+            market_ll = round(mean(tb), digits = 4),
+            Δ = round(mean(td), digits = 4),
+            t = round(tse > 0 ? mean(td) / tse : 0.0, digits = 2),
+        ))
+
+        df = DataFrame(rows)
+        if markets === nothing
+            markets = df.market
+            cols["market"] = df.market
+            cols["n"]      = df.n
+            cols["model"]  = df.model
+        end
+        cols["$b"]   = df.market_ll
+        cols["Δ_$b"] = df.Δ
+        cols["t_$b"] = df.t
+    end
+
+    markets === nothing && return DataFrame()
+    order = vcat(["market", "n", "model"],
+                 vcat([["$b", "Δ_$b", "t_$b"] for b in baselines if haskey(cols, "$b")]...))
+    return DataFrame([Symbol(c) => cols[c] for c in order if haskey(cols, c)])
+end
+
+"""
+    tp_summary_shape(fx) -> DataFrame
+
+The market-free metrics in one line each. These have no baseline column because no
+baseline produces them: a bookmaker quotes market probabilities, not a distribution
+over scorelines, so RQR and LPD can only be compared across MODEL VARIANTS.
+"""
+function tp_summary_shape(fx::AbstractDataFrame)
+    r  = filter(isfinite, vcat(fx.rqr_h, fx.rqr_a))
+    lp = filter(isfinite, fx.lpd)
+    return DataFrame(
+        metric = ["RQR mean", "RQR sd", "LPD mean", "LPD total",
+                  "draw observed", "draw predicted"],
+        value  = round.([mean(r), std(r), mean(lp), sum(lp),
+                         mean(fx.is_draw), mean(filter(isfinite, fx.p_draw))], digits = 4),
+        target = ["0.0", "1.0", "higher is better", "higher is better",
+                  "—", "should match observed"],
+        note   = ["bias", "<1 over-confident", "variants only", "variants only",
+                  "n = $(nrow(fx))", "no Dixon-Coles case if these agree"],
+    )
+end
