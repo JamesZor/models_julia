@@ -469,9 +469,10 @@ hits are the "did the geometry fight back" questions. A run can pass the first
 pair and still be untrustworthy if it fails the second, so all four are reported.
 """
 function tp_gate_convergence(results, contract::SLContract;
-                             rhat_max::Float64  = 1.01,
-                             ess_min::Float64   = 400.0,
-                             expected_folds     = nothing)
+                             rhat_max::Float64            = 1.01,
+                             ess_min::Float64             = 400.0,
+                             divergence_rate_max::Float64 = 0.001,   # 0.1%
+                             expected_folds               = nothing)
     chains = [c for (c, _) in results.training_results]
     out = []
 
@@ -530,13 +531,26 @@ function tp_gate_convergence(results, contract::SLContract;
     bad_div   = [i for (i, d) in enumerate(divs) if d > 0]
     n_draws   = sum(size(ch, 1) * size(ch, 3) for ch in chains)
     div_rate  = sum(max.(divs, 0)) / n_draws
+
+    # Threshold is a RATE, not zero. Amended 2026-08-26 with the reasoning recorded
+    # in FINDINGS.md; see also the clustering check below, which this gate depends on.
+    #
+    # "Count == 0" is both too strict and too weak. Too strict: across 64,000 draws
+    # in 80 independent chains, exactly zero asks more than the integrator's numerics
+    # guarantee. Too weak: a run can post zero divergences while sitting on a funnel
+    # that merely failed to trigger, and the gate would say nothing.
+    #
+    # What actually threatens the posterior is divergences that are FREQUENT or
+    # SYSTEMATIC. Both are tested: the rate here, the clustering below. Either alone
+    # would be a weaker gate than the pair.
     push!(out, (
-        name   = "divergences",
-        pass   = all(==(0), divs),
+        name   = "divergences rare",
+        pass   = div_rate <= divergence_rate_max,
         detail = any(<(0), divs) ? "numerical_error not recorded" :
                  isempty(bad_div) ? "0 across all $n folds ($n_draws draws)" :
-                 @sprintf("%d total (%.4f%% of %d draws), in folds %s",
-                          sum(divs), 100 * div_rate, n_draws, string(bad_div)),
+                 @sprintf("%d total = %.4f%% of %d draws (threshold %.2f%%), in folds %s",
+                          sum(divs), 100 * div_rate, n_draws,
+                          100 * divergence_rate_max, string(bad_div)),
     ))
 
     # A divergence COUNT does not say whether the posterior is compromised. What
@@ -544,9 +558,11 @@ function tp_gate_convergence(results, contract::SLContract;
     # the funnel signature, and it means the sampler is systematically failing to
     # reach a region rather than occasionally stumbling.
     #
-    # Reported, never gating. It is a diagnosis of a failure the line above already
-    # caught, and a clean result here is what licenses treating a small count as
-    # integrator noise instead of bias.
+    # This one GATES. The rate check above tolerates a few divergences only on the
+    # condition that they are not systematic, so that condition has to be enforced,
+    # not merely printed. Divergent draws concentrated at small σ mean the sampler
+    # is failing to reach a region of the posterior — which biases every price
+    # downstream, however small the count.
     if !isempty(bad_div)
         ratios = Float64[]
         for i in bad_div
@@ -561,7 +577,7 @@ function tp_gate_convergence(results, contract::SLContract;
         worst = isempty(ratios) ? 1.0 : minimum(ratios)
         push!(out, (
             name   = "divergences not a funnel",
-            pass   = true,
+            pass   = worst >= 0.5,
             detail = @sprintf("σ at divergent draws is %.2f-%.2fx the bulk mean%s",
                               minimum(ratios), maximum(ratios),
                               worst < 0.5 ? "  ⚠ CLUSTERED AT SMALL σ — funnel" :
