@@ -274,24 +274,25 @@ end
 # 5. Market Summary Display
 # ==============================================================================
 
-function tp00_market_summary(model::DynamicPoissonGoalsTimeDecayModel, df::DataFrame, contract::SLContract; n_rows::Int = 8)
-    println()
-    println("-" ^ 74)
-    println("SAMPLE PREDICTED PRICES (Model 00 Pure Poisson)")
-    println("-" ^ 74)
-    println("  λ_h    λ_a    Home    Draw    Away    Over 2.5  BTTS")
-    println("-" ^ 74)
+function tp00_market_summary(model::DynamicPoissonGoalsTimeDecayModel, df::AbstractDataFrame, contract::SLContract; n_rows::Int = 8)
+    rows = NamedTuple[]
     for row in eachrow(first(df, n_rows))
-        sm = tp00_score_matrix(model, row; max_goals = contract.max_goals)
-        p_1x2 = Markets.calculate_1x2_probabilities(sm)
-        p_ou  = Markets.calculate_over_under_probabilities(sm, 2.5)
-        p_btts= Markets.calculate_btts_probabilities(sm)
+        S      = tp00_score_matrix(model, row; max_goals = contract.max_goals)
+        p_1x2  = Predictions.compute_market_probs(S, Markets.Market1X2())
+        p_btts = Predictions.compute_market_probs(S, Markets.MarketBTTS())
+        o25    = outcomes(Markets.MarketOverUnder(2.5))
+        p_25   = Predictions.compute_market_probs(S, Markets.MarketOverUnder(2.5))
 
-        @printf("  %.3f  %.3f  %.3f   %.3f   %.3f   %.3f     %.3f\n",
-                mean(row.λ_h), mean(row.λ_a),
-                p_1x2[1], p_1x2[2], p_1x2[3],
-                p_ou[1], p_btts[1])
+        push!(rows, (
+            match_id = row.match_id,
+            λ_h      = round(mean(row.λ_h), digits = 3),
+            λ_a      = round(mean(row.λ_a), digits = 3),
+            home     = round(mean(p_1x2[:home]),      digits = 3),
+            draw     = round(mean(p_1x2[:draw]),      digits = 3),
+            away     = round(mean(p_1x2[:away]),      digits = 3),
+            over25   = round(mean(p_25[o25.over]),    digits = 3),
+            btts     = round(mean(p_btts[:btts_yes]), digits = 3),
+        ))
     end
-    println("-" ^ 74)
-    return nothing
+    return DataFrame(rows)
 end
