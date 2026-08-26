@@ -60,6 +60,7 @@ sl_equation_logjoint(adapter::TP00Adapter, params::TP00Params, data) =
 sl_sampled_sites(::TP00Adapter, n_teams::Int) = tp00_sampled_sites(n_teams)
 sl_parameter_row(::TP00Adapter, p::TP00Params) =
     Float64[p.μ, p.γ, p.σ_a, p.σ_d, p.raw_a..., p.raw_d...]
+sl_synthetic_n_teams(::TP00Adapter, p::TP00Params) = length(p.raw_a)
 function sl_synthetic_draws(::TP00Adapter, n_teams::Int, n_draws::Int; seed::Int = 20260826)
     rng = Random.MersenneTwister(seed)
     return [TP00Params(
