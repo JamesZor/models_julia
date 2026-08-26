@@ -18,13 +18,11 @@ using DataFrames
 using Distributions
 using Statistics
 
-const TP01_ROOT = "current_development/scottish_lower"
-
-include(joinpath(TP01_ROOT, "_protocol/ScottishLowerProtocol.jl"))
+include("../_protocol/ScottishLowerProtocol.jl")
 using .ScottishLowerProtocol
-include(joinpath(TP01_ROOT, "01_team_poisson/l01_model.jl"))
-include(joinpath(TP01_ROOT, "01_team_poisson/l02_equations.jl"))
-include(joinpath(TP01_ROOT, "01_team_poisson/l03_adapter.jl"))
+include("l01_model.jl")
+include("l02_equations.jl")
+include("l03_adapter.jl")
 
 
 # %%
