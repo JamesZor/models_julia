@@ -372,6 +372,40 @@ end
 # ==============================================================================
 
 """
+    tp_selections_expected(market) -> Int
+
+How many selections a complete market must have. Used to detect PARTIAL markets,
+which are the dangerous case: de-vigging divides by the overround computed over the
+selections present, so a market with ONE leg de-vigs to exactly p = 1.0.
+
+That does not error. Clamped, a losing p = 1 contributes a log loss of ~20.7, which
+is enough to make a sound model look catastrophic against a thin exchange while every
+diagnostic still reads as healthy. Measured on Scottish Betfair: 143 of 930 markets.
+"""
+tp_selections_expected(market::String) = market == "1X2" ? 3 : 2
+
+"""
+    tp_drop_incomplete(book) -> (kept, n_dropped)
+
+Remove markets that are missing selections. Must run BEFORE de-vigged probabilities
+are scored or staked — see `tp_selections_expected`.
+"""
+function tp_drop_incomplete(book::AbstractDataFrame)
+    isempty(book) && return (book, 0)
+    g = groupby(book, [:match_id, :market, :line])
+    keep = DataFrame()
+    dropped = 0
+    for sub in g
+        if nrow(sub) == tp_selections_expected(sub.market[1])
+            keep = isempty(keep) ? DataFrame(sub) : vcat(keep, DataFrame(sub))
+        else
+            dropped += 1
+        end
+    end
+    return (keep, dropped)
+end
+
+"""
     tp_gate_book_integrity(market_book, contract; label) -> Vector
 
 Before any score is computed: is the market book itself well-formed?
@@ -407,6 +441,17 @@ function tp_gate_book_integrity(mb::AbstractDataFrame, contract::SLContract; lab
         name   = "probabilities in (0, 1)",
         pass   = all(0 .< mb.p_market .< 1),
         detail = @sprintf("range [%.4f, %.4f]", minimum(mb.p_market), maximum(mb.p_market)),
+    ))
+
+    # Partial markets de-vig to p = 1.0 without erroring. See tp_selections_expected.
+    nsel = combine(g, nrow => :n)
+    nsel.want = tp_selections_expected.(nsel.market)
+    n_bad = count(r -> r.n != r.want, eachrow(nsel))
+    push!(out, (
+        name   = "markets have all their selections",
+        pass   = n_bad == 0,
+        detail = n_bad == 0 ? "$(nrow(nsel)) markets complete" :
+                 "$n_bad of $(nrow(nsel)) markets partial — these de-vig to p = 1.0",
     ))
 
     want = Set((Eval_Data.market_group(m), Float64(Eval_Data.market_line(m))) for m in tp_book_markets(contract))
