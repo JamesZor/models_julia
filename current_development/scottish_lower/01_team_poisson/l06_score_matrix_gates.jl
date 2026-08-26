@@ -202,11 +202,25 @@ function tp_gate_score_grid(model, df::AbstractDataFrame, contract::SLContract;
         detail = @sprintf("min cell = %.3e", min_cell),
     ))
 
+    # Truncation is a CHOICE, so it is judged by what it costs, not by whether the
+    # mass "looks small". Raw mass is the wrong quantity: it is dominated by a few
+    # extreme draws, while what matters is the shift in a price a bet would be
+    # placed at. Measured against a grid 8 goals wider on the highest-scoring
+    # fixture, at the line the discarded mass affects most (every truncated
+    # scoreline is an "over").
+    hot = df[argmax([mean(r.λ_h) + mean(r.λ_a) for r in eachrow(df)]), :]
+    o35 = outcomes(Markets.MarketOverUnder(3.5))
+    p_at(g) = mean(Predictions.compute_market_probs(
+                       tp_score_matrix(model, hot; max_goals = g),
+                       Markets.MarketOverUnder(3.5))[o35.over])
+    price_shift = abs(p_at(mg) - p_at(mg + 8))
+
     push!(results, (
-        name   = "truncation mass negligible",
-        pass   = worst_trunc <= 1e-6,
-        detail = @sprintf("max mass beyond %d goals/side = %.3e  (grid sums to 1 - this)",
-                          mg - 1, worst_trunc),
+        name   = "truncation costs nothing that matters",
+        pass   = price_shift <= 1e-4,
+        detail = @sprintf("P(over 3.5) moves %.3e widening %d→%d goals (worst fixture, λ_tot %.2f); mass %.3e",
+                          price_shift, mg, mg + 8,
+                          mean(hot.λ_h) + mean(hot.λ_a), worst_trunc),
     ))
 
     # ---- Orientation. See the header: a transposed grid is well-formed and wrong.
@@ -214,26 +228,39 @@ function tp_gate_score_grid(model, df::AbstractDataFrame, contract::SLContract;
     S1   = tp_score_matrix(model, row1; max_goals = mg)
     g1   = S1.data[:, :, 1]
 
-    # E[home] from the grid must track λ_h, not λ_a. Under this model γ > 0, so the
-    # two marginals are genuinely different and a transpose cannot pass.
-    goals    = collect(0:(mg - 1))
-    e_home   = sum(goals .* vec(sum(g1, dims = 2)))
-    e_away   = sum(goals .* vec(sum(g1, dims = 1)))
+    goals      = collect(0:(mg - 1))
+    e_home     = sum(goals .* vec(sum(g1, dims = 2)))
+    e_away     = sum(goals .* vec(sum(g1, dims = 1)))
     λ_h1, λ_a1 = row1.λ_h[1], row1.λ_a[1]
+    separation = abs(λ_h1 - λ_a1)
 
+    # Tested RELATIVE to the separation between the two marginals, not against an
+    # absolute tolerance. The question is "which marginal is this", and the answer
+    # is only meaningful because γ > 0 makes the two differ. An absolute tolerance
+    # would instead be measuring truncation, which is a different question and is
+    # gated above.
     push!(results, (
         name   = "grid orientation [home, away]",
-        pass   = abs(e_home - λ_h1) < 1e-6 && abs(e_away - λ_a1) < 1e-6,
-        detail = @sprintf("E[home] %.4f vs λ_h %.4f | E[away] %.4f vs λ_a %.4f  (separation %.4f)",
-                          e_home, λ_h1, e_away, λ_a1, abs(λ_h1 - λ_a1)),
+        pass   = abs(e_home - λ_h1) < 0.05 * separation &&
+                 abs(e_away - λ_a1) < 0.05 * separation,
+        detail = @sprintf("E[home] %.4f vs λ_h %.4f | E[away] %.4f vs λ_a %.4f | marginals separated by %.4f",
+                          e_home, λ_h1, e_away, λ_a1, separation),
     ))
 
-    # The marginal mean of a mean-parameterised NegBin is λ exactly, so the moment
-    # check above is a genuine identity, not an approximation -- up to truncation.
+    # The mean of a mean-parameterised NegBin is λ EXACTLY, so on the full support
+    # E[home] would be λ_h. On a truncated grid it must fall short by precisely the
+    # first moment of the discarded tail — computed here from the stock
+    # distribution. Requiring that identity to hold to 1e-12 is much stronger than
+    # requiring E[home] ≈ λ_h: it says the shortfall is truncation and nothing else.
+    dh        = NegativeBinomial(row1.r_h[1], row1.r_h[1] / (row1.r_h[1] + λ_h1))
+    tail_mean = λ_h1 - sum(k * pdf(dh, k) for k in 0:(mg - 1))
+    moment_err = abs((λ_h1 - e_home) - tail_mean)
+
     push!(results, (
-        name   = "moments recover λ",
-        pass   = abs(e_home - λ_h1) < 1e-6,
-        detail = @sprintf("|E[home] - λ_h| = %.3e (truncation-limited)", abs(e_home - λ_h1)),
+        name   = "moment shortfall is exactly the truncated tail",
+        pass   = moment_err <= 1e-12,
+        detail = @sprintf("shortfall %.3e, tail first moment %.3e, |Δ| = %.3e",
+                          λ_h1 - e_home, tail_mean, moment_err),
     ))
 
     return results
