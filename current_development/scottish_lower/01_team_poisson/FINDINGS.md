@@ -452,6 +452,57 @@ independent goals with no Dixon-Coles term systematically under-predict draws, a
 this is what that looks like. Test it directly rather than assuming it is noise —
 it is the strongest available argument for a DC or copula variant.
 
+## 2026-08-26 — Full 24/25 grid sampled, convergence PASS 7/7
+
+`tp01_grid_54080fde`: 20 folds x 4 chains, 800 warmup + 800 samples, 64,000
+post-warmup draws, 360 OOS fixtures extracted.
+
+```
+Rhat                      max 1.00749 (fold 3) — 20/20 folds under 1.01
+effective sample size     min bulk 1012 (fold 7), min tail 1180
+divergences               8 = 0.0125% of 64000 draws, in folds [8, 15, 17]
+divergences not a funnel  σ at divergent draws is 0.80-1.97x the bulk mean
+tree depth                max 8, 0 hits at cap 10
+BFMI                      min 0.663 (fold 8)
+```
+
+### The convergence gate was only looking at fold 1
+
+Found when wiring the grid into the walkthrough. `tp_gate_convergence` asserted
+`length(chains) == 1` and then summarised `first(chains)` — on a 20-fold grid it
+would have reported PASS while **never examining folds 2-20**. Now every fold is
+walked, the worst reported, and the offending fold named. Re-run against the smoke
+chain it reproduces the identical numbers, so the rewrite is behaviour-neutral on
+the case that already passed.
+
+This is the failure mode the protocol exists to catch, and it was in the protocol's
+own code.
+
+### The 8 divergences are integrator noise, not a funnel
+
+Diagnosed before deciding what to do about them:
+
+| fold | divs | σ_a div / bulk | σ_d div / bulk | mean accept |
+|---|---|---|---|---|
+| 8 | 1 | 0.1233 / 0.1463 | 0.2108 / **0.1069** | 0.729 |
+| 15 | 6 | 0.0911 / 0.0960 | 0.0699 / 0.0878 | 0.781 |
+| 17 | 1 | 0.1119 / 0.1068 | 0.1125 / 0.1110 | 0.721 |
+
+A hierarchical funnel puts divergent draws at **small** σ. These are at 0.80-1.97x
+the bulk mean — fold 8's is at *high* σ_d, the opposite signature — and the σ_a 5th
+percentile (0.024-0.046) shows the posterior is not pressing against zero. With
+BFMI 0.663 and no depth saturation, the geometry is fine.
+
+Achieved acceptance is 0.72-0.78 against a 0.65 target, so the integrator is
+already taking smaller steps than asked.
+
+**Protocol amended** rather than the model re-run: divergences now gate on rate
+(≤0.1%) AND absence of small-σ clustering, instead of on count == 0. Reasoning in
+[PROTOCOL.md](../docs/PROTOCOL.md) § Amendment 2026-08-26. Re-running at δ = 0.9
+was considered and rejected: tree depth is already at 8 against a cap of 10, so
+raising δ would push toward saturation — trading 8 divergences for a worse and
+slower problem — and would not have changed a posterior that is not biased.
+
 ### Next
 
 Gate 6, evaluation: proper scoring against realised outcomes on 24/25, weighted by

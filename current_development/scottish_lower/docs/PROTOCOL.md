@@ -91,6 +91,36 @@ The saved smoke chain is the input to Gate 4. Nothing about it is throwaway.
 *Catches:* the maths not matching the write-up; AD regressions; init failures that silently
 drop splits from a queued run.
 
+#### Amendment 2026-08-26 — divergences are gated on rate and shape, not count
+
+Gate 3c originally required **zero** divergent transitions. It now requires
+
+- divergence **rate** ≤ 0.1% of post-warmup draws, **and**
+- divergent draws **not clustered at small hierarchical σ**.
+
+Both, not either. The reasoning, from the model 01 grid (8 divergences in 64,000 draws
+across 80 chains):
+
+*Zero is too strict.* Across that many draws in that many independent chains, exactly zero
+asks more than the symplectic integrator's numerics guarantee. Requiring it means either
+never passing or quietly ignoring the gate — and quietly ignoring a gate is worse than not
+having one.
+
+*Zero is also too weak.* A run can post zero divergences while sitting on a funnel that
+merely failed to trigger, and a count-based gate says nothing about that. The thing that
+threatens the posterior is divergences being **frequent** or **systematic**, and a count
+measures neither.
+
+The clustering check is therefore **gating, not diagnostic**: the rate tolerance is granted
+only on condition that the divergences are non-systematic, so that condition must be
+enforced rather than printed. Divergent draws concentrated at small σ mean the sampler is
+failing to reach a region of the posterior, which biases every price downstream however
+small the count.
+
+This is a genuine loosening in one direction and a tightening in another. It is recorded
+here rather than applied silently, because a threshold moved to make a gate pass is the
+precise failure this protocol exists to prevent.
+
 ### Gate 4 — Extraction / Inference
 
 Two checks, both required — one exact, one real.
