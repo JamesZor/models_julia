@@ -49,6 +49,7 @@ include(joinpath(TP_ROOT, "01_team_poisson/l02_equations.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l03_gates.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l04_sampling_gates.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l05_extraction_gates.jl"))
+include(joinpath(TP_ROOT, "01_team_poisson/l06_score_matrix_gates.jl"))
 
 
 # %%
@@ -284,3 +285,64 @@ tp_gate4b, tp_latents = tp_gate_extraction_real(tp_ds, tp_smoke_loaded, tp_contr
 
 # tp_latents.df is the input to gate 5 — one row per OOS fixture, each carrying the
 # full posterior for λ_h, λ_a, r_h, r_a.
+
+
+# %%
+# ==============================================================================
+# 9. GATE 5 — Score matrix
+# ==============================================================================
+#
+# The last translation before money: λ and r become a joint distribution over
+# scorelines, and that grid becomes market probabilities.
+#
+# 5a is dispatch. Engines are routed to a pricer by abstract supertype and by
+# Union membership, and an engine missing from the relevant Union does not error
+# at definition time — it falls through to a default meant for another
+# likelihood. So the gate asserts the resolved method BY FILE.
+
+tp_gate5a = tp_gate_score_dispatch(tp_engine, first(eachrow(tp_latents.df));
+                                   max_goals = tp_contract.max_goals)
+@assert sl_gate_table("5a. Score matrix dispatch", tp_gate5a)
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 5b. The grid
+# ------------------------------------------------------------------------------
+#
+# Parity against two stock NegativeBinomials built outside src, plus orientation
+# and truncation mass.
+#
+# Orientation is the one that matters most. A transposed grid produces perfectly
+# well-formed probabilities that are simply the wrong way round, and nothing
+# downstream can detect it — it looks like a badly calibrated model, not a broken
+# one. It is caught here only because γ > 0 makes the home and away marginals
+# genuinely different.
+
+tp_gate5b = tp_gate_score_grid(tp_engine, tp_latents.df, tp_contract)
+@assert sl_gate_table("5b. Score matrix grid", tp_gate5b)
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 5c. Market identities
+# ------------------------------------------------------------------------------
+#
+# Every market is a partition of the same grid, so each family must sum to the
+# same total — and that total is `1 - truncation_mass`, NOT 1. Nothing in src
+# normalises the NegBin grid, so asserting "1X2 sums to 1" would assert something
+# false. Internal consistency is both true and the stronger test.
+
+tp_gate5c = tp_gate_market_identities(tp_engine, tp_latents.df, tp_contract)
+@assert sl_gate_table("5c. Market identities", tp_gate5c)
+
+
+# %%
+# ------------------------------------------------------------------------------
+# First look at actual prices  (not a gate)
+# ------------------------------------------------------------------------------
+#
+# The first point in the protocol where the model says something you can check
+# against intuition. Worth reading before trusting gate 6.
+
+tp_market_summary(tp_engine, tp_latents.df, tp_contract; n_rows = 8)
