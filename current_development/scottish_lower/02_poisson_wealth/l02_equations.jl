@@ -1,12 +1,7 @@
-# TP02 independent log-space Poisson referee.
 using SpecialFunctions
-function tp02_equation_data(model, fs)
-    d = fs.data
-    n = length(d[:flat_home_ids])
-    (; home=Vector{Int}(d[:flat_home_ids]), away=Vector{Int}(d[:flat_away_ids]),
-       yh=Vector{Int}(d[:flat_home_goals]), ya=Vector{Int}(d[:flat_away_goals]),
-       weights=_slfp_weight(Float64.(d[:dates]), model.dynamics_config.days_half_life),
-       wealth=Float64.(get(d, :flat_delta_wealth, zeros(Float64,n))),
-       distance=Float64.(get(d, :flat_distance, zeros(Float64,n))))
+function tp02_equation_data(m,fs)
+ d=_dat(m,fs); (;home=d.h,away=d.a,yh=d.yh,ya=d.ya,weights=d.wt,wealth=d.xw,distance=zeros(Float64,length(d.h)),lfh=loggamma.(Float64.(d.yh).+1),lfa=loggamma.(Float64.(d.ya).+1))
 end
-tp02_logjoint(model, params, data) = slfp_logjoint(model, params, data)
+function tp02_logjoint(m,p,d)
+ α,β=slfp_team_effects(p); q=p.w_wealth.*d.wealth; eh=clamp.(p.μ.+p.γ.+α[d.home].+β[d.away].+q,-10.,10.); ea=clamp.(p.μ.+α[d.away].+β[d.home].-q,-10.,10.); lp=logpdf(m.interception_config.μ,p.μ)+logpdf(m.homeadvantage_config.γ_global,p.γ)+logpdf(m.dynamics_config.σ_att,p.σ_a)+logpdf(m.dynamics_config.σ_def,p.σ_d)+sum(logpdf.(Normal(),p.raw_a))+sum(logpdf.(Normal(),p.raw_d))+logpdf(m.w_wealth_prior,p.w_wealth); lp+sum(d.weights.*(d.yh.*eh.-exp.(eh).-d.lfh))+sum(d.weights.*(d.ya.*ea.-exp.(ea).-d.lfa))
+end
