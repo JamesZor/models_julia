@@ -943,10 +943,19 @@ function tp_summary(joined::Dict{String,DataFrame}; baselines = sort(collect(key
             end
         end
 
-        # The BOOK row is the cost of pricing EVERY market for one fixture. Only
-        # fixtures priced in every market are counted, so the sum is comparable
-        # across rows rather than mixing books of different width.
-        full = [f for f in keys(book_m)]
+        # The BOOK row is the cost of pricing EVERY market for one fixture, so it is
+        # only meaningful over fixtures where the baseline prices ALL of them.
+        #
+        # Summing over whatever each fixture happens to have makes a thin baseline
+        # look cheap: Betfair scored 1.86 against Bet365's 3.84 purely because it
+        # prices fewer markets per match, which reads as an enormous advantage and is
+        # an artifact. `n_markets` is carried so the row can never be read without it.
+        n_mkts = length(unique(zip(j.market, j.line)))
+        counts = Dict{Int,Int}()
+        for f in keys(book_m)
+            counts[f] = count(g -> f in g.match_id, groupby(j, [:market, :line]))
+        end
+        full = [f for (f, c) in counts if c == n_mkts]
         if !isempty(full)
             tm = [book_m[f] for f in full]
             tb = [book_b[f] for f in full]
@@ -954,7 +963,7 @@ function tp_summary(joined::Dict{String,DataFrame}; baselines = sort(collect(key
             tse = std(td) / sqrt(length(td))
             push!(rows, (
                 baseline = b,
-                market   = "BOOK (all markets)",
+                market   = "BOOK (all $n_mkts markets)",
                 n        = length(full),
                 ll_model = round(mean(tm), digits = 4),
                 ll_mkt   = round(mean(tb), digits = 4),
@@ -966,7 +975,7 @@ function tp_summary(joined::Dict{String,DataFrame}; baselines = sort(collect(key
 
     df = DataFrame(rows)
     isempty(df) && return df
-    df.is_book = df.market .== "BOOK (all markets)"
+    df.is_book = startswith.(df.market, "BOOK")
     sort!(df, [:baseline, :is_book, :market])
     return select(df, Not(:is_book))
 end
