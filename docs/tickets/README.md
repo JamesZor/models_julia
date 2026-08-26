@@ -23,7 +23,7 @@ only that ticket. Update `Status` here when it lands.
 
 | ID | Title | Severity | Area | Status | Raised |
 |---|---|---|---|---|---|
-| — | — | — | — | — | — |
+| [T002](T002-scalar-taped-likelihood.md) | Engine likelihoods taped scalar-by-scalar (~20x AD work); `view` defeats vectorisation and NegBin crashes on the fast path | medium | `src/models/pregame/engines/`, `src/MyDistributions/` | open | 2026-08-26 |
 
 ## Closed
 
