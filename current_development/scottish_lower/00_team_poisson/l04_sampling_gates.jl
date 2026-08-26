@@ -125,7 +125,7 @@ function tp00_gate_gradients(model::DynamicPoissonGoalsTimeDecayModel, fs; seed:
         detail = @sprintf("logdensity = %.4f", f(θ)),
     ))
 
-    tape = ReverseDiff.compile(ReverseDiff.GradientTape(f, θ))
+    compile_s = @elapsed tape = ReverseDiff.compile(ReverseDiff.GradientTape(f, θ))
 
     g_compiled = similar(θ)
     ReverseDiff.gradient!(g_compiled, tape, θ)
@@ -181,7 +181,20 @@ function tp00_gate_gradients(model::DynamicPoissonGoalsTimeDecayModel, fs; seed:
         detail = @sprintf("max relerr = %.3e over %d probes", worst_probe, length(probes)),
     ))
 
-    return (results, (tape = tape, θ = θ, f = f))
+    # Latency benchmark
+    g_bench = similar(θ)
+    times = Float64[]
+    for _ in 1:50
+        push!(times, @elapsed ReverseDiff.gradient!(g_bench, tape, θ))
+    end
+    med_ms = median(times) * 1e3
+    push!(results, (
+        name   = "compiled gradient latency",
+        pass   = true,
+        detail = @sprintf("median %.3f ms (compile %.2f s) — target < 1 ms", med_ms, compile_s),
+    ))
+
+    return (results, (tape = tape, θ = θ, f = f, median_ms = med_ms))
 end
 
 
