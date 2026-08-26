@@ -223,38 +223,44 @@ function _tp_rqr(rng, r_draws, λ_draws, y::Int)
 end
 
 """
-    tp_betfair_close_book(ds, contract, grading; ids, window) -> DataFrame
+    tp_betfair_book(ds, contract, grading; ids, open_window, close_window) -> DataFrame
 
-De-vigged Betfair CLOSING probabilities for the contract book.
+De-vigged Betfair ENTRY and CLOSING probabilities for the contract book.
 
-Deliberately does NOT use `Data.summarize_betfair_market`. That helper summarises an
-OPEN window (-1440, -1380 min) and a close window and `innerjoin`s them, so any match
-without a price 24 hours before kickoff is dropped entirely. Minor-league exchange
-markets frequently do not open that early, and on Scottish 56+57 the cost is severe:
+Uses the package's own `Data.summarize_betfair_market`, with a widened
+`open_window`. The default `(-1440, -1380)` is a 60-minute band 24 hours before
+kickoff, and the helper `innerjoin`s the open and close summaries — so a match with
+no tick inside that one hour is dropped **entirely, including its closing price**.
+The Betfair feed records price changes, not a heartbeat, so on a thin league that
+band is missed constantly:
 
-    close window alone      322 of 360 OOS fixtures   (89%)
-    open window alone        35 of 360
-    the helper (both)        30 of 360
+    open_window            OOS fixtures returned (of 360)
+    (-1440, -1380)  default            30
+    (-1440,   -21)  used here         319          ceiling is 322
 
-Evaluation and CLV need the CLOSE price. The open price is only required for
-line-movement metrics, so requiring it here would discard 90% of the evidence to
-compute something nothing here asks for. Raised as T005.
+Markets are not opening late — the median first tick is 3,276 minutes (2.3 days)
+before kickoff, and 93.8% have one before -1380. The band is simply too narrow for a
+sparse feed. Raised as T005; this call site is the workaround, not the fix.
 
-Grading is taken from `grading` (the bookmaker book) rather than re-derived — the
-protocol's rule is to extend the package, not re-implement it, and gate 6b asserts
-the two graders agree wherever they overlap.
+**`p_entry` is not an opening price.** Over a 24-hour window `TWAEstimator` returns a
+time-weighted AVERAGE ending just before the close — roughly "the price that was
+available", which is a defensible CLV entry convention but overstates CLV if read as
+the price at market open.
+
+Grading comes from `grading` (the bookmaker book) rather than being re-derived; gate
+6b asserts the two graders agree wherever they overlap.
 """
-function tp_betfair_close_book(ds, contract::SLContract, grading::AbstractDataFrame;
-                               ids::Union{Nothing,AbstractSet} = nothing,
-                               window = (-20.0, 0.0))
+function tp_betfair_book(ds, contract::SLContract, grading::AbstractDataFrame;
+                         ids::Union{Nothing,AbstractSet} = nothing,
+                         open_window  = (-1440.0, -21.0),
+                         close_window = (-20.0, 0.0))
     D   = BayesianFootball.Data
-    raw = D.summarize_odds(ds.betfair_odds, D.TWAEstimator(); window = window)
+    raw = D.summarize_betfair_market(ds; open_window = open_window, close_window = close_window)
     isempty(raw) && return DataFrame()
 
     wanted = Set((D.market_group(m), Float64(D.market_line(m))) for m in tp_book_markets(contract))
     df = filter(r -> (String(r.market_name), Float64(r.market_line)) in wanted, raw)
     ids === nothing || (df = filter(r -> Int(r.match_id) in ids, df))
-    "is_sane" in names(df) && (df = filter(r -> coalesce(r.is_sane, true), df))
     isempty(df) && return DataFrame()
 
     out = DataFrame(
@@ -262,7 +268,10 @@ function tp_betfair_close_book(ds, contract::SLContract, grading::AbstractDataFr
         market    = String.(df.market_name),
         line      = Float64.(df.market_line),
         selection = Symbol.(df.selection),
-        p_market  = (1 ./ Float64.(df.odds)) ./ Float64.(df.overround),
+        p_market  = Float64.(df.prob_implied_close) ./ Float64.(df.overround_close),
+        p_entry   = Float64.(df.prob_implied_open)  ./ Float64.(df.overround_open),
+        odds_close = Float64.(df.odds_close),
+        odds_entry = Float64.(df.odds_open),
     )
     return innerjoin(out, select(grading, [:match_id, :market, :line, :selection, :is_winner]),
                      on = [:match_id, :market, :line, :selection])

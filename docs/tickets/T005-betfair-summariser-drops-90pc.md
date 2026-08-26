@@ -1,9 +1,9 @@
-# T005 — `summarize_betfair_market` discards 90% of fixtures by requiring an open price
+# T005 — `summarize_betfair_market`'s default open window discards 90% of fixtures
 
 | | |
 |---|---|
 | **Status** | open |
-| **Severity** | high — silently removes most of the evidence from any CLV or backtest work |
+| **Severity** | medium — a call-site workaround exists (widen `open_window`); the DEFAULT silently removes 90% of fixtures |
 | **Area** | `src/Data/betfair_util.jl:178` |
 | **Raised** | 2026-08-26, by model 01 gate 6b in `current_development/scottish_lower/` |
 | **Verified on** | Scottish 56+57, 24/25, 360 OOS fixtures, 599,529 Betfair ticks |
@@ -61,9 +61,49 @@ nothing unusual.
 The effect is worst exactly where the exchange is thin, which is where minor-league research
 lives.
 
+## The window is too NARROW, not too early
+
+Markets are not opening late. Measured over the 324 OOS fixtures with Betfair data:
+
+| earliest tick, minutes before kickoff | |
+|---|---|
+| 5th percentile | -5,670 |
+| median | **-3,276** (2.3 days) |
+| 95th percentile | -1,248 |
+
+93.8% have a tick before -1380, and 100% have one before -360. The default window is a
+**60-minute band**, and the feed records price CHANGES rather than a heartbeat, so a market
+that is open all day can easily have no tick inside that particular hour.
+
+Widening the band alone fixes it, with no change to the join:
+
+| `open_window` | span | OOS fixtures returned |
+|---|---|---|
+| `(-1440, -1380)` *default* | 60 min | **30** |
+| `(-1500, -1300)` | 200 min | 102 |
+| `(-2880, -1440)` | 24 h | 202 |
+| `(-2880, -720)` | 36 h | 290 |
+| `(-1440, -21)` | ~24 h to just before close | **319** |
+| `(-4320, -360)` | 66 h | 320 |
+
+Ceiling is 322 (36 fixtures have no Betfair data at all).
+
+**Workaround available today**, and used by the Scottish Lower protocol:
+
+```julia
+summarize_betfair_market(ds; open_window = (-1440.0, -21.0))
+```
+
+Note this changes what `odds_open` MEANS. `TWAEstimator` returns a time-weighted average
+over the window, so across 24 hours it is a pre-close average price rather than an opening
+price. That is a reasonable CLV entry convention — approximately "the price that was
+available" — but it must be named accordingly, because reading it as the open would
+overstate CLV.
+
 ## Proposed fix
 
-Make the open side optional and default to close-only:
+Change the default to something survivable on a sparse feed, and make the join
+non-destructive:
 
 ```julia
 summarize_betfair_market(ds; require_open::Bool = false, ...)
@@ -91,8 +131,10 @@ length(unique(helper.match_id))       # 188
 
 ## Acceptance criteria
 
-- [ ] Close-only summarisation returns ≥ 89% of OOS fixtures on Scottish 56+57 through the
-      public helper, not only through `summarize_odds` directly.
+- [ ] The default `open_window` returns ≥ 85% of OOS fixtures on Scottish 56+57. A window
+      of `(-1440, -21)` achieves 319/360; the current default achieves 30.
+- [ ] Whatever `odds_open` means under the chosen default is documented in the docstring —
+      a TWA over a wide window is an average, not an opening price.
 - [ ] Rows are never dropped for missing OPEN data; `odds_open` is `missing` instead.
 - [ ] Existing callers that use `odds_open` still work, or are updated with the change.
 - [ ] Coverage is reported (or a warning raised) when a window matches fewer than some share
