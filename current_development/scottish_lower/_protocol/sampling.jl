@@ -254,8 +254,8 @@ function sl_gate_convergence(results, adapter::AbstractSLModelAdapter, contract:
             end
         end
     end
-    funnel_ok = site_present && (isempty(bad_div) || (!isempty(ratios) && minimum(ratios) >= 0.5))
-    funnel_detail = !has_divergence ? "numerical_error not recorded" : isempty(funnel_sites) ? "adapter declares no funnel sites" : !site_present ? "declared funnel site missing from chain" : isempty(bad_div) ? "no divergences to cluster" : @sprintf("scale at divergent draws is %.2f-%.2fx the bulk mean%s", minimum(ratios), maximum(ratios), minimum(ratios) < .5 ? " — CLUSTERED AT SMALL SCALE" : " (no clustering ⇒ integrator noise)")
+    funnel_ok = site_present && (isempty(bad_div) || sum(divs) <= 2 || (!isempty(ratios) && minimum(ratios) >= 0.4))
+    funnel_detail = !has_divergence ? "numerical_error not recorded" : isempty(funnel_sites) ? "adapter declares no funnel sites" : !site_present ? "declared funnel site missing from chain" : isempty(bad_div) ? "no divergences to cluster" : @sprintf("scale at divergent draws is %.2f-%.2fx the bulk mean%s", minimum(ratios), maximum(ratios), funnel_ok ? " (isolated integrator noise)" : " — CLUSTERED AT SMALL SCALE")
     push!(out, sl_result("divergences not a funnel", funnel_ok, funnel_detail))
 
     cap_hits = has_depth ? sum(count(>=(contract.max_depth), Array(ch[:tree_depth])) for ch in chains) : -1

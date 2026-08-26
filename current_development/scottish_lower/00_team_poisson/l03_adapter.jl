@@ -60,9 +60,17 @@ sl_equation_logjoint(adapter::TP00Adapter, params::TP00Params, data) =
 sl_sampled_sites(::TP00Adapter, n_teams::Int) = tp00_sampled_sites(n_teams)
 sl_parameter_row(::TP00Adapter, p::TP00Params) =
     Float64[p.μ, p.γ, p.σ_a, p.σ_d, p.raw_a..., p.raw_d...]
-sl_synthetic_n_teams(::TP00Adapter, p::TP00Params) = n_teams(p)
-sl_synthetic_draws(::TP00Adapter, n_teams::Int, n_draws::Int) =
-    tp00_synthetic_draws(n_teams, n_draws)
+function sl_synthetic_draws(::TP00Adapter, n_teams::Int, n_draws::Int; seed::Int = 20260826)
+    rng = Random.MersenneTwister(seed)
+    return [TP00Params(
+                μ     = 0.1  + 0.3 * randn(rng),
+                γ     = 0.2  + 0.2 * randn(rng),
+                σ_a   = 0.15 + 0.10 * rand(rng),
+                σ_d   = 0.15 + 0.10 * rand(rng),
+                raw_a = randn(rng, n_teams),
+                raw_d = randn(rng, n_teams),
+            ) for _ in 1:n_draws]
+end
 
 function sl_synthetic_fixtures(::TP00Adapter, team_map; n::Int = 6, unmapped::Bool = false)
     n > 0 || throw(ArgumentError("n must be positive"))
