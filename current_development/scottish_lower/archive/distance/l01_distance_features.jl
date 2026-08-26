@@ -33,7 +33,8 @@ const EARTH_RADIUS_KM    = 6371.0088
 Computes the Great-Circle Haversine distance between two WGS84 GPS coordinates.
 """
 function haversine_distance(lat1::Real, lon1::Real, lat2::Real, lon2::Real; unit::Symbol=:miles)
-    r = (unit == :km) ? EARTH_RADIUS_KM : EARTH_RADIUS_MILES
+    unit in (:miles, :km) || throw(ArgumentError("unit must be :miles or :km, got $unit"))
+    r = unit == :km ? EARTH_RADIUS_KM : EARTH_RADIUS_MILES
     
     phi1 = deg2rad(Float64(lat1))
     phi2 = deg2rad(Float64(lat2))
@@ -106,18 +107,64 @@ function load_scottish_stadium_catalog(csv_path::String = DEFAULT_GEOCODES_CSV)
         error("Stadium geocodes file not found at: $(csv_path)")
     end
     df = CSV.read(csv_path, DataFrame)
+    required = (:team_slug, :latitude, :longitude)
+    all(name -> name in propertynames(df), required) ||
+        error("Stadium catalog must contain columns $(collect(required))")
+
     df.team_slug = String.(df.team_slug)
     df.latitude  = Float64.(df.latitude)
     df.longitude = Float64.(df.longitude)
+
+    length(unique(df.team_slug)) == nrow(df) || error("Stadium catalog contains duplicate team_slug values")
+    all(isfinite, df.latitude) && all(isfinite, df.longitude) ||
+        error("Stadium catalog coordinates must be finite")
+    all(x -> -90.0 <= x <= 90.0, df.latitude) || error("Stadium latitude outside [-90, 90]")
+    all(x -> -180.0 <= x <= 180.0, df.longitude) || error("Stadium longitude outside [-180, 180]")
     return df
 end
 
 """
-    build_match_distance_table(matches_df::DataFrame; geocodes_df::DataFrame = load_scottish_stadium_catalog()) -> DataFrame
+    catalog_distance_standardization(geocodes_df) -> NamedTuple
 
-Computes pairwise distances for every match in `matches_df`.
+Returns fixed raw- and log-distance centering constants computed from every
+ordered pair in the versioned stadium catalog. Unlike match-sample moments,
+these constants cannot change when future fixtures are added or removed.
 """
-function build_match_distance_table(matches_df::DataFrame; geocodes_df::DataFrame = load_scottish_stadium_catalog())
+function catalog_distance_standardization(geocodes_df::DataFrame)
+    n = nrow(geocodes_df)
+    n >= 2 || throw(ArgumentError("at least two stadiums are required for standardization"))
+
+    distances = Float64[]
+    sizehint!(distances, n * (n - 1))
+    for i in 1:n, j in 1:n
+        i == j && continue
+        push!(distances, haversine_distance(
+            geocodes_df.latitude[i], geocodes_df.longitude[i],
+            geocodes_df.latitude[j], geocodes_df.longitude[j]))
+    end
+
+    log_distances = log1p.(distances)
+    raw_scale = std(distances; corrected=false)
+    log_scale = std(log_distances; corrected=false)
+    return (
+        raw_center = mean(distances),
+        raw_scale = raw_scale > 0.0 ? raw_scale : 1.0,
+        log_center = mean(log_distances),
+        log_scale = log_scale > 0.0 ? log_scale : 1.0,
+    )
+end
+
+"""
+    build_match_distance_table(matches_df; geocodes_df, standardization) -> DataFrame
+
+Computes pairwise distances for every match in `matches_df`. Standardization is
+catalog-fixed by default, so deleting future matches cannot alter past values.
+"""
+function build_match_distance_table(
+    matches_df::DataFrame;
+    geocodes_df::DataFrame = load_scottish_stadium_catalog(),
+    standardization = catalog_distance_standardization(geocodes_df),
+)
     geo_map = Dict{String, Tuple{Float64, Float64}}()
     for row in eachrow(geocodes_df)
         geo_map[row.team_slug] = (row.latitude, row.longitude)
@@ -131,6 +178,7 @@ function build_match_distance_table(matches_df::DataFrame; geocodes_df::DataFram
     log_mi    = zeros(Float64, n)
     tiers     = zeros(Int, n)
     is_midwk  = zeros(Float64, n)
+    fallback  = zeros(Int, n)
     
     for i in 1:n
         h_team = String(matches_df.home_team[i])
@@ -140,8 +188,9 @@ function build_match_distance_table(matches_df::DataFrame; geocodes_df::DataFram
         a_coord = get(geo_map, a_team, nothing)
         
         if isnothing(h_coord) || isnothing(a_coord)
-            # Fallback for any unknown ground (assume Central Belt mean ~45 miles)
+            # Deterministic population fallback for promoted or unmapped grounds.
             dist_m = 45.0
+            fallback[i] = 1
         else
             dist_m = haversine_distance(h_coord[1], h_coord[2], a_coord[1], a_coord[2]; unit=:miles)
         end
@@ -167,16 +216,9 @@ function build_match_distance_table(matches_df::DataFrame; geocodes_df::DataFram
         end
     end
     
-    # Standardization (Z-scores)
-    mu_dist = mean(hav_miles)
-    sd_dist = std(hav_miles)
-    sd_dist = (sd_dist == 0.0 || isnan(sd_dist)) ? 1.0 : sd_dist
-    dist_z  = (hav_miles .- mu_dist) ./ sd_dist
-    
-    mu_log = mean(log_mi)
-    sd_log = std(log_mi)
-    sd_log = (sd_log == 0.0 || isnan(sd_log)) ? 1.0 : sd_log
-    log_dist_z = (log_mi .- mu_log) ./ sd_log
+    # Catalog-fixed standardization: no moments are fitted on fixture rows.
+    dist_z = (hav_miles .- standardization.raw_center) ./ standardization.raw_scale
+    log_dist_z = (log_mi .- standardization.log_center) ./ standardization.log_scale
     
     result = DataFrame(
         match_id        = Int.(matches_df.match_id),
@@ -190,7 +232,8 @@ function build_match_distance_table(matches_df::DataFrame; geocodes_df::DataFram
         dist_z          = dist_z,
         log_dist_z      = log_dist_z,
         distance_tier   = tiers,
-        is_midweek      = is_midwk
+        is_midweek      = is_midwk,
+        distance_fallback = fallback,
     )
     
     return result
@@ -230,8 +273,10 @@ function Features.add_feature!(
     ds::Data.DataStore
 )
     geocodes_df = load_scottish_stadium_catalog(config.geocodes_csv)
-    dist_df     = build_match_distance_table(ds.matches; geocodes_df=geocodes_df)
-    
+    selected_ids = Set(ordered_ids)
+    selected_matches = subset(ds.matches, :match_id => ByRow(id -> Int(id) in selected_ids))
+    dist_df = build_match_distance_table(selected_matches; geocodes_df=geocodes_df)
+
     # Fast match_id lookup
     dist_row_map = Dict(r.match_id => r for r in eachrow(dist_df))
     
@@ -241,8 +286,9 @@ function Features.add_feature!(
     flat_hav_miles  = zeros(Float64, n)
     flat_road_miles = zeros(Float64, n)
     flat_drive_mins = zeros(Float64, n)
-    flat_tiers      = zeros(Float64, n)
+    flat_tiers      = zeros(Int, n)
     flat_is_midweek = zeros(Float64, n)
+    flat_fallback   = zeros(Int, n)
     
     for (i, mid) in enumerate(ordered_ids)
         row = get(dist_row_map, mid, nothing)
@@ -252,16 +298,18 @@ function Features.add_feature!(
             flat_hav_miles[i]  = 45.0
             flat_road_miles[i] = 56.0
             flat_drive_mins[i] = 75.0
-            flat_tiers[i]      = 2.0
+            flat_tiers[i]      = 2
             flat_is_midweek[i] = 0.0
+            flat_fallback[i]   = 1
         else
             flat_dist_z[i]     = Float64(row.dist_z)
             flat_log_dist_z[i] = Float64(row.log_dist_z)
             flat_hav_miles[i]  = Float64(row.hav_miles)
             flat_road_miles[i] = Float64(row.road_miles)
             flat_drive_mins[i] = Float64(row.drive_minutes)
-            flat_tiers[i]      = Float64(row.distance_tier)
-            flat_is_midweek[i] = Float64(row.is_midweek)
+            flat_tiers[i]      = Int(row.distance_tier)
+            flat_is_midweek[i] = config.include_midweek ? Float64(row.is_midweek) : 0.0
+            flat_fallback[i]   = Int(row.distance_fallback)
         end
     end
     
@@ -288,7 +336,11 @@ function Features.add_feature!(
     F_data[:flat_drive_minutes]    = flat_drive_mins
     F_data[:flat_distance_tier]    = flat_tiers
     F_data[:flat_is_midweek]       = flat_is_midweek
-    F_data[:distance_df]           = dist_df
+    F_data[:flat_distance_fallback] = flat_fallback
+    # Only selected fold IDs are retained. Storing the full `dist_df` leaks future
+    # fixture membership and makes perturbation comparisons fail structurally.
+    F_data[:distance_by_match_id] = Dict(
+        Int(mid) => Float64(primary_vec[i]) for (i, mid) in enumerate(ordered_ids))
 end
 
 function Features.add_feature!(
