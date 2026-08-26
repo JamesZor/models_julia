@@ -70,6 +70,27 @@ tp_report_gate("2. Features", gate_results)   # prints the PASS/FAIL table
 
 Read the table; the assert is the tripwire, not the report.
 
+### Namespace collisions in loaders
+
+The walkthrough has `using` on both DataFrames and Turing, so a bare call to a name
+both packages export resolves to neither and dies at call time with
+
+    UndefVarError: `subset` not defined in `Main`
+    Hint: It looks like two or more modules export different bindings with this name
+
+The overlapping set worth watching: `subset`, `transform`, `select`, `combine`,
+`groupby`, `stack`, `describe`. **Qualify them in loaders** — `DataFrames.subset(...)` —
+rather than relying on import order. `logpdf`, `mean` and `var` look like clashes but are
+not: Turing re-exports the same binding, so it is one function, not two.
+
+### Re-including a loader mid-session
+
+`l03_gates.jl` defines the `TPFold` struct. Julia 1.12 lets you redefine a struct, but the
+redefinition creates a *new* type: values built before the re-include still hold the old one,
+so `tp_fold_table(tp_ds, tp_folds)` then fails with a `MethodError` that points nowhere near
+the cause. **Re-include and rebuild in one go** — after re-including a loader that defines a
+struct, re-run the blocks that constructed values of that type.
+
 ## Recording results
 
 After a gate run, append to the model's `FINDINGS.md`:
