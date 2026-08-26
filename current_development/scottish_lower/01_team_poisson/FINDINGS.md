@@ -279,11 +279,90 @@ their `_negbin_vector_loglik` was hand-vectorised.
 measurement is therefore representative of real sampling, but the contract cannot
 override it. Asserted from source by `tp_ad_backend_matches_src`.
 
+## 2026-08-26 — Gate 3c PASS 6/6, gate 4 PASS 11/13
+
+### Gate 3c — the posterior is clean
+
+Fold 1 (season opener, 720 matches), 4 chains x 500/500, 53.5 s wall.
+
+| | |
+|---|---|
+| Rhat | max 1.00806 (threshold 1.01) |
+| ESS | min bulk 606, min tail 711 (threshold 400) |
+| divergences | 0 |
+| tree depth | max 6 against a cap of 10 |
+| BFMI | min 0.743 (threshold 0.30) |
+
+Max tree depth 6 against the cap of 10 means the sampler never truncated a
+trajectory — the geometry is easy and the non-centred parameterisation is doing
+its job. Artifact: `data/scottish_lower/01_team_poisson/54080fde/tp01_smoke_54080fde_20260826_104111`.
+
+Worth noting for the full grid: two chains found ε = 0.2 and two found ε = 0.025,
+an 8x spread. Rhat 1.008 says they still agree on the posterior, so this is warmup
+path dependence rather than multimodality — but if the grid ever shows Rhat drift,
+this is the first place to look.
+
+### Gate 4a — the priced model IS the fitted model
+
+Fabricated an 8-draw / 2-chain synthetic chain with known parameters, priced it
+through the package's own `extract_parameters`, compared against `l02`:
+
+```
+λ parity vs l02      max |Δλ| = 2.220e-16   (one ulp, over 8 draws x 6 fixtures x 2 sides)
+r parity vs l02      max |Δr| = 0.000e+00
+draws not collapsed  8 distinct λ_h across 8 draws
+```
+
+Two chains rather than one is deliberate. Every extractor flattens with
+`vec(Array(chain[name]))` — column-major over `(n_iter, n_chains)` — and nothing
+checks that separate components agree on that convention. With a single chain,
+row-major and column-major coincide and a mixing bug would pass unnoticed.
+
+This closes the audit's worst finding from the other direction: `src`'s extraction
+keys `team_map` by NAME and applies the hierarchical scale correctly. The
+re-implemented prototype was the broken one.
+
+### Gate 4b — plumbing, on the real chain loaded from disk
+
+```
+OOS fixtures priced          20 rows priced, 20 OOS fixtures at t+1
+match ids match the OOS set  0 missing, 0 unexpected
+posterior depth preserved    2000 draws per fixture (chain is 500 x 4)
+λ finite and positive        80000 values, range [0.549, 3.835]
+r finite and positive        range [6.17, 91.97] — clamp at exp(±10) never binds
+λ plausible for the league   median 1.358 goals/side (league average ~1.3)
+```
+
+The dispersion clamp asymmetry flagged in MODEL.md is now settled empirically: `r`
+lands in [6.17, 91.97], nowhere near `exp(±10)`, so training clamping and
+extraction not clamping cannot disagree under this prior.
+
+### Gate 4c — FAIL 1/2: unmapped teams lose home advantage
+
+```
+[FAIL]  unmapped team keeps global home advantage
+        γ_global DROPPED: λ_h is 0.849x the population value
+[PASS]  month index inert for this config    max |Δλ_h| = 0.000e+00
+```
+
+`goals.jl:158` substitutes `zeros` for γ when a team is missing from `team_map`.
+Zero is the correct population value for α and β — the zero-sum constraint makes
+it so — but **not** for γ: under `GlobalHomeAdvantage` every team shares the same
+γ_global (~0.16), so nothing is unknown about an unseen team's home advantage.
+
+Fires on 2 of 360 fixtures (0.56%) in Scottish 24/25 — `arbroath` and
+`inverness-caledonian-thistle`, sides appearing in a fold's OOS window before its
+fitted history. Rare, but concentrated at season boundaries where the model is
+already weakest, and silent. 28 call sites across the engines.
+
+Raised as [T003](../../../docs/tickets/T003-home-advantage-population-fallback.md).
+
 ### Next
 
-Gate 3c: run the smoke (block 7 of the walkthrough) with `-t 16`, ThreadPinning
-and single-threaded BLAS. It persists a chain to
-`data/scottish_lower/01_team_poisson/54080fde/`, which gate 4 then reloads.
+Gate 5, the score matrix: dispatch Union membership, normalisation and truncation
+mass at `max_goals = 12`, and the market identities — 1X2 summing to 1, and O/U
+and BTTS agreeing with sums over the same grid cells.
 
-T002 is a cost ticket, not a blocker — the posterior is correct, so gates 3c
-onward can proceed at current speed.
+Both open tickets are quantified and neither blocks it: T002 is cost only, and
+T003 mis-prices 0.56% of fixtures on one side. Gate 5 works on the grid, which is
+downstream of both.
