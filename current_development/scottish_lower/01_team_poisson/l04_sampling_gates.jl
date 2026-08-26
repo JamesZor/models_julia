@@ -357,9 +357,12 @@ function tp_run_smoke(ds, model, contract::SLContract)
     config   = tp_smoke_config(model, contract; save_dir = save_dir)
 
     results = Experiments.run_experiment(ds, config)
-    path    = Experiments.save_experiment(results)
+    Experiments.save_experiment(results)
 
-    return (results, path)
+    # save_experiment returns nothing; the artifact location lives on the results
+    # object. Returned explicitly because gate 4 loads the chain back FROM DISK
+    # rather than reusing this in-memory object.
+    return (results, results.save_path)
 end
 
 

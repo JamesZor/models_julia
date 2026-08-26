@@ -48,6 +48,7 @@ include(joinpath(TP_ROOT, "01_team_poisson/l01_model.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l02_equations.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l03_gates.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l04_sampling_gates.jl"))
+include(joinpath(TP_ROOT, "01_team_poisson/l05_extraction_gates.jl"))
 
 
 # %%
@@ -227,3 +228,59 @@ println("saved to: ", tp_smoke_path)
 # Poke at the chain:
 #   tp_chain = first(tp_smoke_results.training_results)[1]
 #   DataFrame(MCMCChains.summarystats(tp_chain))
+
+
+# %%
+# ==============================================================================
+# 8. GATE 4 — Extraction
+# ==============================================================================
+#
+# Gate 3a proved the FITTED model is the documented model. This asks the separate
+# question: is the PRICED model the same one that was fitted?
+#
+# Different code path entirely. Training runs inside `@model` on TrackedArrays;
+# extraction runs afterwards on an MCMCChains object, indexing by variable NAME
+# and reassembling the arithmetic by hand. Nothing forces them to agree — and the
+# 2026-08-24 audit found a prototype where they did not.
+#
+# 4a is exact and cheap: fabricate a chain with known parameters, price it, and
+# compare against l02 — the same independent reference gate 3a used.
+
+tp_gate4a = tp_gate_extraction_synthetic(tp_engine, tp_features[1])
+@assert sl_gate_table("4a. Extraction parity (synthetic chain)", tp_gate4a)
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 4c. Fallbacks — what extraction does with what it has never seen
+# ------------------------------------------------------------------------------
+#
+# Gate 2 found 4 of 720 OOS sides whose team is absent from the fitted fold
+# (arbroath, inverness-caledonian-thistle). Extraction substitutes zeros for them.
+# This measures whether those zeros are the right POPULATION values rather than
+# assuming they are, and checks that the season/month fallbacks are inert for this
+# component set.
+
+tp_gate4c = tp_gate_extraction_fallbacks(tp_engine, tp_features[1])
+@assert sl_gate_table("4c. Extraction fallbacks", tp_gate4c)
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 4b. Real chain, real loader
+# ------------------------------------------------------------------------------
+#
+# Loads the gate 3c artifact back off DISK — not the in-memory object the smoke
+# returned. The saved artifact is what gates 5-7 consume, so it is the thing that
+# has to be readable.
+#
+# This cannot check arithmetic (the true λ is unknown). It checks plumbing: that
+# the splitter reproduces the boundaries the experiment trained on, that the t+1
+# fixtures are found and every one is priced, and that nothing is NaN or absurd.
+
+tp_smoke_loaded = tp_load_smoke(tp_smoke_path)
+tp_gate4b, tp_latents = tp_gate_extraction_real(tp_ds, tp_smoke_loaded, tp_contract)
+@assert sl_gate_table("4b. Extraction plumbing (real chain)", tp_gate4b)
+
+# tp_latents.df is the input to gate 5 — one row per OOS fixture, each carrying the
+# full posterior for λ_h, λ_a, r_h, r_a.
