@@ -525,7 +525,8 @@ function tp_hot_frames(; top::Int = 12)
     lidict = Profile.getdict(data)
 
     counts  = Dict{Tuple{Symbol,String},Int}()
-    total   = 0
+    kept    = 0
+    dropped = 0
     at_leaf = true
     for ip in data
         if ip == 0
@@ -533,21 +534,32 @@ function tp_hot_frames(; top::Int = 12)
             continue
         end
         if at_leaf
-            total += 1
-            frames = get(lidict, ip, nothing)
-            if frames !== nothing && !isempty(frames)
-                fr  = first(frames)
-                key = (fr.func, string(basename(string(fr.file)), ":", fr.line))
-                counts[key] = get(counts, key, 0) + 1
-            end
             at_leaf = false
+            frames  = get(lidict, ip, nothing)
+            if frames === nothing || isempty(frames)
+                dropped += 1
+                continue
+            end
+            fr   = first(frames)
+            file = string(fr.file)
+            # Julia samples ALL threads. With `-t 16` the 15 idle workers park in
+            # libc and resolve to no function, which otherwise swamps the ranking
+            # at ~97% and hides the actual kernel. They are not our gradient.
+            if fr.func === Symbol("") || occursin("libc", file) || occursin("libpthread", file)
+                dropped += 1
+                continue
+            end
+            counts[(fr.func, string(basename(file), ":", fr.line))] =
+                get(counts, (fr.func, string(basename(file), ":", fr.line)), 0) + 1
+            kept += 1
         end
     end
 
-    total == 0 && return NamedTuple{(:pct, :func, :loc)}[]
+    kept == 0 && return (frames = NamedTuple{(:pct, :func, :loc)}[], kept = 0, dropped = dropped)
     ranked = sort(collect(counts); by = last, rev = true)
-    return [(pct = 100 * c / total, func = k[1], loc = k[2])
-            for (k, c) in first(ranked, min(top, length(ranked)))]
+    return (frames = [(pct = 100 * c / kept, func = k[1], loc = k[2])
+                      for (k, c) in first(ranked, min(top, length(ranked)))],
+            kept = kept, dropped = dropped)
 end
 
 """
@@ -572,6 +584,9 @@ function tp_grad_profile(model, fs;
     θ    = draw.θ
     f    = tp_logdensity_fn(draw.turing_model)
 
+    raw_tape  = ReverseDiff.GradientTape(f, θ)
+    n_inst    = length(raw_tape.tape)
+    n_scalar  = count(i -> typeof(i).name.name === :ScalarInstruction, raw_tape.tape)
     compile_s = @elapsed tape = ReverseDiff.compile(ReverseDiff.GradientTape(f, θ))
     g = similar(θ)
     ReverseDiff.gradient!(g, tape, θ)          # warm
@@ -595,6 +610,9 @@ function tp_grad_profile(model, fs;
     return (
         n_params      = length(θ),
         n_rows        = n_rows,
+        n_inst        = n_inst,
+        n_scalar      = n_scalar,
+        inst_per_obs  = n_inst / (2 * n_rows),
         n_obs         = 2 * n_rows,
         ad_matches_src = tp_ad_backend_matches_src(),
         compile_s     = compile_s,
@@ -618,26 +636,32 @@ comparable, plus the ratio and self-time breakdown that table lacked — which i
 what tells you WHY a number is what it is.
 """
 function tp_profile_table(rep; label::AbstractString = "")
-    line = "-"^74
-    @printf("\n%s\nGRADIENT PROFILE   %s\n%s\n", line, label, line)
-    @printf("  matches / observations      %d / %d\n", rep.n_rows, rep.n_obs)
-    @printf("  sampled parameters          %d\n", rep.n_params)
-    @printf("  AD backend matches src      %s\n",
-            rep.ad_matches_src.ok ? "yes — $(rep.ad_matches_src.detail)" :
-                                    "NO — $(rep.ad_matches_src.detail)")
-    @printf("  tape compile                %.2f s\n", rep.compile_s)
-    @printf("  primal   (log density)      %.3f ms\n", rep.primal_ms)
-    @printf("  gradient (compiled tape)    %.3f ms   [%.3f .. %.3f]\n",
-            rep.grad_ms, rep.grad_min_ms, rep.grad_max_ms)
-    @printf("  gradient / primal           %.1fx   (reverse-mode should be ~3-5x)\n", rep.ratio)
-    @printf("  per observation             %.2f us\n", rep.us_per_obs)
-    @printf("  allocations per gradient    %d bytes\n", rep.bytes)
-    @printf("  guide target                < 1 ms   (docs/turing_ad_performance_guide.md)\n")
-    println(line)
-    println("SELF TIME (share of gradient evaluation)")
-    for h in rep.hot
-        @printf("  %5.1f%%  %-28s %s\n", h.pct, string(h.func), h.loc)
+    line = "-"^76
+    io   = IOBuffer()
+    w(fmt, args...) = Printf.format(io, Printf.Format(fmt), args...)
+
+    w("\n%s\nGRADIENT PROFILE   %s\n%s\n", line, label, line)
+    w("  matches / observations      %d / %d\n", rep.n_rows, rep.n_obs)
+    w("  sampled parameters          %d\n", rep.n_params)
+    w("  AD backend matches src      %s\n",
+      rep.ad_matches_src.ok ? "yes - " * rep.ad_matches_src.detail
+                            : "NO - "  * rep.ad_matches_src.detail)
+    w("  tape instructions           %d  (%d scalar, %.1f per observation)\n",
+      rep.n_inst, rep.n_scalar, rep.inst_per_obs)
+    w("  tape compile                %.2f s\n", rep.compile_s)
+    w("  primal   (log density)      %.3f ms\n", rep.primal_ms)
+    w("  gradient (compiled tape)    %.3f ms median   [min %.3f, max %.3f]\n",
+      rep.grad_ms, rep.grad_min_ms, rep.grad_max_ms)
+    w("  gradient / primal           %.1fx   (reverse-mode should be ~3-5x)\n", rep.ratio)
+    w("  per observation             %.2f us\n", rep.us_per_obs)
+    w("  allocations per gradient    %d bytes\n", rep.bytes)
+    w("  guide target                < 1 ms  (docs/turing_ad_performance_guide.md,\n")
+    w("                              measured there with @belapsed = MIN, not median)\n")
+    w("%s\nSELF TIME  (%d resolved samples; %d unresolved C frames dropped -- idle worker threads)\n",
+      line, rep.hot.kept, rep.hot.dropped)
+    for h in rep.hot.frames
+        w("  %5.1f%%  %-26s %s\n", h.pct, string(h.func), h.loc)
     end
-    println(line)
-    return rep
+    w("%s\n", line)
+    return String(take!(io))
 end
