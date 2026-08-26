@@ -9,6 +9,7 @@ One line per completed gate run or result, newest first. Details live in each mo
 | 2026-08-25 | src (via model 01) | — | Pooled groups walk a per-tournament clock → contaminated fold 6 | **Fixed** in src as T001 (`edd5eba`); re-verified 20 folds, 0 dropped |
 | 2026-08-25 | 01_team_poisson | `54080fde` | Gates 0–2 re-run on the T001 shared calendar clock | **PASS** 5/5, 4/4, 7/7 |
 | 2026-08-25 | 01_team_poisson | `54080fde` | Gate 3a/3b — equation parity and gradients | **PASS** 3/3, 7/7; parity Δ = 0 exactly |
+| 2026-08-26 | 01 gate 3b | Gradient is 1.15 ms because the tape holds 35,421 instructions (24.6/obs), not because the maths is slow; `view` defeats vectorisation and `RobustNegativeBinomial` crashes on the fast path | Diagnosed, raised as T002 |
 
 ## Carried forward from `archive/` (pre-protocol, not gated)
 

@@ -229,8 +229,61 @@ repository's own presets (`±0.1`), and it starts the positive-constrained scale
 contract as `init_range = 0.1`, since gate 1's premise is that no configuration is
 invisible.
 
+## 2026-08-26 — Why the gradient is slow (diagnostic, raised as T002)
+
+Profiled `tp_grad_profile` after the latency number looked poor against the
+archived benchmark table. The answer is not the maths.
+
+**The tape holds 35,421 instructions for 51 parameters — 35,387 of them scalar,
+24.6 per observation.** Self time contains no maths kernel at all: `getproperty`
+10.6%, `CallWrapper` 9.7%, `pull_value!` 7.0%, `setproperty!` 6.8%,
+`increment_deriv!` 3.4%. `loggamma` does not appear in the top 12. The cost is
+per-instruction bookkeeping for 35k tiny nodes.
+
+Two compounding causes, both in our code, neither in the data:
+
+| stage | tape nodes/obs | attributable to |
+|---|---|---|
+| λ only (`view` + `exp`) | 2.0 | engine `view` |
+| + `Poisson` logpdf | 5.0 | — |
+| + stdlib `NegativeBinomial` | 11.9 | — |
+| + `RobustNegativeBinomial` | 21.0 | our distribution |
+
+1. `view(dyn.α, idx)` on a `TrackedArray` yields `SubArray{TrackedReal}`, which
+   forces every downstream broadcast onto the scalar path. Isolated: `view` = 1439
+   instructions, `getindex` = **3**, same value. This is the **opposite** of Rule 4
+   in `docs/turing_ad_performance_guide.md`, which the engines follow.
+2. `RobustNegativeBinomial` costs ~1.9x stdlib `NegativeBinomial` on that path:
+   `log(r+μ)` twice per observation, and `loggamma(r)`/`log(r)` recomputed 1,440
+   times per gradient despite `r` being a single global scalar.
+
+Switching to `getindex` collapses the tape 15,120 → **5** instructions for the
+identical value, and then the gradient **throws** `InexactError` from
+`negative_binomial.jl:79` (`Int(k)` on a ForwardDiff dual). So the slow path is
+currently masking a crash on the fast one.
+
+Raised as [T002](../../../docs/tickets/T002-scalar-taped-likelihood.md). Not fixed
+here: it touches 10 of 28 engines and a shared distribution, and gate 3a must stay
+bit-identical through any fix.
+
+**Comparability note.** The archived table
+(`archive/open_play/r04_benchmark_ad_recomb.jl`) uses `@belapsed`, which reports the
+**minimum**; gate 3b reports the **median**. Our min is 1.140 ms against a median of
+1.150 ms, so the gap to their 0.572 ms NegBin is real and not a statistic artifact —
+their `_negbin_vector_loglik` was hand-vectorised.
+
+### The AD backend is not configurable
+
+`QueuedNUTSConfig` has **no `adtype` field**. Both `run_sampler` methods hardcode
+`AutoReverseDiff(compile=true)` (`src/samplers/engines/nuts.jl:101,120`). Gate 3b's
+measurement is therefore representative of real sampling, but the contract cannot
+override it. Asserted from source by `tp_ad_backend_matches_src`.
+
 ### Next
 
 Gate 3c: run the smoke (block 7 of the walkthrough) with `-t 16`, ThreadPinning
 and single-threaded BLAS. It persists a chain to
 `data/scottish_lower/01_team_poisson/54080fde/`, which gate 4 then reloads.
+
+T002 is a cost ticket, not a blocker — the posterior is correct, so gates 3c
+onward can proceed at current speed.
