@@ -24,6 +24,7 @@ only that ticket. Update `Status` here when it lands.
 | ID | Title | Severity | Area | Status | Raised |
 |---|---|---|---|---|---|
 | [T002](T002-scalar-taped-likelihood.md) | Engine likelihoods taped scalar-by-scalar (~20x AD work); `view` defeats vectorisation and NegBin crashes on the fast path | medium | `src/models/pregame/engines/`, `src/MyDistributions/` | open | 2026-08-26 |
+| [T003](T003-home-advantage-population-fallback.md) | Unmapped teams silently lose home advantage at extraction (λ_h 0.849x); 28 call sites | medium | `src/models/pregame/engines/`, `src/models/pregame/components/home_advantage.jl` | open | 2026-08-26 |
 
 ## Closed
 
