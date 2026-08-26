@@ -503,10 +503,128 @@ was considered and rejected: tree depth is already at 8 against a cap of 10, so
 raising δ would push toward saturation — trading 8 divergences for a worse and
 slower problem — and would not have changed a posterior that is not biased.
 
+## 2026-08-26 — Gate 6 PASS 26/26. The model is competitive with the closing line.
+
+360 fixtures, 4,680 model prices, scored against de-vigged Bet365 close (360/360
+fixtures) and Betfair close (320/360).
+
+### Headline: it is not worse than the market
+
+Per-line log loss, model minus de-vigged Bet365 close. Negative = model better.
+
+| line | n | base rate | Δ log loss | t |
+|---|---|---|---|---|
+| O/U 0.5 | 357 | 0.927 | **-0.0083** | -1.82 |
+| 1X2 home | 360 | 0.456 | **-0.0068** | -0.77 |
+| O/U 3.5 | 357 | 0.280 | **-0.0030** | -0.79 |
+| O/U 2.5 | 359 | 0.490 | **-0.0021** | -0.61 |
+| 1X2 draw | 360 | 0.233 | **-0.0014** | -0.54 |
+| O/U 1.5 | 357 | 0.756 | 0.0000 | +0.01 |
+| BTTS | 359 | 0.490 | +0.0021 | +0.65 |
+| 1X2 away | 360 | 0.311 | +0.0051 | +0.58 |
+
+Better on 6 of 8 lines, nothing significant either way, worst line +0.0051 against a
++0.02 threshold. Betfair close reproduces the same ordering on its 320 fixtures.
+
+**This is the expected shape, not a triumph.** A structural model level with the
+closing line on proper scoring is what a model that might have CLV looks like; gate 7
+decides whether it does.
+
+### The dispersion finding, now measured
+
+`sd(p_model) / sd(p_market) = 0.55`, averaged across lines. The model differentiates
+fixtures at roughly **half** the market's spread — confirming the prior observation,
+now on 360 fixtures across 13 lines rather than as an impression.
+
+That has a direct consequence for gate 7 worth stating in advance: a model with half
+the market's spread that nevertheless scores level will find its edges where the
+market moves furthest from the base rate. Its bets will lean **against** strong
+favourites and heavy overs. That is a structural property of the dispersion, not a
+strategy, and it should be recognised as such when the staking results appear.
+
+### RQR says the count distribution is right
+
+```
+RQR mean   -0.0239   (target 0)
+RQR sd      0.9855   (target 1)   → well dispersed
+home/away   0.0015 / -0.0493, gap 0.0508
+```
+
+Randomised quantile residuals are exactly N(0,1) under correct specification, so
+both moments mean something. sd 0.9855 says the NegBin predictive for team goal
+counts is essentially correctly shaped.
+
+**Note this does not contradict the 0.55 dispersion figure above** — they measure
+different things. RQR asks whether the predicted distribution of goals for a given
+fixture has the right spread (it does). The 0.55 asks whether predicted
+probabilities vary enough BETWEEN fixtures (they do not). The model has the right
+uncertainty about each match and too little conviction about which match is which.
+
+LPD (scoreline log predictive density, averaged over the posterior): mean **-2.9816**,
+total -1073.4. Meaningless alone; it exists to rank variants of this model.
+
+### My gate-5 draw hypothesis was wrong
+
+Gate 5 saw mean predicted draw ≈ 0.243 on 8 smoke fixtures and I argued that
+conditionally independent goals under-predict draws, making it the strongest case
+for a Dixon-Coles term. Tested on all 360:
+
+```
+observed 0.2333 vs predicted 0.2523, z = -0.85
+```
+
+The model **over**-predicts draws slightly, and not significantly. The direction is
+opposite to the hypothesis. There is no draw-based argument for a Dixon-Coles or
+copula term on this data, and the 8-fixture reading was noise.
+
+### Calibration slopes: the point estimates are uninterpretable here
+
+Slopes ranged over [-1.12, 1.73] and only 1 of 13 fell inside a [0.7, 1.3] band —
+which looked alarming and is an artifact. Standard errors run 0.85 to 2.97, and
+**all 13 lines are within 2 se of a perfectly calibrated slope of 1** (worst |z| =
+0.92). With `sd(p_model)` as low as 0.008 on the 1X2 draw, the regression has almost
+no leverage and returns noise.
+
+The gate now tests significance rather than banding a point estimate. Banding it
+would reject a model for being under-dispersed, which is a real property worth
+reporting and is not miscalibration.
+
+### glm_edge: no incremental information yet
+
+Encompassing regression `y ~ logit(p_market) + logit(p_model)` per line. Best model
+coefficient is O/U 0.5 at z = 1.2; nothing reaches z = 2. On this sample the model
+does not demonstrably know anything the closing line does not — which, with 360
+fixtures and Δ log loss around 0.005, is what the power available can detect.
+
+### Fold weighting: the trap is real but small here
+
+Pooled 1X2 log loss 0.6188 vs fold-averaged 0.6182, difference **-0.0007** across 20
+folds ranging 6 to 72 rows. Worth measuring rather than asserting: it is an order of
+magnitude below the Δll effects being discussed, so on this data the choice does not
+change a conclusion. Fixture-weighted remains the default because that ordering is
+not guaranteed on a more uneven grid.
+
+### Three defects found by building this gate
+
+1. **T005 (high)** — `summarize_betfair_market` inner-joins an open window 24h before
+   kickoff, returning **30 of 360** fixtures where 322 exist. Gate 7 uses Betfair
+   close as its primary discriminator and would have run on 8% of the data.
+2. **T004 (low)** — `is_winner` contradicts the score on 3 fixtures, incl. two 2-2
+   draws with no 1X2 winner at all. None in the 24/25 window.
+3. **Partial markets de-vig to p = 1.0.** 143 of 930 Betfair markets had one leg;
+   the overround is computed over what is present, so a single leg de-vigs to
+   certainty. Clamped, one losing p=1 costs ~20.7 log loss — enough to make a sound
+   model look catastrophic with every other diagnostic reading healthy. Now detected
+   and dropped.
+
+Two gate-design errors of my own, both caught by their own output: joining all
+baselines into one table cut the evaluation from 4,658 rows to 96 while reporting
+PASS, and coverage measured in rows rather than fixtures failed a legitimate baseline
+for being a thin book.
+
 ### Next
 
-Gate 6, evaluation: proper scoring against realised outcomes on 24/25, weighted by
-FIXTURE COUNT rather than averaged over folds — OOS blocks range from 2 to 24
+Gate 7, growth and CLV. T005 must land first, or it runs on 30 fixtures. — OOS blocks range from 2 to 24
 fixtures, so a fold average would let a 2-fixture block outvote a 24-fixture one.
 Then gate 7, growth and CLV against Betfair closing prices.
 

@@ -19,6 +19,10 @@ One line per completed gate run or result, newest first. Details live in each mo
 | 2026-08-26 | 01 grid | Full 24/25 grid: 20 folds, Rhat 1.0075, min bulk ESS 1012, BFMI 0.663, 360 OOS fixtures | Verified |
 | 2026-08-26 | 01 gate 6.0 | 8 divergences (0.0125%) are integrator noise not a funnel — σ at divergent draws 0.80-1.97x bulk | Diagnosed; protocol amended to gate on rate+shape |
 | 2026-08-26 | protocol | Convergence gate examined only fold 1 — would have passed a 20-fold grid blind | Fixed |
+| 2026-08-26 | 01 gate 6 | Model is level with de-vigged Bet365 close: better on 6 of 8 lines, worst +0.0051, nothing significant | Verified, 360 fixtures |
+| 2026-08-26 | 01 gate 6 | sd(p_model)/sd(p_market) = 0.55 — half the market's between-fixture spread; RQR sd 0.9855 says within-fixture spread is right | Measured |
+| 2026-08-26 | 01 gate 6 | Draw deficit hypothesis REFUTED: model over-predicts draws (0.2523 vs 0.2333, z −0.85); no case for Dixon-Coles from draws | Corrected |
+| 2026-08-26 | 01 gate 6 | Partial market books de-vig to p=1.0 (143 of 930 Betfair markets) — silent log-loss catastrophe | Detected and dropped |
 
 ## Carried forward from `archive/` (pre-protocol, not gated)
 
