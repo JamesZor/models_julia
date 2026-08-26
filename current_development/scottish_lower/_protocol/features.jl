@@ -106,6 +106,16 @@ function sl_featureset_equal(a, b)
             map_a = Dict(id => ratings for (id, ratings) in a.data[k] if id in ids_a)
             map_b = Dict(id => ratings for (id, ratings) in b.data[k] if id in ids_b)
             isequal(map_a, map_b) || push!(differing, k)
+        elseif k === :wealth_oos_bridge_by_match_id
+            # Extraction has no DataStore argument.  This causal registry carries
+            # point-in-time wealth values for known OOS fixtures, so it may have
+            # extra future keys in the full store.  Compare every retained/common
+            # fixture (including the truncated fold's OOS rows) exactly.
+            map_a, map_b = a.data[k], b.data[k]
+            # `a` is full and `b` is truncated: every retained bridge entry must
+            # exist unchanged in full; only full-store future membership may differ.
+            all(id -> haskey(map_a, id) && isequal(map_a[id], map_b[id]), keys(map_b)) ||
+                push!(differing, k)
         elseif !isequal(a.data[k], b.data[k])
             push!(differing, k)
         end
