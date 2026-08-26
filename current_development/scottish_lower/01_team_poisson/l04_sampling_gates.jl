@@ -469,60 +469,88 @@ hits are the "did the geometry fight back" questions. A run can pass the first
 pair and still be untrustworthy if it fails the second, so all four are reported.
 """
 function tp_gate_convergence(results, contract::SLContract;
-                             rhat_max::Float64 = 1.01, ess_min::Float64 = 400.0)
+                             rhat_max::Float64  = 1.01,
+                             ess_min::Float64   = 400.0,
+                             expected_folds     = nothing)
     chains = [c for (c, _) in results.training_results]
     out = []
 
+    n = length(chains)
     push!(out, (
-        name   = "fold sampled",
-        pass   = length(chains) == 1,
-        detail = "$(length(chains)) chain object(s) returned",
+        name   = "folds sampled",
+        pass   = n > 0 && (expected_folds === nothing || n == expected_folds),
+        detail = expected_folds === nothing ? "$n fold(s) returned" :
+                 "$n of $expected_folds folds returned",
     ))
     isempty(chains) && return out
 
-    chain = first(chains)
-    stats = DataFrame(MCMCChains.summarystats(chain))
+    # Every fold is examined and the WORST is reported, with the fold named.
+    # Summarising only the first fold would let 19 divergent folds through — the
+    # failure mode this gate exists to prevent.
+    rhats  = Float64[]; bulks = Float64[]; tails = Float64[]
+    divs   = Int[];     depth_max = Int[]; depth_cap = Int[]; bfmis = Float64[]
 
-    max_rhat = maximum(skipmissing(stats.rhat))
+    for ch in chains
+        st = DataFrame(MCMCChains.summarystats(ch))
+        push!(rhats, maximum(skipmissing(st.rhat)))
+        push!(bulks, minimum(skipmissing(st.ess_bulk)))
+        push!(tails, minimum(skipmissing(st.ess_tail)))
+
+        internals = names(ch, :internals)
+        push!(divs, :numerical_error in internals ? Int(sum(Array(ch[:numerical_error]))) : -1)
+
+        if :tree_depth in internals
+            d = Array(ch[:tree_depth])
+            push!(depth_max, Int(maximum(d)))
+            push!(depth_cap, count(>=(contract.max_depth), d))
+        end
+
+        b = tp_bfmi(ch)
+        isempty(b) || push!(bfmis, minimum(b))
+    end
+
+    worst_rhat, i_rhat = findmax(rhats)
     push!(out, (
         name   = "Rhat",
-        pass   = max_rhat <= rhat_max,
-        detail = @sprintf("max %.5f (threshold %.2f)", max_rhat, rhat_max),
+        pass   = worst_rhat <= rhat_max,
+        detail = @sprintf("max %.5f (fold %d) — %d/%d folds under %.2f",
+                          worst_rhat, i_rhat, count(<=(rhat_max), rhats), n, rhat_max),
     ))
 
-    min_bulk = minimum(skipmissing(stats.ess_bulk))
-    min_tail = minimum(skipmissing(stats.ess_tail))
+    min_bulk, i_bulk = findmin(bulks)
+    min_tail = minimum(tails)
     push!(out, (
         name   = "effective sample size",
         pass   = min_bulk >= ess_min && min_tail >= ess_min,
-        detail = @sprintf("min bulk %.0f, min tail %.0f (threshold %.0f)", min_bulk, min_tail, ess_min),
+        detail = @sprintf("min bulk %.0f (fold %d), min tail %.0f — %d/%d folds above %.0f",
+                          min_bulk, i_bulk, min_tail,
+                          count(b -> b >= ess_min, bulks), n, ess_min),
     ))
 
-    internals = names(chain, :internals)
-
-    n_div = :numerical_error in internals ? Int(sum(Array(chain[:numerical_error]))) : -1
+    bad_div = [i for (i, d) in enumerate(divs) if d > 0]
     push!(out, (
         name   = "divergences",
-        pass   = n_div == 0,
-        detail = n_div < 0 ? "numerical_error not recorded" : "$n_div divergent transitions",
+        pass   = all(==(0), divs),
+        detail = any(<(0), divs) ? "numerical_error not recorded" :
+                 isempty(bad_div) ? "0 across all $n folds" :
+                 "$(sum(divs)) total, in folds $(bad_div)",
     ))
 
-    if :tree_depth in internals
-        depths = Array(chain[:tree_depth])
-        n_cap  = count(>=(contract.max_depth), depths)
+    if !isempty(depth_max)
         push!(out, (
             name   = "tree depth",
-            pass   = n_cap == 0,
-            detail = "max $(Int(maximum(depths))), $n_cap hits at cap $(contract.max_depth)",
+            pass   = sum(depth_cap) == 0,
+            detail = "max $(maximum(depth_max)), $(sum(depth_cap)) hits at cap $(contract.max_depth)",
         ))
     end
 
-    bfmi = tp_bfmi(chain)
-    if !isempty(bfmi)
+    if !isempty(bfmis)
+        worst_bfmi, i_bfmi = findmin(bfmis)
         push!(out, (
             name   = "BFMI",
-            pass   = minimum(bfmi) >= 0.3,
-            detail = @sprintf("min %.3f across %d chains (threshold 0.30)", minimum(bfmi), length(bfmi)),
+            pass   = worst_bfmi >= 0.3,
+            detail = @sprintf("min %.3f (fold %d) across %d folds (threshold 0.30)",
+                              worst_bfmi, i_bfmi, n),
         ))
     end
 

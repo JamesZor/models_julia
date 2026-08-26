@@ -221,7 +221,7 @@ BLAS.set_num_threads(1)
 
 tp_smoke_results, tp_smoke_path = tp_run_smoke(tp_ds, tp_engine, tp_contract)
 
-tp_gate3c = tp_gate_convergence(tp_smoke_results, tp_contract)
+tp_gate3c = tp_gate_convergence(tp_smoke_results, tp_contract; expected_folds = 1)
 @assert sl_gate_table("3c. Smoke convergence", tp_gate3c)
 
 println("saved to: ", tp_smoke_path)
@@ -385,7 +385,7 @@ tp_grid_results, tp_grid_path = tp_run_grid(tp_ds, tp_engine, tp_contract)
 # 3c cleared ONE fold. A fold that fails here is a fold whose prices gate 6 must
 # not score, so this runs before any evaluation.
 
-tp_gate10 = tp_gate_convergence(tp_grid_results, tp_contract)
+tp_gate10 = tp_gate_convergence(tp_grid_results, tp_contract; expected_folds = length(tp_folds))
 @assert sl_gate_table("6.0 Grid convergence (all folds)", tp_gate10)
 
 
