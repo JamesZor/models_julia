@@ -166,6 +166,31 @@ tp_gate3b, tp_grad = tp_gate_gradients(tp_engine, tp_features[1])
 
 
 # %%
+# ------------------------------------------------------------------------------
+# 6b. Gradient profile   (diagnostic — not a gate, nothing here can fail)
+# ------------------------------------------------------------------------------
+#
+# Run this when the 3b latency looks disappointing. It answers WHERE the time
+# goes, which the gate deliberately does not.
+#
+# The number that matters is `tape instructions`. A correctly vectorised model
+# has a tape whose size does not depend on row count; ours has 24.6 nodes per
+# observation, and the self-time ranking is all tape bookkeeping rather than
+# maths. Diagnosed 2026-08-26, raised as docs/tickets/T002.
+#
+# Takes ~30s (it compiles a second tape and profiles 1500 gradients).
+
+tp_prof1 = tp_grad_profile(tp_engine, tp_features[1])
+print(tp_profile_table(tp_prof1; label = "01_team_poisson — fold 1"))
+
+# Compare against the largest fold to confirm the tape scales with rows (it should
+# not, and currently does):
+#
+#   tp_prof20 = tp_grad_profile(tp_engine, tp_features[20])
+#   (tp_prof1.n_inst, tp_prof20.n_inst)
+
+
+# %%
 # ==============================================================================
 # 7. GATE 3c — Smoke run   ***THIS ONE SAMPLES***
 # ==============================================================================
