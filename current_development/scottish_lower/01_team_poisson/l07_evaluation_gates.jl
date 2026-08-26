@@ -268,7 +268,7 @@ function tp_paired_delta(p_a::AbstractVector, p_b::AbstractVector, y::AbstractVe
 end
 
 "Brier score (mean squared error of the probability)."
-tp_brier(p::AbstractVector, y::AbstractVector) = mean((p .- (y .? 1.0 : 0.0)).^2)
+tp_brier(p::AbstractVector, y::AbstractVector) = mean((p .- Float64.(y)).^2)
 
 """
     tp_glm_edge(df, p_model_col, p_market_col, y_col) -> NamedTuple
