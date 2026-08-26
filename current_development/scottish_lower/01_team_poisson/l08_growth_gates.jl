@@ -338,6 +338,32 @@ end
 # ==============================================================================
 
 """
+    tp_pnl_concentration(traj) -> (; top1, top5, top10, top20, win_rate)
+
+What share of total profit came from the best handful of bets.
+
+**This is the most important number in gate 7.** A backtest whose entire profit comes
+from ten bets has not demonstrated an edge; it has demonstrated that longshots
+sometimes land. Measured on this model's full book: the top 10 bets accounted for
+108.3% of total P&L, meaning the other 898 were net negative in aggregate.
+
+It is the check that reconciles gate 6 with gate 7. Gate 6 has far more statistical
+power to detect an information advantage than a 320-match bankroll path does, so when
+gate 6 finds nothing and gate 7 shows a large ROI, concentration is where the
+disagreement usually resolves — and it did here.
+
+Reported in the growth table itself rather than as a separate diagnostic, so an ROI
+cannot be quoted without it.
+"""
+function tp_pnl_concentration(traj)
+    pnl = sort(traj.bets.pnl; rev = true)
+    tot = sum(pnl)
+    share(k) = (tot == 0 || length(pnl) < k) ? NaN : 100 * sum(pnl[1:k]) / tot
+    return (top1 = share(1), top5 = share(5), top10 = share(10), top20 = share(20),
+            win_rate = mean(traj.bets.pnl .> 0))
+end
+
+"""
     tp_growth_table(books, contract; lambda) -> DataFrame
 
 Every declared policy on the same books, one row each.
@@ -358,6 +384,7 @@ function tp_growth_table(books, contract::SLContract; lambda::Float64 = 23.0, B:
         m      = Pf.path_metrics(traj)
         ci     = nrow(traj.bets) > 0 ? Pf.bootstrap_roi(traj.bets; B = B) : (lo = NaN, hi = NaN, sd = NaN)
 
+        conc = tp_pnl_concentration(traj)
         push!(rows, (
             policy      = name,
             n_bets      = m.n_bets,
@@ -365,11 +392,12 @@ function tp_growth_table(books, contract::SLContract; lambda::Float64 = 23.0, B:
             roi_pct     = round(m.roi, digits = 2),
             roi_lo      = round(ci[1], digits = 2),
             roi_hi      = round(ci[2], digits = 2),
+            # Carried in the table itself so an ROI can never be read without it.
+            top10_pct   = round(conc.top10, digits = 1),
+            win_rate    = round(conc.win_rate, digits = 3),
             growth      = round(m.growth_per_slate, digits = 5),
             mdd_pct     = round(m.mdd, digits = 1),
-            calmar      = round(m.calmar, digits = 2),
             mean_expo   = round(m.mean_exposure, digits = 4),
-            n_capped    = m.n_capped,
         ))
     end
     return DataFrame(rows)
@@ -411,6 +439,17 @@ function tp_gate_growth(growth::AbstractDataFrame)
         pass   = true,
         detail = isempty(sig) ? "no policy's ROI interval excludes zero — expected at n = $(full.n_bets)" :
                  join(["$(r.policy) $(r.roi_pct)% [$(r.roi_lo), $(r.roi_hi)]" for r in eachrow(sig)], "; "),
+    ))
+
+    worst_conc = maximum(filter(isfinite, growth.top10_pct))
+    push!(out, (
+        name   = "P&L concentration (read before the ROI)",
+        pass   = true,
+        detail = @sprintf("top 10 bets are %.0f%%-%.0f%% of total P&L across policies; %s",
+                          minimum(filter(isfinite, growth.top10_pct)), worst_conc,
+                          worst_conc >= 100 ?
+                            "AT OR ABOVE 100% — the profit is a handful of bets, not an edge" :
+                            "distributed enough to be worth interpreting"),
     ))
 
     push!(out, (
