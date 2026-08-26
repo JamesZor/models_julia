@@ -501,15 +501,34 @@ function tp_gate_alignment(joined::Dict{String,DataFrame}, model_book::AbstractD
     # Coverage is GATED, not merely printed. A baseline that aligns on a handful of
     # rows produces a confident-looking score table computed on almost nothing, and
     # the row count is the only place that shows.
+    # Coverage is measured in FIXTURES, not rows. An exchange legitimately prices 1X2
+    # on nearly every match and only some O/U lines, so a row-based threshold would
+    # reject a perfectly good baseline for being a thin book rather than a thin one.
+    # What must not happen is a baseline aligning on a handful of MATCHES, which is
+    # what T005 caused: 30 of 360.
+    n_fix = length(unique(model_book.match_id))
     for (name, j) in sort(collect(joined); by = first)
-        cov = n_model == 0 ? 0.0 : nrow(j) / n_model
+        f = nrow(j) == 0 ? 0 : length(unique(j.match_id))
+        cov = n_fix == 0 ? 0.0 : f / n_fix
         push!(out, (
-            name   = "coverage vs $name",
+            name   = "fixture coverage vs $name",
             pass   = cov >= min_coverage,
-            detail = @sprintf("%d of %d model rows (%.1f%%), %d fixtures — threshold %.0f%%",
-                              nrow(j), n_model, 100cov,
-                              nrow(j) == 0 ? 0 : length(unique(j.match_id)), 100min_coverage),
+            detail = @sprintf("%d of %d fixtures (%.1f%%), %d rows — threshold %.0f%%",
+                              f, n_fix, 100cov, nrow(j), 100min_coverage),
         ))
+
+        # Which LINES that baseline can actually price. A line thin enough to be
+        # uninformative should be read off here, not discovered in a score table.
+        if nrow(j) > 0
+            per = combine(groupby(j, [:market, :line]), :match_id => (x -> length(unique(x))) => :f)
+            sort!(per, :f, rev = true)
+            push!(out, (
+                name   = "  per-line coverage, $name",
+                pass   = true,
+                detail = join([@sprintf("%s%s %d", r.market, r.line == 0.0 ? "" : " $(r.line)", r.f)
+                               for r in eachrow(per)], " | "),
+            ))
+        end
     end
 
     # If two graders disagree about who won, one is wrong and every score is suspect.
