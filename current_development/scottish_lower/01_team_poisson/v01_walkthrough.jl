@@ -51,6 +51,7 @@ include(joinpath(TP_ROOT, "01_team_poisson/l04_sampling_gates.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l05_extraction_gates.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l06_score_matrix_gates.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l07_evaluation_gates.jl"))
+include(joinpath(TP_ROOT, "01_team_poisson/l08_growth_gates.jl"))
 
 
 # %%
@@ -544,3 +545,53 @@ tp_edges_b365
 # stays the default because that is not guaranteed on a more uneven grid.
 
 tp_fold_weighting_check(tp_j["bet365"], tp_folds)
+
+
+# %%
+# ==============================================================================
+# 12. GATE 7 — Growth
+# ==============================================================================
+#
+# Assembles src/Portfolio; writes no staking mathematics. Bets are staked and
+# graded at BETFAIR CLOSING PRICES with the contract's commission.
+#
+# Book build takes ~35s: a score matrix plus a Kelly solve per fixture.
+
+tp_odds_bf   = tp_betfair_odds_df(tp_ds, tp_contract; ids = tp_oos_ids)
+tp_spec      = tp_book_spec(tp_contract)
+tp_books_bf  = Pf.build_books(tp_spec, tp_grid_latents.df, tp_grid_results, tp_odds_bf, tp_ds)
+
+@assert sl_gate_table("7a. Book construction", tp_gate_books(tp_books_bf, tp_grid_latents.df, tp_odds_bf))
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 12b. Simulation integrity
+# ------------------------------------------------------------------------------
+#
+# Prior work shipped three defects that all produce plausible numbers: a bankroll
+# driven negative by a missing slate cap, path metrics on a scrambled bet order, and
+# an alpha fitted on the data it was evaluated on. The first two are asserted here.
+
+tp_pol0    = tp_growth_policies(tp_contract)[1].policy
+tp_slates  = Pf.group(tp_pol0.grouping, tp_books_bf)
+tp_traj0   = Pf.simulate(tp_pol0, tp_slates)
+@assert sl_gate_table("7b. Simulation integrity", tp_gate_simulation(tp_traj0, tp_slates, tp_contract))
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 12c. The result   ***READ top10_pct BEFORE roi_pct***
+# ------------------------------------------------------------------------------
+#
+# Curation is declared in tp_growth_policies BEFORE any number is read, because on
+# this book it is the most overfittable knob available. The full book is always
+# reported alongside, so a curated row cannot be quoted without its selection pool.
+#
+# `top10_pct` is the share of total P&L from the ten best bets. At or above 100% the
+# other bets are net NEGATIVE in aggregate and the "profit" is a handful of outcomes,
+# not an edge. On 2026-08-26 every policy was at or above 108%.
+
+tp_growth = tp_growth_table(tp_books_bf, tp_contract)
+@assert sl_gate_table("7c. Growth verdict", tp_gate_growth(tp_growth))
+tp_growth

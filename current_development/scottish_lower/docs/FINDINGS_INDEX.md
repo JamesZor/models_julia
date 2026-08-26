@@ -23,6 +23,8 @@ One line per completed gate run or result, newest first. Details live in each mo
 | 2026-08-26 | 01 gate 6 | sd(p_model)/sd(p_market) = 0.55 — half the market's between-fixture spread; RQR sd 0.9855 says within-fixture spread is right | Measured |
 | 2026-08-26 | 01 gate 6 | Draw deficit hypothesis REFUTED: model over-predicts draws (0.2523 vs 0.2333, z −0.85); no case for Dixon-Coles from draws | Corrected |
 | 2026-08-26 | 01 gate 6 | Partial market books de-vig to p=1.0 (143 of 930 Betfair markets) — silent log-loss catastrophe | Detected and dropped |
+| 2026-08-26 | 01 gate 7 | Full book 2.02x, ROI 21.3% CI [2.1, 40.9] — but top 10 bets are 108% of P&L; 1X2_away is 72% of profit and is gate 6's WORST line | NOT an edge; variance |
+| 2026-08-26 | 01 gate 7 | Model 01 complete through all 7 gates: sound, competitive on scoring, no demonstrated betting edge on one season | Baseline established |
 
 ## Carried forward from `archive/` (pre-protocol, not gated)
 

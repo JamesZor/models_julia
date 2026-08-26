@@ -658,9 +658,80 @@ and the BOOK row summed however many markets each fixture happened to have, whic
 made the thin baseline look 2 nats cheaper. All three produced entirely plausible
 numbers.
 
+## 2026-08-26 — Gate 7 PASS 17/17. No demonstrated betting edge.
+
+320 books at Betfair closing prices, 2% commission, portfolio cap 0.20, daily slates.
+Built by assembling `src/Portfolio`; no staking mathematics written here.
+
+### The numbers, and why they do not mean what they appear to
+
+| policy | bets | final | ROI% | CI | **top10%** | win rate | growth |
+|---|---|---|---|---|---|---|---|
+| full book | 908 | 2.015 | 21.31 | [2.1, 40.9] | **108.3** | 0.338 | 0.0140 |
+| totals only | 338 | 1.039 | 5.69 | [-16.1, 28.9] | **411.0** | 0.382 | 0.0008 |
+| totals + BTTS | 370 | 1.015 | 2.30 | [-18.9, 24.9] | **919.4** | 0.384 | 0.0003 |
+| 1X2 only | 538 | 1.979 | 26.83 | [1.9, 53.1] | **111.0** | 0.307 | 0.0137 |
+
+Two policies double the bankroll with a bootstrap interval excluding zero. **That is
+not evidence of an edge**, and the column that says so is `top10_pct`.
+
+**The top ten bets are 108% of the full book's total P&L.** The other 898 are net
+negative in aggregate. On `totals + BTTS` the top ten are 919%.
+
+### Gate 6 and gate 7 disagree, and gate 6 wins
+
+Gate 6 found no information advantage on 1X2: Δ log loss -0.0018 (t = -0.18) and an
+encompassing-regression coefficient of z = -0.09. Gate 7 shows 1X2-only returning
+26.8%.
+
+The family breakdown resolves it. `1X2_away` contributed **0.548 of the 0.758 total
+P&L (72%)** from 204 bets — and away is the line where gate 6 found the model at its
+**worst** (Δll +0.0051, the only clearly positive line). The model prices away wins
+less well than the market and made most of its money backing them.
+
+That is the signature of backing longshots at long odds and having a few land. Gate 6
+has far more statistical power to detect an information advantage than a 320-match
+bankroll path, so where they conflict, gate 6 is the one to believe.
+
+### Honest status of model 01
+
+Sound, correctly implemented, competitive with the closing line on proper scoring,
+and **with no demonstrated betting edge on one season**. That is a perfectly good
+baseline — it is what models 02 and 03 must beat, and it is now measured rather than
+assumed.
+
+Anyone quoting "the baseline returned 21%" without `top10_pct` beside it is quoting
+noise.
+
+### Notes on the machinery
+
+- `DeArb` settles at `d * min(overround, 1)`: the quoted price under real vig, shaved
+  where the recorded book implies an arbitrage. ROI is not inflated by data artifacts.
+- `require_complete_markets` drops partial markets inside `extract_selections`, so the
+  p = 1.0 trap from gate 6 cannot reach here.
+- Settlement uses the real score via `settle_vector`, not `is_winner`, so T004 cannot
+  reach these numbers either.
+- KKT residual: 319 of 320 books at ~1.2e-6 as documented. The single 2.7e-4 outlier
+  is a book whose optimum is "bet nothing" — the solution is on the boundary, no stake
+  is placed, and the residual is not the relevant diagnostic. The gate now checks only
+  books that allocate.
+- Betfair prices 5.9 selections per fixture on average, and the exchange book is thin:
+  BTTS appears on 42 fixtures, O/U 0.5 on 61. Curation to totals is therefore also a
+  curation to a much smaller sample, which is part of why those rows are noisier.
+
 ### Next
 
-Gate 7, staking and grading at Betfair closing prices. — OOS blocks range from 2 to 24
+Model 01 is complete through all seven gates. Options, in order of what the evidence
+supports:
+
+1. **`02_apm_player_poisson`** — the planned next model, now with a measured baseline
+   to beat.
+2. **Variants of 01** — league-varying home advantage for 56 vs 57 is a real modelling
+   question (two divisions pooled, no reason to assume a shared home edge). The
+   Dixon-Coles case is NOT supported: gate 6 refuted the draw deficit.
+3. **More seasons before more models.** The binding constraint on every conclusion
+   above is 360 fixtures. `25/26` is sealed by design, but 23/24 and earlier are not,
+   and widening the development window would sharpen every comparison that follows. — OOS blocks range from 2 to 24
 fixtures, so a fold average would let a 2-fixture block outvote a 24-fixture one.
 Then gate 7, growth and CLV against Betfair closing prices.
 
