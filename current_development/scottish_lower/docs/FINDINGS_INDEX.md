@@ -13,6 +13,9 @@ One line per completed gate run or result, newest first. Details live in each mo
 | 2026-08-26 | 01 gate 3c | Smoke converges clean: Rhat 1.008, min bulk ESS 606, 0 divergences, max tree depth 6 of 10, BFMI 0.74 | Verified |
 | 2026-08-26 | 01 gate 4a | Priced model == fitted model: max \|Δλ\| = 2.22e-16 vs independent reference | Verified |
 | 2026-08-26 | 01 gate 4c | Unmapped teams lose global home advantage at extraction (λ_h 0.849x); 0.56% of 24/25 fixtures | Defect, raised as T003 |
+| 2026-08-26 | 01 gate 5 | Score matrix parity 5.12e-15 vs stock NegBins; orientation correct; markets partition the grid to 1e-15 | Verified |
+| 2026-08-26 | 01 gate 5b | max_goals=12 truncation costs 1.05e-5 on P(over 3.5) at the worst fixture — defensible; nothing normalises the NegBin grid | Measured, contract keeps 12 |
+| 2026-08-26 | 01 gate 5 | Mean draw ≈0.243 vs empirical ~0.25-0.27 — expected signature of no Dixon-Coles term | Open question for gate 6 |
 
 ## Carried forward from `archive/` (pre-protocol, not gated)
 

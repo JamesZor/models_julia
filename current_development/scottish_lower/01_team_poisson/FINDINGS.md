@@ -365,12 +365,99 @@ already weakest, and silent. 28 call sites across the engines.
 
 Raised as [T003](../../../docs/tickets/T003-home-advantage-population-fallback.md).
 
+## 2026-08-26 — Gate 5 PASS 16/16
+
+### 5a — dispatch resolves to the intended pricer
+
+`DynamicGoalsTimeDecayModel <: AbstractTimeDecayTeamModel <: AbstractNegBinModel`
+routes to `negativebinomial.jl:48`, asserted **by resolved method file** rather
+than by the call merely succeeding. That is the point: engines are selected by
+supertype and by `Union` membership, and one omitted from a Union does not error
+at definition time — it falls through to a default meant for another likelihood.
+`extract_params` takes the separate `:r_h`/`:r_a` route, not the shared `:r` one.
+
+### 5b — the grid is the documented distribution
+
+```
+grid parity vs stock NegativeBinomials    max |ΔP| = 5.121e-15 over 125 grids
+orientation [home, away]                  E[home] 2.0895 vs λ_h 2.0900
+                                          E[away] 1.4159 vs λ_a 1.4160
+                                          marginals separated by 0.6740
+moment vs truncated expectation           |Δ| = 1.066e-14
+```
+
+Orientation is tested RELATIVE to the separation between the marginals, not
+against an absolute tolerance. A transposed grid is the nastiest bug available at
+this stage — it yields perfectly well-formed probabilities that are simply the
+wrong way round, and nothing downstream can detect it. It is catchable here only
+because γ > 0 makes the home and away marginals genuinely differ.
+
+**Truncation at `max_goals = 12` is defensible, and now measured rather than
+assumed.** Nothing in `src` normalises the NegBin grid (only `frank_copula.jl:51`
+does), so every market sums to `1 - truncation_mass`. On the highest-scoring
+fixture (λ_tot 3.32), widening the grid moves the most-affected price by:
+
+| max_goals | worst-draw mass | P(over 3.5) |
+|---|---|---|
+| 12 | 4.05e-4 | 0.42005309 |
+| 14 | 4.14e-5 | 0.42006291 |
+| 16 | 4.27e-6 | 0.42006352 |
+| 20 | 5.19e-8 | 0.42006356 |
+
+**1.05e-5** between 12 and 20 — three orders of magnitude below any edge worth
+betting. Keeping 12. A higher-scoring league inheriting this default must re-check:
+the quantity that matters is the price shift, not the discarded mass.
+
+### 5c — markets partition the same grid
+
+```
+1X2   |home+draw+away - sum(grid)|   5.551e-16
+BTTS  |yes+no - sum(grid)|           9.992e-16
+O/U   |over+under - sum(grid)|       9.992e-16   across [0.5, 1.5, 2.5, 3.5]
+cross-family disagreement            1.332e-15
+O/U vs direct cell sum              0.000e+00
+under(line) monotone                 yes
+```
+
+Asserting "1X2 sums to 1" would assert something false, since nothing normalises.
+Internal consistency is both true and stronger: a pricer that dropped a cell,
+double-counted the diagonal, or used `>=` for `>` would break consistency while
+still summing to something near 1. The contract's O/U lines are all half-lines, so
+no push mass exists — `over_under.jl:31-36` silently discards exact-integer
+totals, which would break this identity on an integer line, so the gate refuses
+one.
+
+### Two gate bugs found in my own reference, not in src
+
+Both worth recording, because both initially looked like defects:
+
+1. Gating truncation on raw discarded mass at 1e-6. Wrong quantity — raw mass is
+   dominated by a few extreme draws, while what matters is the price shift.
+2. The moment identity omitted the away dimension. The grid is truncated in BOTH
+   directions, so `E[home]` equals the truncated home first moment scaled by the
+   away marginal's RETAINED mass. Dropping that factor left a residual of
+   λ_h × away_tail ≈ 2.6e-6 that looked exactly like a real disagreement.
+
+### First look at prices
+
+| λ_h | λ_a | home | draw | away | over 2.5 | BTTS |
+|---|---|---|---|---|---|---|
+| 1.733 | 1.590 | 0.417 | 0.222 | 0.361 | 0.629 | 0.624 |
+| 1.619 | 1.236 | 0.461 | 0.241 | 0.299 | 0.533 | 0.543 |
+| 1.561 | 1.140 | 0.467 | 0.248 | 0.285 | 0.498 | 0.512 |
+
+All in the right neighbourhood. One thing to carry into gate 6: mean draw is
+**~0.243** against an empirical Scottish L1/L2 rate of ~0.25-0.27. Conditionally
+independent goals with no Dixon-Coles term systematically under-predict draws, and
+this is what that looks like. Test it directly rather than assuming it is noise —
+it is the strongest available argument for a DC or copula variant.
+
 ### Next
 
-Gate 5, the score matrix: dispatch Union membership, normalisation and truncation
-mass at `max_goals = 12`, and the market identities — 1X2 summing to 1, and O/U
-and BTTS agreeing with sums over the same grid cells.
+Gate 6, evaluation: proper scoring against realised outcomes on 24/25, weighted by
+FIXTURE COUNT rather than averaged over folds — OOS blocks range from 2 to 24
+fixtures, so a fold average would let a 2-fixture block outvote a 24-fixture one.
+Then gate 7, growth and CLV against Betfair closing prices.
 
-Both open tickets are quantified and neither blocks it: T002 is cost only, and
-T003 mis-prices 0.56% of fixtures on one side. Gate 5 works on the grid, which is
-downstream of both.
+Open tickets stand and neither blocks gate 6: T002 is cost only; T003 mis-prices
+0.56% of fixtures on one side.
