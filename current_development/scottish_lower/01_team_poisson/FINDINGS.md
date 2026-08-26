@@ -703,6 +703,43 @@ assumed.
 Anyone quoting "the baseline returned 21%" without `top10_pct` beside it is quoting
 noise.
 
+### Policy sweep: trust is inert, λ is the lever, concentration is invariant
+
+Staking knobs now live in `SLContract` (`trust_w = 0.30`, `drawdown_lambda = 23.0`,
+`max_selection_stake = 0.50`) rather than being hardcoded in the gate. Sweeping them
+on the cached books, full-book curation:
+
+| λ | trust | final | ROI% | top10% | exposure | mdd% |
+|---|---|---|---|---|---|---|
+| 15 | 0.15 | 2.244 | 20.31 | 119.3 | 0.089 | -16.6 |
+| 15 | 0.30 | 2.761 | 22.07 | 105.8 | 0.103 | -17.1 |
+| 15 | 1.00 | 2.740 | 21.79 | 106.5 | 0.104 | -17.1 |
+| 23 | 0.15 | 2.010 | 21.62 | 108.8 | 0.070 | -12.2 |
+| 23 | 0.30 | 2.019 | 21.41 | 108.0 | 0.071 | -12.2 |
+| 23 | 1.00 | 2.007 | 21.17 | 108.9 | 0.071 | -12.2 |
+| 35 | 0.30 | 1.615 | 21.30 | 108.5 | 0.048 | -8.2 |
+| 35 | 1.00 | 1.610 | 21.13 | 109.2 | 0.048 | -8.2 |
+
+Three things, all as the module documents:
+
+1. **Trust is inert wherever the drawdown constraint binds.** At λ = 23, trust from
+   0.15 to 1.0 moves final wealth 2.010 → 2.007. `risk_factor` is homogeneous of
+   degree 0, so it solves for whatever factor satisfies the constraint and `trust ×
+   stakes` is unchanged. The λ = 15 row where trust 0.15 *does* bite (2.244 vs 2.76)
+   is the mechanism, not an exception: there the constraint is slack enough for trust
+   to resize rather than only reshape.
+2. **λ is the lever.** Exposure 0.104 → 0.071 → 0.047 and drawdown -17.1% → -12.2% →
+   -8.2%, while ROI holds at ~21% throughout — correct, since ROI is per unit staked
+   and λ changes only the unit. The cap (0.20) never binds; max exposure is 0.104.
+3. **`top10_pct` is 105-119% in every one of the twelve cells.** The concentration is
+   invariant to the staking policy, so it is a property of the model's SELECTIONS and
+   not of how they are sized. That is the strongest form of the argument that the
+   21% ROI is not an edge: no sizing rule disperses it.
+
+λ is deliberately left at the module default and NOT calibrated on this data.
+`calibrate_lambda` exists, and using it here then quoting the result would be the
+-91% OOS mistake from the notes.
+
 ### Notes on the machinery
 
 - `DeArb` settles at `d * min(overround, 1)`: the quoted price under real vig, shaved

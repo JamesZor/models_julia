@@ -595,3 +595,37 @@ tp_traj0   = Pf.simulate(tp_pol0, tp_slates)
 tp_growth = tp_growth_table(tp_books_bf, tp_contract)
 @assert sl_gate_table("7c. Growth verdict", tp_gate_growth(tp_growth))
 tp_growth
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 12d. Policy sweep   (cheap — the books are cached)
+# ------------------------------------------------------------------------------
+#
+# A PolicySpec is a pure post-multiplier on a built MatchBook, so this reuses the
+# 320 books. A BookSpec change would not — that forces the ~35s rebuild, which is
+# what tp_sweep_book is for.
+#
+# What to look for, all three confirmed 2026-08-26:
+#
+#   * trust is INERT wherever the drawdown constraint binds. At λ=23, trust 0.15
+#     through 1.0 gives final wealth 2.010/2.019/2.015/2.007. At λ=15 the
+#     constraint is looser and trust 0.15 does bite — which is the mechanism, not
+#     an exception to it.
+#   * λ is the lever: exposure 0.104 → 0.071 → 0.047 as λ goes 15 → 23 → 35, while
+#     ROI stays ~21% throughout, because ROI is per unit staked.
+#   * top10_pct stays 105-119% in every cell. The P&L concentration is invariant to
+#     the staking policy, so it is a property of the model's SELECTIONS, not of how
+#     they are sized.
+
+tp_sweep = tp_sweep_policy(tp_books_bf, tp_contract;
+                           trusts = [0.15, 0.3, 0.5, 1.0], lambdas = [15.0, 23.0, 35.0])
+
+
+# %%
+# Price-policy ablation. REBUILDS the books for each variant (~35s each), so keep
+# the list short. `Normalise` settles ABOVE the traded price wherever there is real
+# vig and therefore manufactures edge — included only to show how much of a result
+# is the price policy rather than the model.
+#
+#   tp_sweep_book(tp_ds, tp_contract, tp_grid_latents.df, tp_grid_results, tp_odds_bf)
