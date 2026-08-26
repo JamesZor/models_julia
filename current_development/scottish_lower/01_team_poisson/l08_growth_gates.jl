@@ -127,14 +127,18 @@ the posterior-mean grid and `BakerMcHale` supplies the parameter-uncertainty
 shrinkage — the point of a Bayesian model is that the posterior width should size
 the bet, and that is where it enters.
 """
-function tp_book_spec(contract::SLContract)
+function tp_book_spec(contract::SLContract;
+                      price     = Pf.DeArb(),
+                      allocator = Pf.KellyLogUtility(),
+                      shrink    = Pf.BakerMcHale())
     return Pf.BookSpec(
         markets   = BayesianFootball.Data.Markets.MarketConfig(tp_book_markets(contract)),
-        price     = Pf.DeArb(),
-        allocator = Pf.KellyLogUtility(),
-        shrink    = Pf.BakerMcHale(),
+        price     = price,
+        allocator = allocator,
+        shrink    = shrink,
         exec      = Pf.ExecutionConfig(
             commission               = Pf.PerBetCommission(contract.commission),
+            max_selection_stake      = contract.max_selection_stake,
             require_complete_markets = true,
         ),
     )
@@ -157,10 +161,12 @@ this gate, not a fitted quantity — `calibrate_lambda` may be used to hit a tar
 exposure, but it must be calibrated on a rule declared in advance, never on the
 result.
 """
-function tp_growth_policies(contract::SLContract; lambda::Float64 = 23.0)
+function tp_growth_policies(contract::SLContract;
+                            lambda::Float64 = contract.drawdown_lambda,
+                            trust::Float64  = contract.trust_w)
     cap  = Pf.FixedCap(contract.portfolio_kelly_cap)
     risk = Pf.SlateDrawdown(lambda)
-    base(f) = Pf.PolicySpec(trust = Pf.FlatTrust(0.5), risk = risk, cap = cap,
+    base(f) = Pf.PolicySpec(trust = Pf.FlatTrust(trust), risk = risk, cap = cap,
                             filter = f, grouping = Pf.DailySlate())
 
     return [
@@ -376,9 +382,12 @@ book difference masquerade as a staking result.
 — several bets on one fixture share a scoreline and are strongly dependent, and
 resampling individual bets would understate the interval badly.
 """
-function tp_growth_table(books, contract::SLContract; lambda::Float64 = 23.0, B::Int = 4000)
+function tp_growth_table(books, contract::SLContract;
+                         lambda::Float64 = contract.drawdown_lambda,
+                         trust::Float64  = contract.trust_w,
+                         B::Int = 4000)
     rows = NamedTuple[]
-    for (name, policy) in tp_growth_policies(contract; lambda = lambda)
+    for (name, policy) in tp_growth_policies(contract; lambda = lambda, trust = trust)
         slates = Pf.group(policy.grouping, books)
         traj   = Pf.simulate(policy, slates)
         m      = Pf.path_metrics(traj)
@@ -460,4 +469,94 @@ function tp_gate_growth(growth::AbstractDataFrame)
     ))
 
     return out
+end
+
+
+# ==============================================================================
+# 6. Policy sweeps  (cheap — the books are cached)
+# ==============================================================================
+#
+# A `PolicySpec` is a pure post-multiplier on an already-built `MatchBook`, so a
+# policy sweep costs nothing but the simulation. A `BookSpec` change does not: it
+# invalidates every book and forces the ~35s rebuild. That asymmetry is why the two
+# functions below are separate.
+
+"""
+    tp_sweep_policy(books, contract; trusts, lambdas, policy_name) -> DataFrame
+
+Sweep trust and λ on ONE curation, reusing the cached books.
+
+Expect trust to do almost nothing. `risk_factor` is homogeneous of degree 0 in the
+stakes handed to it, so once the drawdown constraint binds it solves for whatever
+factor satisfies the constraint and `trust x stakes` comes out unchanged — trust can
+reshape the book across selections but cannot resize it. λ is the lever that moves
+exposure.
+
+Swept rather than asserted: the claim is in the module's docstring, and a sweep that
+confirms it on this data costs seconds.
+"""
+function tp_sweep_policy(books, contract::SLContract;
+                         trusts  = [0.15, 0.3, 0.5, 1.0],
+                         lambdas = [15.0, 23.0, 35.0],
+                         policy_name::String = "full book",
+                         B::Int = 1500)
+    rows = NamedTuple[]
+    for λ in lambdas, w in trusts
+        ps = tp_growth_policies(contract; lambda = λ, trust = w)
+        i  = findfirst(p -> p.name == policy_name, ps)
+        i === nothing && error("unknown policy $policy_name")
+        pol    = ps[i].policy
+        slates = Pf.group(pol.grouping, books)
+        traj   = Pf.simulate(pol, slates)
+        m      = Pf.path_metrics(traj)
+        conc   = tp_pnl_concentration(traj)
+        ci     = nrow(traj.bets) > 0 ? Pf.bootstrap_roi(traj.bets; B = B) : (NaN, NaN, NaN)
+        push!(rows, (
+            λ = λ, trust = w, n_bets = m.n_bets,
+            final = round(m.final, digits = 3),
+            roi_pct = round(m.roi, digits = 2),
+            roi_lo = round(ci[1], digits = 2), roi_hi = round(ci[2], digits = 2),
+            top10_pct = round(conc.top10, digits = 1),
+            mean_expo = round(m.mean_exposure, digits = 4),
+            mdd_pct = round(m.mdd, digits = 1),
+        ))
+    end
+    return DataFrame(rows)
+end
+
+"""
+    tp_sweep_book(ds, contract, latents_df, expr, odds_df; variants) -> DataFrame
+
+Sweep `BookSpec` components. **Rebuilds the books for every variant** (~35s each), so
+keep the list short.
+
+`price` is the one worth varying and the one to be careful with. `Normalise` settles
+ABOVE the traded price wherever there is real vig, which manufactures edge — the
+module's own docstring says not to believe anything it produces. It is included here
+only as an ablation, to show how much of a result is the price policy rather than the
+model.
+"""
+function tp_sweep_book(ds, contract::SLContract, latents_df, expr, odds_df;
+                       variants = [("DeArb (default)", Pf.DeArb()),
+                                   ("RawPrice",        Pf.RawPrice()),
+                                   ("Normalise (ABLATION — manufactures edge)", Pf.Normalise())],
+                       policy_name::String = "full book")
+    rows = NamedTuple[]
+    for (name, price) in variants
+        spec  = tp_book_spec(contract; price = price)
+        books = Pf.build_books(spec, latents_df, expr, odds_df, ds)
+        ps    = tp_growth_policies(contract)
+        pol   = ps[findfirst(p -> p.name == policy_name, ps)].policy
+        traj  = Pf.simulate(pol, Pf.group(pol.grouping, books))
+        m     = Pf.path_metrics(traj)
+        conc  = tp_pnl_concentration(traj)
+        push!(rows, (
+            price = name, n_books = length(books), n_bets = m.n_bets,
+            final = round(m.final, digits = 3),
+            roi_pct = round(m.roi, digits = 2),
+            top10_pct = round(conc.top10, digits = 1),
+            mean_expo = round(m.mean_exposure, digits = 4),
+        ))
+    end
+    return DataFrame(rows)
 end

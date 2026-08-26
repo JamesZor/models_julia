@@ -77,6 +77,22 @@ Base.@kwdef struct SLContract
     commission::Float64          = 0.02            # Betfair, net
     portfolio_kelly_cap::Float64 = 0.20            # Σ simultaneous stakes
 
+    # --- gate 7 staking -------------------------------------------------------
+    # Stated here rather than buried in the gate, because gate 1's premise is that
+    # no configuration is invisible — and these decide how much gets bet.
+    #
+    # `drawdown_lambda` is the constraint that ACTUALLY binds: measured mean slate
+    # exposure is 0.071 against a cap of 0.20, so the cap is slack and λ sets the
+    # size. It is left at the module default deliberately and NOT calibrated on the
+    # evaluation data — fitting it there is the -91% OOS mistake in the notes.
+    #
+    # `trust_w` is nearly inert once the drawdown constraint binds: `risk_factor` is
+    # homogeneous of degree 0 in the stakes handed to it, so trust reshapes the book
+    # but cannot resize it. Swept in gate 7 to demonstrate that rather than assert it.
+    trust_w::Float64             = 0.30            # FlatTrust weight
+    drawdown_lambda::Float64     = 23.0            # SlateDrawdown λ
+    max_selection_stake::Float64 = 0.50            # per selection, fraction of bankroll
+
     # --- Paths ----------------------------------------------------------------
     artifact_root::String = "data/scottish_lower"
 end
@@ -173,6 +189,7 @@ function sl_describe(contract::SLContract = sl_contract())
     println("  book               : 1X2, O/U $(contract.totals_lines), BTTS")
     println("  score matrix       : 0..$(contract.max_goals) goals")
     println("  commission / cap   : $(contract.commission) / $(contract.portfolio_kelly_cap)")
+    println("  staking            : trust $(contract.trust_w), λ $(contract.drawdown_lambda), max stake $(contract.max_selection_stake)")
     println("  artifacts          : $(contract.artifact_root)/<model>/<config_hash>/")
     println("=" ^ 74)
     return nothing
