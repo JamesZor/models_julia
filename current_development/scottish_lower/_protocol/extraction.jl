@@ -170,13 +170,14 @@ function sl_gate_extraction_real(ds, results, adapter::AbstractSLModelAdapter, c
     schema = _sl_extraction_schema(adapter)
     out = Any[]
 
-    # The smoke artifact must reproduce the same splitter boundaries after reload;
-    # checking row count alone permits a wrong set of fixtures with the right size.
-    splitter = _sl_smoke_splitter(contract)
+    # Support both 1-fold smoke artifacts and multi-fold grid artifacts dynamically
+    n_folds = length(results.training_results)
+    splitter = n_folds == 1 ? _sl_smoke_splitter(contract) : _sl_grid_splitter(contract)
     boundaries = SLData.create_id_boundaries(ds, splitter)
-    oos = isempty(boundaries) ? DataFrame() : DataFrame(SLData.get_next_matches(ds, boundaries[1], splitter))
+    oos_list = [DataFrame(SLData.get_next_matches(ds, b, splitter)) for b in boundaries[1:min(n_folds, length(boundaries))]]
+    oos = isempty(oos_list) ? DataFrame() : vcat(oos_list...)
     push!(out, sl_result("OOS fixtures priced", nrow(df) == nrow(oos) && nrow(df) > 0,
-                         "$(nrow(df)) rows priced, $(nrow(oos)) OOS fixtures at t+1"))
+                         "$(nrow(df)) rows priced across $(n_folds) fold(s), $(nrow(oos)) OOS fixtures expected"))
     ids_present = :match_id in propertynames(df) && :match_id in propertynames(oos)
     missing_ids = ids_present ? length(setdiff(Set(oos.match_id), Set(df.match_id))) : nrow(oos)
     extra_ids = ids_present ? length(setdiff(Set(df.match_id), Set(oos.match_id))) : nrow(df)
