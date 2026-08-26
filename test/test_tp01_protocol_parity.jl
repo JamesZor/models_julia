@@ -46,7 +46,7 @@ include(normpath(joinpath(@__DIR__, "../current_development/scottish_lower/01_te
     @test sl_gate_table("4c. Extraction fallbacks", gate4c)
 
     # Gate 5a: Score Matrix Dispatch
-    synthetic_row = (λ_h = [1.4], λ_a = [1.1], true_xg_h = [1.4], true_xg_a = [1.1], log_r = [2.0])
+    synthetic_row = (λ_h = [1.4], λ_a = [1.1], true_xg_h = [1.4], true_xg_a = [1.1], r_h = [7.389], r_a = [7.389])
     gate5a = sl_gate_score_dispatch(adapter, synthetic_row; max_goals = contract.max_goals)
     @test sl_gate_table("5a. Score-matrix dispatch", gate5a)
 end

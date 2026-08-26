@@ -155,7 +155,7 @@ function extract_parameters(
         α_a = a_idx > 0 ? dyn_nt.α[:, a_idx] : zeros(n_samples)
         β_a = a_idx > 0 ? dyn_nt.β[:, a_idx] : zeros(n_samples)
 
-        γ_h = h_idx > 0 ? ha_mat[:, h_idx] : zeros(n_samples)
+        γ_h = model.homeadvantage_config isa GlobalHomeAdvantage ? (size(ha_mat, 2) >= 1 ? ha_mat[:, 1] : zeros(n_samples)) : (h_idx > 0 ? ha_mat[:, h_idx] : zeros(n_samples))
 
         s_idx = hasproperty(row, :season_idx) ? Int(row.season_idx) : n_seasons
         
