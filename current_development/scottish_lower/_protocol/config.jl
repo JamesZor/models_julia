@@ -221,3 +221,11 @@ function sl_gate_table(title::AbstractString, results::AbstractVector)
     println()
     return n_pass == length(results)
 end
+
+"Protocol schema is part of artifact identity; an artifact is trusted only after all gates pass."
+sl_protocol_contract(adapter, contract::SLContract) = (; protocol=:ScottishLowerProtocol, version=2, capabilities=sl_capabilities(adapter), contract)
+sl_artifact_hash(adapter, contract::SLContract) = sl_hash((sl_model(adapter), sl_protocol_contract(adapter, contract)))
+"Protocol-aware artifact path."
+sl_artifact_dir(adapter::AbstractSLModelAdapter, contract::SLContract) = sl_artifact_dir(contract, sl_model_name(adapter), sl_artifact_hash(adapter, contract))
+"Explicit legacy lookup; never silently selected by protocol runs."
+sl_legacy_artifact_dir(adapter::AbstractSLModelAdapter, contract::SLContract) = sl_artifact_dir(contract, sl_model_name(adapter), sl_hash(sl_model(adapter)))
