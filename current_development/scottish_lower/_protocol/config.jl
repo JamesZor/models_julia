@@ -66,7 +66,7 @@ Base.@kwdef struct SLContract
     # Stated explicitly because QueuedNUTSConfig otherwise defaults to +/-0.001,
     # which is far tighter than the repository's own presets use (+/-0.1) and
     # starts positive-constrained scales almost on their boundary.
-    init_range::Float64  = 0.1
+    init_range::Float64  = 2
 
     # --- Pricing --------------------------------------------------------------
     max_goals::Int              = 12               # score-matrix truncation
