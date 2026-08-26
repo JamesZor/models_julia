@@ -367,6 +367,71 @@ end
 
 
 # ==============================================================================
+# 4b. The full grid  (gate 6 input)
+# ==============================================================================
+#
+# Gate 3c samples ONE fold to prove the machinery works. Gates 6 and 7 need every
+# fold of the development season, at the contract's grid settings rather than the
+# smoke's cheaper ones.
+#
+# Same splitter as gate 0 built the fold inventory from, so the boundaries gate 2
+# checked for leakage are the boundaries this trains on.
+
+"""
+    tp_grid_config(model, contract; save_dir) -> ExperimentConfig
+
+The full 24/25 walk-forward run: 20 folds x `grid_chains`, queued.
+
+Differs from `tp_smoke_config` only in the sampler budget and in using the real
+splitter (all target steps, not just step 0). Everything else — init range, accept
+rate, tree depth, seed — is the same contract, so a difference between smoke and
+grid can only be sample size.
+"""
+function tp_grid_config(model, contract::SLContract; save_dir::AbstractString)
+    sampler = Samplers.QueuedNUTSConfig(
+        n_samples      = contract.grid_samples,
+        n_chains       = contract.grid_chains,
+        n_warmup       = contract.grid_warmup,
+        accept_rate    = contract.accept_rate,
+        max_depth      = contract.max_depth,
+        initialisation = Samplers.UniformInit(-contract.init_range, contract.init_range),
+        show_progress  = true,
+    )
+
+    # The queue flattens folds x chains into one global pool, so concurrency is set
+    # by the box (physical cores), not by the chain count.
+    execution = Training.Independent(
+        parallel             = true,
+        max_concurrent_tasks = contract.queue_tasks,
+    )
+
+    return Experiments.ExperimentConfig(
+        name            = "tp01_grid_$(sl_hash(model))",
+        model           = model,
+        splitter        = sl_splitter(contract),
+        training_config = Training.TrainingConfig(sampler, execution, nothing, false),
+        save_dir        = save_dir,
+        description     = "Model 01 full 24/25 grid: all folds, input to gates 6-7.",
+    )
+end
+
+"""
+    tp_run_grid(ds, model, contract) -> (results, path)
+
+***THIS SAMPLES ALL 20 FOLDS.*** Requires the threading setup — see
+docs/SERVER_AND_KAIMON.md.
+"""
+function tp_run_grid(ds, model, contract::SLContract)
+    save_dir = sl_artifact_dir(contract, "01_team_poisson", sl_hash(model))
+    config   = tp_grid_config(model, contract; save_dir = save_dir)
+
+    results = Experiments.run_experiment(ds, config)
+    Experiments.save_experiment(results)
+    return (results, results.save_path)
+end
+
+
+# ==============================================================================
 # 5. Convergence diagnostics
 # ==============================================================================
 
