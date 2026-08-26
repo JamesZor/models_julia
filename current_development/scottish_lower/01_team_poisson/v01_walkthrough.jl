@@ -346,3 +346,55 @@ tp_gate5c = tp_gate_market_identities(tp_engine, tp_latents.df, tp_contract)
 # against intuition. Worth reading before trusting gate 6.
 
 tp_market_summary(tp_engine, tp_latents.df, tp_contract; n_rows = 8)
+
+
+# %%
+# ==============================================================================
+# 10. THE FULL GRID   ***THIS SAMPLES ALL 20 FOLDS***
+# ==============================================================================
+#
+# Everything up to here ran on ONE fold. Gates 6 and 7 need the whole development
+# season, at the contract's grid budget rather than the smoke's cheaper one.
+#
+#   20 folds x 4 chains = 80 queued tasks, 800 warmup + 800 samples
+#   concurrency 16 (physical cores — the queue flattens folds x chains)
+#   → data/scottish_lower/01_team_poisson/<hash>/tp01_grid_<hash>_<timestamp>
+#
+# Same splitter gate 0 built the fold inventory from and gate 2 checked for
+# leakage, so this trains on boundaries that have already been audited.
+#
+# REQUIRES the threading cell (block 6) to have been run in this session.
+# Budget roughly 15-25 minutes: the smoke did 4 chains on 720 rows in 53s, and
+# this is 1.6x the iterations on folds up to 1060 rows.
+#
+# Check the setup before committing to the run:
+#
+#   cfg = tp_grid_config(tp_engine, tp_contract;
+#                        save_dir = sl_artifact_dir(tp_contract, "01_team_poisson",
+#                                                   sl_hash(tp_engine)))
+#   (cfg.name, cfg.save_dir, length(Data.create_id_boundaries(tp_ds, cfg.splitter)))
+
+tp_grid_results, tp_grid_path = tp_run_grid(tp_ds, tp_engine, tp_contract)
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 10b. Grid convergence — the same diagnostics as 3c, across every fold
+# ------------------------------------------------------------------------------
+#
+# 3c cleared ONE fold. A fold that fails here is a fold whose prices gate 6 must
+# not score, so this runs before any evaluation.
+
+tp_gate10 = tp_gate_convergence(tp_grid_results, tp_contract)
+@assert sl_gate_table("6.0 Grid convergence (all folds)", tp_gate10)
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 10c. Extract OOS predictions for the whole season
+# ------------------------------------------------------------------------------
+#
+# Same path gate 4b exercised, now across all 20 folds. Expect ~360 fixtures.
+
+tp_grid_latents = Experiments.extract_oos_predictions(tp_ds, tp_grid_results; force = true)
+nrow(tp_grid_latents.df)
