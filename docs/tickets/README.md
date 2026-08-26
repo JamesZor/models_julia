@@ -26,6 +26,7 @@ only that ticket. Update `Status` here when it lands.
 | [T002](T002-scalar-taped-likelihood.md) | Engine likelihoods taped scalar-by-scalar (~20x AD work); `view` defeats vectorisation and NegBin crashes on the fast path | medium | `src/models/pregame/engines/`, `src/MyDistributions/` | open | 2026-08-26 |
 | [T003](T003-home-advantage-population-fallback.md) | Unmapped teams silently lose home advantage at extraction (λ_h 0.849x); 28 call sites | medium | `src/models/pregame/engines/`, `src/models/pregame/components/home_advantage.jl` | open | 2026-08-26 |
 | [T004](T004-1x2-grading-disagrees-with-score.md) | `is_winner` contradicts the recorded score on 3 fixtures (2-2 draws with no 1X2 winner); no QA invariant catches it | low | `ds.odds` grading | open | 2026-08-26 |
+| [T005](T005-betfair-summariser-drops-90pc.md) | `summarize_betfair_market` inner-joins an open window and silently returns 30 of 360 fixtures; breaks CLV | high | `src/Data/betfair_util.jl` | open | 2026-08-26 |
 
 ## Closed
 

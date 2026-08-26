@@ -223,20 +223,71 @@ function _tp_rqr(rng, r_draws, λ_draws, y::Int)
 end
 
 """
-    tp_join_books(model_book, market_books) -> DataFrame
+    tp_betfair_close_book(ds, contract, grading; ids, window) -> DataFrame
 
-Inner join on (match_id, market, line, selection).
+De-vigged Betfair CLOSING probabilities for the contract book.
 
-INNER deliberately: a selection priced by one side and not the other is not
-comparable, and silently keeping it would score the model and the market on
-different fixture sets. Gate 6b reports exactly what the join dropped.
+Deliberately does NOT use `Data.summarize_betfair_market`. That helper summarises an
+OPEN window (-1440, -1380 min) and a close window and `innerjoin`s them, so any match
+without a price 24 hours before kickoff is dropped entirely. Minor-league exchange
+markets frequently do not open that early, and on Scottish 56+57 the cost is severe:
+
+    close window alone      322 of 360 OOS fixtures   (89%)
+    open window alone        35 of 360
+    the helper (both)        30 of 360
+
+Evaluation and CLV need the CLOSE price. The open price is only required for
+line-movement metrics, so requiring it here would discard 90% of the evidence to
+compute something nothing here asks for. Raised as T005.
+
+Grading is taken from `grading` (the bookmaker book) rather than re-derived — the
+protocol's rule is to extend the package, not re-implement it, and gate 6b asserts
+the two graders agree wherever they overlap.
+"""
+function tp_betfair_close_book(ds, contract::SLContract, grading::AbstractDataFrame;
+                               ids::Union{Nothing,AbstractSet} = nothing,
+                               window = (-20.0, 0.0))
+    D   = BayesianFootball.Data
+    raw = D.summarize_odds(ds.betfair_odds, D.TWAEstimator(); window = window)
+    isempty(raw) && return DataFrame()
+
+    wanted = Set((D.market_group(m), Float64(D.market_line(m))) for m in tp_book_markets(contract))
+    df = filter(r -> (String(r.market_name), Float64(r.market_line)) in wanted, raw)
+    ids === nothing || (df = filter(r -> Int(r.match_id) in ids, df))
+    "is_sane" in names(df) && (df = filter(r -> coalesce(r.is_sane, true), df))
+    isempty(df) && return DataFrame()
+
+    out = DataFrame(
+        match_id  = Int.(df.match_id),
+        market    = String.(df.market_name),
+        line      = Float64.(df.market_line),
+        selection = Symbol.(df.selection),
+        p_market  = (1 ./ Float64.(df.odds)) ./ Float64.(df.overround),
+    )
+    return innerjoin(out, select(grading, [:match_id, :market, :line, :selection, :is_winner]),
+                     on = [:match_id, :market, :line, :selection])
+end
+
+"""
+    tp_join_books(model_book, market_books) -> Dict{String,DataFrame}
+
+One aligned table PER baseline, not one table joined across all of them.
+
+This is the second design here: joining every baseline into a single table restricts
+everything to the intersection, so adding a thin baseline silently destroys a thick
+one. Measured: joining Bet365 (4,658 rows) with Betfair (96 rows) left 96 rows, and
+the alignment gate reported PASS because the result was non-empty. A gate that
+passes while 98% of the evidence disappears is worse than no gate.
+
+Each baseline now gets its own aligned subset, scored on its own fixtures, with its
+coverage reported.
 """
 function tp_join_books(model_book::AbstractDataFrame, market_books::Dict{String,DataFrame})
-    out = copy(model_book)
+    out = Dict{String,DataFrame}()
     for (name, mb) in market_books
+        isempty(mb) && (out[name] = DataFrame(); continue)
         cols = select(mb, [:match_id, :market, :line, :selection, :p_market, :is_winner])
-        rename!(cols, :p_market => Symbol("p_", name), :is_winner => Symbol("win_", name))
-        out = innerjoin(out, cols, on = [:match_id, :market, :line, :selection])
+        out[name] = innerjoin(model_book, cols, on = [:match_id, :market, :line, :selection])
     end
     return out
 end
@@ -385,46 +436,51 @@ Two forecasters scored on different sets are not comparable, and nothing in the
 output reveals it: both columns are full, both numbers are plausible, and the
 comparison is meaningless. The join is inner, so this reports what it dropped.
 """
-function tp_gate_alignment(joined::AbstractDataFrame, model_book::AbstractDataFrame,
-                           market_books::Dict{String,DataFrame})
+function tp_gate_alignment(joined::Dict{String,DataFrame}, model_book::AbstractDataFrame;
+                           min_coverage::Float64 = 0.80)
     out = Any[]
-    key(df) = Set((r.match_id, r.market, r.line, r.selection) for r in eachrow(df))
-    k_model = key(model_book)
+    n_model = nrow(model_book)
 
     push!(out, (
-        name   = "joined set is non-empty",
-        pass   = nrow(joined) > 0,
-        detail = "$(nrow(joined)) rows, $(length(unique(joined.match_id))) fixtures",
+        name   = "model book built",
+        pass   = n_model > 0,
+        detail = "$n_model rows, $(length(unique(model_book.match_id))) fixtures",
     ))
 
-    for (name, mb) in market_books
-        k_mkt  = key(mb)
-        common = intersect(k_model, k_mkt)
+    # Coverage is GATED, not merely printed. A baseline that aligns on a handful of
+    # rows produces a confident-looking score table computed on almost nothing, and
+    # the row count is the only place that shows.
+    for (name, j) in sort(collect(joined); by = first)
+        cov = n_model == 0 ? 0.0 : nrow(j) / n_model
         push!(out, (
             name   = "coverage vs $name",
-            pass   = length(common) > 0,
-            detail = @sprintf("%d shared; model-only %d, %s-only %d",
-                              length(common), length(setdiff(k_model, k_mkt)),
-                              name, length(setdiff(k_mkt, k_model))),
+            pass   = cov >= min_coverage,
+            detail = @sprintf("%d of %d model rows (%.1f%%), %d fixtures — threshold %.0f%%",
+                              nrow(j), n_model, 100cov,
+                              nrow(j) == 0 ? 0 : length(unique(j.match_id)), 100min_coverage),
         ))
     end
 
-    # The outcome column must agree between baselines. If Bet365 and Betfair disagree
-    # about who won, one of the graders is wrong and every score below is suspect.
-    wincols = [c for c in names(joined) if startswith(String(c), "win_")]
-    if length(wincols) > 1
-        disagree = count(r -> length(unique([r[c] for c in wincols])) > 1, eachrow(joined))
+    # If two graders disagree about who won, one is wrong and every score is suspect.
+    names_ = collect(keys(joined))
+    if length(names_) > 1
+        a, b = joined[names_[1]], joined[names_[2]]
+        both = innerjoin(select(a, [:match_id, :market, :line, :selection, :is_winner]),
+                         select(b, [:match_id, :market, :line, :selection, :is_winner]),
+                         on = [:match_id, :market, :line, :selection], makeunique = true)
+        dis = nrow(both) == 0 ? 0 : count(r -> r.is_winner != r.is_winner_1, eachrow(both))
         push!(out, (
-            name   = "graders agree on outcomes",
-            pass   = disagree == 0,
-            detail = disagree == 0 ? "all $(nrow(joined)) rows agree" : "$disagree rows disagree",
+            name   = "graders agree where they overlap",
+            pass   = dis == 0,
+            detail = "$(nrow(both)) shared rows, $dis disagreements",
         ))
     end
 
+    allp = model_book.p_model
     push!(out, (
         name   = "model probabilities well-formed",
-        pass   = all(isfinite, joined.p_model) && all(0 .< joined.p_model .< 1),
-        detail = @sprintf("range [%.5f, %.5f]", minimum(joined.p_model), maximum(joined.p_model)),
+        pass   = all(isfinite, allp) && all(0 .< allp .< 1),
+        detail = @sprintf("range [%.5f, %.5f]", minimum(allp), maximum(allp)),
     ))
 
     return out
@@ -450,14 +506,13 @@ automatically; the trap is only in averaging per-fold scores, where a 2-fixture 
 block would count as much as a 24-fixture one. `tp_fold_weighting_check` shows the
 size of that difference rather than asserting it does not matter.
 """
-function tp_score_table(joined::AbstractDataFrame; baseline::Symbol = :p_bet365)
-    wincol = Symbol("win_", String(baseline)[3:end])
+function tp_score_table(joined::AbstractDataFrame)
     rows = NamedTuple[]
 
     for g in groupby(joined, [:market, :line, :selection])
-        y  = collect(g[!, wincol])
+        y  = collect(g.is_winner)
         pm = collect(g.p_model)
-        pb = collect(g[!, baseline])
+        pb = collect(g.p_market)
         d  = tp_paired_delta(pm, pb, y)
 
         push!(rows, (
@@ -486,8 +541,7 @@ Not a gate — a demonstration. OOS blocks here range from 2 to 24 fixtures, and
 point is to show how far a fold average drifts from the fixture-weighted number,
 rather than to assert in a comment that it would.
 """
-function tp_fold_weighting_check(joined::AbstractDataFrame, folds; baseline::Symbol = :p_bet365)
-    wincol = Symbol("win_", String(baseline)[3:end])
+function tp_fold_weighting_check(joined::AbstractDataFrame, folds)
     fmap = Dict{Int,Int}()
     for f in folds, id in f.oos_df.match_id
         fmap[Int(id)] = f.idx
@@ -496,10 +550,10 @@ function tp_fold_weighting_check(joined::AbstractDataFrame, folds; baseline::Sym
     j.fold = [get(fmap, id, 0) for id in j.match_id]
 
     onex = filter(r -> r.market == "1X2", j)
-    pooled = tp_log_loss(onex.p_model, onex[!, wincol])
+    pooled = tp_log_loss(onex.p_model, onex.is_winner)
 
     per_fold = combine(groupby(onex, :fold),
-                       [:p_model, wincol] => ((p, y) -> tp_log_loss(p, y)) => :ll,
+                       [:p_model, :is_winner] => ((p, y) -> tp_log_loss(p, y)) => :ll,
                        nrow => :n)
     per_fold = filter(r -> r.fold > 0, per_fold)
 
@@ -630,11 +684,10 @@ true even where `Δll` is positive (the model losing on absolute log loss). That
 combination is what a profitable contrarian model looks like, and it is invisible
 to proper scoring alone.
 """
-function tp_edge_table(joined::AbstractDataFrame; baseline::Symbol = :p_bet365)
-    wincol = Symbol("win_", String(baseline)[3:end])
+function tp_edge_table(joined::AbstractDataFrame)
     rows = NamedTuple[]
     for g in groupby(joined, [:market, :line, :selection])
-        e = tp_glm_edge(g; p_model = :p_model, p_market = baseline, y = wincol)
+        e = tp_glm_edge(g; p_model = :p_model, p_market = :p_market, y = :is_winner)
         push!(rows, (
             market    = g.market[1],
             line      = g.line[1],
