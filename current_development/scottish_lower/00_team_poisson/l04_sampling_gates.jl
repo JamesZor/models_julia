@@ -4,10 +4,10 @@
 #
 # Loader. Definitions only, no execution.
 #
-# Covers Gate 3 for Model 00:
-#   3a: Equation parity (Turing @model vs independent l02_equations.jl)
-#   3b: Gradient health (compiled ReverseDiff vs fresh vs ForwardDiff vs FiniteDiff)
-#   3c: Smoke run & convergence (1 fold, 4 chains x 500/500, persisted)
+# Gate 3 asks three separate questions:
+#   (a) equation parity   is the Turing model the model MODEL.md documents?
+#   (b) gradient health   is the AD path correct and fast enough to sample?
+#   (c) smoke run         does it actually sample, and converge?
 #
 # ==============================================================================
 
@@ -20,6 +20,7 @@ using LinearAlgebra
 using Random
 using Statistics
 using Printf
+using Profile
 using Dates
 using MCMCChains
 
@@ -185,14 +186,11 @@ end
 
 
 # ==============================================================================
-# 4. GATE 3c — Smoke & Grid Runners
+# 4. GATE 3c — Smoke & Grid Configs and Runners
 # ==============================================================================
 
-function tp00_smoke_config(model::DynamicPoissonGoalsTimeDecayModel, contract::SLContract;
-                           save_dir = sl_artifact_dir(contract, "00_team_poisson", sl_hash(model)))
-    name = "tp00_smoke_$(sl_hash(model))_$(Dates.format(now(), "yyyymmdd_HHMMSS"))"
-
-    splitter = Data.GroupedCVConfig(
+function tp00_smoke_splitter(contract::SLContract)
+    return Data.GroupedCVConfig(
         tournament_groups = [contract.tournaments],
         target_seasons    = contract.dev_seasons,
         history_seasons   = contract.history_seasons,
@@ -201,37 +199,43 @@ function tp00_smoke_config(model::DynamicPoissonGoalsTimeDecayModel, contract::S
         stop_early        = contract.stop_early,
         end_dynamics      = 0,
     )
+end
 
+function tp00_smoke_config(model::DynamicPoissonGoalsTimeDecayModel, contract::SLContract;
+                           save_dir::AbstractString)
     sampler = Samplers.QueuedNUTSConfig(
-        n_chains              = contract.smoke_chains,
-        target_accept_rate    = contract.accept_rate,
-        max_depth             = contract.max_depth,
-        seed                  = contract.seed,
-        max_concurrent_tasks  = 4,
-        init_type             = :uniform,
-        init_range            = contract.init_range,
+        n_samples      = contract.smoke_samples,
+        n_chains       = contract.smoke_chains,
+        n_warmup       = contract.smoke_warmup,
+        accept_rate    = contract.accept_rate,
+        max_depth      = contract.max_depth,
+        initialisation = Samplers.UniformInit(-contract.init_range, contract.init_range),
+        show_progress  = false,
     )
 
-    return Experiments.ExperimentTask(
-        name            = name,
+    execution = Training.Independent(
+        parallel             = true,
+        max_concurrent_tasks = contract.smoke_chains,
+    )
+
+    return Experiments.ExperimentConfig(
+        name            = "tp00_smoke_$(sl_hash(model))",
         model           = model,
+        splitter        = tp00_smoke_splitter(contract),
+        training_config = Training.TrainingConfig(sampler, execution, nothing, false),
         save_dir        = save_dir,
-        target_seasons  = contract.dev_seasons,
-        history_seasons = contract.history_seasons,
-        samples         = contract.smoke_samples,
-        warmup          = contract.smoke_warmup,
-        save_to_disk    = true,
-        save_diagnostics= true,
-        splitter        = splitter,
-        sampler         = sampler,
+        description     = "Model 00 gate-3 smoke: one fold, persisted for gate 4.",
     )
 end
 
-function tp00_run_smoke(ds, model::DynamicPoissonGoalsTimeDecayModel, contract::SLContract; kwargs...)
-    task = tp00_smoke_config(model, contract; kwargs...)
-    results = Experiments.run_experiment(ds, task)
-    path = joinpath(task.save_dir, task.name)
-    return (results, path)
+function tp00_run_smoke(ds, model::DynamicPoissonGoalsTimeDecayModel, contract::SLContract)
+    save_dir = sl_artifact_dir(contract, "00_team_poisson", sl_hash(model))
+    config   = tp00_smoke_config(model, contract; save_dir = save_dir)
+
+    results = Experiments.run_experiment(ds, config)
+    Experiments.save_experiment(results)
+
+    return (results, results.save_path)
 end
 
 function tp00_load_smoke(path::AbstractString)
@@ -239,97 +243,168 @@ function tp00_load_smoke(path::AbstractString)
 end
 
 function tp00_grid_config(model::DynamicPoissonGoalsTimeDecayModel, contract::SLContract;
-                          save_dir = sl_artifact_dir(contract, "00_team_poisson", sl_hash(model)))
-    name = "tp00_grid_$(sl_hash(model))_$(Dates.format(now(), "yyyymmdd_HHMMSS"))"
-
-    splitter = sl_splitter(contract)
-
+                          save_dir::AbstractString)
     sampler = Samplers.QueuedNUTSConfig(
-        n_chains              = contract.grid_chains,
-        target_accept_rate    = contract.accept_rate,
-        max_depth             = contract.max_depth,
-        seed                  = contract.seed,
-        max_concurrent_tasks  = contract.queue_tasks,
-        init_type             = :uniform,
-        init_range            = contract.init_range,
+        n_samples      = contract.grid_samples,
+        n_chains       = contract.grid_chains,
+        n_warmup       = contract.grid_warmup,
+        accept_rate    = contract.accept_rate,
+        max_depth      = contract.max_depth,
+        initialisation = Samplers.UniformInit(-contract.init_range, contract.init_range),
+        show_progress  = true,
     )
 
-    return Experiments.ExperimentTask(
-        name            = name,
+    execution = Training.Independent(
+        parallel             = true,
+        max_concurrent_tasks = contract.queue_tasks,
+    )
+
+    return Experiments.ExperimentConfig(
+        name            = "tp00_grid_$(sl_hash(model))",
         model           = model,
+        splitter        = sl_splitter(contract),
+        training_config = Training.TrainingConfig(sampler, execution, nothing, false),
         save_dir        = save_dir,
-        target_seasons  = contract.dev_seasons,
-        history_seasons = contract.history_seasons,
-        samples         = contract.grid_samples,
-        warmup          = contract.grid_warmup,
-        save_to_disk    = true,
-        save_diagnostics= true,
-        splitter        = splitter,
-        sampler         = sampler,
+        description     = "Model 00 full 24/25 grid: all folds, input to gates 6-7.",
     )
 end
 
-function tp00_run_grid(ds, model::DynamicPoissonGoalsTimeDecayModel, contract::SLContract; kwargs...)
-    task = tp00_grid_config(model, contract; kwargs...)
-    results = Experiments.run_experiment(ds, task)
-    path = joinpath(task.save_dir, task.name)
-    return (results, path)
+function tp00_run_grid(ds, model::DynamicPoissonGoalsTimeDecayModel, contract::SLContract)
+    save_dir = sl_artifact_dir(contract, "00_team_poisson", sl_hash(model))
+    config   = tp00_grid_config(model, contract; save_dir = save_dir)
+
+    results = Experiments.run_experiment(ds, config)
+    Experiments.save_experiment(results)
+    return (results, results.save_path)
 end
 
-function tp00_gate_convergence(results, contract::SLContract; expected_folds::Int = 1)
+
+# ==============================================================================
+# 5. Convergence Diagnostics
+# ==============================================================================
+
+function tp00_bfmi(chain)
+    :hamiltonian_energy in names(chain, :internals) || return Float64[]
+    E = Array(chain[:hamiltonian_energy])
+    out = Float64[]
+    for c in axes(E, 2)
+        e = vec(E[:, c])
+        v = var(e)
+        push!(out, v > 0 ? sum(diff(e) .^ 2) / (length(e) * v) : NaN)
+    end
+    return out
+end
+
+function tp00_gate_convergence(results, contract::SLContract;
+                               rhat_max::Float64            = 1.01,
+                               ess_min::Float64             = 400.0,
+                               divergence_rate_max::Float64 = 0.001,
+                               expected_folds               = nothing)
     chains = [c for (c, _) in results.training_results]
-    results_list = []
+    out = []
 
-    push!(results_list, (
-        name   = "expected fold count present",
-        pass   = length(chains) == expected_folds,
-        detail = "$(length(chains)) / $expected_folds folds present",
+    n = length(chains)
+    push!(out, (
+        name   = "folds sampled",
+        pass   = n > 0 && (expected_folds === nothing || n == expected_folds),
+        detail = expected_folds === nothing ? "$n fold(s) returned" :
+                 "$n of $expected_folds folds returned",
     ))
+    isempty(chains) && return out
 
-    # Evaluate summary statistics across all folds
-    max_rhat = 0.0
-    min_ess_bulk = Inf
-    min_ess_tail = Inf
-    total_divs = 0
-    total_draws = 0
+    rhats  = Float64[]; bulks = Float64[]; tails = Float64[]
+    divs   = Int[];     depth_max = Int[]; depth_cap = Int[]; bfmis = Float64[]
 
     for ch in chains
-        s = DataFrame(MCMCChains.summarystats(ch))
-        rhat_col = :rhat in propertynames(s) ? s.rhat : s.r_hat
-        max_rhat = max(max_rhat, maximum(filter(isfinite, rhat_col)))
+        st = DataFrame(MCMCChains.summarystats(ch))
+        push!(rhats, maximum(skipmissing(st.rhat)))
+        push!(bulks, minimum(skipmissing(st.ess_bulk)))
+        push!(tails, minimum(skipmissing(st.ess_tail)))
 
-        if :ess_bulk in propertynames(s)
-            min_ess_bulk = min(min_ess_bulk, minimum(filter(isfinite, s.ess_bulk)))
-        end
-        if :ess_tail in propertynames(s)
-            min_ess_tail = min(min_ess_tail, minimum(filter(isfinite, s.ess_tail)))
+        internals = names(ch, :internals)
+        push!(divs, :numerical_error in internals ? Int(sum(Array(ch[:numerical_error]))) : -1)
+
+        if :tree_depth in internals
+            d = Array(ch[:tree_depth])
+            push!(depth_max, Int(maximum(d)))
+            push!(depth_cap, count(>=(contract.max_depth), d))
         end
 
-        if :numerical_error in names(ch.value)
-            divs = sum(ch.value[:numerical_error])
-            total_divs += divs
-        end
-        total_draws += size(ch, 1) * size(ch, 3)
+        b = tp00_bfmi(ch)
+        isempty(b) || push!(bfmis, minimum(b))
     end
 
-    push!(results_list, (
-        name   = "Rhat convergence (<= 1.01)",
-        pass   = max_rhat <= 1.01,
-        detail = @sprintf("max Rhat = %.5f across folds", max_rhat),
+    worst_rhat, i_rhat = findmax(rhats)
+    push!(out, (
+        name   = "Rhat",
+        pass   = worst_rhat <= rhat_max,
+        detail = @sprintf("max %.5f (fold %d) — %d/%d folds under %.2f",
+                          worst_rhat, i_rhat, count(<=(rhat_max), rhats), n, rhat_max),
     ))
 
-    push!(results_list, (
-        name   = "Effective sample size (ESS >= 400)",
-        pass   = min_ess_bulk >= 400 && min_ess_tail >= 400,
-        detail = @sprintf("min bulk = %.0f, min tail = %.0f", min_ess_bulk, min_ess_tail),
+    min_bulk, i_bulk = findmin(bulks)
+    min_tail = minimum(tails)
+    push!(out, (
+        name   = "effective sample size",
+        pass   = min_bulk >= ess_min && min_tail >= ess_min,
+        detail = @sprintf("min bulk %.0f (fold %d), min tail %.0f — %d/%d folds above %.0f",
+                          min_bulk, i_bulk, min_tail,
+                          count(b -> b >= ess_min, bulks), n, ess_min),
     ))
 
-    div_rate = total_draws > 0 ? total_divs / total_draws : 0.0
-    push!(results_list, (
-        name   = "Divergences rate (<= 0.1%)",
-        pass   = div_rate <= 0.001,
-        detail = @sprintf("%d / %d draws (%.4f%%)", total_divs, total_draws, div_rate * 100),
+    bad_div   = [i for (i, d) in enumerate(divs) if d > 0]
+    n_draws   = sum(size(ch, 1) * size(ch, 3) for ch in chains)
+    div_rate  = sum(max.(divs, 0)) / n_draws
+
+    push!(out, (
+        name   = "divergences rare",
+        pass   = div_rate <= divergence_rate_max,
+        detail = any(<(0), divs) ? "numerical_error not recorded" :
+                 isempty(bad_div) ? "0 across all $n folds ($n_draws draws)" :
+                 @sprintf("%d total = %.4f%% of %d draws (threshold %.2f%%), in folds %s",
+                          sum(divs), 100 * div_rate, n_draws,
+                          100 * divergence_rate_max, string(bad_div)),
     ))
 
-    return results_list
+    if !isempty(bad_div)
+        ratios = Float64[]
+        for i in bad_div
+            ch  = chains[i]
+            d   = vec(Array(ch[:numerical_error])) .> 0
+            any(d) && all(d) && continue
+            for site in ("dyn.σ_a", "dyn.σ_d")
+                v = vec(Array(ch[Symbol(site)]))
+                push!(ratios, mean(v[d]) / mean(v[.!d]))
+            end
+        end
+        worst = isempty(ratios) ? 1.0 : minimum(ratios)
+        push!(out, (
+            name   = "divergences not a funnel",
+            pass   = worst >= 0.5,
+            detail = @sprintf("σ at divergent draws is %.2f-%.2fx the bulk mean%s",
+                              minimum(ratios), maximum(ratios),
+                              worst < 0.5 ? "  ⚠ CLUSTERED AT SMALL σ — funnel" :
+                                            "  (no clustering ⇒ integrator noise)"),
+        ))
+    end
+
+    if !isempty(depth_max)
+        push!(out, (
+            name   = "tree depth",
+            pass   = sum(depth_cap) == 0,
+            detail = "max $(maximum(depth_max)), $(sum(depth_cap)) hits at cap $(contract.max_depth)",
+        ))
+    end
+
+    if !isempty(bfmis)
+        worst_bfmi, i_bfmi = findmin(bfmis)
+        push!(out, (
+            name   = "BFMI",
+            pass   = worst_bfmi >= 0.3,
+            detail = @sprintf("min %.3f (fold %d) across %d folds (threshold 0.30)",
+                              worst_bfmi, i_bfmi, n),
+        ))
+    end
+
+    return out
 end
