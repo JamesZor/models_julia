@@ -50,6 +50,7 @@ include(joinpath(TP_ROOT, "01_team_poisson/l03_gates.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l04_sampling_gates.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l05_extraction_gates.jl"))
 include(joinpath(TP_ROOT, "01_team_poisson/l06_score_matrix_gates.jl"))
+include(joinpath(TP_ROOT, "01_team_poisson/l07_evaluation_gates.jl"))
 
 
 # %%
@@ -398,3 +399,122 @@ tp_gate10 = tp_gate_convergence(tp_grid_results, tp_contract; expected_folds = l
 
 tp_grid_latents = Experiments.extract_oos_predictions(tp_ds, tp_grid_results; force = true)
 nrow(tp_grid_latents.df)
+
+
+# %%
+# ==============================================================================
+# 11. GATE 6 — Evaluation
+# ==============================================================================
+#
+# THE PASS CRITERION IS NOT "BEATS THE MARKET". Prior work on this book had the
+# model losing narrowly on 1X2 log loss while producing positive CLV and growth; a
+# gate demanding it win would have discarded a working model. Gate 6 passes when
+# the model is not BROKEN. Beating the market is recorded as a finding.
+#
+# 6a — book integrity, on BOTH baselines, before a single score is computed.
+#
+# Two traps this catches, both found here on 2026-08-26:
+#   * a market missing selections de-vigs to p = 1.0, because the overround is
+#     computed over what is PRESENT. Clamped, one losing p=1 costs ~20.7 log loss
+#     while every other diagnostic reads healthy. 143 of 930 Betfair markets.
+#   * is_winner contradicting the score (T004).
+
+tp_oos_ids = Set(Int.(tp_grid_latents.df.match_id))
+
+tp_mb_b365 = tp_market_book(tp_ds.odds, tp_contract; ids = tp_oos_ids)
+tp_mb_bf, tp_n_partial = tp_drop_incomplete(
+    tp_betfair_book(tp_ds, tp_contract, tp_mb_b365; ids = tp_oos_ids))
+
+@assert sl_gate_table("6a. Book integrity (Bet365 close)", tp_gate_book_integrity(tp_mb_b365, tp_contract))
+@assert sl_gate_table("6a. Book integrity (Betfair close)", tp_gate_book_integrity(tp_mb_bf, tp_contract))
+tp_n_partial   # partial Betfair markets dropped — expect ~143
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 11b. The model book   (~20s: 360 fixtures x 2000 draws of score matrices)
+# ------------------------------------------------------------------------------
+#
+# Streams one fixture at a time; the full posterior grid would be ~414 MB.
+# Returns the market prices AND the per-fixture quantities the market-free metrics
+# need (LPD, randomised quantile residuals).
+
+tp_model_bk, tp_fx = tp_model_book(tp_engine, tp_grid_latents, tp_ds, tp_contract)
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 11c. Alignment — asserted BEFORE any ranking is printed
+# ------------------------------------------------------------------------------
+#
+# Each baseline is scored on its OWN aligned subset. Joining every baseline into
+# one table restricts to the intersection, and adding thin Betfair to thick Bet365
+# once cut the evaluation from 4,658 rows to 96 while reporting PASS.
+
+tp_books = Dict("bet365" => tp_mb_b365, "betfair" => tp_mb_bf)
+tp_j     = tp_join_books(tp_model_bk, tp_books)
+@assert sl_gate_table("6b. Alignment", tp_gate_alignment(tp_j, tp_model_bk))
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 11d. Shape — RQR and LPD, both market-free
+# ------------------------------------------------------------------------------
+#
+# RQR is exactly N(0,1) under correct specification, so both moments mean
+# something: mean ≠ 0 is bias, sd < 1 is over-confidence.
+#
+# Note RQR sd and the sd_model/sd_market column in 11f measure DIFFERENT things.
+# RQR is the spread WITHIN a fixture's goal distribution; sd_model is the spread
+# of probabilities BETWEEN fixtures. This model has the first right (0.9855) and
+# the second at 0.55 of the market's — correct uncertainty about each match, too
+# little conviction about which match is which.
+
+@assert sl_gate_table("6c. Shape (RQR / LPD)", tp_gate_shape(tp_fx))
+@assert sl_gate_table("6d. Draw deficit", tp_gate_draw_deficit(tp_fx))
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 11e. Proper scores, per line
+# ------------------------------------------------------------------------------
+#
+# Per line, never aggregated across a market's selections. Paired differences, not
+# two independent means — the two forecasters score the SAME fixtures, and treating
+# them as independent inflates the interval until it says nothing.
+
+tp_scores_b365 = tp_score_table(tp_j["bet365"])
+tp_scores_bf   = tp_score_table(tp_j["betfair"])
+tp_scores_b365
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 11f. glm_edge — does the model know anything the market does not?
+# ------------------------------------------------------------------------------
+#
+# y ~ logit(p_market) + logit(p_model), per line. A model can be worse than the
+# market in absolute log loss and still carry incremental information; that
+# combination is what a profitable contrarian model looks like, and proper scoring
+# alone cannot see it.
+#
+# Read `slope` together with `se_slope`: with sd_model as low as 0.008 the
+# regression has almost no leverage, so the point estimate is noise. The gate tests
+# significance, not a band.
+
+tp_edges_b365 = tp_edge_table(tp_j["bet365"])
+@assert sl_gate_table("6e. Not broken (vs Bet365 close)", tp_gate_not_broken(tp_scores_b365, tp_edges_b365))
+tp_edges_b365
+
+
+# %%
+# ------------------------------------------------------------------------------
+# 11g. Fold weighting — measured, not asserted
+# ------------------------------------------------------------------------------
+#
+# OOS blocks range 2-24 fixtures, so a fold average lets a small block outvote a
+# large one. Measured on this grid the difference is -0.0007, an order of magnitude
+# below the Δll effects in play — so it does not change a conclusion HERE. Pooling
+# stays the default because that is not guaranteed on a more uneven grid.
+
+tp_fold_weighting_check(tp_j["bet365"], tp_folds)
