@@ -158,8 +158,11 @@ end
 # 2. Kickoff helpers
 # ==============================================================================
 
+# `subset` is exported by BOTH DataFrames and DynamicPPL. The walkthrough has
+# `using` on both, so the bare name resolves to neither and errors at call time.
+# Qualify it here (and at tp_truncate_datastore) -- do not "tidy" this away.
 tp_kickoffs(ds, ids::AbstractVector{Int}) =
-    subset(ds.matches, :match_id => ByRow(id -> id in Set(ids))).match_date
+    DataFrames.subset(ds.matches, :match_id => ByRow(id -> id in Set(ids))).match_date
 
 function tp_last_kickoff(ds, ids::AbstractVector{Int})
     ks = tp_kickoffs(ds, ids)
@@ -279,7 +282,7 @@ so the BBC domains are not silently dropped (see Data.DataStore docstring).
 function tp_truncate_datastore(ds, keep_ids::AbstractVector{Int})
     keep = Set(keep_ids)
     trim(df) = (nrow(df) > 0 && "match_id" in names(df)) ?
-               DataFrame(subset(df, :match_id => ByRow(id -> id in keep))) : df
+               DataFrame(DataFrames.subset(df, :match_id => ByRow(id -> id in keep))) : df
 
     return Data.DataStore(
         ds.segment,
