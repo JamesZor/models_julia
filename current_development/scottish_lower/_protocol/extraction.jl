@@ -172,7 +172,7 @@ function sl_gate_extraction_real(ds, results, adapter::AbstractSLModelAdapter, c
 
     # Support both 1-fold smoke artifacts and multi-fold grid artifacts dynamically
     n_folds = length(results.training_results)
-    splitter = n_folds == 1 ? _sl_smoke_splitter(contract) : _sl_grid_splitter(contract)
+    splitter = n_folds == 1 ? _sl_smoke_splitter(contract) : sl_splitter(contract)
     boundaries = SLData.create_id_boundaries(ds, splitter)
     oos_list = [DataFrame(SLData.get_next_matches(ds, b, splitter)) for b in boundaries[1:min(n_folds, length(boundaries))]]
     oos = isempty(oos_list) ? DataFrame() : vcat(oos_list...)
