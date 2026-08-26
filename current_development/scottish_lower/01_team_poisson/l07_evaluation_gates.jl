@@ -85,13 +85,18 @@ proportional de-vigging is known to bias against favourites; Shin or power
 de-vigging would give a different baseline. That shifts the BASELINE, not the
 model, so it moves every Δ reported. Recorded here so the number is read with it.
 """
-function tp_market_book(odds_df::AbstractDataFrame, contract::SLContract)
+function tp_market_book(odds_df::AbstractDataFrame, contract::SLContract;
+                        ids::Union{Nothing,AbstractSet} = nothing)
     wanted = Set{Tuple{String,Float64}}()
     for m in tp_book_markets(contract)
         push!(wanted, (Eval_Data.market_group(m), Float64(Eval_Data.market_line(m))))
     end
 
     df = filter(r -> (String(r.market_name), Float64(r.market_line)) in wanted, odds_df)
+    # Scope to the fixtures actually being scored. Without this the integrity gate
+    # audits the whole odds table, which is a useful sweep but a different question —
+    # and a defect outside the evaluation window would fail a gate about this one.
+    ids === nothing || (df = filter(r -> Int(r.match_id) in ids, df))
     isempty(df) && return DataFrame()
 
     out = DataFrame(
