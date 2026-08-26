@@ -14,10 +14,14 @@ When a fixture's home team is absent from the fitted fold's `team_map`, extracti
 substitutes **zero for the global home advantage**, not the population value. The home
 side is then priced at `exp(μ + α_h + β_a)` instead of `exp(μ + γ + α_h + β_a)`.
 
-Measured: **λ_h is 0.849x what it should be** — a ~15% under-price on the home side, which
-propagates into 1X2, totals and BTTS.
+Measured: **λ_h is 0.849x what it should be** on synthetic draws, **0.863x** on the real
+gate 3c posterior (γ mean 0.1469) — a ~14% under-price on the home side, which propagates
+into 1X2, totals and BTTS.
 
-The attack/defence fallback in the same expression is *correct* and should be left alone.
+Under this model's `GlobalHomeAdvantage` component, γ is a **single global scalar with no
+team dimension**. The guard that drops it is therefore not a defensible fallback choice; it
+discards a known value. The attack/defence fallback in the same expression *is* correct and
+should be left alone.
 
 ## Root cause
 
@@ -29,24 +33,39 @@ The attack/defence fallback in the same expression is *correct* and should be le
 γ_h = h_idx > 0 ? ha_mat[:, h_idx]   : zeros(n_samples)   # WRONG
 ```
 
-Zero is the right population value for `α` and `β` because `extract_dynamics` applies a
-**zero-sum constraint** (`components/dynamics/team_level/time_decay.jl:59-60`), so zero
-*is* the population mean by construction.
+**Under `GlobalHomeAdvantage`, γ has no team dimension at all.** There is a single
+sampled site, `ha.γ_global`. `extract_home_advantage`
+(`components/home_advantage.jl:49-54`) then does:
 
-Zero is **not** the right value for `γ`. Under `GlobalHomeAdvantage`,
-`extract_home_advantage` returns `repeat(γ_global, 1, n_teams)`
-(`components/home_advantage.jl:49-54`) — every team has the *same* γ, and it is nowhere
-near zero (prior `Normal(0.2, 0.2)`, posterior ~0.16). Home advantage is not a
-team-specific quantity in this configuration at all, so there is nothing to fall back
-*from*; the value is known regardless of whether the team was seen.
+```julia
+val = vec(Array(chain[Symbol("ha.γ_global")]))
+return repeat(val, 1, n_teams)      # n_teams identical copies
+```
 
-The correct fallback is component-dependent, which is why a blanket `zeros` is wrong:
+Verified on the gate 3c chain: `ha_mat` is 2000x23 with **exactly one distinct column**,
+γ posterior mean 0.1469.
 
-| component | population home advantage |
+So `ha_mat[:, h_idx]` returns the same vector for every `h_idx`, and the `h_idx > 0` guard
+is guarding nothing. Its else-branch then destroys a quantity that was never
+team-specific and never missing. This is not a subtle question about what the right
+population value is — for this configuration there is no question: the value is known
+whether or not the team was seen.
+
+Contrast with `α`/`β`, where the guard is doing real work. Those genuinely are per-team,
+and zero is the correct substitute because `extract_dynamics` applies a **zero-sum
+constraint** (`components/dynamics/team_level/time_decay.jl:59-60`), making zero the
+population mean by construction. Leave them alone.
+
+The same wrapper pattern is used for home-advantage components that *are* team-varying, so
+the fix must dispatch rather than hardcode:
+
+| component | γ for an unmapped team |
 |---|---|
-| `GlobalHomeAdvantage` | `γ_global` |
-| `HierarchicalTeamHomeAdvantage` | `γ_base` (the hierarchical mean), not 0 |
+| `GlobalHomeAdvantage` | `γ_global` — not a fallback, just the value |
+| `HierarchicalTeamHomeAdvantage` | `γ_base`, the hierarchical mean (a genuine fallback) |
 | `HierarchicalLeagueHomeAdvantage` | the league mean, or `γ_base` if the league is unknown |
+
+Only the middle two rows involve an actual choice.
 
 ## Evidence
 
@@ -121,7 +140,8 @@ sl_gate_table("4c. Extraction fallbacks", tp_gate4c)
 ## Acceptance criteria
 
 - [ ] Gate 4c passes: `max |Δ| <= 1e-12` between the unmapped-team price and the
-      population price.
+      population price. For `GlobalHomeAdvantage` this means the unmapped price must be
+      **identical** to a mapped one, since γ does not vary by team.
 - [ ] Gate 4a still passes at `max |Δλ| <= 1e-12` — mapped teams must be unaffected.
 - [ ] `α`/`β` fallbacks unchanged (still zero, still correct).
 - [ ] All 28 call sites updated, including the four league-level `γlg` sites.

@@ -346,9 +346,17 @@ extraction not clamping cannot disagree under this prior.
 ```
 
 `goals.jl:158` substitutes `zeros` for γ when a team is missing from `team_map`.
-Zero is the correct population value for α and β — the zero-sum constraint makes
-it so — but **not** for γ: under `GlobalHomeAdvantage` every team shares the same
-γ_global (~0.16), so nothing is unknown about an unseen team's home advantage.
+
+Under `GlobalHomeAdvantage` **γ has no team dimension**: one sampled site
+`ha.γ_global`, which `extract_home_advantage` then `repeat`s into n_teams identical
+columns. Verified on the gate 3c chain — `ha_mat` is 2000x23 with exactly one
+distinct column, γ mean 0.1469. So `ha_mat[:, h_idx]` returns the same vector for
+every index, the `h_idx > 0` guard guards nothing, and its else-branch discards a
+value that was never team-specific and never missing.
+
+Zero *is* the correct substitute for α and β, where the guard does real work: the
+zero-sum constraint makes zero the population mean by construction. On the real
+posterior the home side is priced at 0.863x.
 
 Fires on 2 of 360 fixtures (0.56%) in Scottish 24/25 — `arbroath` and
 `inverness-caledonian-thistle`, sides appearing in a fold's OOS window before its
