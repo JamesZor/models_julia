@@ -11,20 +11,11 @@
 #
 # Two design points that are load-bearing:
 #
-# 1. LEAK-SAFE FIT — and note carefully WHICH set that means.
-#    A `SplitBoundary` splits the FOLD's own matches into a frozen history block and an expanding
-#    target block; BOTH are training data for that fold (`create_features` builds `ordered_ids =
-#    [history; target]`, and the engine's likelihood runs over all of them). The out-of-sample
-#    matches are fetched separately from the next observed effective step by
-#    `Data.get_next_matches` — they are never in `ordered_ids`.
-#    So `fit_on = :training` (the default) fits the ridge on history ∪ target, i.e. EXACTLY the
-#    information set the Turing model itself is trained on. That is leak-free by construction and
-#    it lets the rating keep updating through the target season.
-#    `fit_on = :history` fits on the frozen history block only. That is also leak-free but freezes
-#    the rating at the start of the target season, so by the last fold it is ~9 months stale. It is
-#    kept as a config option so the difference can be measured rather than asserted.
-#    Either way the time decay is anchored at the LAST match in the fit set, so the most recent
-#    training matches carry the most weight.
+# 1. LEAK-SAFE FIT — Gate 2 requires `fit_on = :history` (the default), so the ridge is fit only
+#    on the frozen history block. `fit_on = :training` (history ∪ target) is retained solely as a
+#    non-Gate-2 research override; it must be requested explicitly. Either way the time decay is
+#    anchored at the LAST match in the fit set, so the most recent permitted matches carry the most
+#    weight.
 #
 # 2. NO `minutes_played` WEIGHTING. `player_extractors.jl` weights each rating by
 #    `clamp(minutes_played, 0, 90)/90`, but on tiers 56/57 `minutes_played` is IDENTICALLY 0 before
@@ -50,30 +41,36 @@ function add_feature!(F_data::Dict, config::AbstractPlusMinusFeature, ordered_id
     positions = ("G", "D", "M", "F")
     sides = ("home", "away")
 
-    function emit_zeros!()
+    function emit_zeros!(fit_ids::Vector{Int})
         for side in sides, pos in positions
             F_data[Symbol("flat_$(side)_$(pos)_rating")] = zeros(Float64, n)
         end
+        # A one means that no fitted RAPM coverage was available, hence neutral zeros.
+        F_data[:flat_plus_minus_fallback] = ones(Int, n)
+        F_data[:plus_minus_fit_match_ids] = fit_ids
         F_data[:player_ratings_map] = Dict{Int, Dict{Tuple{String, String}, Float64}}()
         F_data[:plus_minus_ratings] = Dict{Int, Float64}()
         return nothing
     end
 
     prep = pm_prepared(ds)
-    nrow(prep.segments) == 0 && return emit_zeros!()
 
     # --- 1. which matches the ridge may learn from -------------------------------------------
     fit_ids = if config.fit_on === :history
         haskey(F_data, :history_match_ids) || error(
             "AbstractPlusMinusFeature(fit_on = :history) needs F_data[:history_match_ids]. " *
             "The builder stashes it (src/features/builder.jl); a hand-rolled F_data must too.")
-        F_data[:history_match_ids]::Set{Int}
+        # Gate-2 default: source IDs exclusively from the frozen history boundary.
+        Set(Int.(F_data[:history_match_ids]))
     elseif config.fit_on === :training
+        # Non-Gate-2 research override; never the default.
         Set(Int.(ordered_ids))
     else
         error("Unknown fit_on = $(config.fit_on); expected :training or :history")
     end
-    isempty(fit_ids) && return emit_zeros!()
+    fit_id_vector = sort!(collect(fit_ids))
+    nrow(prep.segments) == 0 && return emit_zeros!(fit_id_vector)
+    isempty(fit_ids) && return emit_zeros!(fit_id_vector)
 
     # Anchor the decay at the last match the ridge is allowed to see.
     date_of  = Dict{Int, Date}(Int(r.match_id) => r.match_date for r in eachrow(ds.matches))
@@ -82,14 +79,32 @@ function add_feature!(F_data::Dict, config::AbstractPlusMinusFeature, ordered_id
 
     # --- 2. the ridge fit --------------------------------------------------------------------
     segs = prep.segments[in.(Int.(prep.segments.match_id), Ref(fit_ids)), :]
+    if pm_target(config) === :y_xg
+        # Unlike count targets, y_xg depends on a fitted shot-xG lookup. Refit that lookup from
+        # exactly the permitted matches, then rebuild the copied segments' targets. The prepared
+        # cache deliberately fits its lookup store-wide for research parity, which is not Gate-2
+        # safe for this variant.
+        xg_shots = build_shots(ds)
+        xg_shots = xg_shots[in.(Int.(xg_shots.match_id), Ref(fit_ids)), :]
+        if nrow(xg_shots) > 0
+            xg_model = fit_shot_xg(xg_shots)
+            xg_shots.xg = predict_xg(xg_model, xg_shots)
+        else
+            xg_shots.xg = Float64[]
+        end
+        segs = copy(segs)
+        add_targets!(segs, xg_shots, prep.it1_by_match)
+    end
     fit = fit_ratings(segs;
                       target        = pm_target(config),
                       λ             = config.λ,
                       w_sim         = config.w_sim,
                       half_life     = config.half_life_days,
                       T_rating      = T_rating,
-                      comp_sets     = prep.comp_sets)
-    fit === nothing && return emit_zeros!()
+                      # Competition-history controls must be reconstructed from the same
+                      # permitted matches as the ridge, not the whole-store prepared cache.
+                      comp_sets     = competition_sets(ds; match_ids = fit_ids))
+    fit === nothing && return emit_zeros!(fit_id_vector)
 
     rating_of = Dict{Int, Float64}(Int(r.player_id) => Float64(r.rapm) for r in eachrow(fit))
 
@@ -127,5 +142,8 @@ function add_feature!(F_data::Dict, config::AbstractPlusMinusFeature, ordered_id
     # for diagnostics.
     F_data[:player_ratings_map] = ratings_map
     F_data[:plus_minus_ratings] = rating_of
+    # Matches without any starter carrying a non-neutral fitted rating receive neutral zeros.
+    F_data[:flat_plus_minus_fallback] = Int[haskey(ratings_map, Int(id)) ? 0 : 1 for id in ordered_ids]
+    F_data[:plus_minus_fit_match_ids] = fit_id_vector
     return nothing
 end

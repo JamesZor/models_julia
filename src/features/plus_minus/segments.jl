@@ -301,7 +301,8 @@ leaks and would quietly flatter any predictive validation.
 Including the *current* match's tournament is not leakage: which competition this match belongs to
 is known at kickoff.
 """
-function competition_sets(ds::Data.DataStore)
+function competition_sets(ds::Data.DataStore;
+                          match_ids::Union{Nothing, AbstractSet{Int}} = nothing)
     out = Dict{Int, Dict{Int, Set{Int}}}()
     nrow(ds.lineups) == 0 && return out
 
@@ -309,6 +310,7 @@ function competition_sets(ds::Data.DataStore)
     tid   = Dict{Int, Int}()
     for r in eachrow(ds.matches)
         mid = Int(r.match_id)
+        isnothing(match_ids) || mid in match_ids || continue
         order[mid] = (r.match_date, mid)
         tid[mid]   = Int(r.tournament_id)
     end

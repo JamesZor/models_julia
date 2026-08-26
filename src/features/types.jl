@@ -107,13 +107,10 @@ end
 # src/features/plus_minus/ridge.jl for why the Brier-optimal `w_sim = 0.9` is NOT the default.
 #
 # `fit_on` picks which of the fold's matches the ridge may learn from:
-#   :training (default) — history ∪ target, i.e. EXACTLY the matches the engine's own likelihood
-#                         runs over. Out-of-sample matches come from `Data.get_next_matches`
-#                         (the next observed effective step) and are never in the fold, so this is
-#                         leak-free and the rating keeps
-#                         updating through the target season.
-#   :history            — the frozen history block only. Also leak-free, but the rating is stale by
-#                         up to a season on the later folds. Kept so the difference is measurable.
+#   :history (default)  — the frozen history block only. This is the Gate-2 production contract.
+#   :training           — history ∪ target. This remains available ONLY as a non-Gate-2 research
+#                         override for measuring the benefit of updating through the target season;
+#                         do not use it for leakage-gated evaluation.
 abstract type AbstractPlusMinusFeature <: AbstractFeatureConfig end
 
 # The GREEN-LIT cell: split-half reliability 0.669 vs the SofaScore rating's 0.660, and better
@@ -122,21 +119,21 @@ Base.@kwdef struct ShotsPlusMinusFeature <: AbstractPlusMinusFeature
     w_sim::Float64          = 0.0
     λ::Float64              = 1000.0
     half_life_days::Float64 = 730.0
-    fit_on::Symbol          = :training
+    fit_on::Symbol          = :history
 end
 
 Base.@kwdef struct ShotsOnTargetPlusMinusFeature <: AbstractPlusMinusFeature
     w_sim::Float64          = 0.0
     λ::Float64              = 1000.0
     half_life_days::Float64 = 730.0
-    fit_on::Symbol          = :training
+    fit_on::Symbol          = :history
 end
 
 Base.@kwdef struct GoalsPlusMinusFeature <: AbstractPlusMinusFeature
     w_sim::Float64          = 0.0
     λ::Float64              = 1000.0
     half_life_days::Float64 = 730.0
-    fit_on::Symbol          = :training
+    fit_on::Symbol          = :history
 end
 
 # The LEAST TEAM-LOADED cell (club R² 0.212 vs 0.389 for shots), at the cost of a lower split-half
@@ -145,7 +142,7 @@ Base.@kwdef struct XGPlusMinusFeature <: AbstractPlusMinusFeature
     w_sim::Float64          = 0.0
     λ::Float64              = 200.0
     half_life_days::Float64 = 730.0
-    fit_on::Symbol          = :training
+    fit_on::Symbol          = :history
 end
 
 """

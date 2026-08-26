@@ -85,6 +85,12 @@ end
 
 Structural comparison of two FeatureSets. Returns whether they match and the
 keys that differ.
+
+`player_ratings_map` is intentionally compared only for each FeatureSet's
+`ordered_match_ids`. RAPM projects the fixed historical ratings onto teamsheets for
+future OOS fixtures, so its whole-store map legitimately changes when those fixtures
+are removed by the perturbation test. Entries for fitted fold matches must still be
+identical.
 """
 function sl_featureset_equal(a, b)
     ka = Set(keys(a.data))
@@ -92,7 +98,15 @@ function sl_featureset_equal(a, b)
     differing = Symbol[]
 
     for k in union(ka, kb)
-        if !(k in ka) || !(k in kb) || !isequal(a.data[k], b.data[k])
+        if !(k in ka) || !(k in kb)
+            push!(differing, k)
+        elseif k === :player_ratings_map
+            ids_a = Set(Int.(a.data[:ordered_match_ids]))
+            ids_b = Set(Int.(b.data[:ordered_match_ids]))
+            map_a = Dict(id => ratings for (id, ratings) in a.data[k] if id in ids_a)
+            map_b = Dict(id => ratings for (id, ratings) in b.data[k] if id in ids_b)
+            isequal(map_a, map_b) || push!(differing, k)
+        elseif !isequal(a.data[k], b.data[k])
             push!(differing, k)
         end
     end
