@@ -248,19 +248,25 @@ function tp_gate_score_grid(model, df::AbstractDataFrame, contract::SLContract;
     ))
 
     # The mean of a mean-parameterised NegBin is λ EXACTLY, so on the full support
-    # E[home] would be λ_h. On a truncated grid it must fall short by precisely the
-    # first moment of the discarded tail — computed here from the stock
-    # distribution. Requiring that identity to hold to 1e-12 is much stronger than
-    # requiring E[home] ≈ λ_h: it says the shortfall is truncation and nothing else.
-    dh        = NegativeBinomial(row1.r_h[1], row1.r_h[1] / (row1.r_h[1] + λ_h1))
-    tail_mean = λ_h1 - sum(k * pdf(dh, k) for k in 0:(mg - 1))
-    moment_err = abs((λ_h1 - e_home) - tail_mean)
+    # E[home] would be λ_h. On the truncated grid it must equal the truncated first
+    # moment scaled by the away marginal's RETAINED mass — the grid is truncated in
+    # both dimensions, so summing over away rows recovers less than 1. Asserting
+    # that exact identity is far stronger than asserting E[home] ≈ λ_h: it says the
+    # shortfall is truncation and nothing else.
+    #
+    # (Getting this wrong is instructive: dropping the away factor leaves a residual
+    # of λ_h × away_tail ≈ 2.6e-6, which looks like a real defect and is not.)
+    dh = NegativeBinomial(row1.r_h[1], row1.r_h[1] / (row1.r_h[1] + λ_h1))
+    da = NegativeBinomial(row1.r_a[1], row1.r_a[1] / (row1.r_a[1] + λ_a1))
+    e_home_expected = sum(k * pdf(dh, k) for k in 0:(mg - 1)) *
+                      sum(pdf(da, a)     for a in 0:(mg - 1))
+    moment_err = abs(e_home - e_home_expected)
 
     push!(results, (
-        name   = "moment shortfall is exactly the truncated tail",
+        name   = "moment matches the truncated distribution exactly",
         pass   = moment_err <= 1e-12,
-        detail = @sprintf("shortfall %.3e, tail first moment %.3e, |Δ| = %.3e",
-                          λ_h1 - e_home, tail_mean, moment_err),
+        detail = @sprintf("E[home] %.6f vs truncated expectation %.6f, |Δ| = %.3e (λ_h %.4f, shortfall %.3e is truncation)",
+                          e_home, e_home_expected, moment_err, λ_h1, λ_h1 - e_home),
     ))
 
     return results
