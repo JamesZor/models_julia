@@ -39,7 +39,8 @@ include(joinpath(TP04_ROOT, "04_poisson_wealth_distance/l03_adapter.jl"))
 
 TP04_contract = sl_contract()
 TP04_adapter = TP04Adapter(half_life_days = 180.0)
-TP04_ds = BayesianFootball.Data.load_datastore_cached(BayesianFootball.Data.ScottishLower())
+TP04_ds = BayesianFootball.Data.load_datastore_cached(
+    BayesianFootball.Data.ScottishLower(); max_age_hours = 100_000)  # pinned: must match r01_train_all
 TP04_grid_loaded = sl_load_experiment(TP04_GRID_PATH)
 TP04_folds = sl_build_folds(TP04_ds, TP04_contract)
 

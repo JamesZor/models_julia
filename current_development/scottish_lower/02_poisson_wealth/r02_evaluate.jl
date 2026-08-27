@@ -39,7 +39,8 @@ include(joinpath(TP02_ROOT, "02_poisson_wealth/l03_adapter.jl"))
 
 TP02_contract = sl_contract()
 TP02_adapter = TP02Adapter(half_life_days = 180.0)
-TP02_ds = BayesianFootball.Data.load_datastore_cached(BayesianFootball.Data.ScottishLower())
+TP02_ds = BayesianFootball.Data.load_datastore_cached(
+    BayesianFootball.Data.ScottishLower(); max_age_hours = 100_000)  # pinned: must match r01_train_all
 TP02_grid_loaded = sl_load_experiment(TP02_GRID_PATH)
 TP02_folds = sl_build_folds(TP02_ds, TP02_contract)
 
