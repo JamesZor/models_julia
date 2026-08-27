@@ -143,18 +143,24 @@ end
 # A 3am scrollback should show the state of every arm in one place.  Labels are
 # built with `map` rather than accumulated in a top-level loop: assigning to a
 # global from inside a top-level `for` is a soft-scope error in a script.
+# `sampled` and `accepted` are deliberately separate.  An arm that sampled 20/20
+# folds cleanly but tripped one advisory gate has produced a usable artifact; the
+# run did NOT fail.  Only a run that produced no chains at all is a failed run.
 SL_ALL_SUMMARY = map(SL_ALL_ADAPTERS) do adapter
     name = sl_model_name(adapter)
     if !SL_ALL_PREFLIGHT_OK[name]
-        (; name, ok = false, label = "FAILED PREFLIGHT — never sampled")
+        (; name, sampled = false, accepted = false, label = "FAILED PREFLIGHT — never sampled")
     elseif !SL_ALL_RUN_GRIDS
-        (; name, ok = true, label = "preflight passed — grids not run (SL_RUN_GRIDS unset)")
+        (; name, sampled = false, accepted = false, label = "preflight passed — grids not run (SL_RUN_GRIDS unset)")
     elseif get(SL_ALL_ARM_STATUS, name, "") == "accepted"
-        (; name, ok = true, label = "ACCEPTED — $(get(SL_ALL_ARM_PATH, name, "?"))")
+        (; name, sampled = true, accepted = true, label = "ACCEPTED — $(get(SL_ALL_ARM_PATH, name, "?"))")
     else
         failed = join(get(SL_ALL_ARM_FAILED_GATES, name, String[]), ", ")
         status = get(SL_ALL_ARM_STATUS, name, "unknown")
-        (; name, ok = false, label = "NOT ACCEPTED — " * (isempty(failed) ? status : "$status: $failed"))
+        path = get(SL_ALL_ARM_PATH, name, "")
+        (; name, sampled = !isempty(path), accepted = false,
+           label = "NOT ACCEPTED — " * (isempty(failed) ? status : "$status: $failed") *
+                   (isempty(path) ? "" : "\n" * " "^30 * "chains: " * path))
     end
 end
 
@@ -163,10 +169,18 @@ println("=" ^ 74)
 println("SCOTTISH LOWER POISSON GRID LAUNCHER — ARM SUMMARY")
 println("=" ^ 74)
 for s in SL_ALL_SUMMARY
-    println("  ", rpad(s.name, 26), s.label)
+    println("  ", rpad(s.name, 30), s.label)
 end
 println("=" ^ 74)
 
-# A fully failed run must not read as a clean one.
-count(s -> s.ok, SL_ALL_SUMMARY) == 0 &&
-    error("Scottish Lower grid run: no arm succeeded — see the summary above.")
+println("  ", count(s -> s.accepted, SL_ALL_SUMMARY), " accepted / ",
+        count(s -> s.sampled, SL_ALL_SUMMARY), " sampled / ", length(SL_ALL_SUMMARY), " arms")
+println("=" ^ 74)
+
+# Only a run that produced NO chains at all is a failed run.  Gate verdicts are
+# recorded above; they do not decide whether the launcher itself failed.
+if SL_ALL_RUN_GRIDS && count(s -> s.sampled, SL_ALL_SUMMARY) == 0
+    error("Scottish Lower grid run: no arm produced chains — see the summary above.")
+elseif !SL_ALL_RUN_GRIDS && count(s -> SL_ALL_PREFLIGHT_OK[s.name], SL_ALL_SUMMARY) == 0
+    error("Scottish Lower preflight: no arm passed — see the summary above.")
+end
