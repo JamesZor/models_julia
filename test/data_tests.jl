@@ -4,6 +4,7 @@ using Test
 using BayesianFootball
 using DataFrames
 using Dates
+using InlineStrings
 
 @testset "Data Module" begin
     
@@ -18,6 +19,31 @@ using Dates
         @test BayesianFootball.Data.parse_fractional_to_decimal("SP") == 0.0
         @test BayesianFootball.Data.parse_fractional_to_decimal("1") == 0.0
         @test BayesianFootball.Data.parse_fractional_to_decimal(missing) == 0.0
+    end
+
+    @testset "Lineup market values" begin
+        raw = DataFrame(
+            tournament_id = [56, 56],
+            season_id = [1, 1],
+            match_id = [1001, 1001],
+            team_side = ["home", "away"],
+            player_id = [101, 202],
+            proposed_market_value = Union{Missing, Int64}[250_000, missing],
+            proposed_market_value_currency = Union{Missing, String}["EUR", missing],
+            totalPass = Union{Missing, Float64}[42.0, missing],
+        )
+
+        processed = BayesianFootball.Data.process_data(
+            raw, BayesianFootball.Data.LineUpsData())
+
+        @test eltype(processed.proposed_market_value) == Union{Missing, Int64}
+        @test isequal(processed.proposed_market_value, Union{Missing, Int64}[250_000, missing])
+        @test eltype(processed.proposed_market_value_currency) == Union{Missing, String3}
+        @test processed.proposed_market_value_currency[1] == "EUR"
+        @test ismissing(processed.proposed_market_value_currency[2])
+        @test "total_passes" in names(processed)
+        @test eltype(processed.total_passes) == Union{Missing, Float64}
+        @test isequal(processed.total_passes, Union{Missing, Float64}[42.0, missing])
     end
 
     @testset "Betfair Grading" begin

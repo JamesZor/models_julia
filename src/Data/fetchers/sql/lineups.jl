@@ -8,7 +8,8 @@ function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::LineUpsData)
             CASE WHEN l.is_home_team THEN 'home' ELSE 'away' END AS team_side,
             l.player_id, l.player_name, l.position, l.shirt_number,
             l.substitute AS is_substitute, l.captain AS is_captain,
-            l.minutes_played, l.rating, l.goals, l.expected_goals, l.expected_assists
+            l.minutes_played, l.rating, l.goals, l.expected_goals, l.expected_assists,
+            l.proposed_market_value, l.proposed_market_value_currency
         FROM sofascore.match_player_lineups l
         JOIN sofascore.matches m ON l.match_id = m.match_id
         WHERE m.tournament_id = ANY(\$1)
@@ -90,7 +91,9 @@ function process_data(df::DataFrame, ::LineUpsData)
         :is_substitute => Union{Missing, Bool},
         :is_captain => Union{Missing, Bool},
         :minutes_played => Union{Missing, Int32},
-        :goals => Union{Missing, Int32}
+        :goals => Union{Missing, Int32},
+        :proposed_market_value => Union{Missing, Int64},
+        :proposed_market_value_currency => Union{Missing, InlineStrings.String3}
     )
     
     for col in names(df)
