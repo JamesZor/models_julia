@@ -59,3 +59,25 @@ function compute_score_matrix(model::AbstractDoublePoissonPlayerModels, params; 
     
     return ScoreMatrix(S)
 end
+
+# 3. Latent column schema
+#
+# `get_latent_column_symbols` had methods for `AbstractNegBinModel`
+# (negativebinomial.jl) and the Frank-copula NegBin model (frank_copula.jl) and NOTHING
+# ELSE, while `Evaluation`'s CRPS and RQR kernels call it unconditionally. Every
+# `AbstractPoissonModel` engine therefore raised `MethodError` inside
+# `evaluate_experiments`' `try`, which drops the model's whole row with a `@warn` and no
+# other trace — so CRPS and RQR have never been computable for the entire Poisson engine
+# ladder, and the leaderboards silently omitted those models rather than reporting them.
+#
+# A Poisson container has no dispersion column by construction, so the schema is the two
+# rates and the key.
+#
+# Declared on `AbstractPoissonModel` and NOT on `AbstractDoublePoissonPlayerModels`: three
+# members of that union subtype `AbstractNegBinModel` (they are listed there because they
+# return plain rates), so a union method would be AMBIGUOUS with the NegBin one for those
+# three. `AbstractPoissonModel` is disjoint from it, and the engines already covered by
+# the NegBin method keep resolving to it.
+function get_latent_column_symbols(::AbstractPoissonModel, df::AbstractDataFrame)
+    return [:match_id, :λ_h, :λ_a]
+end

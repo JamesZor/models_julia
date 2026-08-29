@@ -7,6 +7,16 @@ function unroll(prefix::String, val::Real)
     return NamedTuple{(Symbol(prefix),)}((val,))
 end
 
+# `missing` is a leaf too. `MIQStats`' fields are `Union{Missing, Float64}` and become
+# `missing` whenever a selection group has fewer than two winners or two losers — which
+# any store that does not quote Over/Under 1.5 or 3.5 guarantees for those four fields.
+# Without this method `to_dataframe_row(exp, MIQResult(...))` raises `MethodError` inside
+# `evaluate_experiments`' `try`, which drops the model's ENTIRE row with only a `@warn`.
+# Additive: nothing that worked before behaves differently.
+function unroll(prefix::String, ::Missing)
+    return NamedTuple{(Symbol(prefix),)}((missing,))
+end
+
 # Recursive Case: It's a nested component (like DistributionStats). Dive inside!
 function unroll(prefix::String, comp::AbstractMetricComponent)
     keys = propertynames(comp)

@@ -142,6 +142,37 @@ export MatchState, kickoff_state, NHPPIntensityModel,
        solve_ingame_rates, solve_ingame_rates!
 export upgrade_to_fit, fit_from_experiment, experiment_from_fit
 
+# The typed evaluation pipeline (Evaluation). Additive: the legacy metric kernels,
+# `evaluate_experiments` and `to_dataframe_row` are unchanged, and `compat.jl` converts
+# a legacy container's inputs into the typed evaluator's.
+using .Evaluation: OddsView, MatchOutcomes, MarketProbabilities, EvaluationContext,
+                   EvaluationRow, EvaluationWorkspace, EvaluationReport,
+                   build_odds_view, extract_match_outcomes, build_evaluation_context,
+                   evaluation_rows, verify_alignment, AlignmentReport,
+                   pit_values, pit_uniformity, PITReport,
+                   alloc_evaluation_workspace, price_match_markets!,
+                   market_probabilities, prob_mean, prob_draws, outcome_of,
+                   fit_latents,
+                   marginals, crps_parameters,
+                   evaluate_predictions, PredictionScores, PredictionScore,
+                   brier_score, ranked_probability_score, calibration_curve,
+                   CalibrationCurve, expected_calibration_error, max_calibration_error,
+                   evaluate_fits, leaderboard, report_table, markdown_report,
+                   as_typed_latents, as_fit, convergence_verdict, ConvergenceRefusal
+export OddsView, MatchOutcomes, MarketProbabilities, EvaluationContext,
+       EvaluationRow, EvaluationWorkspace, EvaluationReport
+export build_odds_view, extract_match_outcomes, build_evaluation_context,
+       evaluation_rows, verify_alignment, AlignmentReport
+export pit_values, pit_uniformity, PITReport
+export alloc_evaluation_workspace, price_match_markets!, market_probabilities
+export prob_mean, prob_draws, outcome_of, fit_latents
+export marginals, crps_parameters
+export evaluate_predictions, PredictionScores, PredictionScore
+export brier_score, ranked_probability_score, calibration_curve, CalibrationCurve,
+       expected_calibration_error, max_calibration_error
+export evaluate_fits, leaderboard, report_table, markdown_report
+export as_typed_latents, as_fit, convergence_verdict, ConvergenceRefusal
+
 # Maybe export core config types too?
 export NUTSConfig, ADVIConfig, MAPConfig # From Samplers
 export TrainingConfig, Independent, SequentialPriorUpdate # From Training
