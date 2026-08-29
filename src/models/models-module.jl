@@ -23,8 +23,11 @@ using .PreGame: CountModelBuilder, PoissonCountModel, NegBinCountModel,
     AbstractRateGuard, ClampGuard, NoGuard,
     AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
     DixonColesCorrelation, FrankCopulaCorrelation,
-    add!, add, replace!, validate, build_count_model,
-    cb_varinfo_sites, cb_chain_columns, cb_parameter_count
+    add!, add, replace!, validate, build, build_count_model,
+    cb_varinfo_sites, cb_chain_columns, cb_parameter_count,
+    GlobalInterception, SeasonalInterception, HierarchicalMonthlyInterception,
+    GlobalHomeAdvantage, HierarchicalTeamHomeAdvantage, HierarchicalLeagueHomeAdvantage,
+    TimeDecayDynamics, StaticZeroDynamics, PositionalPlayerDynamics
 
 # Expose the sub-modules and typed posterior API to the rest of the package.
 export PreGame, InGame, Latents
@@ -45,8 +48,11 @@ export covariate_name, covariate_role, covariate_prior, covariate_features,
 export AbstractRateGuard, ClampGuard, NoGuard
 export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
        DixonColesCorrelation, FrankCopulaCorrelation
-export add!, add, replace!, validate, build_count_model
+export add!, add, replace!, validate, build, build_count_model
 export cb_varinfo_sites, cb_chain_columns, cb_parameter_count
+export GlobalInterception, SeasonalInterception, HierarchicalMonthlyInterception
+export GlobalHomeAdvantage, HierarchicalTeamHomeAdvantage, HierarchicalLeagueHomeAdvantage
+export TimeDecayDynamics, StaticZeroDynamics, PositionalPlayerDynamics
 # We must re-export the contract function so other modules can use it.
 export required_mapping_keys
 
