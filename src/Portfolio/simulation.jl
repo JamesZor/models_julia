@@ -244,6 +244,8 @@ function portfolio_summary(states::Vector{DailyState}, t::Trajectory, initial_ba
     )
 end
 
+portfolio_summary(r::PortfolioResult) = r.summary
+
 "The daily states as a `DataFrame`, one row per settlement window."
 function states_frame(r::PortfolioResult)
     isempty(r.daily_states) && return DataFrame(
