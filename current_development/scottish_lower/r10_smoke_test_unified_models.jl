@@ -81,10 +81,10 @@ println("  Using Fold 1 boundary (Target season $(fold_1_boundary[1][2].target_s
 
 # Sampler settings: 500 warmup, 500 samples, 4 chains
 sampler_cfg = NUTSConfig(
-    n_samples     = 500,
-    n_warmup      = 500,
-    n_chains      = 4,
-    target_accept = 0.65
+    n_samples   = 500,
+    n_warmup    = 500,
+    n_chains    = 4,
+    accept_rate = 0.65
 )
 
 # Portfolio & Book Specs (09)
@@ -139,7 +139,8 @@ for (name, m) in models
     elapsed = round(time() - t0, digits = 1)
     
     # Convergence Audit
-    verdict, conv = convergence_verdict(fit)
+    conv = fit.diagnostics
+    verdict = conv.passed
     ch = fit.folds[1].chain
     
     # Extract parameter posteriors
@@ -166,7 +167,7 @@ for (name, m) in models
         passed      = verdict,
         max_rhat    = conv.max_rhat,
         min_ess     = conv.min_ess_bulk,
-        divs        = conv.n_divergences,
+        divs        = conv.n_divergent,
         gamma       = mean_gamma,
         w_wealth    = mean_wealth,
         w_dist      = mean_dist,

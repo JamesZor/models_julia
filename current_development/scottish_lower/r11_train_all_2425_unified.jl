@@ -69,10 +69,10 @@ splitter = Data.GroupedCVConfig(
 
 # 800 warmup + 800 samples per chain, 4 chains
 sampler_cfg = QueuedNUTSConfig(
-    n_samples     = 800,
-    n_warmup      = 800,
-    n_chains      = 4,
-    target_accept = 0.65
+    n_samples   = 800,
+    n_warmup    = 800,
+    n_chains    = 4,
+    accept_rate = 0.65
 )
 
 # Portfolio & Book Specs

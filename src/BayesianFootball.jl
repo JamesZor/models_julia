@@ -111,6 +111,11 @@ export GridWorkspace, SmileScoreGrid, alloc_score_grid, alloc_smile_buffers,
        alloc_market_book, compute_score_grid!, compute_score_grid,
        fill_smile_buffers!, price_market!, price_market, market_keys
 
+using .Samplers: AbstractSamplerConfig, AbstractNUTSConfig, NUTSConfig, QueuedNUTSConfig,
+                 MAPConfig, MLEConfig
+export AbstractSamplerConfig, AbstractNUTSConfig, NUTSConfig, QueuedNUTSConfig,
+       MAPConfig, MLEConfig
+
 # The unified inference & fit lifecycle (Training.Inference). Additive: `Experiments`
 # and the legacy `Training.train` path are unchanged, and `fit_from_experiment` /
 # `experiment_from_fit` bridge a result between the two.
