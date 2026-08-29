@@ -14,6 +14,17 @@ include("pregame/pregame-module.jl")
 include("ingame/ingame-module.jl")
 include("latents/latents-module.jl")
 using .Latents
+using .PreGame: CountModelBuilder, PoissonCountModel, NegBinCountModel,
+    ComposableCountModel, AbstractCovariateRole, SupremacyRole, LevelRole,
+    AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
+    WealthCovariate, DistanceCovariate,
+    covariate_name, covariate_role, covariate_prior, covariate_features,
+    covariate_column, covariate_oos, covariate_sides,
+    AbstractRateGuard, ClampGuard, NoGuard,
+    AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
+    DixonColesCorrelation, FrankCopulaCorrelation,
+    add!, add, replace!, validate, build_count_model,
+    cb_varinfo_sites, cb_chain_columns, cb_parameter_count
 
 # Expose the sub-modules and typed posterior API to the rest of the package.
 export PreGame, InGame, Latents
@@ -25,6 +36,17 @@ export n_matches, n_draws, n_strikes, latent_match_ids, latent_matrices,
        recomb_total_home, recomb_total_away, smile_intensity
 export extract_latents, latent_family, latents_from_legacy_dataframe,
        to_legacy_dataframe
+export CountModelBuilder, PoissonCountModel, NegBinCountModel, ComposableCountModel
+export AbstractCovariateRole, SupremacyRole, LevelRole
+export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
+       WealthCovariate, DistanceCovariate
+export covariate_name, covariate_role, covariate_prior, covariate_features,
+       covariate_column, covariate_oos, covariate_sides
+export AbstractRateGuard, ClampGuard, NoGuard
+export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
+       DixonColesCorrelation, FrankCopulaCorrelation
+export add!, add, replace!, validate, build_count_model
+export cb_varinfo_sites, cb_chain_columns, cb_parameter_count
 # We must re-export the contract function so other modules can use it.
 export required_mapping_keys
 

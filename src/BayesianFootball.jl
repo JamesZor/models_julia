@@ -68,7 +68,19 @@ using .Models: AbstractPosteriorLatents, CountLatents, RecombLatents, SmileLaten
                n_matches, n_draws, n_strikes, latent_match_ids, latent_matrices,
                match_index, latent_bytes, latent_allocations, observation_family,
                extract_latents, latent_family, latents_from_legacy_dataframe,
-               to_legacy_dataframe
+               to_legacy_dataframe,
+               CountModelBuilder, PoissonCountModel, NegBinCountModel,
+               ComposableCountModel, AbstractCovariateRole, SupremacyRole, LevelRole,
+               AbstractCovariateConfig, LogSumWealthFeature,
+               SLFPLogSumWealthFeature, WealthCovariate, DistanceCovariate,
+               covariate_name, covariate_role, covariate_prior, covariate_features,
+               covariate_column, covariate_oos, covariate_sides,
+               AbstractRateGuard, ClampGuard, NoGuard,
+               AbstractObservationConfig, PoissonObservation,
+               NegativeBinomialObservation, DixonColesCorrelation,
+               FrankCopulaCorrelation, add!, add, replace!, validate,
+               build_count_model, cb_varinfo_sites, cb_chain_columns,
+               cb_parameter_count
 using .Predictions: GridWorkspace, SmileScoreGrid, alloc_score_grid,
                     alloc_smile_buffers, alloc_market_book, compute_score_grid!,
                     compute_score_grid, fill_smile_buffers!, price_market!,
@@ -78,6 +90,17 @@ export n_matches, n_draws, n_strikes, latent_match_ids, latent_matrices,
        match_index, latent_bytes, latent_allocations, observation_family
 export extract_latents, latent_family, latents_from_legacy_dataframe,
        to_legacy_dataframe
+export CountModelBuilder, PoissonCountModel, NegBinCountModel, ComposableCountModel
+export AbstractCovariateRole, SupremacyRole, LevelRole
+export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
+       WealthCovariate, DistanceCovariate
+export covariate_name, covariate_role, covariate_prior, covariate_features,
+       covariate_column, covariate_oos, covariate_sides
+export AbstractRateGuard, ClampGuard, NoGuard
+export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
+       DixonColesCorrelation, FrankCopulaCorrelation
+export add!, add, replace!, validate, build_count_model
+export cb_varinfo_sites, cb_chain_columns, cb_parameter_count
 export GridWorkspace, SmileScoreGrid, alloc_score_grid, alloc_smile_buffers,
        alloc_market_book, compute_score_grid!, compute_score_grid,
        fill_smile_buffers!, price_market!, price_market, market_keys

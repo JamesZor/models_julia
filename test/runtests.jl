@@ -18,6 +18,9 @@ using DataFrames, Dates, InlineStrings # Add any other packages your tests need 
     println("Running Pre Game Module tests...")
     include("pregame_tests.jl")
 
+    println("Running composable count-model builder tests...")
+    include("builder_tests.jl")
+
     println("Running Portfolio Module tests...")
     include("portfolio_tests.jl")
 

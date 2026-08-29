@@ -64,6 +64,23 @@ include("./engines/player_level/time_decay/outfield_bigchance_double_poisson.jl"
 include("./engines/player_level/time_decay/goals_plus_minus_league.jl")
 include("./engines/player_level/time_decay/goals_funnel_plus_minus_league.jl")
 
+# Composable count-model builder. Loaded after the legacy engines so its methods
+# extend the established build_turing_model/extract_parameters interfaces without
+# changing any existing model definitions.
+include("./builder/builder-module.jl")
+using .Builder: CountModelBuilder, PoissonCountModel, NegBinCountModel,
+    ComposableCountModel, AbstractCovariateRole, SupremacyRole, LevelRole,
+    AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
+    WealthCovariate, DistanceCovariate,
+    covariate_name, covariate_role, covariate_prior, covariate_features,
+    covariate_column, covariate_oos, covariate_sides,
+    AbstractRateGuard, ClampGuard, NoGuard,
+    AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
+    DixonColesCorrelation, FrankCopulaCorrelation,
+    add!, add, replace!, validate, build, build_count_model,
+    cb_covariates, cb_covariate_names, cb_varinfo_sites, cb_chain_columns,
+    cb_parameter_count
+
 export DynamicGoalsModel, DynamicGoalsTimeDecayModel, DynamicMarketGoalsTimeDecayModel, DynamicXGModel, DynamicXGTimeDecayModel, DynamicMarketGoalsModel, DynamicMarketXGModel, DynamicMarketXGTimeDecayModel, DynamicMarketXGPlayerModel, DynamicMarketXGPlayerTimeDecayModel, DynamicMarketXGHierarchicalPlayerTimeDecayModel, DynamicMarketXGOutfieldPlayerTimeDecayModel, DynamicXGOutfieldPlayerTimeDecayModel, DynamicCopulaGoalsTimeDecayModel, DynamicDixonColesXGOutfieldPlayerTimeDecayModel, DynamicDixonColesXGFullPositionPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicSmileDoublePoissonGoalsLeagueTimeDecayModel, DynamicFunnelDoublePoissonGoalsLeagueTimeDecayModel, DynamicDoubleNegBinXGOutfieldPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDixonColesXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDoublePoissonBigChanceOutfieldPlayerTimeDecayModel, DynamicGoalsPlusMinusLeagueTimeDecayModel, DynamicFunnelPlusMinusGoalsLeagueTimeDecayModel
 export DynamicRecombinedGoalsModel, DynamicPxGRecombModel
 export AbstractRecombinationConfig, EmpiricalRecombinationConfig, HierarchicalOfficiatingConfig
@@ -73,6 +90,19 @@ export TimeDecayDynamics, StaticZeroDynamics, PositionalPlayerDynamics, Hierarch
 
 ##
 
+export Builder
+export CountModelBuilder, PoissonCountModel, NegBinCountModel, ComposableCountModel
+export AbstractCovariateRole, SupremacyRole, LevelRole
+export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
+       WealthCovariate, DistanceCovariate
+export covariate_name, covariate_role, covariate_prior, covariate_features,
+       covariate_column, covariate_oos, covariate_sides
+export AbstractRateGuard, ClampGuard, NoGuard
+export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
+       DixonColesCorrelation, FrankCopulaCorrelation
+export add!, add, replace!, validate, build, build_count_model
+export cb_covariates, cb_covariate_names, cb_varinfo_sites, cb_chain_columns,
+       cb_parameter_count
 export build_turing_model, extract_parameters
 
 end # module
