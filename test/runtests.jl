@@ -41,5 +41,8 @@ using DataFrames, Dates, InlineStrings # Add any other packages your tests need 
 
     println("Running unified evaluation framework tests...")
     include("evaluation_tests.jl")
+
+    println("Running unified portfolio framework tests...")
+    include("unified_portfolio_tests.jl")
 end
 

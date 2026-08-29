@@ -53,6 +53,23 @@ using ..Predictions
 using ..Experiments
 using ..BackTesting
 
+# The market interface functions. `Data` re-exports the concrete market types but not
+# `market_group` / `market_line` / `outcomes` / `AbstractMarket`, so those come from the submodule.
+using ..Data.Markets: AbstractMarket, market_group, market_line, outcomes
+
+# Qualified rather than `using`, so every call site says where the name comes from and no exported
+# name from these modules (`n_matches`, `add!`, `replace!`, `report_table`, ...) can shadow or be
+# shadowed by one of ours.
+#
+#   Models      the typed posterior containers the zero-allocation builder reads
+#   Training    `Fit` -- the run container the convergence gate reads a FIELD off
+#   Evaluation  `convergence_verdict` / `fit_latents` / `as_typed_latents`, reused verbatim so
+#               staking and evaluation cannot gate on two different verdicts
+import ..Models
+import ..Training
+import ..Evaluation
+import ..TypesInterfaces
+
 # --- order matters -----------------------------------------------------------
 # types.jl declares the abstract types AND the config structs, whose @kwdef defaults name
 # concrete types from implementations/. That is fine: @kwdef defaults are evaluated when a
@@ -79,6 +96,22 @@ include("matchday.jl")
 include("metrics.jl")
 include("calibrate.jl")
 
+# --- the zero-allocation path ------------------------------------------------
+# Additive to everything above: `book.jl`'s builder, `simulate.jl`'s trajectory and every legacy
+# signature are unchanged. These files add the typed-container fast path (one workspace per FOLD
+# rather than one tensor per FIXTURE), the convergence gate in front of the bankroll, and the
+# richer result / report objects.
+#
+# `alignment.jl` before `pricing.jl` because the builder reads an `OddsIndex`; `pricing.jl` before
+# `simulation.jl` because the simulator's `BuildReport` method needs the builder that produces one;
+# `compat.jl` last of the four because its aliases resolve at definition time.
+
+include("alignment.jl")
+include("pricing.jl")
+include("simulation.jl")
+include("reporting.jl")
+include("compat.jl")
+
 # last: it dispatches on every type and component defined above
 include("display.jl")
 
@@ -94,6 +127,12 @@ export
     Selection, MatchBook, Slate, SlateContext, SlateAllocation, Trajectory,
 
     # config
-    ExecutionConfig, BookSpec, PolicySpec, PortfolioSystem
+    ExecutionConfig, BookSpec, PolicySpec, PortfolioSystem,
+
+    # the zero-allocation path: alignment, workspace, build report
+    OddsIndex, MarketSlot, FallbackSlot, BookWorkspace, BuildReport,
+
+    # simulation results
+    DailyState, PortfolioSummary, BootstrapCI, PortfolioResult, PortfolioReport
 
 end

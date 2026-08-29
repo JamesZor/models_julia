@@ -83,9 +83,10 @@ function build_book(spec::BookSpec, latents_row, expr, odds_df::DataFrame,
     (require_result && fx.score === nothing) && return nothing
     any(==(m_id), odds_df.match_id) || return nothing
 
+    model = _portfolio_model_of(expr)
     score_matrix = try
-        Predictions.compute_score_matrix(expr.config.model,
-                                         Predictions.extract_params(expr.config.model, latents_row))
+        Predictions.compute_score_matrix(model,
+                                         Predictions.extract_params(model, latents_row))
     catch
         return nothing
     end

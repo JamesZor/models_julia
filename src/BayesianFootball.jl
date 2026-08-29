@@ -173,6 +173,57 @@ export brier_score, ranked_probability_score, calibration_curve, CalibrationCurv
 export evaluate_fits, leaderboard, report_table, markdown_report
 export as_typed_latents, as_fit, convergence_verdict, ConvergenceRefusal
 
+# The zero-allocation portfolio & staking path (Portfolio). Additive: `build_book`,
+# `build_books`, `extract_selections`, `simulate`, `stake_slate`, `group`, `path_metrics`,
+# `bootstrap_roi`, `report` and `stake_sheet`'s legacy signatures are unchanged, and
+# `book_cache_key` still returns the same `UInt` so an existing book cache hits rather than
+# silently rebuilding. What is new is one workspace per FOLD instead of one tensor per FIXTURE,
+# the convergence gate in front of the bankroll, and the richer result / report objects.
+#
+# `MarketSelection`, `MarketBook`, `MatchedMarketOdds`, `PortfolioPolicy` and `LogUtility` are
+# `const` ALIASES of `Selection`, `MatchBook`, `OddsIndex`, `PolicySpec` and `KellyLogUtility` --
+# one type per name, never a second struct with the same shape. See `src/Portfolio/compat.jl`.
+using .Portfolio: OddsIndex, MarketSlot, FallbackSlot, BookWorkspace, BuildReport,
+                  DailyState, PortfolioSummary, BootstrapCI, PortfolioResult,
+                  PortfolioReport,
+                  Selection, MatchBook, Slate, SlateContext, SlateAllocation, Trajectory,
+                  ExecutionConfig, BookSpec, PolicySpec, PortfolioSystem,
+                  MarketSelection, MarketBook, MatchedMarketOdds, PortfolioPolicy,
+                  LogUtility, KellyLogUtility, UnsettledBooks,
+                  build_odds_index, group_slates_by_day, fixture_table,
+                  price_fixture!, fallback_probs, grid_shrink_factor,
+                  workspace_bytes, fallback_market_names, n_skipped,
+                  build_book, build_books, build_books_reported, build_slates,
+                  extract_selections, selection_family, is_settled, unsettled_books,
+                  simulate, simulate_portfolio, portfolio_summary, bootstrap_portfolio,
+                  run_portfolio_simulation, states_frame, stake_sheet, stake_slate,
+                  slate_summary, path_metrics, bootstrap_roi, attribution,
+                  portfolio_report, display_portfolio, daily_returns_table,
+                  portfolio_markdown, as_namedtuple, log_growth, book_cache_key,
+                  book_match_id, book_date, book_selections, book_grid, book_payoff,
+                  book_settle, book_alloc, book_shrink, book_kkt, book_converged,
+                  sel_name, sel_odds_close, sel_odds_settle, sel_prob_model,
+                  sel_prob_market, sel_edge
+export OddsIndex, MarketSlot, FallbackSlot, BookWorkspace, BuildReport
+export DailyState, PortfolioSummary, BootstrapCI, PortfolioResult, PortfolioReport
+export Selection, MatchBook, Slate, SlateContext, SlateAllocation, Trajectory
+export ExecutionConfig, BookSpec, PolicySpec, PortfolioSystem
+export MarketSelection, MarketBook, MatchedMarketOdds, PortfolioPolicy, LogUtility,
+       KellyLogUtility, UnsettledBooks
+export build_odds_index, group_slates_by_day, fixture_table
+export price_fixture!, fallback_probs, grid_shrink_factor, workspace_bytes,
+       fallback_market_names, n_skipped
+export build_book, build_books, build_books_reported, build_slates
+export extract_selections, selection_family, is_settled, unsettled_books
+export simulate, simulate_portfolio, portfolio_summary, bootstrap_portfolio,
+       run_portfolio_simulation, states_frame, stake_sheet, stake_slate, slate_summary,
+       path_metrics, bootstrap_roi, attribution
+export portfolio_report, display_portfolio, daily_returns_table, portfolio_markdown,
+       as_namedtuple, log_growth, book_cache_key
+export book_match_id, book_date, book_selections, book_grid, book_payoff, book_settle,
+       book_alloc, book_shrink, book_kkt, book_converged
+export sel_name, sel_odds_close, sel_odds_settle, sel_prob_model, sel_prob_market, sel_edge
+
 # Maybe export core config types too?
 export NUTSConfig, ADVIConfig, MAPConfig # From Samplers
 export TrainingConfig, Independent, SequentialPriorUpdate # From Training
