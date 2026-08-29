@@ -105,6 +105,43 @@ export GridWorkspace, SmileScoreGrid, alloc_score_grid, alloc_smile_buffers,
        alloc_market_book, compute_score_grid!, compute_score_grid,
        fill_smile_buffers!, price_market!, price_market, market_keys
 
+# The unified inference & fit lifecycle (Training.Inference). Additive: `Experiments`
+# and the legacy `Training.train` path are unchanged, and `fit_from_experiment` /
+# `experiment_from_fit` bridge a result between the two.
+using .Training: Inference,
+                 Fit, FoldFit, FitConfig, FitMetadata,
+                 fit_model, sample_fold, run_folds, ReplaySampler,
+                 fold_chains, fold_metas, total_draws, fit_name,
+                 ConvergenceThresholds, ConvergenceSummary, FoldConvergence,
+                 audit_convergence, audit_fold, summarise_convergence,
+                 convergence_table,
+                 AbstractExecution, AutoExecution, SequentialExecution,
+                 ThreadedExecution, QueuedExecution,
+                 save_fit, load_fit, load_fits, list_fits, read_fit_meta,
+                 save_latents, load_latents,
+                 merge_latents, extract_run_latents,
+                 MatchState, kickoff_state, NHPPIntensityModel,
+                 IngameRatesWorkspace, LiveMatchRates,
+                 build_ingame_workspace, alloc_live_rates,
+                 solve_ingame_rates, solve_ingame_rates!,
+                 upgrade_to_fit, fit_from_experiment, experiment_from_fit
+export Inference
+export Fit, FoldFit, FitConfig, FitMetadata
+export fit_model, sample_fold, run_folds, ReplaySampler
+export fold_chains, fold_metas, total_draws, fit_name
+export ConvergenceThresholds, ConvergenceSummary, FoldConvergence,
+       audit_convergence, audit_fold, summarise_convergence, convergence_table
+export AbstractExecution, AutoExecution, SequentialExecution, ThreadedExecution,
+       QueuedExecution
+export save_fit, load_fit, load_fits, list_fits, read_fit_meta,
+       save_latents, load_latents
+export merge_latents, extract_run_latents
+export MatchState, kickoff_state, NHPPIntensityModel,
+       IngameRatesWorkspace, LiveMatchRates,
+       build_ingame_workspace, alloc_live_rates,
+       solve_ingame_rates, solve_ingame_rates!
+export upgrade_to_fit, fit_from_experiment, experiment_from_fit
+
 # Maybe export core config types too?
 export NUTSConfig, ADVIConfig, MAPConfig # From Samplers
 export TrainingConfig, Independent, SequentialPriorUpdate # From Training

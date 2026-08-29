@@ -180,7 +180,7 @@ cb_loglik(::PoissonObservation, p::CBParams, data, η_h, η_a) =
 
 "Negative-binomial log-likelihood with a single global dispersion, time-decay weighted."
 function cb_loglik(::NegativeBinomialObservation, p::CBParams, data, η_h, η_a)
-    r = exp(clamp(p.log_r, -10.0, 10.0))
+    r = exp(_cb_bound_dispersion_log(p.log_r))
     λ_h = exp.(η_h)
     λ_a = exp.(η_a)
     total_h = log.(r .+ λ_h)

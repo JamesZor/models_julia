@@ -64,6 +64,16 @@ function builder_site_vector(value)
     return Float64[Float64(value)]
 end
 
+function builder_site_range(varinfo, target::AbstractString)
+    offset = 1
+    for site in keys(varinfo)
+        width = length(builder_site_vector(varinfo[site]))
+        string(site) == target && return offset:(offset + width - 1)
+        offset += width
+    end
+    error("site $target not found")
+end
+
 function builder_synthetic_chain(model; n_teams::Int=2, n_seasons::Int=1,
                                  n_draws::Int=4)
     columns = cb_chain_columns(model, n_teams; n_seasons)
@@ -134,6 +144,10 @@ end
         BuilderPG.HierarchicalLeagueHomeAdvantage())
     @test_throws ErrorException build_count_model(
         :discrete_covariate, base..., WealthCovariate(prior=Bernoulli()))
+    @test_throws ErrorException build_count_model(
+        :negbin_without_floor_guard, base..., BuilderPG.GlobalDispersion(), NoGuard())
+    @test_throws Exception WealthCovariate(feature=BuilderFeatures.DistanceFeature())
+    @test_throws Exception DistanceCovariate(feature=BuilderFeatures.SquadWealthFeature())
 
     seasonal = build_count_model(
         :seasonal_schema, BuilderPG.SeasonalInterception(), base[2], base[3])
@@ -210,7 +224,7 @@ end
     base = builder_base_components()
     for dispersion in (BuilderPG.GlobalDispersion(), BuilderPG.HomeAwayDispersion())
         model = build_count_model(
-            :negbin_ad, base..., dispersion, NoGuard())
+            :negbin_ad, base..., dispersion)
         artifacts = builder_density_artifacts(model, builder_feature_set(10); seed=73)
         raw_tape = ReverseDiff.GradientTape(artifacts.f, artifacts.θ)
         tape = ReverseDiff.compile(raw_tape)
@@ -234,6 +248,41 @@ end
         perturbed_relerr = norm(perturbed_compiled - perturbed_forward) /
                            max(norm(perturbed_compiled), norm(perturbed_forward), 1.0)
         @test perturbed_relerr <= 1e-6
+
+        # A compiled tape recorded in the typical region must remain valid after
+        # crossing both former hard-clamp boundaries.
+        log_r_range = builder_site_range(artifacts.varinfo, "disp.log_r")
+        for log_r in (-12.0, -10.5, 10.5, 12.0)
+            crossed = copy(artifacts.θ)
+            crossed[log_r_range] .= log_r
+            crossed_compiled = similar(crossed)
+            ReverseDiff.gradient!(crossed_compiled, tape, crossed)
+            crossed_fresh = ReverseDiff.gradient(artifacts.f, crossed)
+            crossed_forward = ForwardDiff.gradient(artifacts.f, crossed)
+            fresh_relerr = norm(crossed_compiled - crossed_fresh) /
+                           max(norm(crossed_compiled), norm(crossed_fresh), 1.0)
+            forward_relerr = norm(crossed_compiled - crossed_forward) /
+                             max(norm(crossed_compiled), norm(crossed_forward), 1.0)
+            @test fresh_relerr <= 1e-8
+            @test forward_relerr <= 1e-6
+        end
+
+        # Extraction applies the identical smooth bound used by the likelihood.
+        columns = cb_chain_columns(model, 2)
+        chain_values = zeros(Float64, 2, length(columns), 1)
+        chain_values[:, findfirst(==("disp.log_r"), columns), 1] .= 12.0
+        home_log_r = 12.0
+        if dispersion isa BuilderPG.HomeAwayDispersion
+            chain_values[:, findfirst(==("disp.δ_r_home"), columns), 1] .= 1.0
+            home_log_r += 1.0
+        end
+        chain = Chains(chain_values, Symbol.(columns))
+        extracted_dispersion = BuilderAPI._cb_extract_observation(
+            model.observation, chain, 2)
+        expected_away = exp(BuilderAPI._cb_bound_dispersion_log(12.0))
+        expected_home = exp(BuilderAPI._cb_bound_dispersion_log(home_log_r))
+        @test extracted_dispersion.a == fill(expected_away, 2)
+        @test extracted_dispersion.h == fill(expected_home, 2)
     end
 end
 
@@ -243,7 +292,7 @@ end
     feature_set = builder_feature_set(8)
 
     composable = build_count_model(
-        :legacy_parity, inter, dynamics, home_advantage, dispersion, NoGuard())
+        :legacy_parity, inter, dynamics, home_advantage, dispersion, ClampGuard())
     legacy = BuilderPG.DynamicGoalsTimeDecayModel(
         interception_config=inter,
         dynamics_config=dynamics,
@@ -314,7 +363,7 @@ end
     distance = DistanceCovariate(
         feature=BuilderFeatures.DistanceFeature(metric=:road_miles))
     distance_df = DataFrame(match_id=[1, 2], road_miles=[25.0, 40.0],
-                            distance_z=[-9.0, -9.0])
+                            distance=[-100.0, -100.0], distance_z=[-9.0, -9.0])
     @test covariate_oos(distance, BayesianFootball.FeatureSet(), distance_df) ==
           [25.0, 40.0]
 

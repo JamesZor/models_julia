@@ -35,5 +35,8 @@ using DataFrames, Dates, InlineStrings # Add any other packages your tests need 
 
     println("Running typed posterior latent tests...")
     include("latents_tests.jl")
+
+    println("Running unified inference and fit lifecycle tests...")
+    include("inference_tests.jl")
 end
 

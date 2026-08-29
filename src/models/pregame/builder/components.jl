@@ -287,7 +287,7 @@ Uses `LogSumWealthFeature`, preserving the verified prototype's feature equation
 kickoff filtration, and neutral fallback. The prior default is arm 02's.
 """
 Base.@kwdef struct WealthCovariate{
-    F<:CB_Features.AbstractFeatureConfig,
+    F<:Union{LogSumWealthFeature,CB_Features.SquadWealthFeature},
     D<:UnivariateDistribution,
     R<:AbstractCovariateRole,
 } <: AbstractCovariateConfig
@@ -329,7 +329,7 @@ Static away-travel burden between the two grounds. Uses the production
 a deterministic 45-mile fallback for unmapped grounds. The prior default is arm 03's.
 """
 Base.@kwdef struct DistanceCovariate{
-    F<:CB_Features.AbstractFeatureConfig,
+    F<:CB_Features.DistanceFeature,
     D<:UnivariateDistribution,
     R<:AbstractCovariateRole,
 } <: AbstractCovariateConfig
@@ -357,7 +357,6 @@ const _CB_DIST_COLUMN = Dict(
 )
 
 function covariate_oos(c::DistanceCovariate, fs, df)
-    hasproperty(df, :distance) && return Float64.(df.distance)
     hasproperty(df, c.feature.metric) &&
         return Float64.(getproperty(df, c.feature.metric))
     # Legacy Scottish arm materialised its default log-distance under this name.
@@ -449,9 +448,10 @@ struct PoissonObservation <: AbstractObservationConfig end
     NegativeBinomialObservation
 
 `y ~ RobustNegativeBinomial(r, exp(η))`. Wraps any `src` dispersion config
-(`GlobalDispersion`, `HomeAwayDispersion`) verbatim, so the `disp.*` chain sites
-are identical to the legacy NegBin engines. Advanced volatility remains an
-explicit validation refusal until its per-match reconstruction is AD-safe.
+(`GlobalDispersion`, `HomeAwayDispersion`) with their existing priors and
+`disp.*` chain schema. The builder applies its own smooth AD-safe log-dispersion
+bound; advanced volatility remains an explicit validation refusal until its
+per-match reconstruction is AD-safe.
 """
 Base.@kwdef struct NegativeBinomialObservation{D<:CB_PG.AbstractDispersionConfig} <: AbstractObservationConfig
     dispersion::D = CB_PG.GlobalDispersion()

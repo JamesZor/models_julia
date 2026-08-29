@@ -136,16 +136,38 @@ The log-factorial is data, precomputed in `build_turing_model`.
     return sum(ll_h .* wts) + sum(ll_a .* wts)
 end
 
+# Smooth, branch-free saturation of log-dispersion to (-10, 10). The high even
+# power is effectively identity over the prior's typical region (the difference
+# at log_r=3.1 is below machine-relevant density tolerance) while remaining
+# compiled-tape safe when a trajectory crosses ±10.
+_cb_bound_dispersion_log(x) = x / (1 + (x / 10)^24)^(1 / 24)
+
+@model function _build_count_dispersion(config::CB_PG.GlobalDispersion,
+                                        n_teams::Int, n_months::Int)
+    log_r ~ config.log_r
+    r = exp(_cb_bound_dispersion_log(log_r))
+    return (; h = r, a = r)
+end
+
+@model function _build_count_dispersion(config::CB_PG.HomeAwayDispersion,
+                                        n_teams::Int, n_months::Int)
+    log_r ~ config.log_r
+    δ_r_home ~ config.δ_r_home
+    r_a = exp(_cb_bound_dispersion_log(log_r))
+    r_h = exp(_cb_bound_dispersion_log(log_r + δ_r_home))
+    return (; h = r_h, a = r_a)
+end
+
 """
-Negative binomial, sharing the `src` dispersion components verbatim so the chain
-carries the same `disp.*` sites the `src` NegBin engines do.
+Negative binomial, retaining the legacy `disp.*` sites while using a branch-free,
+compiled-tape-safe dispersion bound.
 """
 @model function _observe(o::NegativeBinomialObservation,
                          η_h, η_a,
                          yh::Vector{Int}, ya::Vector{Int}, wts::Vector{Float64},
                          lfh::Vector{Float64}, lfa::Vector{Float64},
                          n_teams::Int, n_months::Int)
-    disp ~ to_submodel(CB_PG.build_dispersion(o.dispersion, n_teams, n_months))
+    disp ~ to_submodel(_build_count_dispersion(o.dispersion, n_teams, n_months))
     λ_h = exp.(η_h)
     λ_a = exp.(η_a)
 
@@ -378,8 +400,22 @@ function _cb_checked_oos(c::AbstractCovariateConfig, feature_set, df)
 end
 
 _cb_extract_observation(::PoissonObservation, chain, n_teams) = nothing
-_cb_extract_observation(o::NegativeBinomialObservation, chain, n_teams) =
-    CB_PG.extract_dispersion(chain, o.dispersion, n_teams, 12)
+
+function _cb_extract_observation(o::NegativeBinomialObservation{<:CB_PG.GlobalDispersion},
+                                 chain, n_teams)
+    log_r = vec(Array(chain[Symbol("disp.log_r")]))
+    r = exp.(_cb_bound_dispersion_log.(log_r))
+    return (; h = r, a = r)
+end
+
+function _cb_extract_observation(o::NegativeBinomialObservation{<:CB_PG.HomeAwayDispersion},
+                                 chain, n_teams)
+    log_r = vec(Array(chain[Symbol("disp.log_r")]))
+    home_offset = vec(Array(chain[Symbol("disp.δ_r_home")]))
+    r_a = exp.(_cb_bound_dispersion_log.(log_r))
+    r_h = exp.(_cb_bound_dispersion_log.(log_r .+ home_offset))
+    return (; h = r_h, a = r_a)
+end
 
 # The prediction NamedTuple must carry exactly what the score grid for this family
 # reads. `true_xg_h/a` mirror λ so the downstream evaluation path is unchanged.

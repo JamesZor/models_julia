@@ -366,6 +366,16 @@ function validate(b::CountModelBuilder)
         b.guard === nothing ? "ClampGuard() by default — $(guard_describe(guard))" :
                               guard_describe(guard)))
 
+    # RobustNegativeBinomial floors μ at 1e-6. Rather than put a value branch in
+    # the compiled tape, require the rate guard to make that floor unreachable.
+    negbin_guard_valid = !(obs isa NegativeBinomialObservation) ||
+        (guard isa ClampGuard && guard.lo >= log(1e-6))
+    push!(out, cb_result("NegBin guard stays above the legacy mean floor",
+        negbin_guard_valid,
+        !(obs isa NegativeBinomialObservation) ? "not a NegBin observation" :
+        negbin_guard_valid ? "minimum η = $(guard.lo), above log(1e-6)" :
+        "NegBin requires ClampGuard(lo >= $(log(1e-6))); NoGuard can cross the legacy μ floor"))
+
     # --- R6: covariate names are unique ---------------------------------------
     # Two covariates named `:wealth` would both sample the site `wealth.w`. Turing
     # does not stop you; the second silently overwrites the first's contribution in
