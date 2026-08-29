@@ -165,7 +165,8 @@ for (name, m) in models
     rps_model = eval_rep.model.rps
     
     # Portfolio Simulation (09)
-    port_res, books, _ = run_portfolio_simulation(book_spec, policy_spec, fit, ds.odds, ds; bootstrap = false)
+    port_res, books, _ = run_portfolio_simulation(book_spec, policy_spec, fit, ds.odds, ds;
+                                                  bootstrap = false, require_converged = false)
     p_sum = portfolio_summary(port_res)
     
     push!(results_summary, (
