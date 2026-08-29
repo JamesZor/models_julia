@@ -80,6 +80,18 @@ struct MonthFeature <: AbstractFeatureConfig end
 struct MidweekFeature <: AbstractFeatureConfig end
 struct PlasticPitchFeature <: AbstractFeatureConfig end
 
+"""
+    DistanceFeature <: AbstractFeatureConfig
+
+Extracts pairwise geographic travel distance (Haversine miles, road miles,
+drive minutes, and standardized log-distance) between competing team grounds.
+"""
+Base.@kwdef struct DistanceFeature <: AbstractFeatureConfig
+    metric::Symbol = :log_dist_z
+    include_midweek::Bool = true
+    geocodes_csv::String = normpath(joinpath(@__DIR__, "data", "scottish_stadium_geocodes.csv"))
+end
+
 # --- Player Tracking Features ---
 """
     AbstractRatingTracker
@@ -191,17 +203,14 @@ end
 """
     SquadWealthFeature <: AbstractFeatureConfig
 
-Extracts starting-XI log market-valuation differentials from match-scoped,
-point-in-time values. A valuation timestamp must strictly precede kickoff by
-default; matches without safe valuation coverage receive neutral ΔW = 0.
-
-`log_scale` is fixed configuration rather than a moment fitted over fixture rows,
-so adding future matches cannot alter historical features.
+Extracts the scaled difference in mean log starting-XI market value. When a
+lineup is unavailable, the team's last observed value decays towards the
+history-split population baseline.
 """
 Base.@kwdef struct SquadWealthFeature <: AbstractFeatureConfig
-    fallback_default::Float64 = 100_000.0
-    log_scale::Float64 = 1.0
-    require_valuation_timestamp::Bool = true
+    log_scale::Union{Float64, Nothing} = 0.50
+    decay_half_life_days::Float64 = 30.0
+    min_valid_players_per_side::Int = 1
 end
 
 """

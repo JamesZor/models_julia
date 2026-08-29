@@ -1,18 +1,56 @@
-# src/data/fetchers/sql/lineups.jl
-
 function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::LineUpsData)
-    # 1. Base Details
+    # 1. Base Details (SofaScore primary with BBC fallback for missing match sheets)
     base_query = """
-        SELECT 
-            m.tournament_id, m.season_id, l.match_id,
-            CASE WHEN l.is_home_team THEN 'home' ELSE 'away' END AS team_side,
-            l.player_id, l.player_name, l.position, l.shirt_number,
-            l.substitute AS is_substitute, l.captain AS is_captain,
-            l.minutes_played, l.rating, l.goals, l.expected_goals, l.expected_assists,
-            l.proposed_market_value, l.proposed_market_value_currency
-        FROM sofascore.match_player_lineups l
-        JOIN sofascore.matches m ON l.match_id = m.match_id
-        WHERE m.tournament_id = ANY(\$1)
+        WITH sofa_lineups AS (
+            SELECT
+                m.tournament_id, m.season_id, l.match_id,
+                CASE WHEN l.is_home_team THEN 'home' ELSE 'away' END AS team_side,
+                l.player_id, l.player_name, l.position, l.shirt_number,
+                l.substitute AS is_substitute, l.captain AS is_captain,
+                l.minutes_played, l.rating, l.goals, l.expected_goals, l.expected_assists,
+                l.proposed_market_value, l.proposed_market_value_currency
+            FROM sofascore.match_player_lineups l
+            JOIN sofascore.matches m ON l.match_id = m.match_id
+            WHERE m.tournament_id = ANY(\$1)
+        ),
+        sofa_matches_with_lineups AS (
+            SELECT DISTINCT match_id FROM sofa_lineups
+        ),
+        player_market_values AS (
+            SELECT DISTINCT ON (player_id)
+                player_id,
+                proposed_market_value,
+                proposed_market_value_currency
+            FROM sofascore.match_player_lineups
+            WHERE proposed_market_value IS NOT NULL AND proposed_market_value > 0
+            ORDER BY player_id, match_id DESC
+        ),
+        bbc_fallback_lineups AS (
+            SELECT
+                m.tournament_id, m.season_id, bl.match_id,
+                CASE WHEN bl.is_home_team THEN 'home' ELSE 'away' END AS team_side,
+                COALESCE(bl.sofascore_player_id, 0)::integer AS player_id,
+                bl.bbc_name AS player_name,
+                bl.position,
+                bl.shirt_number,
+                bl.is_substitute,
+                bl.is_captain,
+                NULL::integer AS minutes_played,
+                NULL::double precision AS rating,
+                NULL::integer AS goals,
+                NULL::double precision AS expected_goals,
+                NULL::double precision AS expected_assists,
+                pv.proposed_market_value,
+                COALESCE(pv.proposed_market_value_currency, 'EUR')::character varying AS proposed_market_value_currency
+            FROM bbc.match_lineup bl
+            JOIN sofascore.matches m ON bl.match_id = m.match_id
+            LEFT JOIN player_market_values pv ON bl.sofascore_player_id = pv.player_id
+            WHERE m.tournament_id = ANY(\$1)
+            AND bl.match_id NOT IN (SELECT match_id FROM sofa_matches_with_lineups)
+        )
+        SELECT * FROM sofa_lineups
+        UNION ALL
+        SELECT * FROM bbc_fallback_lineups
     """
     local base_df
     try

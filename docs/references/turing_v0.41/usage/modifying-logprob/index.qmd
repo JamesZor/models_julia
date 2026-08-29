@@ -1,0 +1,52 @@
+---
+title: Modifying the Log Probability
+engine: julia
+aliases:
+ - ../../tutorials/usage-modifying-logprob/index.html
+---
+
+```{julia}
+#| echo: false
+#| output: false
+using Pkg;
+Pkg.instantiate();
+```
+
+Turing accumulates log probabilities internally in an internal data structure that is accessible through the internal variable `__varinfo__` within the model definition. To avoid users having to deal with internal data structures, Turing provides the `@addlogprob!` macro which increases the accumulated log probability. For instance, this allows you to [include arbitrary terms in the likelihood](https://github.com/TuringLang/Turing.jl/issues/1332)
+
+```{julia}
+using Turing
+
+myloglikelihood(x, μ) = loglikelihood(Normal(μ, 1), x)
+
+@model function demo(x)
+    μ ~ Normal()
+    @addlogprob! myloglikelihood(x, μ)
+end
+```
+
+and to force a sampler to [reject a sample](https://github.com/TuringLang/Turing.jl/issues/1328):
+
+```{julia}
+using Turing
+using LinearAlgebra
+
+@model function demo(x)
+    m ~ MvNormal(zero(x), I)
+    if dot(m, x) < 0
+        @addlogprob! -Inf
+        # Exit the model evaluation early
+        return nothing
+    end
+
+    x ~ MvNormal(m, I)
+    return nothing
+end
+```
+
+Note that `@addlogprob! (p::Float64)` adds `p` to the log likelihood. If instead you want to add to the log prior, you can use
+
+```{julia}
+#| eval: false
+@addlogprob! (; logprior=value_goes_here)
+```

@@ -1,0 +1,149 @@
+---
+title: Using External Samplers
+engine: julia
+aliases:
+ - ../../tutorials/docs-16-using-turing-external-samplers/index.html
+---
+
+```{julia}
+#| echo: false
+#| output: false
+using Pkg;
+Pkg.instantiate();
+```
+
+## Using External Samplers on Turing Models
+
+`Turing` provides several wrapped samplers from external sampling libraries, e.g., HMC samplers from `AdvancedHMC`.
+These wrappers allow new users to seamlessly sample statistical models without leaving `Turing`
+However, these wrappers might not always be complete, missing some functionality from the wrapped sampling library.
+Moreover, users might want to use samplers currently not wrapped within `Turing`.
+
+For these reasons, `Turing` also makes running external samplers on Turing models easy without any necessary modifications or wrapping!
+Throughout, we will use a 10-dimensional Neal's funnel as a running example::
+
+```{julia}
+# Import libraries.
+using Turing, Random, LinearAlgebra
+
+d = 10
+@model function funnel()
+    θ ~ Truncated(Normal(0, 3), -3, 3)
+    z ~ MvNormal(zeros(d - 1), exp(θ) * I)
+    return x ~ MvNormal(z, I)
+end
+```
+
+Now we sample the model to generate some observations, which we can then condition on.
+
+```{julia}
+vnt = rand(funnel() | (θ=0,))
+model = funnel() | (; x=vnt[@varname(x)]);
+```
+
+Users can use any sampler algorithm to sample this model if it follows the `AbstractMCMC` API.
+Before discussing how this is done in practice, giving a high-level description of the process is interesting.
+Imagine that we created an instance of an external sampler that we will call `spl` such that `typeof(spl)<:AbstractMCMC.AbstractSampler`.
+In order to avoid type ambiguity within Turing, at the moment, it is necessary to declare `spl` as an external sampler to Turing `espl = externalsampler(spl)`, where `externalsampler(s::AbstractMCMC.AbstractSampler)` is a Turing function that types our external sampler adequately.
+
+An excellent point to start to show how this is done in practice is by looking at the sampling library `AdvancedMH` ([`AdvancedMH`'s GitHub](https://github.com/TuringLang/AdvancedMH.jl)) for Metropolis-Hastings (MH) methods.
+Let's say we want to use a random walk Metropolis-Hastings sampler without specifying the proposal distributions.
+The code below constructs an MH sampler using a multivariate Gaussian distribution with zero mean and unit variance in `d` dimensions as a random walk proposal.
+
+```{julia}
+# Importing the sampling library
+using AdvancedMH
+rwmh = AdvancedMH.RWMH(d)
+```
+
+```{julia}
+#| output: false
+setprogress!(false)
+```
+
+Sampling is then as easy as:
+
+
+```{julia}
+chain = sample(model, externalsampler(rwmh), 10_000)
+```
+
+## Going beyond the Turing API
+
+As previously mentioned, the Turing wrappers can often limit the capabilities of the sampling libraries they wrap.
+`AdvancedHMC`[^1] ([`AdvancedHMC`'s GitHub](https://github.com/TuringLang/AdvancedHMC.jl)) is a clear example of this. A common practice when performing HMC is to provide an initial guess for the mass matrix.
+However, the native HMC sampler within Turing only allows the user to specify the type of the mass matrix despite the two options being possible within `AdvancedHMC`.
+Thankfully, we can use Turing's support for external samplers to define an HMC sampler with a custom mass matrix in `AdvancedHMC` and then use it to sample our Turing model.
+
+We can use the library `Pathfinder`[^2] ([`Pathfinder`'s GitHub](https://github.com/mlcolab/Pathfinder.jl)) to construct our estimate of mass matrix.
+`Pathfinder` is a variational inference algorithm that first finds the maximum a posteriori (MAP) estimate of a target posterior distribution and then uses the trace of the optimisation to construct a sequence of multivariate normal approximations to the target distribution.
+In this process, `Pathfinder` computes an estimate of the mass matrix the user can access.
+You can see an example of how to use `Pathfinder` with Turing in [`Pathfinder`'s docs](https://mlcolab.github.io/Pathfinder.jl/stable/examples/turing/).
+
+## Using new inference methods
+
+So far we have used Turing's support for external samplers to go beyond the capabilities of the wrappers.
+This is made possible by an interface for external samplers, which is [described in the Turing.jl documentation here](https://turinglang.org/Turing.jl/stable/api/Inference/#Turing.Inference.ExternalSampler): if you are implementing your own sampler and would like it to work with Turing.jl models, that link describes the methods that you need to overload.
+
+For an example of an 'external sampler' that works in this way with Turing, we recommend the [SliceSampling.jl library](https://github.com/TuringLang/SliceSampling.jl).
+Note that although this library is hosted under the TuringLang GitHub organisation, it is not a Turing.jl dependency, and thus from Turing's perspective it is truly an 'external' sampler.
+
+In this section, we will briefly go through the interface requirements for external samplers.
+First and foremost, the sampler `MySampler` should be a subtype of `AbstractMCMC.AbstractSampler`.
+Second, the stepping function of the MCMC algorithm must be defined as new methods of `AbstractMCMC.step` following the structure below:
+
+```julia
+# First step
+function AbstractMCMC.step(
+    rng::Random.AbstractRNG,
+    model::AbstractMCMC.LogDensityModel,
+    spl::MySampler;
+    kwargs...,
+)
+    [...]
+    return transition, state
+end
+
+# N+1 step
+function AbstractMCMC.step(
+    rng::Random.AbstractRNG,
+    model::AbstractMCMC.LogDensityModel,
+    sampler::MySampler,
+    state;
+    kwargs...,
+) 
+    [...]
+    return transition, state
+end
+```
+
+Note that the `model` argument here must be [an `AbstractMCMC.LogDensityModel`](https://turinglang.org/AbstractMCMC.jl/stable/api/#AbstractMCMC.LogDensityModel).
+This is a thin wrapper around an object which satisfies the `LogDensityProblems.jl` interface.
+Thus, in your external sampler, you can access the inner object with `model.logdensity` and call `LogDensityProblems.logdensity(model.logdensity, params)` to calculate the (unnormalised) log density of the model at `params`.
+
+As shown above, there must be two `step` methods:
+    
+ - A method that performs the first step, performing any initialisation it needs to; and
+ - A method that performs the following steps and takes an extra input, `state`, which carries the initialisation information.
+
+The output of both of these methods must be a tuple containing:
+ - a 'transition', which is essentially the 'visible output' of the sampler: this object is later used to construct an `FlexiChains.VNChain`;
+ - a 'state', representing the current state of the sampler, which is passed to the next step of the MCMC algorithm.
+
+Apart from this, your sampler state should also implement `AbstractMCMC.getparams(model, state)` to return the parameters of the model as a vector.
+Here, `transition` represents the first output of the `step` function.
+
+```julia
+function AbstractMCMC.getparams(model::AbstractMCMC.LogDensityModel, state::MyState)
+    # Return a vector containing the parameters of the model.
+end
+```
+
+These functions are the bare minimum that your external sampler must implement to work with Turing models.
+There are other methods which can be overloaded to improve the performance or other features of the sampler; please refer to the documentation linked above for more details.
+
+In general, we recommend that the `AbstractMCMC` interface is implemented directly in your library.
+However, any DynamicPPL- or Turing-specific functionality is best implemented in a `MySamplerTuringExt` extension.
+
+[^1]: Xu et al., [AdvancedHMC.jl: A robust, modular and efficient implementation of advanced HMC algorithms](http://proceedings.mlr.press/v118/xu20a/xu20a.pdf), 2019
+[^2]: Zhang et al., [Pathfinder: Parallel quasi-Newton variational inference](https://arxiv.org/abs/2108.03782), 2021

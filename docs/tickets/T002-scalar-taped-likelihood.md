@@ -217,3 +217,67 @@ configuration. This is a pure AD-performance ticket: same posterior, same number
 tape nodes. If a change alters the log density by any amount, it is out of scope.
 
 Do not "fix" the score-matrix or extraction paths; they do not run under AD.
+
+---
+
+## Corroboration and one addition — 2026-08-28
+
+Raised independently by `current_development/scottish_lower/05_composable_count_builder`,
+which had to choose between the guide and the measurement while writing a new engine.
+Same fold (Scottish 56+57, fold 1, 720 matches), Julia 1.12.6 / ReverseDiff 1.17.0 /
+DynamicPPL 0.38.10.
+
+### (a) confirmed, with an end-to-end number
+
+Root cause (a) reproduces on the **pure Poisson** arms as well, so it is not specific to
+`RobustNegativeBinomial`. Compiled-tape gradient, minimum of 400 reps after 50 warm-up
+calls, identical log-density in every case:
+
+| engine | selection | compiled gradient |
+|---|---|---|
+| composable Poisson engine | `view(A, idx)` | 0.389 ms |
+| composable Poisson engine | `A[idx]` | 0.076 ms |
+| `_engw` (02_poisson_wealth), unmodified | `view(A, idx)` | 0.521 ms |
+| `00_team_poisson` engine, unmodified | `A[idx]` | 0.034 ms |
+
+Arm 00 already uses `getindex` — by accident, not by policy, since the guide says
+otherwise — which is why it is the fastest engine in the repository and why nobody
+noticed. Arms 02/03/04 follow the guide and pay 15x for it.
+
+### (b) a second, smaller tape-shape cost: fusing constants into the tracked expression
+
+Not covered above and worth fixing at the same time. These two are the same value to the
+last bit:
+
+```julia
+sum(w .* (y .* η .- exp.(η) .- lf))     # 0.061 ms   weight fused in
+ll = y .* η .- exp.(η) .- lf
+sum(ll .* w)                            # 0.038 ms   weight applied separately
+```
+
+Fusing the (untracked) decay weight into the tracked elementwise expression widens the
+kernel ReverseDiff forward-optimises, costing ~1.6x. The pattern
+`sum(match_weights .* (...))` appears throughout `src/models/pregame/engines/`.
+
+### (c) unresolved, and the reason this is not purely a cost issue
+
+Both the hand-written and the composable engine were probed with a compiled tape against
+`ForwardDiff` at 40 points drawn ~0.8 units per coordinate away from a prior draw. Both
+disagreed, worst relative error **0.37**, in the same places.
+
+Near a prior draw and under small perturbations the tape is exact (relerr 0.0). The
+divergence appears only well outside the typical set. The leading suspect is
+`clamp.(η, -10.0, 10.0)`: it is a value-dependent branch, which is exactly the construct
+the guide's own `compile=true` warning describes, and every engine in `src` uses it.
+
+This was NOT isolated — it could equally be `exp` overflow or the `max` inside `loggamma`.
+Whoever takes this ticket should isolate it before assuming it is benign, because if it is
+`clamp` then every compiled-tape chain is running on wrong gradients whenever warm-up
+leaves the typical set, which is precisely when warm-up needs them to be right.
+
+### Scope note
+
+The composable prototype already uses `getindex` and the unfused-weight form, and its
+gradient is 0.041-0.051 ms against 0.47-0.63 ms for the arms it reproduces. It is a
+worked example of the fix, not a reason to narrow this ticket: the 28 engines under
+`src/models/pregame/engines/` are still on the slow path.

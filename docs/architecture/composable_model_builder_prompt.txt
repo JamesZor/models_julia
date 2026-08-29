@@ -1,0 +1,32 @@
+You are the Lead Architect for BayesianFootball.jl. We need a comprehensive architectural design and technical specification for a Composable Model Builder Design Pattern.
+
+### 1. Context & Problem Statement
+Currently, BayesianFootball.jl has 28 separate engine files in `src/models/pregame/engines/` (and combinatorial explosion in `current_development/scottish_lower/` with 00, 02, 03, 04, etc.) because each new combination of components and features requires:
+1. A separate struct definition (e.g. `DynamicPoissonWealthDistanceGoalsTimeDecayModel`).
+2. A separate `@model` definition (`_engw`, `_engd`, `_engj`, etc.).
+3. A separate `required_features` implementation.
+4. A separate `extract_parameters` routine.
+
+Adding N features (Wealth, Distance, Rest Days, Red Cards, Officiating) and M components (Interception, Dynamics, Dispersion, Recombination, Copula, Smile) creates an exponential 2^(N+M) maintenance burden.
+
+### 2. Objective & Proposed Solution
+Design a unified, declarative **Composable Model & Config Builder Architecture** (borrowing concepts from PyTorch / Fluent Builders):
+- A fluent builder API: e.g. `ModelBuilder(:team_poisson) |> with_interception(...) |> with_dynamics(...) |> with_covariate(:wealth, ...) |> with_covariate(:distance, ...) |> build()`
+- A strict `build()` validation phase that enforces structural invariants (e.g., exactly 1 dynamics, valid likelihood, no duplicate features, valid priors).
+- A unified Turing `@model` engine that iterates over a typed Tuple of covariates/components with zero dynamic dispatch and 100% ReverseDiff AD-compilation compatibility.
+- Automatic derivation of `required_features(model)` and `extract_parameters(model, ...)` from the assembled components.
+
+### 3. Your Task
+1. Research existing components in `src/models/pregame/components/` and engines in `src/models/pregame/engines/`.
+2. Produce a comprehensive architectural specification document:
+   `docs/architecture/composable_model_builder_specification.md`
+   covering:
+   - Architecture & Type Hierarchy (Config Builder vs Model Instance).
+   - Component & Covariate Interface contracts.
+   - Validation rules in `build()`.
+   - Turing `@model` compilation strategy (Typed Tuples, `@generated` / unrolled loops for ReverseDiff safety).
+   - Automatic parameter extraction & feature derivation.
+   - Scope estimate (engineering effort, migration roadmap, and backward compatibility strategy).
+3. Implement a complete working prototype in `current_development/builder_prototype/` (with `l01_builder.jl`, `l02_components.jl`, and `r01_demo.jl`) proving that the builder compiles, passes validation, runs with Turing and ReverseDiff, and extracts parameters seamlessly.
+
+Please begin by researching the components, drafting the design document, and reporting your architectural recommendations.

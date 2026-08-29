@@ -6,14 +6,16 @@ into a model-ready FeatureSet using the new relational SplitBoundary architectur
 """
 module Features
 
+using CSV
 using DataFrames
 using Dates
+using Statistics
 using Base.Threads
 using ..Data
 using ..TypesInterfaces
 
 export FeatureSet, create_features, required_features, add_feature!
-export AbstractFeatureConfig, TeamIDsFeature, GoalsFeature, LeagueFeature, XGFeature, ShotsFeature, BigChanceFeature, ShotsInsideBoxFeature, FinalThirdEntriesFeature, TouchesInOppBoxFeature, ShotsFunnelFeature, MarketSmileFeature, TimeIndicesFeature, DatesFeature, MonthFeature, MidweekFeature, PlasticPitchFeature, AbstractRatingTracker, PlayerRatingsFeature
+export AbstractFeatureConfig, TeamIDsFeature, GoalsFeature, LeagueFeature, XGFeature, ShotsFeature, BigChanceFeature, ShotsInsideBoxFeature, FinalThirdEntriesFeature, TouchesInOppBoxFeature, ShotsFunnelFeature, MarketSmileFeature, TimeIndicesFeature, DatesFeature, MonthFeature, MidweekFeature, PlasticPitchFeature, DistanceFeature, AbstractRatingTracker, PlayerRatingsFeature
 export LastValueTracker, WindowAverageTracker, EWMATracker, BayesianTracker
 # Plus-minus (RAPM) rating family — one struct per PM target, all sharing one extractor.
 export AbstractPlusMinusFeature, ShotsPlusMinusFeature, ShotsOnTargetPlusMinusFeature,
@@ -37,6 +39,7 @@ include("./market_inverse_utils.jl")
 include("./plus_minus/plus_minus.jl")
 include("./extractors/core_extractors.jl")
 include("./extractors/time_extractors.jl")
+include("./extractors/distance_extractors.jl")
 include("./extractors/stats_extractors.jl")
 include("./extractors/bbc_extractors.jl")
 include("./extractors/market_extractors.jl")

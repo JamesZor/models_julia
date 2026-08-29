@@ -26,6 +26,9 @@ end
 include(joinpath(SL_ALL_ROOT, "_protocol", "ScottishLowerProtocol.jl"))
 using .ScottishLowerProtocol
 
+include(joinpath(SL_ALL_ROOT, "00_team_poisson", "l01_model.jl"))
+include(joinpath(SL_ALL_ROOT, "00_team_poisson", "l02_equations.jl"))
+include(joinpath(SL_ALL_ROOT, "00_team_poisson", "l03_adapter.jl"))
 include(joinpath(SL_ALL_ROOT, "02_poisson_wealth", "l01_model.jl"))
 include(joinpath(SL_ALL_ROOT, "02_poisson_wealth", "l02_equations.jl"))
 include(joinpath(SL_ALL_ROOT, "02_poisson_wealth", "l03_adapter.jl"))
@@ -46,6 +49,7 @@ const SL_ALL_CONTRACT = sl_contract()
 # others, which would otherwise leave two artifacts for the same model.
 const SL_ALL_REQUESTED = filter(!isempty, strip.(split(get(ENV, "SL_ARMS", ""), ",")))
 const SL_ALL_ADAPTERS = let all_arms = (
+        TP00Adapter(half_life_days=180.0),
         TP02Adapter(half_life_days=180.0),
         TP03Adapter(half_life_days=180.0),
         TP04Adapter(half_life_days=180.0),

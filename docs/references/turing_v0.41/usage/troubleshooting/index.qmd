@@ -1,0 +1,255 @@
+---
+title: Troubleshooting
+engine: julia
+---
+
+```{julia}
+#| echo: false
+#| output: false
+using Pkg;
+Pkg.instantiate();
+```
+
+This page collects a number of common error messages observed when using Turing, along with suggestions on how to fix them.
+
+If the suggestions here do not resolve your problem, please do feel free to [open an issue](https://github.com/TuringLang/Turing.jl/issues).
+
+```{julia}
+using Turing
+Turing.setprogress!(false)
+```
+
+## NaN `Dual` numbers when using ForwardDiff
+
+ForwardDiff.jl is the default automatic differentiation backend for Turing.jl, and is used 'under the hood' in many of Turing's functions, such as MCMC sampling with HMC/NUTS, or optimisation.
+
+Since v1.0 of ForwardDiff, a number of changes were made to equality and comparison operators on ForwardDiff's `Dual` type, which can surface many errors that were previously hidden.
+In particular, the presence of `NaN` values in gradients can cause various functions to fail, even when the value of the gradient is not directly used.
+
+For example:
+
+```{julia}
+# This works when not using Dual numbers
+sigma = 0.0
+Normal(1.0, sigma)
+```
+
+```{julia}
+#| error: true
+using ForwardDiff: Dual
+
+# This fails when using Dual numbers that contain NaNs
+dual_sigma = Dual(0.0, NaN)
+Normal(1.0, dual_sigma)
+```
+
+If you are encountering `NaN`-related issues that did not happen before, you should try [enabling NaN-safe mode for ForwardDiff](https://juliadiff.org/ForwardDiff.jl/stable/user/advanced/#Fixing-NaN/Inf-Issues).
+Specifically, you need to run:
+
+```julia
+using ForwardDiff, Preferences
+set_preferences!(ForwardDiff, "nansafe_mode" => true)
+```
+
+and then restart your Julia session.
+
+Note that this creates a `Preferences.toml` or `LocalPreferences.toml` file on your system.
+Because of this, unfortunately, there is no configuration option that Turing can expose for this: you have to run the above code yourself (this is a limitation of ForwardDiff.jl).
+
+Alternatively, consider [switching to a different AD backend]({{< meta usage-automatic-differentiation >}}).
+
+## Initial parameters
+
+> failed to find valid initial parameters in {N} tries. This may indicate an error with the model or AD backend...
+
+This error is seen when a Hamiltonian Monte Carlo sampler is unable to determine a valid set of initial parameters for the sampling.
+Here, 'valid' means that the log probability density of the model, as well as its gradient with respect to each parameter, is finite and not `NaN`.
+
+### `NaN` gradient
+
+One of the most common causes of this error is having a `NaN` gradient.
+To find out whether this is happening, you can evaluate the gradient manually.
+Here is an example with a model that is known to be problematic:
+
+```{julia}
+using Turing
+using DynamicPPL.TestUtils.AD: run_ad
+
+@model function initial_bad()
+    a ~ Normal()
+    x ~ truncated(Normal(a), 0, Inf)
+end
+
+model = initial_bad()
+adtype = AutoForwardDiff()
+result = run_ad(model, adtype; test=false, benchmark=false)
+result.grad_actual
+```
+
+(See [the DynamicPPL docs](https://turinglang.org/DynamicPPL.jl/stable/api/#AD-testing-and-benchmarking-utilities) for more details on the `run_ad` function and its return type.)
+
+In this case, the `NaN` gradient is caused by the `Inf` argument to `truncated`.
+(See, e.g., [this issue on Distributions.jl](https://github.com/JuliaStats/Distributions.jl/issues/1910).)
+Here, the upper bound of `Inf` is not needed, so it can be removed:
+
+```{julia}
+@model function initial_good()
+    a ~ Normal()
+    x ~ truncated(Normal(a); lower=0)
+end
+
+model = initial_good()
+adtype = AutoForwardDiff()
+run_ad(model, adtype; test=false, benchmark=false).grad_actual
+```
+
+More generally, you could try using a different AD backend; if you don't know why a model is returning `NaN` gradients, feel free to open an issue.
+
+### `-Inf` log density
+
+Another cause of this error is having models with very extreme parameters.
+This example is taken from [this Turing.jl issue](https://github.com/TuringLang/Turing.jl/issues/2476):
+
+```{julia}
+@model function initial_bad2()
+    x ~ Exponential(100)
+    y ~ Uniform(0, x)
+end
+model = initial_bad2() | (y = 50.0,)
+```
+
+The problem here is that HMC's default initialisation strategy is `InitFromUniform(-2, 2)`: in other words, it attempts to find initial values for transformed parameters inside the region of `[-2, 2]`.
+For a distribution of `Exponential(100)`, the appropriate transformation is `log(x)` (see the [variable transformation docs]({{< meta dev-transforms-distributions >}}) for more info).
+
+Thus, HMC attempts to find initial values of `log(x)` in the region of `[-2, 2]`, which corresponds to `x` in the region of `[exp(-2), exp(2)]` = `[0.135, 7.39]`.
+However, all of these values of `x` will give rise to a zero probability density for `y` because the value of `y = 50.0` is outside the support of `Uniform(0, x)`.
+Thus, the log density of the model is `-Inf`, as can be seen with `logjoint`:
+
+```{julia}
+logjoint(model, (x = exp(-2),))
+```
+
+```{julia}
+logjoint(model, (x = exp(2),))
+```
+
+You can fix this by overriding the default initialisation strategy (discussed in more detail in [the sampling options page]({{< meta usage-sampling-options >}}#specifying-initial-parameters)).
+
+```{julia}
+# Use initial parameters drawn from the model's prior.
+sample(model, NUTS(), 1000; initial_params=InitFromPrior())
+```
+
+```{julia}
+# Use manually specified initial parameters (always in untransformed space).
+sample(model, NUTS(), 1000; initial_params=InitFromParams((x = 60.0,)))
+```
+
+More generally, you may also consider reparameterising the model to avoid such issues.
+
+## ForwardDiff type parameters
+
+> MethodError: no method matching Float64(::ForwardDiff.Dual{... The type `Float64` exists, but no method is defined for this combination of argument types when trying to construct it.
+
+A common error with ForwardDiff looks like this:
+
+```{julia}
+#| error: true
+@model function forwarddiff_fail()
+    x = Float64[0.0, 1.0]
+    a ~ Normal()
+    @show typeof(a)
+    x[1] = a
+    b ~ MvNormal(x, I)
+end
+sample(forwarddiff_fail(), NUTS(; adtype=AutoForwardDiff()), 10)
+```
+
+The problem here is the line `x[1] = a`.
+When the log probability density of the model is calculated, `a` is sampled from a normal distribution and is thus a Float64; however, when ForwardDiff calculates the gradient of the log density, `a` is a `ForwardDiff.Dual` object.
+However, `x` is _always_ a `Vector{Float64}`, and the call `x[1] = a` attempts to insert a `Dual` object into a `Vector{Float64}`, which is not allowed.
+
+::: {.callout-note}
+In more detail: the basic premise of ForwardDiff is that functions have to accept `Real` parameters instead of `Float64` (since `Dual` is a subtype of `Real`).
+Here, the line `x[1] = a` is equivalent to `setindex!(x, a, 1)`, and although the method `setindex!(::Vector{Float64}, ::Real, ...)` does exist, it attempts to convert the `Real` into a `Float64`, which is where it fails.
+:::
+
+There are two ways around this.
+
+Firstly, you could broaden the type of the container:
+
+```{julia}
+@model function forwarddiff_working1()
+    x = Real[0.0, 1.0]
+    a ~ Normal()
+    x[1] = a
+    b ~ MvNormal(x, I)
+end
+sample(forwarddiff_working1(), NUTS(; adtype=AutoForwardDiff()), 10)
+```
+
+This is generally unfavourable because the `Vector{Real}` type contains an abstract type parameter.
+As a result, memory allocation is less efficient (because the compiler does not know the size of each vector's elements).
+Furthermore, the compiler cannot infer the type of `x[1]`, which can lead to type stability issues (to see this in action, run `x = Real[0.0, 1.0]; @code_warntype x[1]` in the Julia REPL).
+
+A better solution is to pass a type as a parameter to the model:
+
+```{julia}
+@model function forwarddiff_working2(::Type{T}=Float64) where T
+    x = T[0.0, 1.0]
+    a ~ Normal()
+    x[1] = a
+    b ~ MvNormal(x, I)
+end
+sample(forwarddiff_working2(), NUTS(; adtype=AutoForwardDiff()), 10)
+```
+
+Alternatively, you can use a different AD backend such as Mooncake.jl which does not rely on dual numbers.
+
+## GrowableArray warnings
+
+> Returning a `Base.Array` with a presumed size based on the indices used to set values; but this may not be the actual shape or size of the actual `AbstractArray` that was inside the DynamicPPL model. You should inspect the returned result to make sure that it has the correct value.
+
+This warning is seen when using a `VarNamedTuple` — a mapping of `VarName`s to values — that contains indexed variables (such as `x[1]`) but does not know what the type of `x` is.
+
+Generally, this warning is likely to occur when you have provided initial parameters or conditioning values as a `Dict{VarName}`, or a `VarNamedTuple` without template information.
+To fix this, it is recommended that you supply a `VarNamedTuple` with template information.
+That is, instead of 
+
+```{julia}
+using DynamicPPL
+
+Dict(@varname(x[1]) => 1.0, @varname(x[2]) => 2.0)
+```
+
+or
+
+```{julia}
+@vnt begin
+    x[1] := 1.0
+    x[2] := 2.0
+end
+```
+
+you should use
+
+```{julia}
+@vnt begin
+    @template x = Vector{Float64}(undef, 2)
+    x[1] := 1.0
+    x[2] := 2.0
+end
+```
+
+where the template `Vector{Float64}(undef, 2)` informs DynamicPPL of the type and size of `x` that will be used inside the model; i.e., your model looks something like
+
+```{julia}
+@model function mymodel()
+    x = Vector{Float64}(undef, 2)
+    x[1] ~ Normal()
+    x[2] ~ Normal()
+    return nothing
+end
+```
+
+Please see the [`VarNamedTuple` documentation page]({{< meta usage-varnamedtuple >}}) for more information about what this means.

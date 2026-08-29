@@ -62,28 +62,25 @@ function synthetic_wealth_store()
 end
 
 @testset "Squad wealth feature — Gate 2" begin
-    @testset "point-in-time values and neutral fallback" begin
+    @testset "observed values and rolling fallback" begin
         ds = synthetic_wealth_store()
         config = BayesianFootball.Features.SquadWealthFeature()
-        lookup = BayesianFootball.Features._build_match_wealth_lookup(
-            ds.lineups, ds.matches, Int[1, 2], config)
+        records = BayesianFootball.Features._build_match_wealth_records(
+            ds.lineups, ds.matches, Int[1, 2], Int[1], config)
 
-        # Missing players use the fixed player fallback, but both clubs require
-        # at least one timestamp-safe observed valuation.
-        expected = mean(log, [200_000.0, 100_000.0]) -
-                   mean(log, [100_000.0, 100_000.0])
-        @test lookup[Int32(1)] ≈ expected
-        @test !haskey(lookup, Int32(2))
+        @test records[Int32(1)].delta ≈ log(2.0) / config.log_scale
+        @test records[Int32(1)].available == 1.0
+        @test records[Int32(1)].home_count == 1
+        @test records[Int32(1)].away_count == 1
+        @test records[Int32(2)].available == 0.0
+        @test records[Int32(2)].home_count == 0
+        @test records[Int32(2)].away_count == 1
 
-        unsafe = copy(ds.lineups)
-        unsafe.valuation_timestamp[1] = DateTime(2024, 1, 6, 16)
-        unsafe_lookup = BayesianFootball.Features._build_match_wealth_lookup(
-            unsafe, ds.matches, Int[1], config)
-        @test !haskey(unsafe_lookup, Int32(1))
-
+        # Valuations are match-scoped, so legacy valuation timestamps are ignored.
         no_timestamp = select(ds.lineups, Not(:valuation_timestamp))
-        @test isempty(BayesianFootball.Features._build_match_wealth_lookup(
-            no_timestamp, ds.matches, Int[1], config))
+        lookup = BayesianFootball.Features._build_match_wealth_lookup(
+            no_timestamp, ds.matches, Int[1], config)
+        @test lookup[Int32(1)] ≈ log(2.0) / config.log_scale
     end
 
     @testset "future rows cannot alter historical FeatureSet" begin
@@ -99,11 +96,12 @@ end
 
         @test same
         @test isempty(differing)
-        @test full.data[:flat_delta_wealth][1] ≈ log(2) / 2
-        @test full.data[:flat_delta_wealth][2] == 0.0
-        @test full.data[:flat_wealth_fallback] == Int[0, 1]
+        @test full.data[:flat_delta_wealth][1] ≈ log(2) / model.wealth_feature.log_scale
+        @test full.data[:flat_wealth_available] == Float64[1.0, 0.0]
+        @test full.data[:flat_wealth_home_count] == Int[1, 0]
+        @test full.data[:flat_wealth_away_count] == Int[1, 1]
         @test eltype(full.data[:flat_delta_wealth]) === Float64
-        @test eltype(full.data[:flat_wealth_fallback]) === Int
+        @test eltype(full.data[:flat_wealth_available]) === Float64
         @test !any(isnan, full.data[:flat_delta_wealth])
     end
 
@@ -122,12 +120,12 @@ end
         @test all(result.pass for result in results)
         for fs in feature_sets
             wealth = fs.data[:flat_delta_wealth]
-            fallback = fs.data[:flat_wealth_fallback]
+            available = fs.data[:flat_wealth_available]
             @test eltype(wealth) === Float64
-            @test eltype(fallback) === Int
+            @test eltype(available) === Float64
             @test !any(isnan, wealth)
             @test !any(ismissing, wealth)
-            @test all(value -> value in (0, 1), fallback)
+            @test all(value -> value in (0.0, 0.5, 1.0), available)
         end
     end
 end

@@ -1,0 +1,128 @@
+---
+title: Automatic Differentiation
+engine: julia
+aliases:
+  - ../../tutorials/docs-10-using-turing-autodiff/index.html
+---
+
+```{julia}
+#| echo: false
+#| output: false
+using Pkg;
+Pkg.instantiate();
+```
+
+## What is Automatic Differentiation?
+
+Automatic differentiation (AD) is a technique used in Turing.jl to evaluate the gradient of a function at a given set of arguments.
+In the context of Turing.jl, the function being differentiated is the log probability density of a model, and the arguments are the parameters of the model (i.e. the values of the random variables).
+The gradient of the log probability density is used by various algorithms in Turing.jl, such as HMC (including NUTS), mode estimation (which uses gradient-based optimisation), and variational inference.
+
+The Julia ecosystem has a number of AD libraries.
+You can switch between these using the unified [ADTypes.jl](https://github.com/SciML/ADTypes.jl/) interface, which for a given AD backend, provides types such as `AutoBackend` (see [the documentation](https://docs.sciml.ai/ADTypes/stable/) for more details).
+For example, to use the [Mooncake.jl](https://github.com/chalk-lab/Mooncake.jl) package for AD, you can run the following:
+
+```{julia}
+# Turing re-exports AutoEnzyme, AutoForwardDiff, AutoReverseDiff, and AutoMooncake.
+# Other ADTypes must be explicitly imported from ADTypes.jl or
+# DifferentiationInterface.jl.
+using Turing
+setprogress!(false)
+
+# Note that if you specify a custom AD backend, you must also import it.
+import Mooncake
+
+@model function f()
+    x ~ Normal()
+    # Rest of your model here
+end
+
+sample(f(), HMC(0.1, 5; adtype=AutoMooncake()), 100)
+```
+
+By default, if you do not specify a backend, Turing will default to [ForwardDiff.jl](https://github.com/JuliaDiff/ForwardDiff.jl).
+In this case, you do not need to import ForwardDiff, as it is already a dependency of Turing.
+
+## Choosing an AD Backend
+
+There are two aspects to choosing an AD backend: firstly, what backends are available; and secondly, which backend is best for your model.
+
+### Usable AD Backends
+
+Turing.jl computes gradients for sampling and variational inference through [AbstractPPL.jl](https://github.com/TuringLang/AbstractPPL.jl)'s [`prepare` / `value_and_gradient!!` interface](https://turinglang.org/AbstractPPL.jl/stable/evaluators/).
+ForwardDiff and Mooncake have native support in this interface; any other backend is routed through [DifferentiationInterface.jl](https://github.com/JuliaDiff/DifferentiationInterface.jl) ('DI').
+(Mode estimation is the exception: `maximum_likelihood` and `maximum_a_posteriori` delegate differentiation to [Optimization.jl](https://github.com/SciML/Optimization.jl).)
+In principle, any AD library that DI provides an interface for can be used with Turing; you should consult the [DI documentation](https://juliadiff.org/DifferentiationInterface.jl/DifferentiationInterface/stable/) for an up-to-date list of compatible AD libraries.
+
+Note, however, that not all AD libraries in there are thoroughly tested on Turing models.
+Thus, it is possible that some of them will either error (because they don't know how to differentiate through Turing's code), or maybe even silently give incorrect results (if you are very unlucky).
+Turing is most extensively tested with **ForwardDiff.jl** (the default), **Enzyme.jl**, **Mooncake.jl**, and **ReverseDiff.jl**.
+
+::: {.callout-note}
+## Gradient preparation
+
+AbstractPPL's interface provides a `prepare` step that performs a one-time setup to make subsequent gradient computations faster (this wraps the equivalent preparation step of the underlying AD backend).
+Turing will automatically perform this preparation for you when calling functions such as `sample` or `vi`, so you do not need to worry about this step.
+:::
+
+### The Best AD Backend for Your Model
+
+Given the number of possible backends, how do you choose the best one for your model?
+
+A simple heuristic is to look at the number of parameters in your model.
+The log density of the model, i.e. the function being differentiated, is a function that goes from $\mathbb{R}^n \to \mathbb{R}$, where $n$ is the number of parameters in your model.
+For models with a small number of parameters (say up to ~ 20), forward-mode AD (e.g. ForwardDiff) is generally faster due to a smaller overhead.
+On the other hand, for models with a large number of parameters, reverse-mode AD (e.g. ReverseDiff or Mooncake) is generally faster as it computes the gradients with respect to all parameters in a single pass.
+
+The most exact way to ensure you are using the fastest AD that works for your problem is to benchmark them using the functionality in DynamicPPL (see [the API documentation](https://turinglang.org/DynamicPPL.jl/stable/api/#AD-testing-and-benchmarking-utilities)):
+
+```{julia}
+using ADTypes
+using DynamicPPL.TestUtils.AD: run_ad, ADResult
+using ForwardDiff, ReverseDiff
+
+@model function gdemo(x, y)
+    s² ~ InverseGamma(2, 3)
+    m ~ Normal(0, sqrt(s²))
+    x ~ Normal(m, sqrt(s²))
+    return y ~ Normal(m, sqrt(s²))
+end
+model = gdemo(1.5, 2)
+
+for adtype in [AutoForwardDiff(), AutoReverseDiff()]
+    result = run_ad(model, adtype; benchmark=true)
+    @show result.grad_time / result.primal_time
+end
+```
+
+In this specific instance, ForwardDiff is clearly faster (due to the small size of the model).
+
+::: {.callout-note}
+## A note about ReverseDiff's `compile` argument
+
+The additional keyword argument `compile=true` for `AutoReverseDiff` specifies whether to pre-record the tape only once and reuse it later.
+By default, this is set to `false`, which means no pre-recording.
+Setting `compile=true` can substantially improve performance, but risks silently incorrect results if not used with care.
+Pre-recorded tapes should only be used if you are absolutely certain that the sequence of operations performed in your code does not change between different executions of your model.
+:::
+
+## Compositional Sampling with Differing AD Modes
+
+When using Gibbs sampling, Turing also supports mixed automatic differentiation methods for different variable spaces.
+The following snippet shows how one can use `ForwardDiff` to sample the mean (`m`) parameter, and `ReverseDiff` for the variance (`s`) parameter:
+
+```{julia}
+using Turing
+using ReverseDiff
+
+# Sample using Gibbs and varying autodiff backends.
+c = sample(
+    gdemo(1.5, 2),
+    Gibbs(
+        :m => HMC(0.1, 5; adtype=AutoForwardDiff()),
+        :s² => HMC(0.1, 5; adtype=AutoReverseDiff()),
+    ),
+    1000,
+    progress=false,
+)
+```

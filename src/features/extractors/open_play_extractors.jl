@@ -159,144 +159,193 @@ end
 # 3. STARTING-XI SQUAD WEALTH DIFFERENTIAL
 # ==============================================================================
 
-function _wealth_kickoff_map(matches::AbstractDataFrame)
-    result = Dict{Int32, DateTime}()
-    for row in eachrow(matches)
-        kickoff = if :start_timestamp in propertynames(row)
-            DateTime(row.start_timestamp)
-        elseif :match_date in propertynames(row)
-            hour = :match_hour in propertynames(row) ? Int(coalesce(row.match_hour, 0)) : 0
-            DateTime(row.match_date) + Hour(hour)
-        else
-            continue
+function _wealth_match_time(row)
+    if :start_timestamp in propertynames(row) && !ismissing(row.start_timestamp)
+        value = row.start_timestamp
+        value isa DateTime && return value
+        value isa Date && return DateTime(value)
+        try
+            return DateTime(String(value))
+        catch
         end
-        result[Int32(row.match_id)] = kickoff
     end
-    return result
+    hour = :match_hour in propertynames(row) ? Int(coalesce(row.match_hour, 0)) : 0
+    return DateTime(row.match_date) + Hour(hour)
 end
 
-function _wealth_as_datetime(value)
+function _wealth_side(row, side_col::Symbol)
+    raw_side = row[side_col]
+    ismissing(raw_side) && return nothing
+    if side_col == :team_side
+        side = lowercase(String(raw_side))
+        side == "home" && return true
+        side == "away" && return false
+        return nothing
+    end
+    raw_side isa Bool || return nothing
+    return raw_side
+end
+
+function _wealth_valid_value(value)
     ismissing(value) && return nothing
-    value isa DateTime && return value
-    value isa Date && return DateTime(value)
-    try
-        return DateTime(String(value))
+    parsed = try
+        Float64(value)
     catch
         return nothing
     end
+    return isfinite(parsed) && parsed > 0.0 ? parsed : nothing
 end
 
-function _wealth_is_home(row, side_col::Symbol)
-    side_col == :team_side && return lowercase(String(row[side_col])) == "home"
-    return Bool(row[side_col])
+"""Build chronological squad-wealth values and their coverage diagnostics."""
+function _build_match_wealth_records(
+    lineups::AbstractDataFrame,
+    matches::AbstractDataFrame,
+    ordered_ids,
+    history_ids,
+    config::SquadWealthFeature,
+)
+    config.log_scale === nothing || config.log_scale > 0.0 ||
+        throw(ArgumentError("log_scale must be positive"))
+    config.decay_half_life_days > 0.0 ||
+        throw(ArgumentError("decay_half_life_days must be positive"))
+    config.min_valid_players_per_side > 0 ||
+        throw(ArgumentError("min_valid_players_per_side must be positive"))
+
+    selected_ids = Set(Int32.(ordered_ids))
+    history_set = Set(Int32.(history_ids))
+    records = Dict{Int32, NamedTuple}()
+    isempty(selected_ids) && return records
+
+    lineup_columns = propertynames(lineups)
+    value_col = :market_value in lineup_columns ? :market_value :
+                (:proposed_market_value in lineup_columns ? :proposed_market_value : nothing)
+    substitute_col = :is_substitute in lineup_columns ? :is_substitute :
+                     (:substitute in lineup_columns ? :substitute : nothing)
+    side_col = :team_side in lineup_columns ? :team_side :
+               (:is_home_team in lineup_columns ? :is_home_team :
+                (:is_home in lineup_columns ? :is_home : nothing))
+
+    values = Dict{Tuple{Int32, Bool}, Vector{Float64}}()
+    # Without starter metadata we cannot safely distinguish the XI from substitutes.
+    if value_col !== nothing && side_col !== nothing && substitute_col !== nothing
+        player_col = :player_id in lineup_columns ? :player_id : nothing
+        seen_players = Set{Tuple{Int32, Bool, Any}}()
+        for row in eachrow(lineups)
+            match_id = Int32(row.match_id)
+            match_id in selected_ids || continue
+            coalesce(row[substitute_col], false) && continue
+            side = _wealth_side(row, side_col)
+            side === nothing && continue
+            value = _wealth_valid_value(row[value_col])
+            value === nothing && continue
+
+            if player_col !== nothing && !ismissing(row[player_col])
+                player_key = (match_id, side, row[player_col])
+                player_key in seen_players && continue
+                push!(seen_players, player_key)
+            end
+            push!(get!(values, (match_id, side), Float64[]), value)
+        end
+    end
+
+    # The population anchor is fitted only on the history side of the split.
+    baseline_logs = Float64[]
+    for ((match_id, _), side_values) in values
+        match_id in history_set || continue
+        append!(baseline_logs, log.(side_values))
+    end
+    baseline = isempty(baseline_logs) ? 11.46 : mean(baseline_logs)
+
+    match_rows = [row for row in eachrow(matches) if Int32(row.match_id) in selected_ids]
+    sort!(match_rows; by=_wealth_match_time)
+    last_val = Dict{String, Float64}()
+    last_date = Dict{String, Date}()
+
+    raw_records = Dict{Int32, NamedTuple{(:raw_delta, :available, :home_count, :away_count), Tuple{Float64, Float64, Int, Int}}}()
+
+    for row in match_rows
+        match_id = Int32(row.match_id)
+        match_date = Date(_wealth_match_time(row))
+        home_team = String(row.home_team)
+        away_team = String(row.away_team)
+        home_values = get(values, (match_id, true), Float64[])
+        away_values = get(values, (match_id, false), Float64[])
+        home_count = length(home_values)
+        away_count = length(away_values)
+
+        function team_value(team::String, side_values::Vector{Float64})
+            if length(side_values) >= config.min_valid_players_per_side
+                observed = mean(log, side_values)
+                last_val[team] = observed
+                last_date[team] = match_date
+                return observed, 1.0
+            elseif haskey(last_val, team)
+                days = max(0.0, Float64(Dates.value(match_date - last_date[team])))
+                weight = 0.5 ^ (days / config.decay_half_life_days)
+                return weight * last_val[team] + (1.0 - weight) * baseline, 0.5
+            else
+                return baseline, 0.0
+            end
+        end
+
+        home_wealth, home_available = team_value(home_team, home_values)
+        away_wealth, away_available = team_value(away_team, away_values)
+        raw_delta = Float64(home_wealth - away_wealth)
+        # A differential is only as reliable as its least-covered side.
+        available = min(home_available, away_available)
+        raw_records[match_id] = (raw_delta=raw_delta, available=available,
+                                 home_count=home_count, away_count=away_count)
+    end
+
+    # Determine scaling denominator: fixed config or fitted over history matches
+    scale = if config.log_scale !== nothing
+        Float64(config.log_scale)
+    else
+        history_diffs = [
+            r.raw_delta for (mid, r) in raw_records
+            if mid in history_set && r.available > 0.0
+        ]
+        s = length(history_diffs) >= 10 ? std(history_diffs) : 0.50
+        (isfinite(s) && s > 1e-4) ? Float64(s) : 0.50
+    end
+    scale > 0 || error("SquadWealthFeature scale must be positive, got $(scale)")
+
+    for (match_id, r) in raw_records
+        records[match_id] = (delta = Float64(r.raw_delta / scale),
+                             available = r.available,
+                             home_count = r.home_count,
+                             away_count = r.away_count)
+    end
+    return records
 end
 
-"""Build a fold-local, point-in-time starting-XI wealth lookup."""
+"""Compatibility helper returning only the match differential lookup."""
 function _build_match_wealth_lookup(
     lineups::AbstractDataFrame,
     matches::AbstractDataFrame,
     ordered_ids,
     config::SquadWealthFeature,
 )
-    config.fallback_default > 0.0 || throw(ArgumentError("fallback_default must be positive"))
-    config.log_scale > 0.0 || throw(ArgumentError("log_scale must be positive"))
-
-    selected_ids = Set(Int32.(ordered_ids))
-    wealth_map = Dict{Int32, Float64}()
-    isempty(selected_ids) && return wealth_map
-    isempty(lineups) && return wealth_map
-
-    lineup_columns = propertynames(lineups)
-    value_col = :market_value in lineup_columns ? :market_value :
-                (:proposed_market_value in lineup_columns ? :proposed_market_value : nothing)
-    value_col === nothing && return wealth_map
-
-    timestamp_col = if :valuation_timestamp in lineup_columns
-        :valuation_timestamp
-    elseif :market_value_timestamp in lineup_columns
-        :market_value_timestamp
-    elseif :valuation_date in lineup_columns
-        :valuation_date
-    else
-        nothing
-    end
-    config.require_valuation_timestamp && timestamp_col === nothing && return wealth_map
-
-    substitute_col = :is_substitute in lineup_columns ? :is_substitute :
-                     (:substitute in lineup_columns ? :substitute : nothing)
-    side_col = :team_side in lineup_columns ? :team_side :
-               (:is_home_team in lineup_columns ? :is_home_team :
-                (:is_home in lineup_columns ? :is_home : nothing))
-    side_col === nothing && return wealth_map
-
-    kickoffs = _wealth_kickoff_map(matches)
-    values = Dict{Tuple{Int32, Bool}, Vector{Float64}}()
-    known = Dict{Tuple{Int32, Bool}, Int}()
-
-    for row in eachrow(lineups)
-        match_id = Int32(row.match_id)
-        match_id in selected_ids || continue
-        substitute_col !== nothing && coalesce(row[substitute_col], false) && continue
-
-        is_home = _wealth_is_home(row, side_col)
-        key = (match_id, is_home)
-        side_values = get!(values, key, Float64[])
-
-        raw_value = row[value_col]
-        market_value = if ismissing(raw_value)
-            NaN
-        else
-            try
-                Float64(raw_value)
-            catch
-                NaN
-            end
-        end
-
-        timestamp_safe = if timestamp_col === nothing
-            !config.require_valuation_timestamp
-        else
-            valuation_time = _wealth_as_datetime(row[timestamp_col])
-            kickoff = get(kickoffs, match_id, nothing)
-            valuation_time !== nothing && kickoff !== nothing && valuation_time < kickoff
-        end
-
-        if isfinite(market_value) && market_value > 0.0 && timestamp_safe
-            push!(side_values, market_value)
-            known[key] = get(known, key, 0) + 1
-        else
-            push!(side_values, config.fallback_default)
-        end
-    end
-
-    for match_id in selected_ids
-        home_key = (match_id, true)
-        away_key = (match_id, false)
-        home_values = get(values, home_key, Float64[])
-        away_values = get(values, away_key, Float64[])
-
-        # If either club has no safe point-in-time valuation, treat the match as
-        # unmapped and return the neutral population fallback.
-        isempty(home_values) && continue
-        isempty(away_values) && continue
-        get(known, home_key, 0) > 0 || continue
-        get(known, away_key, 0) > 0 || continue
-
-        delta = (mean(log, home_values) - mean(log, away_values)) / config.log_scale
-        isfinite(delta) && (wealth_map[match_id] = Float64(delta))
-    end
-    return wealth_map
+    records = _build_match_wealth_records(
+        lineups, matches, ordered_ids, Int[], config)
+    return Dict(id => record.delta for (id, record) in records)
 end
 
 function add_feature!(F_data::Dict, config::SquadWealthFeature, ordered_ids, team_map::Dict, ds::Data.DataStore)
-    wealth_map = _build_match_wealth_lookup(ds.lineups, ds.matches, ordered_ids, config)
-    flat_delta_w = Float64[get(wealth_map, Int32(id), 0.0) for id in ordered_ids]
-    flat_fallback = Int[haskey(wealth_map, Int32(id)) ? 0 : 1 for id in ordered_ids]
+    history_ids = get(F_data, :history_match_ids, Set{Int}())
+    records = _build_match_wealth_records(
+        ds.lineups, ds.matches, ordered_ids, history_ids, config)
 
-    F_data[:flat_delta_wealth] = flat_delta_w
-    F_data[:flat_wealth_fallback] = flat_fallback
+    F_data[:flat_delta_wealth] = Float64[
+        get(records, Int32(id), (delta=0.0,)).delta for id in ordered_ids]
+    F_data[:flat_wealth_available] = Float64[
+        get(records, Int32(id), (available=0.0,)).available for id in ordered_ids]
+    F_data[:flat_wealth_home_count] = Int[
+        get(records, Int32(id), (home_count=0,)).home_count for id in ordered_ids]
+    F_data[:flat_wealth_away_count] = Int[
+        get(records, Int32(id), (away_count=0,)).away_count for id in ordered_ids]
     F_data[:wealth_by_match_id] = Dict(
-        Int32(id) => flat_delta_w[i] for (i, id) in enumerate(ordered_ids))
+        Int32(id) => F_data[:flat_delta_wealth][i] for (i, id) in enumerate(ordered_ids))
 end
 
 # ==============================================================================

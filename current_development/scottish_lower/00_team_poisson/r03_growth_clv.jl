@@ -12,7 +12,10 @@ using BayesianFootball
 using DataFrames
 using Statistics
 
-const TP00_ROOT = "current_development/scottish_lower"
+const TP00_ROOT = let d = dirname(@__DIR__)
+    isfile(joinpath(d, "_protocol", "ScottishLowerProtocol.jl")) ? d :
+        "current_development/scottish_lower"
+end
 include(joinpath(TP00_ROOT, "_protocol/ScottishLowerProtocol.jl"))
 using .ScottishLowerProtocol
 include(joinpath(TP00_ROOT, "00_team_poisson/l01_model.jl"))

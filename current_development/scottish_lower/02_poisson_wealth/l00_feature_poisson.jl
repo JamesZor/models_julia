@@ -12,8 +12,9 @@ function _slfp_wealth_lookup(lineups,matches,ids,times,cfg)
     for r in eachrow(lineups)
         id=Int(r.match_id); id in wanted||continue; (:is_substitute in propertynames(lineups)&&coalesce(r.is_substitute,false))&&continue
         side=:team_side in propertynames(lineups) ? lowercase(String(r.team_side))=="home" : Bool(r.is_home_team); key=(id,side); v=get!(vals,key,Float64[])
-        raw=:market_value in propertynames(lineups) ? r.market_value : missing; stamp=:valuation_timestamp in propertynames(lineups) ? SLFP_Features._wealth_as_datetime(r.valuation_timestamp) : nothing; at=get(times,id,get(ko,id,nothing))
-        if !ismissing(raw)&&stamp!==nothing&&at!==nothing&&stamp<at&&isfinite(Float64(raw))&&Float64(raw)>0; push!(v,Float64(raw)); known[key]=get(known,key,0)+1 else push!(v,cfg.fallback_default) end
+        raw=:proposed_market_value in propertynames(lineups) ? r.proposed_market_value : :market_value in propertynames(lineups) ? r.market_value : missing; stamp=:valuation_timestamp in propertynames(lineups) ? SLFP_Features._wealth_as_datetime(r.valuation_timestamp) : nothing; at=get(times,id,get(ko,id,nothing))
+        stamp_ok = (stamp === nothing) || (at === nothing) || (stamp < at)
+        if !ismissing(raw)&&stamp_ok&&isfinite(Float64(raw))&&Float64(raw)>0; push!(v,Float64(raw)); known[key]=get(known,key,0)+1 else push!(v,cfg.fallback_default) end
     end
     out=Dict{Int,Float64}(); for id in wanted; h=get(vals,(id,true),Float64[]); a=get(vals,(id,false),Float64[]); if isempty(h)||isempty(a)||get(known,(id,true),0)==0||get(known,(id,false),0)==0; continue; end; out[id]=(log(sum(h))-log(sum(a)))/cfg.log_scale end; out
 end

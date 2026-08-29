@@ -40,7 +40,7 @@ Shifts scalar probabilities and MCMC posterior distributions to align with histo
 
 ### Environment Setup
 The project uses `Revise.jl` for hot-reloading and `ThreadPinning.jl` for CPU efficiency.
-Always launch Julia with your target threads (e.g., `julia --project -t 32`) to maximize concurrent queue execution.
+Always launch Julia with target physical threads (e.g., `julia --project -t 16` on `mcmc-beast`) to maximize concurrent queue execution without hyperthreading collisions.
 ```julia
 using Pkg; Pkg.activate(".")
 using Revise
@@ -55,12 +55,20 @@ using ThreadPinning; pinthreads(:cores) # Must be run before sampling to lock OS
 4. **Run Experiment**: `results = Experiments.run_experiment(task)`
 5. **Save**: `Experiments.save_experiment(results)`
 
-### 🖥️ Remote Compute Execution (`mcmc-beast` & `archpc`)
-Heavy MCMC sampling and evaluation grids run on the dedicated `mcmc-beast` compute node (32 cores) via nested tmux panels. Postgres database `betdb` runs on `archpc:5433`.
-- **Full Guide & Protocol:** [`docs/setup/agy_remote_execution_guide.md`](file:///home/james/bet_project/BayesianFootball/docs/setup/agy_remote_execution_guide.md)
+### 🖥️ Remote Compute & Agent / REPL Tmux Control
+Heavy MCMC sampling and evaluation grids run on the dedicated `mcmc-beast` compute node (16 physical cores / 32 SMT threads) via nested tmux panels. Postgres database `betdb` runs on `archpc:5433`.
+- **Infrastructure & Prompting Context Guide:** [`docs/architecture/ai_agent_infrastructure_and_execution_context.md`](file:///home/james/bet_project/BayesianFootball/docs/architecture/ai_agent_infrastructure_and_execution_context.md)
+- **AGY Tmux & REPL Control Guide:** [`docs/setup/agy_tmux_agent_and_repl_control_guide.md`](file:///home/james/bet_project/BayesianFootball/docs/setup/agy_tmux_agent_and_repl_control_guide.md)
+- **Full Remote Execution Protocol:** [`docs/setup/agy_remote_execution_guide.md`](file:///home/james/bet_project/BayesianFootball/docs/setup/agy_remote_execution_guide.md)
 - **Outer Tmux Session:** `scottish_runner:1.1` (SSH to `mcmc-beast`)
 - **Inner Windows on Beast:** `0/3:julia` (REPL with pinned threads), `1:btop` (CPU/RAM), `2:bash` (git sync).
-- **Workflow:** Edit code locally -> `git push` -> `tmux send-keys` pull on beast (window 2) -> `include(...)` in REPL (window 3).
+- **Subagent Sessions:** e.g. `features:1.1` (Claude Code subagent).
+- **Tmux Control Rules:**
+  - Send instructions to Claude subagents: `tmux send-keys -t features:1.1 '<prompt>' C-m`
+  - Send code to persistent REPL: `tmux send-keys -t <repl_pane> 'include("...")' C-m`
+  - Capture pane state: `tmux capture-pane -t <pane> -p -S -50`
+  - Zero-TTFX: Use persistent REPL with `Revise` to avoid Julia cold-start package overhead.
+  - Rsync Rule: `rsync -avz --exclude '.cache/' --exclude 'data/' ...` (never clobber remote data caches).
 
 ## 🧪 Prototyping & Iteration (`current_development/`)
 

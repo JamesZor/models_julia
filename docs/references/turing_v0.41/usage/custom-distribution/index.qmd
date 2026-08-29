@@ -1,0 +1,121 @@
+---
+title: Custom Distributions
+engine: julia
+aliases:
+  - ../../tutorials/usage-custom-distribution/index.html
+  - ../../tutorials/docs-09-using-turing-advanced/index.html
+---
+
+```{julia}
+#| echo: false
+#| output: false
+using Pkg;
+Pkg.instantiate();
+```
+
+`Turing.jl` supports the use of distributions from the Distributions.jl package. By extension, it also supports the use of customised distributions by defining them as subtypes of the `Distribution` type in the Distributions.jl package, as well as corresponding functions.
+
+This page shows a workflow of how to define a customised distribution, using our own implementation of a simple `Uniform` distribution as a simple example.
+
+```{julia}
+using Distributions, Turing, Random
+```
+
+## Distribution type
+
+First, define a type of the distribution, as a subtype of a corresponding distribution type in the Distributions.jl package.
+
+```{julia}
+struct CustomUniform <: ContinuousUnivariateDistribution end
+```
+
+## Sampling and log-probability evaluation
+
+Second, implement the `rand` and `logpdf` functions for your new distribution, which will be used to run the model.
+
+```{julia}
+# sample in [0, 1]
+Base.rand(rng::AbstractRNG, ::CustomUniform) = rand(rng)
+
+# p(x) = 1 → log[p(x)] = 0
+Distributions.logpdf(::CustomUniform, x::Real) = zero(x)
+```
+
+## Bijectors
+
+Once you have defined the above, you should be able to use your distribution in a Turing model and sample with `Prior()`.
+
+```{julia}
+@model function demo()
+    x ~ CustomUniform()
+end
+
+mean(sample(demo(), Prior(), 100))
+```
+
+However, to make this work with other samplers (and in particular HMC and NUTS), we also have to define the corresponding bijectors for our distribution.
+This is because HMC and NUTS operate in an unconstrained space.
+
+Turing v0.43 onwards uses the `Bijectors.VectorBijectors` interface, [which is documented here](https://turinglang.org/Bijectors.jl/stable/vector/).
+
+The most important functions to define are `Bijectors.VectorBijectors.from_linked_vec` and `Bijectors.VectorBijectors.to_linked_vec`, which define how to transform from the constrained space to the unconstrained space and back, respectively.
+On top of that, you also need to define `ChangesOfVariables.with_logabsdet_jacobian` for the
+resulting function.
+(Bijectors reexports that function for convenience.)
+
+Specifically, `to_linked_vec` maps from samples (i.e. floats in `[0, 1]`) to a vector where every element is independent and unconstrained; and `from_linked_vec` is the inverse.
+*Note that both these functions take the distribution as the argument, and return the transformation function!*
+Then `with_logabsdet_jacobian` takes that function and *its* argument, and returns a tuple of the transformed value and the log-absolute-determinant of the Jacobian of the transformation.
+
+:::{.callout-note}
+## Jacobians
+
+If you are not familiar with Jacobians, this is explained in more detail at [Variable Transformations]({{< meta dev-transforms-distributions >}}).
+:::
+
+This API is most easily explained by example.
+The forward transform (`to_linked_vec`) can be accomplished with a logit:
+
+```{julia}
+import Bijectors
+using StatsFuns: logit, logistic, log1pexp
+
+function veclogit(x::Real)
+    return [logit(x)]
+end
+
+Bijectors.VectorBijectors.to_linked_vec(::CustomUniform) = veclogit
+
+Bijectors.with_logabsdet_jacobian(::typeof(veclogit), x) = begin
+    logit_x = logit(x)
+    return [logit_x], -logit_x
+end
+```
+
+Often it can be easier to create and dispatch on a callable struct; we'll demonstrate that
+for the inverse transform.
+
+```{julia}
+import Bijectors
+
+struct OnlyLogistic end
+(::OnlyLogistic)(y::AbstractVector{<:Real}) = 1/(1 + exp(-y[1]))
+
+Bijectors.VectorBijectors.from_linked_vec(::CustomUniform) = OnlyLogistic()
+
+function Bijectors.with_logabsdet_jacobian(::OnlyLogistic, y::AbstractVector{<:Real})
+    yi = y[]
+    res = logistic(yi)
+    logjac = yi - (2 * log1pexp(yi))
+    return res, logjac
+end
+```
+
+Once you have defined these, you should be able to sample with HMC and NUTS as well:
+
+```{julia}
+sample(demo(), NUTS(), 100)
+```
+
+There is a lot of functionality that is already in Bijectors.jl which you could reuse.
+In fact, for bounded univariate distributions Bijectors already defines default transforms, so in this specific instance the above code is not strictly necessary.
