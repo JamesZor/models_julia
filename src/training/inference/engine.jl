@@ -485,6 +485,8 @@ function fit_model(ds::Data.DataStore, config::FitConfig; quiet::Bool = false, k
                      quiet = quiet, kwargs...)
 end
 
+fit_model(config::FitConfig, ds::Data.DataStore; kwargs...) = fit_model(ds, config; kwargs...)
+
 """
     fit_model(config::FitConfig; feature_sets, oos_fixtures = nothing, kwargs...) -> Fit
 
