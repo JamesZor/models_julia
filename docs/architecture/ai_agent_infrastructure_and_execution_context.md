@@ -150,17 +150,59 @@ Across 720 fitted historical matches and 20 held-out season-opener fixtures:
 
 ---
 
-## 6. Standard AI Agent Prompting Block
+## 6. Unified V2 Pipeline (`05` -> `09` Production Standard)
+
+The production codebase is organized into five graduated, zero-allocation pipeline stages:
+
+1. **`05` Composable Count Builder (`src/models/pregame/builder/`)**:
+   - Assemble models via generic `add!` calls on `CountModelBuilder`.
+   - Compiles into concrete, type-stable `PoissonCountModel` or `NegBinCountModel` with $O(1)$ ReverseDiff tapes.
+2. **`06` Typed Posterior Latents (`src/models/latents/`)**:
+   - Standardized `CountLatents` container with zero-allocation `SmileScoreGrid` scoring kernels.
+3. **`07` Unified Inference Lifecycle (`src/training/inference/`)**:
+   - `fit_model(FitConfig, ds)` produces an atomic `Fit` container.
+   - Automated MCMC convergence diagnostics (`ConvergenceSummary`) gating bankroll risk.
+   - Execution strategies: `AutoExecution()`, `QueuedExecution()`, `ThreadedExecution()`, `SequentialExecution()`.
+4. **`08` Unified Evaluation Framework (`src/evaluation/`)**:
+   - Zero-copy `OddsView` against match markets.
+   - `evaluate_predictions(fit, ds)` scores LogLoss, CRPS, Brier score, RPS, and ECE against closing prices.
+5. **`09` Zero-Allocation Portfolio & Staking (`src/Portfolio/`)**:
+   - O(1) indexed market lookups via `OddsIndex`.
+   - `BookWorkspace` pre-allocates matrix and probability buffers once per fold.
+   - `simulate_portfolio` simulates fractional Kelly bankroll growth with automated convergence gating.
+
+---
+
+## 7. Fast Test Execution Protocol
+
+* **Single Suite (Fastest for Dev, ~15-20s):**
+  ```bash
+  julia --project -t 8 -e 'using Test, BayesianFootball; include("test/unified_portfolio_tests.jl")'
+  ```
+* **Concurrent Full Suite (4 worker processes, ~40-45s):**
+  ```bash
+  julia --project -t 8 test/run_parallel_tests.jl
+  ```
+* **Standard Sequential Suite (Full regression, ~3.5 min):**
+  ```bash
+  julia --project -t 8 test/runtests.jl
+  ```
+
+---
+
+## 8. Standard AI Agent Prompting Block
 
 When prompting a new AI agent in this workspace, provide this context block:
 
 ```text
 You are working on BayesianFootball.jl across a 3-node topology:
-1. Local Laptop: Development workstation (/home/james/bet_project/BayesianFootball).
+1. Local Laptop / archpc: Development workstation (/home/james/bet_project/BayesianFootball). 8 physical cores.
 2. Remote Compute (mcmc-beast): 16 physical cores (32 SMT). Always launch Julia with -t 16 and run `using ThreadPinning; pinthreads(:cores)`. BLAS threads = 1.
 3. Database (archpc:5433): PostgreSQL betdb.
 
-Rules for Remote Execution:
+Rules for Execution:
+- Use the Unified V2 Pipeline: CountModelBuilder, fit_model, evaluate_predictions, run_portfolio_simulation.
+- Run tests via fast parallel runner: julia --project -t 8 test/run_parallel_tests.jl (~40s).
 - Sync code to mcmc-beast using: rsync -avz --exclude '.cache/' --exclude 'data/' ...
 - Do not run colliding jobs on mcmc-beast when an agent or MCMC chain is running.
 - Ensure all features operate in log-intensity space (eta = log lambda) with Float64/Int AD-safe vectors.

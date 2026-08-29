@@ -1,6 +1,6 @@
 # AGENTS.md
 
-> **AI Agent Orchestration, Infrastructure, and Tmux Tooling Guide**  
+> **AI Agent Orchestration, Infrastructure, and Architecture Guide**  
 > Guidance for AI agents (Antigravity CLI, Claude Code, etc.) operating across the `BayesianFootball.jl` distributed mesh.
 
 ---
@@ -15,7 +15,67 @@
 
 ---
 
-## 2. Infrastructure & Compute Rules
+## 2. Unified V2 Pipeline Quick-Start (Production Standard)
+
+The production pipeline is organized into 5 standardized, type-stable stages:
+
+```julia
+using BayesianFootball
+using DataFrames, Dates, ThreadPinning
+
+pinthreads(:cores)
+LinearAlgebra.BLAS.set_num_threads(1)
+
+# 1. Data Layer
+ds = Data.load_datastore_cached(Data.ScottishLower())
+
+# 2. Composable Model Builder
+model = CountModelBuilder(:poisson_model) |>
+    add(GlobalInterception()) |>
+    add(TimeDecayDynamics(days_half_life = 180.0)) |>
+    add(GlobalHomeAdvantage()) |>
+    add(PoissonObservation()) |>
+    build
+
+# 3. Unified Inference Lifecycle & Convergence Gating
+fit_cfg = FitConfig(
+    name      = "poisson_fit",
+    model     = model,
+    splitter  = Data.CVConfig(target_seasons = ["24/25"], window_seasons = 3),
+    sampler   = NUTSConfig(n_samples = 1_000, n_chains = 4),
+    execution = AutoExecution() # Resolves to QueuedExecution or ThreadedExecution
+)
+fit = fit_model(fit_cfg, ds)
+
+# 4. Unified Evaluation (LogLoss, CRPS, Brier, RPS, ECE vs Closing Odds)
+eval_report = evaluate_predictions(fit, ds)
+
+# 5. Zero-Alloc Portfolio & Staking Simulation
+spec   = BookSpec(markets = Data.MarketConfig([Data.Market1X2(), Data.MarketOverUnder(2.5)]), shrink = BakerMcHale())
+policy = PolicySpec(trust = FlatTrust(0.25), risk = SlateDrawdown(20.0), cap = FixedCap(0.25))
+result, books, rep = run_portfolio_simulation(spec, policy, fit, ds.odds, ds)
+```
+
+---
+
+## 3. Fast Test Execution Protocol
+
+Always use the fastest test tier appropriate for your change:
+
+```bash
+# 1. Single Module Test (FASTEST: 15-20s)
+julia --project -t 8 -e 'using Test, BayesianFootball; include("test/unified_portfolio_tests.jl")'
+
+# 2. Concurrent Full Suite (4 worker processes: ~40-45s)
+julia --project -t 8 test/run_parallel_tests.jl
+
+# 3. Standard Sequential Suite (Full baseline: ~3.5 min)
+julia --project -t 8 test/runtests.jl
+```
+
+---
+
+## 4. Infrastructure & Compute Rules
 
 1. **Topology:**
    - **Local Laptop:** Development workstation (`/home/james/bet_project/BayesianFootball`).
@@ -23,7 +83,7 @@
    - **Database Host (`archpc:5433`):** PostgreSQL `betdb`.
 
 2. **CPU & Threads:**
-   - Always launch Julia with `-t 16` on `mcmc-beast`.
+   - Always launch Julia with `-t 16` on `mcmc-beast` (or `-t 8` on `archpc`).
    - Always run `using ThreadPinning; pinthreads(:cores)` before starting MCMC chains.
    - Always set `LinearAlgebra.BLAS.set_num_threads(1)` during sampling to prevent CPU oversubscription.
    - Ensure local inference daemons (like `ollama`) remain disabled (`systemctl disable/stop ollama`).
@@ -34,7 +94,7 @@
 
 ---
 
-## 3. Agent-to-Agent & REPL Tmux Tooling
+## 5. Agent-to-Agent & REPL Tmux Tooling
 
 ### Controlling Claude Subagents
 ```bash

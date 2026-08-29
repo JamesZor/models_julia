@@ -4,136 +4,128 @@ A sophisticated Bayesian hierarchical modeling framework for football (soccer) a
 
 ## 🚀 Project Overview
 
-`BayesianFootball` is a two-layer predictive system built in Julia:
-- **Layer 1 (L1):** Probabilistic engines using `Turing.jl` to learn team strengths, dynamics, and goal-scoring distributions from historical data (including xG).
-- **Layer 2 (L2):** A calibration pipeline using `GLM` to correct systemic biases in L1 predictions, ensuring well-calibrated probabilities for Kelly staking.
-
-The system is designed for high performance, utilizing MCMC sampling (NUTS), ADVI, and multi-threaded processing of historical betting markets.
-
----
-
-## 🏗️ Core Architecture
-
-### Layer 0: Data Module (`src/Data/`)
-The foundational data layer that handles the extraction, transformation, and validation of raw PostgreSQL data into memory-optimized Julia `DataFrames`.
-- **`DataStore`**: A strictly typed container that holds domain-specific DataFrames (Matches, Odds, BetfairOdds, Statistics, Lineups, Incidents) for a requested tournament segment.
-- **SQL Pipeline**: Executes concurrent SQL queries (`@async`) via `LibPQ` and applies strict schemas and mathematical enrichments (e.g., vig removal) during the ETL process.
-- **Fetch -> Process -> QA**: A 3-step contract defined in `fetchers/interfaces.jl` to ensure every data domain meets strict integrity and type safety standards before reaching Layer 1.
-
-### Layer 1: Bayesian Engines (`src/Models/`)
-Standardized components ("Mathematical Lego Blocks") are assembled into Master Engines:
-- **`DynamicPxGRecombModel`**: **(Production Champion)** Multi-task continuous Proxy xG (`pxG`) and open-play goals engine co-training with Starting-XI squad market wealth ($\Delta W$) and hierarchical officiating penalty submodels. Recombines latents via exact discrete Poisson convolution. [Architecture Guide](file:///home/james/bet_project/BayesianFootball/docs/models/recombination_pxg_wealth_architecture.md).
-- **`DynamicRecombinedGoalsModel`**: Recombination engine decomposing gross scores into open-play goals, penalty awards, and own goals with squad wealth adjustment.
-- **`DynamicGoalsModel`**: Historical gross goals-only engine.
-- **`DynamicXGModel`**: Unified engine co-training on True xG and goals via a `Kappa` conversion rate.
-- **`DynamicCopulaGoalsModel`**: Evaluates match outcomes using a Frank Copula joint distribution over Negative Binomial marginals to capture team-specific match correlation styles.
-- **Components**: Interception (μ), Dispersion (variance), Home Advantage (hierarchical), Dynamics (multi-scale GRW), Squad Wealth (linear/none), Proxy xG (Gamma observation), Recombination (officiating/empirical), and Copula (hierarchical correlation).
-
-### Layer 2: Calibration (`src/Calibration/`)
-Shifts scalar probabilities and MCMC posterior distributions to align with historical outcomes.
-- **Workflow**: `build_l2_training_df` -> `train_calibrators` -> `apply_calibrators`.
-- **Preservation**: Crucially, L2 shifts the *entire* distribution, maintaining the uncertainty required for optimal staking.
+`BayesianFootball` is a multi-tier Bayesian predictive and portfolio system built in Julia:
+- **Layer 0 (Data):** Strictly typed PostgreSQL extraction, memory-optimized DataStores, and vig-removed market math.
+- **Layer 1 (Bayesian Engines):** Fast Turing.jl hierarchical models using ReverseDiff compiled tapes for team ratings, player dynamics, and score distributions.
+- **Layer 2 (Unified Inference & Latents):** Automated MCMC convergence audits, typed posterior latents (`CountLatents`), and zero-allocation score tensor kernels.
+- **Layer 3 (Unified Evaluation):** Point-in-time prediction pricing, Log-Loss, CRPS, Brier score, RPS, and Expected Calibration Error (ECE) against market closing odds.
+- **Layer 4 (Zero-Alloc Portfolio & Staking):** Fast odds indexing (`OddsIndex`), fold-level pre-allocated workspaces (`BookWorkspace`), Baker-McHale parameter shrinkage, and fractional Kelly staking simulation with automated bankroll convergence gating.
 
 ---
 
-## 🛠️ Development Workflow
+## 🏗️ Core Architecture (The Unified V2 Stack)
 
-### Environment Setup
-The project uses `Revise.jl` for hot-reloading and `ThreadPinning.jl` for CPU efficiency.
-Always launch Julia with target physical threads (e.g., `julia --project -t 16` on `mcmc-beast`) to maximize concurrent queue execution without hyperthreading collisions.
+### 1. Composable Count Builder (`src/models/pregame/builder/`)
+- **`CountModelBuilder`**: Assemble models modularly with generic `add!` dispatches.
+- **`PoissonCountModel` & `NegBinCountModel`**: Concrete, statically-typed prediction engines compiled into $O(1)$ ReverseDiff tapes.
+- **Mathematical Lego Blocks**: Interceptions (`GlobalInterception`, `HierarchicalInterception`), Dynamics (`TimeDecayDynamics`, `GRWDynamics`, `MultiScaleGRW`), Home Advantage (`GlobalHomeAdvantage`, `SingleHomeAdvantage`), and Covariates (`WealthCovariate`, `DistanceCovariate`).
+
+### 2. Typed Posterior Latents & Score Grids (`src/models/latents/`, `src/predictions/score_grids/`)
+- **`CountLatents`**: Typed container for $\lambda_{\text{home}}, \lambda_{\text{away}}$ posterior draws.
+- **`SmileScoreGrid`**: Zero-allocation in-place score grid kernels for Poisson, Negative Binomial, and Dixon-Coles distributions.
+
+### 3. Unified Inference Lifecycle (`src/training/inference/`)
+- **`Fit` Container**: Atomic unit of an estimated model, carrying `config`, `folds`, `latents`, `diagnostics`, and `metadata`.
+- **`fit_model(FitConfig, ds)`**: End-to-end inference orchestrator with automatic ReverseDiff tape compilation.
+- **Automated Convergence Diagnostics (`ConvergenceSummary`)**: Hard audit gates for $\hat{R} < 1.05$, Bulk/Tail ESS, and divergences.
+- **Execution Strategies**: `AutoExecution()`, `QueuedExecution()`, `ThreadedExecution()`, `SequentialExecution()`.
+
+### 4. Unified Evaluation Framework (`src/evaluation/`)
+- **`OddsView` & `EvaluationWorkspace`**: Zero-copy dense views over odds matrices with strict Point-In-Time (`stamp < kickoff`) assertions.
+- **`evaluate_predictions(fit, ds)`**: Prices match probabilities across the posterior score grid and scores Log-Loss, CRPS, Brier score, RPS, and calibration curves vs market closing odds.
+- **Convergence Refusal**: Evaluators refuse unconverged fits to prevent misleading benchmarks.
+
+### 5. Unified Portfolio & Staking (`src/Portfolio/`)
+- **`OddsIndex`**: O(1) indexed lookups for match markets, eliminating expensive full-frame scans.
+- **`BookWorkspace`**: One pre-allocated matrix and probability buffer per fold, enabling zero-allocation Kelly allocation sweeps.
+- **`simulate_portfolio` & `run_portfolio_simulation`**: Simulates bankroll trajectories under fractional Kelly staking, slate drawdown caps, and commission modeling.
+- **Convergence Gating**: Unconverged models throw a `ConvergenceRefusal` before bankroll capital is risked.
+
+---
+
+## 🛠️ Modern Workflow Example
+
 ```julia
-using Pkg; Pkg.activate(".")
-using Revise
 using BayesianFootball
-using ThreadPinning; pinthreads(:cores) # Must be run before sampling to lock OS threads
+using DataFrames, Dates, ThreadPinning
+
+# 1. CPU thread pinning & BLAS isolation
+pinthreads(:cores)
+LinearAlgebra.BLAS.set_num_threads(1)
+
+# 2. Load cached tournament data
+ds = Data.load_datastore_cached(Data.ScottishLower())
+
+# 3. Assemble model with Composable Count Builder
+model = CountModelBuilder(:poisson_timedecay_2425) |>
+    add(GlobalInterception()) |>
+    add(TimeDecayDynamics(days_half_life = 180.0)) |> # Team-level time decay
+    add(GlobalHomeAdvantage()) |>
+    add(PoissonObservation()) |>
+    build
+
+# 4. Train via Unified Inference Engine
+fit_cfg = FitConfig(
+    name      = "poisson_2425",
+    model     = model,
+    splitter  = Data.CVConfig(target_seasons = ["24/25"], window_seasons = 3),
+    sampler   = NUTSConfig(n_samples = 1_000, n_chains = 4, target_accept = 0.85),
+    execution = AutoExecution()
+)
+fit = fit_model(fit_cfg, ds)
+
+# 5. Evaluate forecast accuracy vs closing odds
+eval_report = evaluate_predictions(fit, ds)
+println(eval_report)
+
+# 6. Simulate fractional Kelly portfolio with risk policy
+spec = BookSpec(
+    markets   = Data.MarketConfig([Data.Market1X2(), Data.MarketOverUnder(2.5), Data.MarketBTTS()]),
+    price     = DeArb(),
+    allocator = KellyLogUtility(),
+    shrink    = BakerMcHale()
+)
+policy = PolicySpec(
+    trust     = FlatTrust(0.25),      # 25% Quarter Kelly
+    risk      = SlateDrawdown(20.0),  # 20% max slate risk
+    cap       = FixedCap(0.25)        # 25% max bankroll exposure
+)
+
+result, books, rep = run_portfolio_simulation(spec, policy, fit, ds.odds, ds)
+display(portfolio_report(result))
 ```
 
-### Standard Training Pipeline
-1. **Load Data**: `ds = Data.load_datastore_cached(Data.ScottishLower())`
-2. **Define Model**: `model = Models.PreGame.DynamicXGModel(...)`
-3. **Create Task**: `task = Experiments.create_experiment_task(ds, model, "experiment_name", "./save_dir")`
-4. **Run Experiment**: `results = Experiments.run_experiment(task)`
-5. **Save**: `Experiments.save_experiment(results)`
+---
 
-### 🖥️ Remote Compute & Agent / REPL Tmux Control
-Heavy MCMC sampling and evaluation grids run on the dedicated `mcmc-beast` compute node (16 physical cores / 32 SMT threads) via nested tmux panels. Postgres database `betdb` runs on `archpc:5433`.
-- **Infrastructure & Prompting Context Guide:** [`docs/architecture/ai_agent_infrastructure_and_execution_context.md`](file:///home/james/bet_project/BayesianFootball/docs/architecture/ai_agent_infrastructure_and_execution_context.md)
-- **AGY Tmux & REPL Control Guide:** [`docs/setup/agy_tmux_agent_and_repl_control_guide.md`](file:///home/james/bet_project/BayesianFootball/docs/setup/agy_tmux_agent_and_repl_control_guide.md)
-- **Full Remote Execution Protocol:** [`docs/setup/agy_remote_execution_guide.md`](file:///home/james/bet_project/BayesianFootball/docs/setup/agy_remote_execution_guide.md)
-- **Outer Tmux Session:** `scottish_runner:1.1` (SSH to `mcmc-beast`)
-- **Inner Windows on Beast:** `0/3:julia` (REPL with pinned threads), `1:btop` (CPU/RAM), `2:bash` (git sync).
-- **Subagent Sessions:** e.g. `features:1.1` (Claude Code subagent).
-- **Tmux Control Rules:**
-  - Send instructions to Claude subagents: `tmux send-keys -t features:1.1 '<prompt>' C-m`
-  - Send code to persistent REPL: `tmux send-keys -t <repl_pane> 'include("...")' C-m`
-  - Capture pane state: `tmux capture-pane -t <pane> -p -S -50`
-  - Zero-TTFX: Use persistent REPL with `Revise` to avoid Julia cold-start package overhead.
-  - Rsync Rule: `rsync -avz --exclude '.cache/' --exclude 'data/' ...` (never clobber remote data caches).
+## 🧪 Testing Suite & Test Runners
 
-## 🧪 Prototyping & Iteration (`current_development/`)
+Tests use Julia's `@testset` framework.
 
-New features and architectural changes are first prototyped in the `current_development/` directory before being refactored into `src/`. This allows for high-velocity, REPL-driven development.
-
-### Naming Conventions
-Files in this directory follow a strict **Loader/Runner** pattern:
-- **`lXX_*.jl` (Loader)**: Contains the structural code—struct definitions, functions, and mathematical logic. Think of this as a temporary module.
-- **`rXX_*.jl` (Runner)**: Contains the execution logic—loading data, calling loader functions, running experiments, and visualizing results.
-- **`XX` (Iteration)**: A two-digit number (e.g., `00`, `01`) representing the iteration. Increment this when starting a fresh approach or a major refactor of the prototype.
-
-### AI Guidance for Prototypes
-When asked to build a new feature or experiment:
-1. **Start in `current_development/`**: Do not modify `src/` directly unless instructed.
-2. **Create a Pair**: Always create an `lXX` and an `rXX` file to keep logic separated from execution.
-3. **REPL-First**: Write code that is easy to execute line-by-line in a Julia REPL.
-4. **Graduation**: Only move code to `src/` once the prototype is validated and stable in the `rXX` runner.
-
-### Running Tests
-Tests are located in the `test/` directory and use the standard `@testset` framework.
+### 1. Fast Concurrent Test Runner (~40s)
+Dispatches 4 worker processes concurrently across CPU cores:
 ```bash
-# Run all tests
-julia --project -e 'using Pkg; Pkg.test()'
+julia --project -t 8 test/run_parallel_tests.jl
 ```
-Individual test files: `data_tests.jl`, `features_tests.jl`, `pregame_tests.jl`.
+
+### 2. Standard Sequential Runner (~3.5 min)
+```bash
+julia --project -t 8 test/runtests.jl
+```
+
+### 3. Targeted Sub-Suite Test (~15s)
+```bash
+julia --project -t 8 -e 'using Test, BayesianFootball; include("test/unified_portfolio_tests.jl")'
+```
 
 ---
 
 ## 📂 Module Map
 
-- **`Data`**: SQL extraction, ETL, and `Markets` module (vig removal, fair odds).
-- **`Features`**: AD-safe data flattening and team/time indexing.
-- **`Models`**: Component-driven Turing models (Home Advantage, Dynamics, etc.).
-- **`Samplers`**: Wrappers for NUTS, ADVI, MAP, and `QueuedNUTSConfig` for high-performance flattened MCMC queue execution.
-- **`Training`**: Orchestration of the training process across splits. Supports queued Independent scaling via `max_concurrent_tasks`.
-- **`Experiments`**: Result persistence, listing, and loading from disk.
-- **`Predictions`**: Generates Posterior Predictive Distributions (PPD) from chains.
-- **`Calibration`**: L2 probability shifting and evaluation.
-- **`Signals`**: Betting signal generation and Kelly staking logic.
-- **`BackTesting`**: Performance analysis of historical strategies.
-
----
-
-## 📜 Development Conventions
-
-1. **Multiple Dispatch**: Use abstract types (e.g., `AbstractDynamicsConfig`) to allow interchangeable components without modifying master engines.
-2. **AD-Safety**: Ensure all features are `Float64` or `Int` and use `coalesce(x, NaN)` to handle missingness in a way that doesn't crash ReverseDiff.
-3. **Memory Efficiency**: Prefer `InlineStrings` for team names and tournament segments. Use zero-allocation views where possible during L2 prep.
-4. **Turing Protection**: Use `clamp` and `@addlogprob! -Inf` to prevent gradient explosions in likelihood calculations.
-
----
-
-## 🗄️ Data Contract (fetchers/interfaces.jl)
-
-Every domain (Matches, Odds, etc.) must implement:
-1. **FETCH**: Raw SQL execution.
-2. **PROCESS**: Pivot, enrich (Markets math), and `apply_schema!`.
-3. **QA VALIDATE**: Hard checks for critical columns and logical bounds.
-
----
-
-## 🎯 Adding New Components
-
-### New League/Segment
-Add a singleton struct to `src/Data/fetchers/segments.jl` and extend `tournament_ids(::MyNewLeague)`.
-
-### New Model Component
-Implement the `Config`, `Builder` (Turing `@model`), and `Extractor` (Chain processing) interface in `src/Models/PreGame/components/`.
+- **`Data`**: SQL extraction, ETL, and `Markets` module (vig removal, fair odds, CLM).
+- **`Features`**: AD-safe data flattening, team/time indexing, and lineup market valuations.
+- **`Models`**: Composable count builder (`CountModelBuilder`), Turing model components, and master engines.
+- **`Samplers`**: Sampler configs for NUTS, ADVI, MAP, and `QueuedNUTSConfig`.
+- **`Training`**: Unified inference engine (`fit_model`), execution dispatchers, and convergence auditing.
+- **`Predictions`**: Typed latents (`CountLatents`) and in-place score grid kernels (`SmileScoreGrid`).
+- **`Evaluation`**: Unified evaluation framework (`OddsView`, `evaluate_predictions`, LogLoss, CRPS, RPS, ECE).
+- **`Portfolio`**: Fast odds indexing (`OddsIndex`), `BookWorkspace`, Kelly log-utility allocator, and `simulate_portfolio`.

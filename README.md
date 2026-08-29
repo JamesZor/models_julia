@@ -1,551 +1,144 @@
-# models_julia
+# BayesianFootball.jl
 
+A sophisticated Bayesian hierarchical modeling framework for football (soccer) analytics, market evaluation, and portfolio management in Julia.
 
-# 🗄️ Data Module (SQL Datastore Pipeline)
+---
 
-This module handles the extraction, transformation, and validation of raw PostgreSQL data into memory-optimized Julia `DataFrames`. It serves as the foundational data layer for the `BayesianFootball` package.
+## 🚀 Overview & Key Capabilities
 
-## Basic Usage
+`BayesianFootball.jl` provides an end-to-end Bayesian quantitative workflow:
+* **Layer 0 — Memory-Optimized DataStore**: Concurrent SQL extraction via `LibPQ`, strict typed schemas (`InlineStrings`), and vig-removed market math.
+* **Layer 1 — Composable Count Builder & Master Engines**: Mathematical Lego blocks assembled modularly into `PoissonCountModel` or `NegBinCountModel` with $O(1)$ ReverseDiff compiled tapes.
+* **Layer 2 — Unified Inference Lifecycle (`Fit`)**: Multi-threaded MCMC sampling (NUTS/ADVI), automated convergence auditing ($\hat{R}$, ESS, divergences), and atomic disk persistence.
+* **Layer 3 — Unified Evaluation Framework**: Zero-copy `OddsView` over match markets with bit-identical Log-Loss, CRPS, Brier score, RPS, and Expected Calibration Error (ECE) against market closing prices.
+* **Layer 4 — Zero-Allocation Portfolio & Staking**: O(1) indexed lookups (`OddsIndex`), fold-level pre-allocated workspaces (`BookWorkspace`), Baker-McHale parameter shrinkage, and fractional Kelly staking simulation with automated bankroll convergence gating.
 
-The primary entry point for the module is `load_datastore_cached` (which falls back to `load_datastore_sql` if the cache is expired). It takes a specific tournament segment, executes concurrent SQL queries (`@async`), processes the results, caches them locally, and returns a unified `DataStore` object.
+---
+
+## ⚡ Quick-Start: End-to-End Pipeline
+
+Here is how to train and simulate a team-level time-decay Poisson model for the **24/25** season using the unified v2 stack:
 
 ```julia
 using BayesianFootball
+using DataFrames, Dates, ThreadPinning
 
-# 1. Fetch all data for the Scottish Lower leagues (uses cache if available)
-ds = BayesianFootball.Data.load_datastore_cached(BayesianFootball.Data.ScottishLower())
+# 1. Thread topology & BLAS isolation
+pinthreads(:cores)
+LinearAlgebra.BLAS.set_num_threads(1)
 
-# 2. Access the individual DataFrames
-matches_df = ds.matches
-odds_df    = ds.odds
-bf_odds_df = ds.betfair_odds
-```
+# 2. Load cached tournament data
+ds = Data.load_datastore_cached(Data.ScottishLower())
 
-## 📦 The `DataStore` Object
+# 3. Assemble model with Composable Count Builder
+model = CountModelBuilder(:poisson_timedecay_2425) |>
+    add(GlobalInterception()) |>
+    add(TimeDecayDynamics(days_half_life = 180.0)) |> # Team-level exponential time decay
+    add(GlobalHomeAdvantage()) |>
+    add(PoissonObservation()) |>
+    build
 
-The `DataStore` is a strictly typed container that holds the data for the requested segment. Every DataFrame inside the `DataStore` has been heavily optimized using `InlineStrings` and strict schemas to minimize RAM usage.
+# 4. Train via Unified Inference Engine
+fit_cfg = FitConfig(
+    name      = "poisson_2425",
+    model     = model,
+    splitter  = Data.CVConfig(target_seasons = ["24/25"], window_seasons = 3),
+    sampler   = NUTSConfig(n_samples = 1_000, n_chains = 4, target_accept = 0.85),
+    execution = AutoExecution() # Resolves to QueuedExecution or ThreadedExecution
+)
+fit = fit_model(fit_cfg, ds)
 
-* `segment::DataTournemantSegment` - The specific slice of data requested (e.g., `ScottishLower()`).
-* `matches::DataFrame` - Core match details, scores, dates, and xG presence.
-* `statistics::DataFrame` - Match-level statistics (possession, shots, etc.) pivoted into wide `_home` and `_away` format.
-* `odds::DataFrame` - Betting market data, fully enriched by the `Markets` module (includes implied probabilities, vig removal, fair odds, and Closing Line Movement).
-* `betfair_odds::DataFrame` - High-frequency Betfair exchange tick data (traded prices over time leading up to kickoff).
-* `lineups::DataFrame` - Player-level starting XI, substitutes, and individual JSON performance stats.
-* `incidents::DataFrame` - Event-level timeline data (goals, cards, substitutions, VAR decisions).
+# 5. Evaluate forecast accuracy vs closing odds
+eval_report = evaluate_predictions(fit, ds)
+println(eval_report)
 
----
-
-## ⚙️ Architecture & The Data Flow
-
-To ensure data integrity, every single data domain (Matches, Odds, etc.) passes through a strict 3-step pipeline defined in `fetchers/interfaces.jl`. 
-
-When you call `load_data(conn, segment, MatchesData())`, the orchestrator does the following:
-
-1. **FETCH (`fetch_data`)**: Executes the raw SQL query via `LibPQ` to pull data for the specific `tournament_ids`.
-2. **PROCESS (`process_data`)**: Performs the Julia-side ETL. This includes calculating dates, pivoting wide formats, applying mathematical enrichments (like the `Markets` probability math), and running `apply_schema!` to enforce strict column types.
-3. **QA VALIDATE (`validate_data`)**: Acts as a "Data Contract." It checks the final DataFrame to ensure critical columns exist and that there are no illogical values (e.g., decimal odds below 1.0). If QA fails, it throws a loud warning.
-
-All specific implementations for these 3 steps live in the `src/data/fetchers/sql/` folder.
-
----
-
-## 🛠️ How to Add a New Segment (League)
-
-Adding a new league or grouping of tournaments to the package is incredibly easy. You only need to touch **one file**.
-
-**File:** `src/data/fetchers/segments.jl`
-
-**Step 1: Define the Singleton Struct**
-Create a new struct that subtypes `DataTournemantSegment`.
-```julia
-struct EnglishPremier <: DataTournemantSegment end 
-```
-
-**Step 2: Map the Tournament IDs**
-Define the specific database IDs that belong to this segment by extending the `tournament_ids` function.
-```julia
-tournament_ids(::EnglishPremier) = [17]
-```
-
-That is it. You can immediately call `load_datastore_sql(EnglishPremier())`, and the entire pipeline will automatically target tournament ID 17.
-
----
-
-## 📂 Directory Structure Reference
-
-```text
-src/data/
-├── data-module.jl             # Top-level module: exports and includes
-├── types.jl                   # Global structs (DataStore, DBConfig)
-├── utils.jl                   # Generic helpers (apply_schema!)
-├── Markets/                   # Probability, Vig, and CLM math engine
-├── fetchers/
-│   ├── schemas.jl             # Memory-optimized column type dictionaries
-│   ├── segments.jl            # DataTournemantSegment definitions
-│   ├── interfaces.jl          # The 3-step Fetch -> Process -> QA contract
-│   ├── datastore.jl           # Manages DB connection and @async concurrency
-│   └── sql/                   # The domain-specific SQL and ETL logic
-│       ├── matches.jl         
-│       ├── statistics.jl      
-│       ├── lineups.jl         
-│       ├── incidents.jl       
-│       └── odds.jl            # Merges SQL data with the Markets module
-```
-
-
-# 🎯 Calibration Module (Layer 2)
-
-This module handles the **Layer 2 (L2) Calibration Pipeline**. It is designed to take the raw, structural probabilities generated by our Bayesian models (Layer 1) and correct systemic biases (e.g., overconfidence, goal underestimation) using historical machine learning algorithms. 
-
-Crucially, this module shifts both the scalar probabilities *and* the full MCMC posterior distributions, preserving uncertainty for the Kelly staking engine.
-
-## Basic Usage
-
-The primary workflow involves defining a configuration, training the calibrator on historical splits (an expanding window), and applying it to your raw predictions.
-
-```julia
-using BayesianFootball
-
-# 1. Setup your Calibration Config (e.g., using a pure intercept shift)
-config = BayesianFootball.Calibration.CalibrationConfig(
-    name = "Affine_Median_Shift",
-    model = BayesianFootball.Calibration.BasicLogitShift(), 
-    prob_col = :prob_median,    # Tell the GLM which column to train on
-    min_history_splits = 8      # Minimum burn-in before predicting
+# 6. Simulate fractional Kelly portfolio with risk policy
+spec = BookSpec(
+    markets   = Data.MarketConfig([Data.Market1X2(), Data.MarketOverUnder(2.5), Data.MarketBTTS()]),
+    price     = DeArb(),
+    allocator = KellyLogUtility(),
+    shrink    = BakerMcHale()
+)
+policy = PolicySpec(
+    trust     = FlatTrust(0.25),      # 25% Quarter Kelly
+    risk      = SlateDrawdown(20.0),  # 20% max slate risk budget
+    cap       = FixedCap(0.25)        # 25% max simultaneous exposure
 )
 
-# 2. Train the calibrator (Multi-threaded expanding window)
-fitted_history = BayesianFootball.Calibration.train_calibrators(training_df, [config])
-
-# 3. Apply the calibrator to your raw predictions (PPD)
-calibrated_ppds = BayesianFootball.Calibration.apply_calibrators(ppd_raw, ds, fitted_history)
-ppd_cali = calibrated_ppds[1]
-
-# 4. Compare the performance!
-eval_raw  = BayesianFootball.Calibration.build_evaluation_df(ppd_raw, ds)
-eval_cali = BayesianFootball.Calibration.build_evaluation_df(ppd_cali, ds)
-comparison = BayesianFootball.Calibration.compare_models(eval_raw, eval_cali)
-```
-
-## 📦 Key Structs & Objects
-
-* `CalibrationConfig` - The blueprint. Holds the model algorithm, the target probability column (`:prob_median` or `:prob_mean`), and the rolling/expanding window rules.
-* `CalibrationResults` - The output of the training phase. Contains a nested dictionary of fitted models mapped by `Target Selection -> Split ID`.
-* `PPD (Posterior Predictive Distribution)` - The core prediction container. The calibration module takes a raw `PPD` and returns a **new** `PPD` where the `distribution` arrays have been shifted. It also updates the `PPD.calibrator` field to maintain a strict data lineage (e.g., `NoCalibration` vs `BasicLogitShift`).
-
----
-
-## ⚙️ Architecture & The Data Flow
-
-The calibration process is strictly separated into three phases:
-
-1. **PREP (`build_l2_training_df`)**: Flattens the L1 `PPD` distributions into scalar metrics (mean, median) and joins them with the ground truth (`is_winner`) from the `DataStore`. This is a zero-allocation view to save memory.
-2. **TRAIN (`fit_calibrator`)**: Iterates through the time splits. For every market (e.g., `over_25`), it trains a model (like a GLM) on historical predictions vs. actual outcomes to find the mathematical bias.
-3. **APPLY (`apply_calibration`)**: Takes the learned parameters (intercepts, slopes) and applies them mathematically to the incoming predictions. It maps the shift across every element of the MCMC posterior array to ensure the Bayesian Kelly engine still sees the correct variance.
-
----
-
-## 🛠️ How to Add a New Shift Model
-
-Adding a new L2 algorithm (like a Platt Scaler or a Team-Bias corrector) is highly modular. You just need to create one new file in `src/Calibration/shift_models/` and implement four things:
-
-**Step 1: Define the Abstract Model & Fitted Structs**
-```julia
-struct PlattScale <: AbstractLayerTwoModel end
-
-struct FittedPlattScale
-    c_shift::Float64
-    m_slope::Float64
-    prob_col::Symbol # Must remember what it was trained on!
-end
-```
-
-**Step 2: Implement the `fit_calibrator` method**
-Extract the data, fit your GLM (or other algorithm), and return your fitted struct.
-```julia
-function fit_calibrator(model::PlattScale, data::DataFrame, config::CalibrationConfig)
-    # Fit logic here (e.g., actual ~ logit_prob)
-    # ...
-    return FittedPlattScale(c, m, config.prob_col)
-end
-```
-
-**Step 3: Implement the `apply_calibration` method**
-Use the fitted parameters to shift both the scalar target and the MCMC array.
-```julia
-function apply_calibration(fitted_model::FittedPlattScale, new_data::DataFrame)
-    # Shift scalar probabilities
-    shifted_scalars = ... 
-    
-    # Shift MCMC distributions
-    shifted_dists = map(new_data.distribution) do dist
-       # Math logic here
-    end
-    
-    return shifted_scalars, shifted_dists
-end
-```
-
-Once defined, you can immediately pass `model = PlattScale()` into your `CalibrationConfig` and the orchestrator handles all the multi-threading and splitting automatically!
-
----
-
-## 📂 Directory Structure Reference
-
-```text
-src/Calibration/
-├── Calibration.jl               # Top-level module: exports and includes
-├── types.jl                     # Configs, Results, and AbstractLayerTwoModel
-├── data_l2_prep.jl              # PPD-to-DataFrame transformation
-├── trainer.jl                   # Multi-threaded Train and Apply loops
-├── basic_metrics.jl             # Brier, LogLoss, and compare_models() logic
-└── shift_models/                # The actual ML algorithms
-    ├── basic_glm.jl             # Intercept-only Logit Shift
-    └── platt_scale.jl           # (Future) Slope & Intercept scaling
-```
-
-
-
-# 🧠 Models Module (PreGame Bayesian Engines)
-
-This module contains the **Layer 1 (L1) Probabilistic Engines**. It is built using a highly modular, "Component-Driven Architecture" powered by `Turing.jl`. Instead of writing massive, monolithic scripts, the mathematical concepts (Home Advantage, Form/Dynamics, Conversion Rates) are isolated into interchangeable Lego blocks.
-
-Currently, this module powers three master engines:
-1. `DynamicGoalsModel` - Trains purely on historical goals.
-2. `DynamicXGModel` - A unified engine that co-trains on both True xG (when available) and actual goals, bridging them via a `Kappa` conversion rate.
-3. `DynamicCopulaGoalsTimeDecayModel` - Evaluates match outcomes using a Frank Copula joint distribution over Negative Binomial marginals to capture team-specific tactical correlation.
-
-## Basic Usage
-
-The primary workflow involves instantiating the individual mathematical components (Configs), bolting them into a Master Model, and passing that to the `Experiments` or `Training` modules.
-```julia
-using BayesianFootball
-const PreGame = BayesianFootball.Models.PreGame
-
-# 1. Instantiate the Components (The Lego Blocks)
-inter_cfg = PreGame.GlobalInterception()
-disp_cfg  = PreGame.HomeAwayDispersion() 
-ha_cfg    = PreGame.HierarchicalTeamHomeAdvantage()
-dyn_cfg   = PreGame.MultiScaleGRW()
-kap_cfg   = PreGame.GlobalKappa() # Only needed for the xG Model
-cop_cfg   = PreGame.HierarchicalFrankCopulaConfig() # Only needed for Copula models
-
-# 2. Build the Master Model
-model_xg = PreGame.DynamicXGModel(
-    interception_config  = inter_cfg,
-    dynamics_config      = dyn_cfg,
-    dispersion_config    = disp_cfg,
-    homeadvantage_config = ha_cfg,
-    kappa_config         = kap_cfg
-)
-
-
-# 3. Create the Experiment Task using the unified factory
-task = BayesianFootball.Experiments.create_experiment_task(
-    ds, 
-    model_xg, 
-    "xg_model_experiment", 
-    "./data/experiments"; 
-    target_seasons=["24/25"], 
-    history_seasons=2,
-    samples=1000,
-    warmup=300
-)
-
-# 4. View the beautifully styled experiment config in the REPL
-display(task)
-
-# 5. Run the experiment (handles Turing compilation, parallel folds, and chains internally)
-results = BayesianFootball.Experiments.run_experiment(task)
-```
-
-## 📦 Component-Driven Architecture
-
-The engine is built on standardizing the inputs and outputs of sub-models. By using Julia's Multiple Dispatch, the master Turing engine (`build_xg_engine`) doesn't care *how* you calculate Home Advantage, as long as the component returns an array of shifts.
-
-* **Interception (`interception.jl`)**: The global baseline scoring rate (μ).
-* **Dispersion (`dispersion.jl`)**: Controls the variance/spread of the `RobustNegativeBinomial` likelihoods. Can be Global or Home/Away split.
-* **Home Advantage (`home_advantage.jl`)**: Can be a single flat scalar, or a deeply Hierarchical Non-Centered parameter per team.
-* **Dynamics (`dynamics.jl`)**: The Time-Series engine. Currently implements a `MultiScaleGRW` (Gaussian Random Walk) with three distinct speeds (baseline, season, recent form).
-* **Kappa (`kappa.jl`)**: Specifically for the xG Model. Learns the conversion rate to scale True Expected Goals into Actual Goals.
-
----
-
-## 🧮 Feature Processing & AD-Safety
-
-Before data enters the Turing engine, it is processed into a `FeatureSet`. Because Automatic Differentiation (AD) engines like ReverseDiff crash when they encounter `missing` values or `NaN`s in the wrong places, the Features layer enforces strict type safety:
-
-1. **Flattening & Indexing:** DataFrames are converted into heavily optimized, flat `Vector{Int}` arrays (`flat_home_ids`, `time_indices`).
-2. **The `coalesce` Fallback:** For leagues missing historical xG data, `missing` values are safely coerced to `NaN` using `coalesce.(data, NaN)`.
-3. **Dynamic Likelihood Splitting:** The master engine dynamically finds `idx_xg = findall(x -> !isnan(x), home_xg)`. It then routes matches *with* xG through a Gamma likelihood, and matches *without* xG straight to the Negative Binomial likelihood. 
-4. **Gradient Protection:** Uses `clamp` and `Turing.@addlogprob! -Inf` to gracefully reject samples where the math explodes (e.g., `exp(200)`), preventing the entire MCMC chain from crashing.
-
----
-
-## 🛠️ How to Add a New Component
-
-Adding a new architectural piece (like a new way to calculate Team Strength) requires zero changes to the master engine. You just need to implement a Config, a Builder, and an Extractor.
-
-**Step 1: Define the Config**
-Create a struct subtyping the relevant abstract type in `types.jl`.
-```julia
-Base.@kwdef struct FlatTeamStrength <: AbstractDynamicsConfig
-    σ_strength::ContinuousUnivariateDistribution = Normal(0, 1)
-end
-```
-
-**Step 2: Define the Turing Builder**
-Write the math using the `@model` macro. Ensure it returns the format the master engine expects (e.g., a NamedTuple of `(; α, β)` for Dynamics).
-```julia
-@model function build_dynamics(config::FlatTeamStrength, n_teams::Int, ...)
-    # Sample your parameters
-    σ ~ config.σ_strength
-    α_raw ~ filldist(Normal(0,1), n_teams)
-    
-    # Do the math
-    α_team = α_raw .* σ
-    
-    # Return it!
-    return (; α = α_team, β = reverse(α_team)) # Example logic
-end
-```
-
-**Step 3: Define the Extractor**
-Tell the system how to pull your specific variables out of the `MCMCChains` object during inference.
-```julia
-function extract_dynamics(chain::Chains, ::FlatTeamStrength, prefix::String, ...)
-    # Pull "dyn.σ_strength" out of the chain and format it
-    # ...
-    return (; α = formatted_matrix, β = formatted_matrix)
-end
-```
-
-You can now instantly inject `dyn_cfg = FlatTeamStrength()` into your master model!
-
----
-
-## 📂 Directory Structure Reference
-```text
-src/Models/PreGame/
-├── pregame-module.jl          # Top-level module: imports Turing and components
-├── types.jl                   # Abstract Contracts and Master Structs
-├── common.jl                  # Shared helpers
-├── grw_helpers.jl             # Mathematical utilities for Random Walks
-├── components/                # The Mathematical Lego Blocks
-│   ├── interception.jl        
-│   ├── dispersion.jl          
-│   ├── home_advantage.jl      
-│   ├── kappa.jl               
-│   └── dynamics.jl            # Time-series / Team Strength logic
-└── engines/                   # The Master Assembly Lines
-    ├── goals_engine.jl        # Puts components together for Goals
-    └── xg_engine.jl           # Puts components together for xG
-
-
-# 🔄 Features Module (Relational Data Extraction)
-
-This module is responsible for transforming raw data from the SQL `DataStore` into model-ready `FeatureSet`s (tensors) that `Turing.jl` can digest. It utilizes a highly optimized **"Relational Architecture"** that strictly isolates data grouping boundaries from feature extraction, allowing for massive memory savings and lightning-fast temporal iterations.
-
-## Basic Usage
-
-The primary workflow involves generating `SplitBoundary` folds (which act as pointers to specific Match IDs) and then passing them to the Features builder.
-
-```julia
-using BayesianFootball
-const Data = BayesianFootball.Data
-const Features = BayesianFootball.Features
-
-# 1. Load DataStore
-ds = Data.load_datastore_sql(Data.ScottishLower())
-
-# 2. Define Temporal Rules (e.g., Step forward month-by-month)
-cv_config = Data.GroupedCVConfig(
-    tournament_groups = [[56, 57]], 
-    target_seasons = ["24/25"],
-    history_seasons = 1,
-    dynamics_col = :match_month
-)
-
-# 3. Generate Boundaries (Match ID Pointers)
-boundaries = Data.create_id_boundaries(ds, cv_config)
-
-# 4. Extract Features! 
-# The builder asks the model what traits it needs, and maps the boundaries to the DataStore.
-test_model = PreGame.DynamicXGModel(...)
-feature_collection = Features.create_features(boundaries, ds, test_model, cv_config)
-```
-
-## 📦 Core Architecture: The SplitBoundary
-
-In the past, generating 50 temporal "walk-forward" folds meant creating 50 separate copies (or views) of the entire DataFrame. 
-
-The new architecture uses `Data.SplitBoundary`. A boundary does **not** contain data. It is simply a lightweight struct containing arrays of `Int` (Match IDs).
-* `history_match_ids`: Static list of match IDs used for burn-in/history.
-* `target_match_ids`: Expanding list of match IDs for the current temporal step.
-
-When you call `create_features(boundaries, ds, model, cv_config)`, the builder merges these IDs,
-creates an ordered temporal sequence using the **same clock contract as the splitter**, and passes
-them to specific extractors which query the `DataStore` on the fly. Pass the splitter object—not
-only `dynamics_col`—for grouped experiments.
-
-### Pooled calendar splitting
-
-A `GroupedCVConfig` group containing multiple tournaments uses one shared calendar clock:
-
-- `:match_week` = fixed 7-day bins;
-- `:match_biweek` = fixed 14-day bins;
-- `:match_month` = fixed 28-day bins (the historical name is retained).
-
-Stored match columns remain tournament-local for compatibility. The shared clock exists inside
-the splitter. Blank calendar bins keep their position but produce no empty fold; the splitter
-moves to the next observed bin.
-
-A boundary's IDs are all **fitted** data:
-
-- `history_match_ids` is the frozen prior-season block;
-- `target_match_ids` is the expanding observed block in the target season;
-- neither is the held-out test set.
-
-Retrieve the fixtures the fold predicts with:
-
-```julia
-heldout = Data.get_next_matches(ds, boundaries[i], cv_config)
-```
-
-With `history_seasons > 0`, step zero fits only prior seasons and predicts the first observed
-block of the target season. Every pooled fold enforces `latest fitted kickoff < earliest held-out
-kickoff` using match date and hour. See
-[`docs/guides/grouped_splitting.md`](docs/guides/grouped_splitting.md) for the full contract.
-
-## 🤝 The Contract: `required_features`
-
-The `Features` module does not blindly extract every possible column. It uses Multiple Dispatch to ask the provided model exactly what it needs.
-
-Every concrete model engine must define its requirements:
-```julia
-# In src/models/pregame/engines/xg_engine.jl
-function Features.required_features(model::DynamicXGModel)
-    return [:team_ids, :goals, :xg] 
-end
-```
-When the builder runs, it dynamically calls the corresponding `add_feature!` extractors for only those requested traits, keeping the `FeatureSet` as lean as possible.
-
-## 🛠️ How to Add a New Feature Extractor
-
-If you build a new model that requires a new type of data (e.g., `:weather`), you simply need to define a new `add_feature!` method in the `src/features/extractors/` directory.
-
-**Step 1: Define the Extractor**
-All extractors follow the exact same signature. They receive the `ordered_ids` (the chronological sequence of Match IDs for the current fold) and the raw `DataStore`.
-
-```julia
-# In src/features/extractors/weather_extractors.jl
-function add_feature!(F_data::Dict, ::Val{:weather}, ordered_ids::Vector{Int}, team_map::Dict, ds::DataStore)
-    # 1. Create a fast lookup dictionary (Match ID -> Weather Code)
-    weather_lookup = Dict(row.match_id => row.weather_code for row in eachrow(ds.matches))
-    
-    # 2. Extract the weather codes in the EXACT order requested by the boundary
-    # Fallback to 0 if the data is missing
-    F_data[:flat_weather] = [get(weather_lookup, id, 0) for id in ordered_ids]
-end
-```
-
-**Step 2: Require the Feature**
-Update your model's contract to request the new trait:
-```julia
-function Features.required_features(model::MyNewWeatherModel)
-    return [:team_ids, :goals, :weather] 
-end
-```
-The builder will now automatically inject `:flat_weather` into the `FeatureSet.data` dictionary during compilation!
-
----
-
-## 📂 Directory Structure Reference
-
-```text
-src/features/
-├── features-module.jl         # Top-level module: exports and includes
-├── builder.jl                 # The Core macro/micro loops for handling SplitBoundaries
-├── model_requirements.jl      # Fallback/Abstract required_features definitions
-├── vocabulary.jl              # Global dictionary mapping (e.g., Team Strings -> Integers)
-├── map_builders.jl            # Helper to generate the vocabulary
-├── market_inverse_utils.jl    # Math utilities to solve for Implied Lambdas from Odds
-└── extractors/                # The specific add_feature! implementations
-    ├── core_extractors.jl     # Goals, Team IDs
-    ├── time_extractors.jl     # Dates (Deltas), Month, Midweek, Pitch Type
-    ├── stats_extractors.jl    # Shots, Expected Goals (xG)
-    └── market_extractors.jl   # Multi-threaded Market Lambda extraction
+result, books, rep = run_portfolio_simulation(spec, policy, fit, ds.odds, ds)
+display(portfolio_report(result))
 ```
 
 ---
 
-# ⚡ Samplers & Optimization Module
+## 🏗️ Architecture Layers
 
-This module handles model parameter estimation, providing both full Bayesian posterior sampling (MCMC via NUTS) and fast point-estimation optimization methods (Maximum A Posteriori / MAP and Maximum Likelihood Estimation / MLE). 
+### 🗄️ Layer 0: Data Module (`src/Data/`)
+The foundational data layer that handles the extraction, transformation, and validation of raw PostgreSQL data into memory-optimized Julia `DataFrames`.
+* **`DataStore`**: Strictly typed container holding domain DataFrames (`matches`, `odds`, `betfair_odds`, `statistics`, `lineups`, `incidents`).
+* **`Markets`**: Implied probabilities, vig removal algorithms, fair odds calculations, and closing line movement (CLM).
+* **Fetch $\to$ Process $\to$ QA**: 3-step contract ensuring type safety and logical constraints before data reaches Bayesian models.
 
-Point-estimation modes offer massive speedups (typically 30x–50x over MCMC) which are ideal for fast hyperparameter tuning, backtesting, and model calibration.
+### 🧠 Layer 1: Composable Count Builder & Models (`src/models/`)
+* **`CountModelBuilder`**: Assemble models modularly with generic `add!` dispatches.
+* **Master Engines**:
+  * `PoissonCountModel` & `NegBinCountModel`: Composable count models with compiled ReverseDiff gradient tapes.
+  * `DynamicPxGRecombModel`: Multi-task proxy xG and open-play goals engine co-training with squad market wealth ($\Delta W$).
+  * `DynamicCopulaGoalsModel`: Frank Copula joint distribution over Negative Binomial marginals.
+* **Component Blocks**:
+  * **Interceptions**: `GlobalInterception`, `HierarchicalInterception`, `ConstantInterception`.
+  * **Dynamics**: `TimeDecayDynamics` (exponential decay), `GRWDynamics`, `MultiScaleGRW`.
+  * **Home Advantage**: `GlobalHomeAdvantage`, `SingleHomeAdvantage`, `HierarchicalHomeAdvantage`.
 
-## Basic Usage
+### 🔄 Layer 2: Unified Inference & Latents (`src/training/`, `src/models/latents/`)
+* **`Fit`**: The atomic result of a trained model containing configuration, fold results, posterior latents, convergence audit diagnostics, and metadata.
+* **`fit_model(FitConfig, ds)`**: End-to-end inference orchestrator supporting `AutoExecution`, `QueuedExecution`, `ThreadedExecution`, and `SequentialExecution`.
+* **Automated Convergence Audit (`ConvergenceSummary`)**: Evaluates $\hat{R} < 1.05$, ESS thresholds, and MCMC divergences.
+* **Typed Latents (`CountLatents`)**: Structured matrices for $\lambda_{\text{home}}, \lambda_{\text{away}}$ feeding zero-allocation score kernels (`SmileScoreGrid`).
 
-To configure optimization instead of sampling, pass a `MAPConfig` or `MLEConfig` struct into the `TrainingConfig` orchestration layer:
+### 📊 Layer 3: Unified Evaluation (`src/evaluation/`)
+* **`OddsView`**: Zero-copy dense view over odds matrices with strict Point-In-Time (`stamp < kickoff`) assertion guards.
+* **`evaluate_predictions(fit, ds)`**: Prices match probabilities across the posterior score grid and computes:
+  * **Log-Loss** (Cross-Entropy vs Market)
+  * **Continuous Ranked Probability Score (CRPS)**
+  * **Ranked Probability Score (RPS)** & **Brier Score**
+  * **Expected Calibration Error (ECE)** & Reliability Diagrams
+* **Convergence Refusal**: Automatically prevents evaluating unconverged fits.
 
-```julia
-using BayesianFootball
-const Samplers = BayesianFootball.Samplers
+### 💰 Layer 4: Zero-Allocation Portfolio & Staking (`src/Portfolio/`)
+* **`OddsIndex`**: O(1) indexed lookups for match markets, eliminating expensive full-frame scans.
+* **`BookWorkspace`**: One pre-allocated matrix and probability buffer per fold, enabling zero-allocation Kelly allocation sweeps.
+* **`simulate_portfolio` & `run_portfolio_simulation`**: Simulates bankroll trajectories under fractional Kelly staking, slate drawdown caps, and commission modeling.
+* **Convergence Gating**: Unconverged models throw a `ConvergenceRefusal` before bankroll capital is risked.
 
-# 1. Configure the MAP Optimizer (uses L-BFGS with ReverseDiff by default)
-sampler_cfg = Samplers.MAPConfig(
-    optimizer = LBFGS(),
-    maxiters = 1000,
-    adtype = AutoReverseDiff(compile=true),
-    show_progress = true
-)
+---
 
-# 2. Build training config
-training_config = Training.TrainingConfig(sampler_cfg, Training.Independent(), nothing, false)
+## 🧪 Testing & Test Runners
 
-# 3. Create and run task
-task = Experiments.ExperimentTask(ds, Experiments.ExperimentConfig(..., training_config=training_config))
-results = Experiments.run_experiment(task)
+`BayesianFootball.jl` has a comprehensive test suite (2,460+ passing tests).
+
+### 1. Fast Concurrent Test Runner (~40s)
+Dispatches 4 worker processes concurrently across available CPU cores:
+```bash
+julia --project -t 8 test/run_parallel_tests.jl
+```
+
+### 2. Standard Sequential Test Runner (~3.5 min)
+```bash
+julia --project -t 8 test/runtests.jl
+```
+
+### 3. Targeted Single Suite Run (~15s)
+```bash
+julia --project -t 8 -e 'using Test, BayesianFootball; include("test/unified_portfolio_tests.jl")'
 ```
 
 ---
 
-## ⚡ Queued MCMC Execution
+## 🖥️ Compute & Infrastructure Setup
 
-For Bayesian sampling, the system utilizes a high-performance **Queued Execution** architecture via `QueuedNUTSConfig` and `Training.Independent(max_concurrent_tasks)`. 
-
-Instead of locking threads to an entire walk-forward split (which wastes CPU cycles when one MCMC chain takes longer than the others), the system breaks down $K$ splits $\times$ $N$ chains into a flattened global queue.
-
-1. Launch Julia with exactly your target physical cores: `julia --project -t 32`
-2. Lock threads to hardware via `using ThreadPinning; pinthreads(:cores)`.
-3. The `Experiments` module dynamically auto-detects `Threads.nthreads()` and feeds the maximum number of simultaneous single-chain tasks into the execution loop, guaranteeing **100% CPU utilization** until the entire experiment finishes.
-
----
-
-## ⚙️ Architecture & Point-Mass Chains Bridge
-
-Turing's optimization functions (`maximum_a_posteriori` and `maximum_likelihood`) output a point estimate (`ModeResult`), whereas downstream prediction, evaluation, and calibration layers expect MCMC posterior samples (`MCMCChains.Chains`).
-
-To bridge this gap seamlessly, the Optimization engine implements a **Point-Mass Chains Bridge** (`mode_result_to_chains`):
-1. **Extraction (`safe_mode_extractor`)**: Safely extracts parameter names and modes from `ModeResult` across different Turing/StatsBase versions, falling back to a recursive flattening of the parameter named tuples.
-2. **Casting (`mode_result_to_chains`)**: Reshapes the scalar parameter modes and the final log density (`lp`) into a 1-sample `Chains` object with shape `(1, parameters, 1)`.
-3. **Compatibility**: Downstream modules process the 1-sample point-mass chain identically to MCMC samples without requiring separate code paths.
-
----
-
-## 📂 Directory Structure Reference
-
-```text
-src/samplers/
-├── samplers-module.jl         # Top-level module: exports and includes
-├── types.jl                   # Configs (NUTSConfig, MAPConfig, MLEConfig)
-├── interface.jl               # Base abstract type and run_sampler contract
-├── initialisation/            # Prior/custom parameter initialization
-└── engines/
-    ├── nuts.jl                # MCMC NUTS sampling engine
-    ├── optimization.jl        # Point estimation engine (MAP/MLE)
-    └── advi.jl                # Variational Inference engine
-```
-
-> **Note on AD Backends**: See the [Turing AD Performance Guide](docs/turing_ad_performance_guide.md) for detailed rules on writing optimal models for `ReverseDiff.jl`, `Zygote.jl`, and `Mooncake.jl`.
+* **Local Dev Machine (`archpc`)**: 8 Physical Cores / 16 SMT threads, PostgreSQL `betdb` on port 5433.
+* **Compute Node (`mcmc-beast`)**: 16 Physical Cores (32 SMT threads), 64GB RAM.
+* **Threading Rules**:
+  * Always pin Julia to physical cores: `using ThreadPinning; pinthreads(:cores)`.
+  * Always isolate BLAS threads during sampling: `LinearAlgebra.BLAS.set_num_threads(1)`.
