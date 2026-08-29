@@ -65,7 +65,9 @@ for (name, fit) in fits
     get_stat(sym) = sym in ch_vars ? @sprintf("%.3f", mean(ch[sym])) : "—"
     
     mu_str   = get_stat(Symbol("inter.μ_base[1]"))
-    ha_str   = Symbol("ha.γ") in ch_vars ? get_stat(Symbol("ha.γ")) : get_stat(Symbol("ha.γ_raw"))
+    ha_sym   = Symbol("ha.γ") in ch_vars ? Symbol("ha.γ") :
+               Symbol("ha.γ_global") in ch_vars ? Symbol("ha.γ_global") : Symbol("ha.γ_raw")
+    ha_str   = get_stat(ha_sym)
     sa_str   = get_stat(Symbol("dyn.σ_a"))
     sd_str   = get_stat(Symbol("dyn.σ_d"))
     w_w_str  = get_stat(Symbol("wealth.w"))

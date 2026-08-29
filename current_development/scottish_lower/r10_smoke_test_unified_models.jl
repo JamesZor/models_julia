@@ -150,6 +150,9 @@ for (name, m) in models
     mean_mu     = get_param(Symbol("inter.μ_base[1]"))
     mean_gamma  = get_param(Symbol("ha.γ"))
     if isnan(mean_gamma)
+        mean_gamma = get_param(Symbol("ha.γ_global"))
+    end
+    if isnan(mean_gamma)
         mean_gamma = get_param(Symbol("ha.γ_raw"))
     end
     mean_sa     = get_param(Symbol("dyn.σ_a"))
