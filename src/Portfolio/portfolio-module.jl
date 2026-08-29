@@ -123,6 +123,16 @@ export
     AbstractTrustModel, AbstractRiskModel, AbstractExposureCap, AbstractSelectionFilter,
     AbstractSlateGrouping,
 
+    # concrete implementations
+    DeArb, Normalise, RawPrice,
+    PerBetCommission, TurnoverCommission,
+    KellyLogUtility, IndependentKelly,
+    BakerMcHale, NoShrinkage,
+    FlatTrust, StaticFamilyTrust, ShrinkToMarketTrust,
+    SlateDrawdown, MatchDrawdown, FixedFraction,
+    FixedCap, PerMatchCap,
+    DailySlate, WeeklySlate, MatchSlate,
+
     # domain
     Selection, MatchBook, Slate, SlateContext, SlateAllocation, Trajectory,
 
@@ -131,8 +141,11 @@ export
 
     # the zero-allocation path: alignment, workspace, build report
     OddsIndex, MarketSlot, FallbackSlot, BookWorkspace, BuildReport,
+    build_odds_index, build_books, price_portfolio_books!, price_book!,
+    simulate_portfolio, run_portfolio_simulation,
 
     # simulation results
-    DailyState, PortfolioSummary, BootstrapCI, PortfolioResult, PortfolioReport
+    DailyState, PortfolioSummary, BootstrapCI, PortfolioResult, PortfolioReport,
+    portfolio_summary, portfolio_report
 
 end

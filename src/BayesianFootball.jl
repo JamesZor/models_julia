@@ -199,6 +199,13 @@ using .Portfolio: OddsIndex, MarketSlot, FallbackSlot, BookWorkspace, BuildRepor
                   PortfolioReport,
                   Selection, MatchBook, Slate, SlateContext, SlateAllocation, Trajectory,
                   ExecutionConfig, BookSpec, PolicySpec, PortfolioSystem,
+                  DeArb, Normalise, RawPrice,
+                  PerBetCommission, TurnoverCommission,
+                  IndependentKelly, BakerMcHale, NoShrinkage,
+                  FlatTrust, StaticFamilyTrust, ShrinkToMarketTrust,
+                  SlateDrawdown, MatchDrawdown, FixedFraction,
+                  FixedCap, PerMatchCap,
+                  DailySlate, WeeklySlate, MatchSlate,
                   MarketSelection, MarketBook, MatchedMarketOdds, PortfolioPolicy,
                   LogUtility, KellyLogUtility, UnsettledBooks,
                   build_odds_index, group_slates_by_day, fixture_table,
@@ -219,6 +226,13 @@ export OddsIndex, MarketSlot, FallbackSlot, BookWorkspace, BuildReport
 export DailyState, PortfolioSummary, BootstrapCI, PortfolioResult, PortfolioReport
 export Selection, MatchBook, Slate, SlateContext, SlateAllocation, Trajectory
 export ExecutionConfig, BookSpec, PolicySpec, PortfolioSystem
+export DeArb, Normalise, RawPrice
+export PerBetCommission, TurnoverCommission
+export IndependentKelly, BakerMcHale, NoShrinkage
+export FlatTrust, StaticFamilyTrust, ShrinkToMarketTrust
+export SlateDrawdown, MatchDrawdown, FixedFraction
+export FixedCap, PerMatchCap
+export DailySlate, WeeklySlate, MatchSlate
 export MarketSelection, MarketBook, MatchedMarketOdds, PortfolioPolicy, LogUtility,
        KellyLogUtility, UnsettledBooks
 export build_odds_index, group_slates_by_day, fixture_table
