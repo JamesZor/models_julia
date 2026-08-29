@@ -970,6 +970,16 @@ function evaluate_predictions(ctx::EvaluationContext;
                             _calibration_side(ctx, rows, :market, n_bins))
 end
 
+function evaluate_predictions(fit::Fit, ds::DataStore;
+                              selections = nothing, n_bins::Integer = 10,
+                              max_goals::Integer = Predictions.TPL_MAX_GOALS,
+                              threaded::Bool = true)
+    lat = fit_latents(fit)
+    ctx = build_evaluation_context(lat, ds.odds, ds.matches, [PredictionScore()];
+                                   max_goals = max_goals, threaded = threaded)
+    return evaluate_predictions(ctx; selections = selections, n_bins = n_bins)
+end
+
 function _calibration_side(ctx::EvaluationContext, rows::Vector{EvaluationRow},
                            source::Symbol, n_bins::Integer)
     n = 0

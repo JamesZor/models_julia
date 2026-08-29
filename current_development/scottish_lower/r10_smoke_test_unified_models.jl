@@ -159,8 +159,10 @@ for (name, m) in models
     
     # Unified Evaluation (08)
     eval_rep = evaluate_predictions(fit, ds)
-    ll_1x2  = get(eval_rep.scores, :logloss_1x2, NaN)
-    ll_o25  = get(eval_rep.scores, :logloss_overunder, NaN)
+    ll_model = eval_rep.model.logloss
+    brier_model = eval_rep.model.brier
+    ece_model = eval_rep.model.ece
+    rps_model = eval_rep.model.rps
     
     # Portfolio Simulation (09)
     port_res, books, _ = run_portfolio_simulation(book_spec, policy_spec, fit, ds.odds, ds; bootstrap = false)
@@ -176,20 +178,22 @@ for (name, m) in models
         gamma       = mean_gamma,
         w_wealth    = mean_wealth,
         w_dist      = mean_dist,
-        ll_1x2      = ll_1x2,
-        ll_o25      = ll_o25,
+        logloss     = ll_model,
+        brier       = brier_model,
+        ece         = ece_model,
+        rps         = rps_model,
         n_bets      = p_sum.n_bets,
         pnl         = p_sum.terminal_bankroll - 1.0
     ))
 end
 
 # 6. Formatted Comparison Table
-println("\n" * "="^110)
+println("\n" * "="^120)
 println(" FOLD 1 BENCHMARK SUMMARY TABLE (500 warmup / 500 samples / 4 chains)")
-println("="^110)
-@printf(" %-15s | %6s | %5s | %5s | %5s | %7s | %8s | %8s | %7s | %7s | %5s | %7s\n",
-        "Model", "Time", "R-hat", "ESS", "Div", "γ (HA)", "w_wealth", "w_dist", "LL 1X2", "LL O2.5", "Bets", "PnL")
-println("-"^110)
+println("="^120)
+@printf(" %-15s | %6s | %5s | %5s | %5s | %7s | %8s | %8s | %7s | %6s | %6s | %5s | %7s\n",
+        "Model", "Time", "R-hat", "ESS", "Div", "γ (HA)", "w_wealth", "w_dist", "LogLoss", "Brier", "ECE", "Bets", "PnL")
+println("-"^120)
 
 for r in results_summary
     rhat_str   = isnan(r.max_rhat) ? "N/A" : @sprintf("%.3f", r.max_rhat)
@@ -197,13 +201,14 @@ for r in results_summary
     gamma_str  = isnan(r.gamma) ? "—" : @sprintf("%+.3f", r.gamma)
     wealth_str = isnan(r.w_wealth) ? "—" : @sprintf("%+.3f", r.w_wealth)
     dist_str   = isnan(r.w_dist) ? "—" : @sprintf("%+.3f", r.w_dist)
-    ll1x2_str  = isnan(r.ll_1x2) ? "—" : @sprintf("%.4f", r.ll_1x2)
-    llo25_str  = isnan(r.ll_o25) ? "—" : @sprintf("%.4f", r.ll_o25)
+    ll_str     = isnan(r.logloss) ? "—" : @sprintf("%.4f", r.logloss)
+    brier_str  = isnan(r.brier) ? "—" : @sprintf("%.4f", r.brier)
+    ece_str    = isnan(r.ece) ? "—" : @sprintf("%.3f", r.ece)
     pnl_str    = @sprintf("%+.2f%%", 100 * r.pnl)
 
-    @printf(" %-15s | %5.1fs | %5s | %5s | %5d | %7s | %8s | %8s | %7s | %7s | %5d | %7s\n",
+    @printf(" %-15s | %5.1fs | %5s | %5s | %5d | %7s | %8s | %8s | %7s | %6s | %6s | %5d | %7s\n",
             r.name, r.elapsed, rhat_str, ess_str, r.divs, gamma_str, wealth_str, dist_str,
-            ll1x2_str, llo25_str, r.n_bets, pnl_str)
+            ll_str, brier_str, ece_str, r.n_bets, pnl_str)
 end
-println("="^110)
+println("="^120)
 println(" Smoke test completed successfully!")
