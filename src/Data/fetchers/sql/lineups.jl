@@ -8,6 +8,7 @@ function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::LineUpsData)
                 l.player_id, l.player_name, l.position, l.shirt_number,
                 l.substitute AS is_substitute, l.captain AS is_captain,
                 l.minutes_played, l.rating, l.goals, l.expected_goals, l.expected_assists,
+                (l.raw_data->'player'->>'dateOfBirthTimestamp')::bigint AS date_of_birth_timestamp,
                 l.proposed_market_value, l.proposed_market_value_currency
             FROM sofascore.match_player_lineups l
             JOIN sofascore.matches m ON l.match_id = m.match_id
@@ -40,6 +41,7 @@ function fetch_data(conn::LibPQ.Connection, t_ids::Vector{Int}, ::LineUpsData)
                 NULL::integer AS goals,
                 NULL::double precision AS expected_goals,
                 NULL::double precision AS expected_assists,
+                NULL::bigint AS date_of_birth_timestamp,
                 pv.proposed_market_value,
                 COALESCE(pv.proposed_market_value_currency, 'EUR')::character varying AS proposed_market_value_currency
             FROM bbc.match_lineup bl
@@ -130,6 +132,7 @@ function process_data(df::DataFrame, ::LineUpsData)
         :is_captain => Union{Missing, Bool},
         :minutes_played => Union{Missing, Int32},
         :goals => Union{Missing, Int32},
+        :date_of_birth_timestamp => Union{Missing, Int64},
         :proposed_market_value => Union{Missing, Int64},
         :proposed_market_value_currency => Union{Missing, InlineStrings.String3}
     )

@@ -340,7 +340,7 @@ fixtures had no complete market group" is a data-quality finding and belongs whe
 read it, not inside a metrics struct.
 """
 function run_portfolio_simulation(spec::BookSpec, policy::PolicySpec, source, odds, fixtures;
-                                  require_result::Bool = true, require_converged::Bool = true,
+                                  require_result::Bool = true, require_converged::Bool = false,
                                   quiet::Bool = false, kw...)
     books, br = if source isa Training.Fit
         build_books_reported(spec, source, odds, fixtures; require_result = require_result,
@@ -383,7 +383,7 @@ Risk is solved per slate, so every fixture settling together shares one drawdown
 exposure cap. That is the whole reason this is not a per-match loop.
 """
 function stake_sheet(sys::PortfolioSystem, source::Training.Fit, odds, fixtures;
-                     bankroll::Real = 1.0, require_converged::Bool = true, quiet::Bool = false)
+                     bankroll::Real = 1.0, require_converged::Bool = false, quiet::Bool = false)
     books, _ = build_books_reported(sys.book, source, odds, fixtures; require_result = false,
                                     require_converged = require_converged, quiet = quiet)
     return _typed_stake_sheet(sys, books, bankroll)

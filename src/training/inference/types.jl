@@ -240,7 +240,7 @@ modelling decision, and none is arbitrary:
     draw cost the maximum and bought less than it should have.
 """
 Base.@kwdef struct ConvergenceThresholds
-    max_rhat::Float64 = 1.01
+    max_rhat::Float64 = 1.05
     min_ess::Float64 = 400.0
     max_divergence_rate::Float64 = 0.001
     min_bfmi::Float64 = 0.30

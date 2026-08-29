@@ -24,7 +24,9 @@ include("equations.jl")
 export CountModelBuilder, PoissonCountModel, NegBinCountModel, ComposableCountModel
 export AbstractCovariateRole, SupremacyRole, LevelRole
 export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
-       WealthCovariate, DistanceCovariate
+       AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
+       age_weight, ProductionWealthFeature, WealthCovariate,
+       ProductionWealthCovariate, DistanceCovariate
 export covariate_name, covariate_role, covariate_prior, covariate_features,
        covariate_column, covariate_oos, covariate_sides
 export AbstractRateGuard, ClampGuard, NoGuard

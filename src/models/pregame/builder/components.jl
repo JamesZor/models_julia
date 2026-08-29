@@ -134,6 +134,97 @@ _cov_missing(c, hook::Symbol) = error("$(typeof(c)) must implement $(hook)")
 # 3. CONCRETE COVARIATES
 # ==============================================================================
 
+# ------------------------------------------------------------------------------
+# 3a. Age-weighting curves for production wealth
+# ------------------------------------------------------------------------------
+
+"Abstract contract for a scalar, allocation-free player-age productivity curve."
+abstract type AbstractAgeWeightingCurve end
+
+"""
+    RichardsSigmoid(x0 = 23.0, k = 0.80, nu = 2.0)
+
+Asymmetric maturation curve
+`ϕ(age) = (1 + exp(-k * (age - x0)))^(-1 / nu)`.
+"""
+Base.@kwdef struct RichardsSigmoid <: AbstractAgeWeightingCurve
+    x0::Float64 = 23.0
+    k::Float64 = 0.80
+    nu::Float64 = 2.0
+end
+
+"""
+    ShiftedGamma(a0 = 16.0, peak = 27.5, alpha = 3.5)
+
+Shifted gamma curve divided by its value at the mode, so `ϕ(peak) == 1`.
+Ages at or below `a0` have zero production weight.
+"""
+Base.@kwdef struct ShiftedGamma <: AbstractAgeWeightingCurve
+    a0::Float64 = 16.0
+    peak::Float64 = 27.5
+    alpha::Float64 = 3.5
+end
+
+"""
+    GaussianPrime(mu = 26.5, sigma = 4.5)
+
+Symmetric prime-age benchmark, normalized to one at `mu`.
+"""
+Base.@kwdef struct GaussianPrime <: AbstractAgeWeightingCurve
+    mu::Float64 = 26.5
+    sigma::Float64 = 4.5
+end
+
+"""
+    age_weight(curve, age) -> Float64
+
+Evaluate a candidate player-age productivity curve. These scalar kernels allocate
+nothing and are suitable for the inner player-valuation loop.
+"""
+@inline function age_weight(curve::RichardsSigmoid, age::Real)
+    return (1.0 + exp(-curve.k * (age - curve.x0)))^(-1.0 / curve.nu)
+end
+
+@inline function age_weight(curve::ShiftedGamma, age::Real)
+    age <= curve.a0 && return 0.0
+    x = age - curve.a0
+    mode = curve.peak - curve.a0
+    exponent = curve.alpha - 1.0
+    return (x / mode)^exponent * exp(-(exponent / mode) * (x - mode))
+end
+
+@inline function age_weight(curve::GaussianPrime, age::Real)
+    z = (age - curve.mu) / curve.sigma
+    return exp(-0.5 * z * z)
+end
+
+@inline (curve::AbstractAgeWeightingCurve)(age::Real) = age_weight(curve, age)
+
+function _cb_validate_age_curve(curve::RichardsSigmoid)
+    isfinite(curve.x0) || error("RichardsSigmoid.x0 must be finite")
+    isfinite(curve.k) && curve.k > 0.0 ||
+        error("RichardsSigmoid.k must be finite and > 0")
+    isfinite(curve.nu) && curve.nu > 0.0 ||
+        error("RichardsSigmoid.nu must be finite and > 0")
+    return nothing
+end
+
+function _cb_validate_age_curve(curve::ShiftedGamma)
+    isfinite(curve.a0) || error("ShiftedGamma.a0 must be finite")
+    isfinite(curve.peak) && curve.peak > curve.a0 ||
+        error("ShiftedGamma.peak must be finite and > a0")
+    isfinite(curve.alpha) && curve.alpha > 1.0 ||
+        error("ShiftedGamma.alpha must be finite and > 1")
+    return nothing
+end
+
+function _cb_validate_age_curve(curve::GaussianPrime)
+    isfinite(curve.mu) || error("GaussianPrime.mu must be finite")
+    isfinite(curve.sigma) && curve.sigma > 0.0 ||
+        error("GaussianPrime.sigma must be finite and > 0")
+    return nothing
+end
+
 """
     LogSumWealthFeature
 
@@ -154,10 +245,12 @@ function _cb_wealth_datetime(value)
     ismissing(value) && return nothing
     value isa DateTime && return value
     value isa Date && return DateTime(value)
-    try
-        return DateTime(String(value))
-    catch
-        return nothing
+    if hasproperty(value, :zone) # TimeZones.ZonedDateTime
+        return DateTime(value, Dates.UTC)
+    elseif value isa AbstractString
+        return tryparse(DateTime, String(value))
+    else
+        return tryparse(DateTime, string(value))
     end
 end
 
@@ -184,9 +277,14 @@ end
 function _cb_logsum_wealth_side(row, columns)
     if :team_side in columns
         ismissing(row.team_side) && return nothing
-        side = lowercase(String(row.team_side))
+        side = row.team_side
+        # The production fetcher emits lowercase `home`/`away`; compare those
+        # directly so the per-player hot path does not allocate a String.
         side == "home" && return true
         side == "away" && return false
+        normalized = lowercase(String(side))
+        normalized == "home" && return true
+        normalized == "away" && return false
         return nothing
     elseif :is_home_team in columns
         ismissing(row.is_home_team) && return nothing
@@ -277,6 +375,175 @@ function CB_Features.add_feature!(F_data::Dict, config::LogSumWealthFeature,
     return nothing
 end
 
+const _CB_SECONDS_PER_YEAR = 365.25 * 86_400.0
+
+"""
+    ProductionWealthFeature(
+        curve = RichardsSigmoid(),
+        fallback_default = 100_000.0,
+        fallback_age = 26.5,
+        log_scale = 1.0,
+    )
+
+Point-in-time age-adjusted starting-XI wealth:
+
+`(log(Σ value_home * ϕ(age)) - log(Σ value_away * ϕ(age))) / log_scale`.
+
+Player age is measured at that fixture's kickoff from the SofaScore Unix DOB
+stamp. A missing or malformed DOB uses the prime-neutral `fallback_age`; its raw
+value never reaches the curve. A valuation stamped at or after kickoff is not
+used (the safe `fallback_default` is substituted), and a fixture is neutral
+unless both sides have at least one positive kickoff-safe valuation.
+"""
+Base.@kwdef struct ProductionWealthFeature{
+    C<:AbstractAgeWeightingCurve,
+} <: CB_Features.AbstractFeatureConfig
+    curve::C = RichardsSigmoid()
+    fallback_default::Float64 = 100_000.0
+    fallback_age::Float64 = 26.5
+    log_scale::Float64 = 1.0
+end
+
+function _cb_unix_seconds(value)
+    ismissing(value) && return nothing
+    value isa DateTime && return datetime2unix(value)
+    value isa Date && return datetime2unix(DateTime(value))
+    if value isa Real
+        parsed = Float64(value)
+        return isfinite(parsed) ? parsed : nothing
+    end
+    parsed = tryparse(Float64, String(value))
+    return parsed !== nothing && isfinite(parsed) ? parsed : nothing
+end
+
+@inline function _cb_player_age(kickoff::Union{Nothing,DateTime}, dob_value,
+                                fallback_age::Float64)
+    kickoff === nothing && return fallback_age
+    dob = _cb_unix_seconds(dob_value)
+    dob === nothing && return fallback_age
+    kickoff_seconds = datetime2unix(kickoff)
+    # A DOB at or after kickoff is invalid. Ignore it rather than allowing a
+    # negative age to alter the valuation; the documented prime-age fallback is
+    # the neutral replacement for an unmapped or invalid player.
+    0.0 < dob < kickoff_seconds || return fallback_age
+    age = (kickoff_seconds - dob) / _CB_SECONDS_PER_YEAR
+    return isfinite(age) && age > 0.0 ? age : fallback_age
+end
+
+function _cb_validate_production_feature(config::ProductionWealthFeature)
+    isfinite(config.fallback_default) && config.fallback_default > 0.0 ||
+        error("fallback_default must be finite and > 0")
+    isfinite(config.fallback_age) && config.fallback_age > 0.0 ||
+        error("fallback_age must be finite and > 0")
+    isfinite(config.log_scale) && config.log_scale > 0.0 ||
+        error("log_scale must be finite and > 0")
+    _cb_validate_age_curve(config.curve)
+    fallback_weight = age_weight(config.curve, config.fallback_age)
+    isfinite(fallback_weight) && fallback_weight > 0.0 ||
+        error("the configured curve must have a finite positive weight at fallback_age")
+    return nothing
+end
+
+function _cb_production_wealth_lookup(lineups, matches, ids,
+                                      config::ProductionWealthFeature)
+    _cb_validate_production_feature(config)
+
+    wanted = Set(Int.(ids))
+    totals = Dict{Tuple{Int,Bool},Float64}()
+    valid_counts = Dict{Tuple{Int,Bool},Int}()
+    sizehint!(totals, 2 * length(wanted))
+    sizehint!(valid_counts, 2 * length(wanted))
+    kickoffs = _cb_match_kickoffs(matches)
+    columns = propertynames(lineups)
+
+    for row in eachrow(lineups)
+        match_id = Int(row.match_id)
+        match_id in wanted || continue
+        if :is_substitute in columns && coalesce(row.is_substitute, false)
+            continue
+        end
+
+        side = _cb_logsum_wealth_side(row, columns)
+        side === nothing && continue
+        key = (match_id, side)
+
+        raw_value = :proposed_market_value in columns ? row.proposed_market_value :
+                    :market_value in columns ? row.market_value : missing
+        parsed_value = if ismissing(raw_value)
+            nothing
+        else
+            try
+                Float64(raw_value)
+            catch
+                nothing
+            end
+        end
+
+        valuation_stamp = :valuation_timestamp in columns ?
+                          _cb_wealth_datetime(row.valuation_timestamp) : nothing
+        kickoff = get(kickoffs, match_id, nothing)
+        # Match-row values do not always carry a separate observation timestamp.
+        # In that case (or when kickoff metadata is unavailable), accept them; if
+        # both stamps exist, enforce strict pre-kickoff availability.
+        stamp_ok = (valuation_stamp === nothing) || (kickoff === nothing) ||
+                   (valuation_stamp < kickoff)
+        value = config.fallback_default
+        valid_value = false
+        if parsed_value !== nothing && stamp_ok &&
+           isfinite(parsed_value) && parsed_value > 0.0
+            value = parsed_value
+            valid_value = true
+        end
+
+        dob_value = :date_of_birth_timestamp in columns ?
+                    row.date_of_birth_timestamp : missing
+        age = _cb_player_age(kickoff, dob_value, config.fallback_age)
+        production_value = value * age_weight(config.curve, age)
+        isfinite(production_value) && production_value > 0.0 || continue
+
+        totals[key] = get(totals, key, 0.0) + production_value
+        if valid_value
+            valid_counts[key] = get(valid_counts, key, 0) + 1
+        end
+    end
+
+    out = Dict{Int,Float64}()
+    for match_id in wanted
+        home_key = (match_id, true)
+        away_key = (match_id, false)
+        home = get(totals, home_key, 0.0)
+        away = get(totals, away_key, 0.0)
+        if home <= 0.0 || away <= 0.0 ||
+           get(valid_counts, home_key, 0) == 0 ||
+           get(valid_counts, away_key, 0) == 0
+            continue
+        end
+        delta = (log(home) - log(away)) / config.log_scale
+        isfinite(delta) && (out[match_id] = delta)
+    end
+    return out
+end
+
+function CB_Features.add_feature!(F_data::Dict, config::ProductionWealthFeature,
+                                  ordered_ids, team_map::Dict,
+                                  ds::CB_Features.Data.DataStore)
+    selected = _cb_production_wealth_lookup(
+        ds.lineups, ds.matches, ordered_ids, config)
+    F_data[:flat_delta_production_wealth] = Float64[
+        get(selected, Int(match_id), 0.0) for match_id in ordered_ids]
+    F_data[:flat_production_wealth_fallback] = Int[
+        haskey(selected, Int(match_id)) ? 0 : 1 for match_id in ordered_ids]
+    F_data[:production_wealth_by_match_id] = selected
+
+    # Keep an all-fixture causal bridge for prediction-time extraction. Every
+    # fixture is evaluated against its own kickoff; no future-stamped valuation
+    # can enter an earlier match through this bridge.
+    all_ids = Int.(ds.matches.match_id)
+    F_data[:production_wealth_oos_bridge_by_match_id] =
+        _cb_production_wealth_lookup(ds.lineups, ds.matches, all_ids, config)
+    return nothing
+end
+
 """
     WealthCovariate
 
@@ -319,6 +586,46 @@ function covariate_oos(c::WealthCovariate, fs, df)
         bridge = get(fs.data, :wealth_by_match_id, Dict{Int32,Float64}())
     end
     return Float64[get(bridge, Int(r.match_id), 0.0) for r in eachrow(df)]
+end
+
+"""
+    ProductionWealthCovariate
+
+Age-adjusted point-in-time starting-XI production wealth. The design column is
+built by `ProductionWealthFeature` and enters the home/away log-rates as a
+supremacy term. Its default prior matches the raw wealth covariate, making the
+curve transform—not a prior change—the distinction between the two components.
+"""
+Base.@kwdef struct ProductionWealthCovariate{
+    F<:ProductionWealthFeature,
+    D<:UnivariateDistribution,
+    R<:AbstractCovariateRole,
+} <: AbstractCovariateConfig
+    feature::F = ProductionWealthFeature()
+    prior::D = truncated(Normal(0.10, 0.05), lower = 0.0)
+    role::R = SupremacyRole()
+end
+
+covariate_name(::ProductionWealthCovariate) = :production_wealth
+covariate_role(c::ProductionWealthCovariate) = c.role
+covariate_prior(c::ProductionWealthCovariate) = c.prior
+covariate_features(c::ProductionWealthCovariate) =
+    CB_Features.AbstractFeatureConfig[c.feature]
+
+function covariate_column(::ProductionWealthCovariate, fs)
+    haskey(fs.data, :flat_delta_production_wealth) || error(
+        "ProductionWealthCovariate requires :flat_delta_production_wealth")
+    return Vector{Float64}(fs.data[:flat_delta_production_wealth])
+end
+
+function covariate_oos(::ProductionWealthCovariate, fs, df)
+    # A caller may override the causal bridge with a materialised hypothetical
+    # lineup, following the same extraction convention as WealthCovariate.
+    hasproperty(df, :delta_production_wealth) &&
+        return Float64.(df.delta_production_wealth)
+    bridge = get(fs.data, :production_wealth_oos_bridge_by_match_id,
+                 Dict{Int,Float64}())
+    return Float64[get(bridge, Int(row.match_id), 0.0) for row in eachrow(df)]
 end
 
 """

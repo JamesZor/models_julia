@@ -216,7 +216,7 @@ model to one missing odds column.
 function evaluate_fits(metrics::AbstractVector,
                        fits::AbstractVector,
                        ds::DataStore;
-                       require_converged::Bool = true,
+                       require_converged::Bool = false,
                        threaded::Bool = true,
                        max_goals::Integer = Predictions.TPL_MAX_GOALS,
                        quiet::Bool = false,

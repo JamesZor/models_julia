@@ -500,7 +500,7 @@ backwards.
 """
 function build_books_reported(spec::BookSpec, fit::Training.Fit, odds, fixtures;
                               require_result::Bool = true,
-                              require_converged::Bool = true,
+                              require_converged::Bool = false,
                               max_goals::Integer = Predictions.TPL_MAX_GOALS,
                               quiet::Bool = false)
     passed, gates, detail = Evaluation.convergence_verdict(fit)

@@ -21,6 +21,9 @@ using DataFrames, Dates, InlineStrings # Add any other packages your tests need 
     println("Running composable count-model builder tests...")
     include("builder_tests.jl")
 
+    println("Running production-wealth feature tests...")
+    include("test_production_wealth_feature.jl")
+
     println("Running Portfolio Module tests...")
     include("portfolio_tests.jl")
 

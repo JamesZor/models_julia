@@ -17,7 +17,9 @@ using .Latents
 using .PreGame: CountModelBuilder, PoissonCountModel, NegBinCountModel,
     ComposableCountModel, AbstractCovariateRole, SupremacyRole, LevelRole,
     AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
-    WealthCovariate, DistanceCovariate,
+    AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
+    age_weight, ProductionWealthFeature, WealthCovariate,
+    ProductionWealthCovariate, DistanceCovariate,
     covariate_name, covariate_role, covariate_prior, covariate_features,
     covariate_column, covariate_oos, covariate_sides,
     AbstractRateGuard, ClampGuard, NoGuard,
@@ -42,7 +44,9 @@ export extract_latents, latent_family, latents_from_legacy_dataframe,
 export CountModelBuilder, PoissonCountModel, NegBinCountModel, ComposableCountModel
 export AbstractCovariateRole, SupremacyRole, LevelRole
 export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
-       WealthCovariate, DistanceCovariate
+       AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
+       age_weight, ProductionWealthFeature, WealthCovariate,
+       ProductionWealthCovariate, DistanceCovariate
 export covariate_name, covariate_role, covariate_prior, covariate_features,
        covariate_column, covariate_oos, covariate_sides
 export AbstractRateGuard, ClampGuard, NoGuard

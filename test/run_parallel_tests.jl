@@ -14,6 +14,7 @@ const TEST_FILES = [
     "features_tests.jl",
     "pregame_tests.jl",
     "builder_tests.jl",
+    "test_production_wealth_feature.jl",
     "portfolio_tests.jl",
     "matchday_tests.jl",
     "caching_tests.jl",
