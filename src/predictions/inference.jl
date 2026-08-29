@@ -107,6 +107,106 @@ function model_inference(latents::LatentStates; market_config=DEFAULT_MARKET_CON
 end
 
 
+"""
+    model_inference(latents::AbstractPosteriorLatents, model; market_config, verbose)
+
+Price dense typed posterior latents without converting them back to a legacy
+`DataFrame`. The model is retained in the returned `PPD`; score-grid dispatch is
+selected entirely by the latent container type.
+"""
+function model_inference(latents::AbstractPosteriorLatents,
+                         model::AbstractFootballModel;
+                         market_config = DEFAULT_MARKET_CONFIG,
+                         verbose::Bool = false)
+    isnothing(market_config) && error("market_config must be provided")
+
+    k = hash((objectid(latents), objectid(model), hash(market_config.markets), :typed))
+    haskey(_PPD_CACHE, k) && return _PPD_CACHE[k]
+
+    markets = collect(market_config.markets)
+    nm = n_matches(latents)
+    verbose && println("Running typed inference on $nm matches...")
+
+    # One reusable score workspace per Julia worker; market result vectors remain
+    # fixture-owned because they are retained in the returned PPD.
+    worker_slots = Base.Threads.maxthreadid()
+    workspaces = [GridWorkspace() for _ in 1:worker_slots]
+    grids = [alloc_score_grid(latents) for _ in 1:worker_slots]
+    smile_buffers = latents isa SmileLatents ?
+        [alloc_smile_buffers(latents) for _ in 1:worker_slots] : nothing
+
+    results_vec = Vector{Dict{String, Dict{Symbol, Vector{Float64}}}}(undef, nm)
+    @threads :static for i in 1:nm
+        worker = threadid()
+        ws = workspaces[worker]
+        S = grids[worker]
+        compute_score_grid!(S, ws, latents, i)
+
+        target = if latents isa SmileLatents
+            buffers = smile_buffers[worker]
+            fill_smile_buffers!(buffers.λ_tot, buffers.φ, latents, i)
+            SmileScoreGrid(S, buffers.λ_tot, buffers.φ, latents.strikes)
+        else
+            S
+        end
+
+        fixture_results = Dict{String, Dict{Symbol, Vector{Float64}}}()
+        for market in markets
+            probabilities = if market isa Union{Market1X2, MarketBTTS, MarketOverUnder}
+                price_market(target, market)
+            else
+                # Typed kernels currently cover 1X2, BTTS and O/U. Preserve the
+                # complete legacy MarketConfig contract for all other markets.
+                compute_market_probs(ScoreMatrix(S), market)
+            end
+            fixture_results[string(market)] = probabilities
+        end
+        results_vec[i] = fixture_results
+    end
+
+    match_ids = Int[]
+    market_names = String[]
+    market_lines = Float64[]
+    selections = Symbol[]
+    distributions = Vector{Float64}[]
+
+    ids = latent_match_ids(latents)
+    for (i, fixture_results) in enumerate(results_vec)
+        for market in markets
+            probabilities = fixture_results[string(market)]
+            for (selection, distribution) in probabilities
+                push!(match_ids, ids[i])
+                push!(market_names, market_group(market))
+                push!(market_lines, market_line(market))
+                push!(selections, selection)
+                push!(distributions, distribution)
+            end
+        end
+    end
+
+    ppd = PPD(DataFrame(
+        :match_id => match_ids,
+        :market_name => market_names,
+        :market_line => market_lines,
+        :selection => selections,
+        :distribution => distributions,
+    ), model, market_config)
+    _PPD_CACHE[k] = ppd
+    return ppd
+end
+
+function model_inference(latents::AbstractPosteriorLatents;
+                         model = nothing,
+                         market_config = DEFAULT_MARKET_CONFIG,
+                         verbose::Bool = false)
+    model isa AbstractFootballModel || error(
+        "model_inference(::AbstractPosteriorLatents) needs `model = ...` because " *
+        "typed latent containers deliberately store posterior values only. " *
+        "Alternatively call `model_inference(latents, model; ...)`.")
+    return model_inference(latents, model;
+                           market_config = market_config, verbose = verbose)
+end
+
 
 """
 Function to process an experiment results struct and datastore to get the 

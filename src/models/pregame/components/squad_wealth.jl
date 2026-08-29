@@ -43,7 +43,8 @@ function extract_squad_wealth(chain::Chains, ::NoSquadWealthConfig)
 end
 
 function extract_squad_wealth(chain::Chains, ::LinearSquadWealthConfig)
-    sym = haskey(chain, Symbol("wealth.w_wealth")) ? Symbol("wealth.w_wealth") : (haskey(chain, :w_wealth) ? :w_wealth : nothing)
+    chain_names = names(chain)
+    sym = Symbol("wealth.w_wealth") in chain_names ? Symbol("wealth.w_wealth") : (:w_wealth in chain_names ? :w_wealth : nothing)
     if sym !== nothing
         return vec(Array(chain[sym]))
     else

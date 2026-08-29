@@ -12,9 +12,19 @@ using ..Features
 # --- Include and export sub-modules ---
 include("pregame/pregame-module.jl")
 include("ingame/ingame-module.jl")
+include("latents/latents-module.jl")
+using .Latents
 
-# Expose the sub-modules to the rest of the package
-export PreGame, InGame
+# Expose the sub-modules and typed posterior API to the rest of the package.
+export PreGame, InGame, Latents
+export AbstractPosteriorLatents, CountLatents, RecombLatents, SmileLatents
+export AbstractLatentFamily, PoissonCountFamily, NegBinCountFamily,
+       RecombinationFamily, SmilePoissonFamily, SmileNegBinFamily
+export n_matches, n_draws, n_strikes, latent_match_ids, latent_matrices,
+       match_index, latent_bytes, latent_allocations, observation_family,
+       recomb_total_home, recomb_total_away, smile_intensity
+export extract_latents, latent_family, latents_from_legacy_dataframe,
+       to_legacy_dataframe
 # We must re-export the contract function so other modules can use it.
 export required_mapping_keys
 

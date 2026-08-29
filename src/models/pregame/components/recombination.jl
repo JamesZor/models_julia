@@ -63,9 +63,10 @@ end
 function extract_recombination(chain::Chains, config::HierarchicalOfficiatingConfig)
     n_samples = size(chain, 1)
     
-    pen_base_sym = haskey(chain, Symbol("officiating.pen_base_μ")) ? Symbol("officiating.pen_base_μ") : (haskey(chain, :pen_base_μ) ? :pen_base_μ : nothing)
-    ha_pen_sym   = haskey(chain, Symbol("officiating.ha_pen")) ? Symbol("officiating.ha_pen") : (haskey(chain, :ha_pen) ? :ha_pen : nothing)
-    σ_ref_sym    = haskey(chain, Symbol("officiating.σ_ref")) ? Symbol("officiating.σ_ref") : (haskey(chain, :σ_ref) ? :σ_ref : nothing)
+    chain_names = names(chain)
+    pen_base_sym = Symbol("officiating.pen_base_μ") in chain_names ? Symbol("officiating.pen_base_μ") : (:pen_base_μ in chain_names ? :pen_base_μ : nothing)
+    ha_pen_sym   = Symbol("officiating.ha_pen") in chain_names ? Symbol("officiating.ha_pen") : (:ha_pen in chain_names ? :ha_pen : nothing)
+    σ_ref_sym    = Symbol("officiating.σ_ref") in chain_names ? Symbol("officiating.σ_ref") : (:σ_ref in chain_names ? :σ_ref : nothing)
     
     pen_base = pen_base_sym !== nothing ? vec(Array(chain[pen_base_sym])) : fill(-1.60, n_samples)
     ha_pen   = ha_pen_sym !== nothing ? vec(Array(chain[ha_pen_sym])) : fill(0.15, n_samples)

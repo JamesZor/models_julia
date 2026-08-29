@@ -193,7 +193,7 @@ function extract_parameters(model::DynamicPxGRecombModel, chain::Chains, feature
 
     # Extract finishing factor κ
     κ_sym = [Symbol("log_κ_raw[$i]") for i in 1:n_teams]
-    all_κ_present = all(haskey(chain, s) for s in κ_sym)
+    all_κ_present = all(s in names(chain) for s in κ_sym)
     if all_κ_present
         raw_mat = Array(chain[κ_sym])
         centered = raw_mat .- mean(raw_mat, dims=2)
@@ -236,7 +236,7 @@ function extract_parameters(
 
     # Finishing factor κ
     κ_sym = [Symbol("log_κ_raw[$i]") for i in 1:n_teams]
-    all_κ_present = all(haskey(chain, s) for s in κ_sym)
+    all_κ_present = all(s in names(chain) for s in κ_sym)
     if all_κ_present
         raw_mat = Array(chain[κ_sym])
         centered = raw_mat .- mean(raw_mat, dims=2)
@@ -246,7 +246,7 @@ function extract_parameters(
     end
 
     league_sym = [Symbol("δ_league_raw[$i]") for i in 1:n_leagues]
-    has_league = all(haskey(chain, s) for s in league_sym)
+    has_league = all(s in names(chain) for s in league_sym)
     if has_league
         raw_l = Array(chain[league_sym])
         delta_league = raw_l .- mean(raw_l, dims=2)

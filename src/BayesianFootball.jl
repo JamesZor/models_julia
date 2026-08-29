@@ -64,6 +64,24 @@ include("./MatchDay/matchday-module.jl")
 export Data, Features, Models, Samplers, Training, Experiments, Predictions, Markets, Calibration, BackTesting, Evaluation, Portfolio, MatchDay
 export AbstractFootballModel, Vocabulary, FeatureSet, required_mapping_keys
 
+using .Models: AbstractPosteriorLatents, CountLatents, RecombLatents, SmileLatents,
+               n_matches, n_draws, n_strikes, latent_match_ids, latent_matrices,
+               match_index, latent_bytes, latent_allocations, observation_family,
+               extract_latents, latent_family, latents_from_legacy_dataframe,
+               to_legacy_dataframe
+using .Predictions: GridWorkspace, SmileScoreGrid, alloc_score_grid,
+                    alloc_smile_buffers, alloc_market_book, compute_score_grid!,
+                    compute_score_grid, fill_smile_buffers!, price_market!,
+                    price_market, market_keys
+export AbstractPosteriorLatents, CountLatents, RecombLatents, SmileLatents
+export n_matches, n_draws, n_strikes, latent_match_ids, latent_matrices,
+       match_index, latent_bytes, latent_allocations, observation_family
+export extract_latents, latent_family, latents_from_legacy_dataframe,
+       to_legacy_dataframe
+export GridWorkspace, SmileScoreGrid, alloc_score_grid, alloc_smile_buffers,
+       alloc_market_book, compute_score_grid!, compute_score_grid,
+       fill_smile_buffers!, price_market!, price_market, market_keys
+
 # Maybe export core config types too?
 export NUTSConfig, ADVIConfig, MAPConfig # From Samplers
 export TrainingConfig, Independent, SequentialPriorUpdate # From Training

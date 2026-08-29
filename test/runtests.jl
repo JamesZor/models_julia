@@ -29,5 +29,8 @@ using DataFrames, Dates, InlineStrings # Add any other packages your tests need 
 
     println("Running Recombination and Squad Wealth Engine tests...")
     include("recombination_tests.jl")
+
+    println("Running typed posterior latent tests...")
+    include("latents_tests.jl")
 end
 

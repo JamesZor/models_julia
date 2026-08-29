@@ -12,10 +12,15 @@ using ..Data
 using ..TypesInterfaces
 using ..Experiments # For LatentStates
 using ..MyDistributions
+using ..Data.Markets: Market1X2, MarketBTTS, MarketOverUnder, outcomes
 
 # 1. Types & Interfaces
 include("types.jl")
 include("interface.jl")
+
+# Dense typed posterior score grids. These are additive to the legacy ScoreMatrix API.
+include("score_grids/types.jl")
+include("score_grids/kernels.jl")
 
 # 2. Score Computations (The Physics)
 include("score_computation/poisson.jl")
@@ -45,10 +50,21 @@ export
     # Types
     PPD,
     ScoreMatrix,
-    
+    SmileScoreGrid,
+    GridWorkspace,
+
     # Functions
     model_inference,
-    score_matrix_data
+    score_matrix_data,
+    alloc_score_grid,
+    alloc_smile_buffers,
+    alloc_market_book,
+    compute_score_grid!,
+    compute_score_grid,
+    fill_smile_buffers!,
+    price_market!,
+    price_market,
+    market_keys
 
 end
 

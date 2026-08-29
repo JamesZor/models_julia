@@ -31,7 +31,8 @@ function extract_pxg_observation(chain::Chains, ::NoPxGObservationConfig)
 end
 
 function extract_pxg_observation(chain::Chains, ::GammaPxGObservationConfig)
-    sym = haskey(chain, Symbol("pxg.ν_xg")) ? Symbol("pxg.ν_xg") : (haskey(chain, :ν_xg) ? :ν_xg : nothing)
+    chain_names = names(chain)
+    sym = Symbol("pxg.ν_xg") in chain_names ? Symbol("pxg.ν_xg") : (:ν_xg in chain_names ? :ν_xg : nothing)
     if sym !== nothing
         return vec(Array(chain[sym]))
     else

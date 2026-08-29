@@ -186,7 +186,7 @@ function extract_parameters(
     n_samples = size(chain, 1) * size(chain, 3)
 
     league_sym = [Symbol("δ_league_raw[$i]") for i in 1:n_leagues]
-    has_league = all(haskey(chain, s) for s in league_sym)
+    has_league = all(s in names(chain) for s in league_sym)
     if has_league
         raw_l = Array(chain[league_sym])
         delta_league = raw_l .- mean(raw_l, dims=2)
