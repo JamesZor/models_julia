@@ -184,7 +184,7 @@ for (name, m) in models
         ece         = ece_model,
         rps         = rps_model,
         n_bets      = p_sum.n_bets,
-        pnl         = p_sum.terminal_bankroll - 1.0
+        pnl         = p_sum.final_bankroll - 1.0
     ))
 end
 
