@@ -60,11 +60,12 @@ println("-"^100)
 
 for (name, fit) in fits
     ch = fit.folds[1].chain
+    ch_vars = Set(Symbol.(names(ch)))
     
-    get_stat(sym) = haskey(ch, sym) ? @sprintf("%.3f", mean(ch[sym])) : "—"
+    get_stat(sym) = sym in ch_vars ? @sprintf("%.3f", mean(ch[sym])) : "—"
     
     mu_str   = get_stat(Symbol("inter.μ_base[1]"))
-    ha_str   = haskey(ch, Symbol("ha.γ")) ? get_stat(Symbol("ha.γ")) : get_stat(Symbol("ha.γ_raw"))
+    ha_str   = Symbol("ha.γ") in ch_vars ? get_stat(Symbol("ha.γ")) : get_stat(Symbol("ha.γ_raw"))
     sa_str   = get_stat(Symbol("dyn.σ_a"))
     sd_str   = get_stat(Symbol("dyn.σ_d"))
     w_w_str  = get_stat(Symbol("wealth.w"))

@@ -144,13 +144,18 @@ for (name, m) in models
     ch = fit.folds[1].chain
     
     # Extract parameter posteriors
-    mean_mu    = haskey(ch, Symbol("inter.μ_base[1]")) ? mean(ch[Symbol("inter.μ_base[1]")]) : NaN
-    mean_gamma = haskey(ch, Symbol("ha.γ")) ? mean(ch[Symbol("ha.γ")]) :
-                 haskey(ch, Symbol("ha.γ_raw")) ? mean(ch[Symbol("ha.γ_raw")]) : NaN
-    mean_sa    = haskey(ch, Symbol("dyn.σ_a")) ? mean(ch[Symbol("dyn.σ_a")]) : NaN
-    mean_sd    = haskey(ch, Symbol("dyn.σ_d")) ? mean(ch[Symbol("dyn.σ_d")]) : NaN
-    mean_wealth = haskey(ch, Symbol("wealth.w")) ? mean(ch[Symbol("wealth.w")]) : NaN
-    mean_dist   = haskey(ch, Symbol("distance.w")) ? mean(ch[Symbol("distance.w")]) : NaN
+    ch_vars = Set(Symbol.(names(ch)))
+    get_param(sym) = sym in ch_vars ? mean(ch[sym]) : NaN
+
+    mean_mu     = get_param(Symbol("inter.μ_base[1]"))
+    mean_gamma  = get_param(Symbol("ha.γ"))
+    if isnan(mean_gamma)
+        mean_gamma = get_param(Symbol("ha.γ_raw"))
+    end
+    mean_sa     = get_param(Symbol("dyn.σ_a"))
+    mean_sd     = get_param(Symbol("dyn.σ_d"))
+    mean_wealth = get_param(Symbol("wealth.w"))
+    mean_dist   = get_param(Symbol("distance.w"))
     
     # Unified Evaluation (08)
     eval_rep = evaluate_predictions(fit, ds)
