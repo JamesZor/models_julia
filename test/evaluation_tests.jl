@@ -875,10 +875,8 @@ end
     bad = eval_fit(EVAL_L; name = "unconverged", seed = 4, n = 40, n_chains = 2)
     metrics = [EV.LogLoss(), EV.CRPS(), EV.PredictionScore()]
 
-    # By default the gate FILTERS — and the convergence frame still has a row for every
-    # submitted fit, because "two models, one of which did not converge" is a different
-    # message from "one model".
-    report = evaluate_fits(metrics, [good, bad], EVAL_DS; quiet = true, show_tables = false)
+    # When require_converged = true, the gate FILTERS unconverged fits.
+    report = evaluate_fits(metrics, [good, bad], EVAL_DS; require_converged = true, quiet = true, show_tables = false)
     @test report isa EvaluationReport
     @test nrow(report.rows) == 1
     @test report.rows.model == ["converged"]

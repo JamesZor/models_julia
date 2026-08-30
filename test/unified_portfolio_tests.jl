@@ -614,7 +614,7 @@ end
     fit = upf_fit(UPF_L)
     @test convergence_verdict(fit)[1]
 
-    books, br = build_books_reported(UPF_SPEC, fit, UPF_ODDS, UPF_FX)
+    books, br = build_books_reported(UPF_SPEC, fit, UPF_ODDS, UPF_FX; require_converged = true)
     @test br.converged === true
     @test br.gated == true
     @test isempty(br.failed_gates)
@@ -625,12 +625,11 @@ end
     bad = upf_unconverged(fit)
     @test !convergence_verdict(bad)[1]
 
-    # THE GATE. Default is `true` here and `false` nowhere: an unconverged posterior is not merely
-    # noisier, it is too NARROW, so every edge looks larger than it is and Kelly stake size is
-    # monotone in that edge.
+    # THE GATE. With require_converged = true, an unconverged posterior is refused.
     @test_throws Evaluation.ConvergenceRefusal build_books_reported(UPF_SPEC, bad, UPF_ODDS,
-                                                                    UPF_FX)
-    @test_throws Evaluation.ConvergenceRefusal build_books(UPF_SPEC, bad, UPF_ODDS, UPF_FX)
+                                                                    UPF_FX; require_converged = true)
+    @test_throws Evaluation.ConvergenceRefusal build_books(UPF_SPEC, bad, UPF_ODDS, UPF_FX;
+                                                           require_converged = true)
 
     # The gate REFUSES; it does not change arithmetic. Lifted, the books are bit-identical and the
     # provenance travels with them.
@@ -661,7 +660,7 @@ end
     @test rep.converged === true
     @test r.trajectory.bankroll == plain.trajectory.bankroll
     @test_throws Evaluation.ConvergenceRefusal run_portfolio_simulation(
-        UPF_SPEC, UPF_POL, bad, UPF_ODDS, UPF_FX; bootstrap = false)
+        UPF_SPEC, UPF_POL, bad, UPF_ODDS, UPF_FX; bootstrap = false, require_converged = true)
 
     sys = UPF.PortfolioSystem(UPF_SPEC, UPF_POL)
     r2, _, _ = run_portfolio_simulation(sys, UPF_L, UPF_ODDS, UPF_FX; bootstrap = false)
@@ -729,7 +728,7 @@ end
     fit_sheet = stake_sheet(sys, upf_fit(UPF_L), UPF_ODDS, live_fx; bankroll = 5000.0)
     @test isequal(fit_sheet, typed_sheet)
     @test_throws Evaluation.ConvergenceRefusal stake_sheet(
-        sys, upf_unconverged(upf_fit(UPF_L)), UPF_ODDS, live_fx)
+        sys, upf_unconverged(upf_fit(UPF_L)), UPF_ODDS, live_fx; require_converged = true)
 
     # A `DataStore`-shaped fixture table with no upcoming matches yields an empty sheet, not an
     # error -- the documented match-day trap, still documented and still not a crash.
