@@ -206,6 +206,8 @@ function save_fit(f::Fit; path = nothing, quiet::Bool = false, latents::Bool = t
     return target
 end
 
+save_fit(f::Fit, path::AbstractString; kwargs...) = save_fit(f; path = String(path), kwargs...)
+
 """
     save_latents(path, latents) -> String
 

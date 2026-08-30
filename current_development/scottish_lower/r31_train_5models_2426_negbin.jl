@@ -119,6 +119,7 @@ for (name, model) in models
     println(" TRAINING MODEL: $name")
     println("="^80)
 
+    ckpt_dir = joinpath(save_root, name, "checkpoints")
     fit_cfg = FitConfig(
         name      = name,
         model     = model,
@@ -129,12 +130,12 @@ for (name, model) in models
     )
 
     t0 = time()
-    fit = fit_model(fit_cfg, ds; quiet = false)
+    fit = fit_model(fit_cfg, ds; quiet = false, checkpoint_dir = ckpt_dir)
     elapsed = round(time() - t0, digits = 1)
     train_times[name] = elapsed
     fits[name] = fit
     
-    save_fit(fit, joinpath(save_root, name))
+    save_fit(fit; path = joinpath(save_root, name))
     println(" Saved fit artifacts to $(joinpath(save_root, name)) in $(elapsed)s")
 end
 
