@@ -622,18 +622,22 @@ function _inf_footer(meta::FitMetadata, n_failed::Int)
     println(" in ", format_elapsed(meta.elapsed_seconds))
 end
 
-"A progress callback updating an interactive ProgressMeter in-place, thread-safe, with start timestamp and ETA/speed."
+"A progress callback updating an interactive ProgressMeter in-place, thread-safe, with start timestamp, elapsed duration, and ETA/speed."
 function _inf_progress(start_time::Float64 = time())
     p = nothing
     lk = ReentrantLock()
     start_dt = Dates.format(Dates.now(), "HH:MM:SS")
     return function (done::Int, total::Int)
         lock(lk) do
+            el = time() - start_time
+            m, s = divrem(round(Int, el), 60)
+            h, m = divrem(m, 60)
+            el_str = @sprintf("%02d:%02d:%02d", h, m, s)
+            desc = @sprintf("     > [Started %s | Elapsed %s] Sampling: ", start_dt, el_str)
             if p === nothing
-                desc = "     > [$start_dt] Sampling: "
                 p = ProgressMeter.Progress(total; desc = desc, color = :green, showspeed = true, output = stderr)
             end
-            ProgressMeter.update!(p, done)
+            ProgressMeter.update!(p, done; desc = desc)
         end
     end
 end
