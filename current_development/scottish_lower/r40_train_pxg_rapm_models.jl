@@ -235,7 +235,7 @@ end
 println("\n[3/6] pxG measurement coverage ...")
 l40_print_pxg_coverage(l40_pxg_coverage(ds, r40_pxg_feature))
 
-println("\n[4/6] Fold-1 design column preflight ...")
+println("\n[4/6] Per-fold design column preflight and leak gate ...")
 for (name, model) in r40_models
     println("\n  $name")
     l40_print_preflight(l40_covariate_preflight(ds, model, splitter))

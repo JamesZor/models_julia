@@ -71,32 +71,55 @@ end
 """
     l40_covariate_preflight(ds, model, splitter) -> DataFrame
 
-Build the model's fold-1 feature set and describe every covariate design column it
-produced: length, spread, and how much of it is the neutral zero.
+Build the model's feature sets and describe every covariate design column, ONE ROW PER
+FOLD: length, spread, how much of it is the neutral zero, and — for any feature that
+fits something rather than looking it up — whether its fit set touched the target block.
 
-This is the cheap place to catch the two failures that otherwise surface hours into a
-grid run — a covariate that is constant (the feature found no coverage and the weight
-is unidentified) and a covariate whose scale is wildly off its prior.
+This is the cheap place to catch the three failures that otherwise surface hours into a
+grid run: a covariate that is constant (the feature found no coverage and the weight is
+unidentified), a covariate that is mostly neutral (the arm is quietly the baseline), and
+a fit set that reached into the fold's own target.
+
+Every fold is walked, not just the first: with `end_dynamics = 1, stop_early = true` the
+first boundary is a pure-history warm-up carrying NO target matches, so reading fold 1
+alone would describe a fold the leaderboard never scores.
 """
 function l40_covariate_preflight(ds::BayesianFootball.Data.DataStore, model, splitter)
     boundaries = BayesianFootball.Data.create_id_boundaries(ds, splitter)
     feature_sets = L40_FEATURES.create_features(boundaries, ds, model, splitter)
-    fs = feature_sets[1]
 
     rows = NamedTuple[]
-    for covariate in L40_PG.cb_covariates(model)
-        column = L40_PG.covariate_column(covariate, fs)
-        neutral = count(iszero, column)
-        push!(rows, (
-            covariate = String(L40_PG.covariate_name(covariate)),
-            role = String(nameof(typeof(L40_PG.covariate_role(covariate)))),
-            n = length(column),
-            mean = mean(column),
-            sd = length(column) > 1 ? std(column) : 0.0,
-            min = isempty(column) ? 0.0 : minimum(column),
-            max = isempty(column) ? 0.0 : maximum(column),
-            neutral_share = isempty(column) ? 1.0 : neutral / length(column),
-        ))
+    for (fold, (boundary, _)) in enumerate(boundaries)
+        fs = first(feature_sets[fold])
+        target_ids = Set(Int.(boundary.target_match_ids))
+
+        for covariate in L40_PG.cb_covariates(model)
+            column = L40_PG.covariate_column(covariate, fs)
+            neutral = count(iszero, column)
+
+            # A feature that FITS something records the matches it was permitted to learn
+            # from. Anything of that shape must be disjoint from this fold's target.
+            leaked = 0
+            for (key, value) in fs.data
+                endswith(String(key), "_fit_match_ids") || continue
+                leaked += length(intersect(Set(Int.(value)), target_ids))
+            end
+
+            push!(rows, (
+                fold = fold,
+                covariate = String(L40_PG.covariate_name(covariate)),
+                role = String(nameof(typeof(L40_PG.covariate_role(covariate)))),
+                n_history = length(boundary.history_match_ids),
+                n_target = length(boundary.target_match_ids),
+                n = length(column),
+                mean = mean(column),
+                sd = length(column) > 1 ? std(column) : 0.0,
+                min = isempty(column) ? 0.0 : minimum(column),
+                max = isempty(column) ? 0.0 : maximum(column),
+                neutral_share = isempty(column) ? 1.0 : neutral / length(column),
+                leaked_fit_ids = leaked,
+            ))
+        end
     end
     return DataFrame(rows)
 end
@@ -104,29 +127,40 @@ end
 """
     l40_print_preflight(table)
 
-The preflight table, plus the two warnings it exists to raise.
+The preflight table, plus the warnings it exists to raise. A non-zero `leak` column is a
+STOP: the feature learned from matches the fold is being scored on.
 """
 function l40_print_preflight(table::DataFrame)
     if nrow(table) == 0
         println("  (baseline: no covariates)")
         return nothing
     end
-    @printf("  %-12s | %-14s | %5s | %8s | %8s | %8s | %8s | %8s\n",
-            "covariate", "role", "n", "mean", "sd", "min", "max", "neutral")
-    println("  " * "-"^92)
+    @printf("  %4s | %-12s | %-14s | %5s | %5s | %8s | %8s | %8s | %8s | %8s | %4s\n",
+            "fold", "covariate", "role", "hist", "targ", "mean", "sd", "min", "max",
+            "neutral", "leak")
+    println("  " * "-"^110)
     for r in eachrow(table)
-        @printf("  %-12s | %-14s | %5d | %+8.4f | %8.4f | %+8.4f | %+8.4f | %7.1f%%\n",
-                r.covariate, r.role, r.n, r.mean, r.sd, r.min, r.max,
-                100 * r.neutral_share)
+        @printf("  %4d | %-12s | %-14s | %5d | %5d | %+8.4f | %8.4f | %+8.4f | %+8.4f | %7.1f%% | %4d\n",
+                r.fold, r.covariate, r.role, r.n_history, r.n_target,
+                r.mean, r.sd, r.min, r.max, 100 * r.neutral_share, r.leaked_fit_ids)
     end
+
     for r in eachrow(table)
+        r.n_target == 0 && continue          # a pure-history warm-up fold is never scored
         if r.sd < 1e-8
-            println("  [WARN] $(r.covariate) is CONSTANT — its weight is unidentified.")
+            println("  [WARN] fold $(r.fold) $(r.covariate) is CONSTANT — its weight is unidentified.")
         end
         if r.neutral_share > 0.5
-            @printf("  [WARN] %s is neutral on %.1f%% of the fold — thin coverage.\n",
-                    r.covariate, 100 * r.neutral_share)
+            @printf("  [WARN] fold %d %s is neutral on %.1f%% of the fold — thin coverage.\n",
+                    r.fold, r.covariate, 100 * r.neutral_share)
         end
+    end
+    leaks = sum(table.leaked_fit_ids)
+    if leaks > 0
+        println("  [STOP] $(leaks) fitted-feature match id(s) fell inside a target block. " *
+                "Check `fit_on`; do not score this run.")
+    else
+        println("  [OK]   no fitted-feature match id falls inside any target block.")
     end
     return nothing
 end
