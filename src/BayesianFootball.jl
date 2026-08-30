@@ -79,9 +79,10 @@ using .Models: AbstractPosteriorLatents, CountLatents, RecombLatents, SmileLaten
                covariate_name, covariate_role, covariate_prior, covariate_features,
                covariate_column, covariate_oos, covariate_sides,
                AbstractRateGuard, ClampGuard, NoGuard,
-               AbstractObservationConfig, PoissonObservation,
-               NegativeBinomialObservation, DixonColesCorrelation,
-               FrankCopulaCorrelation, add!, add, replace!, validate,
+                AbstractObservationConfig, PoissonObservation,
+                NegativeBinomialObservation, GlobalDispersion, HomeAwayDispersion,
+                DixonColesCorrelation, FrankCopulaCorrelation,
+                add!, add, replace!, validate,
                build_count_model, build, cb_varinfo_sites, cb_chain_columns,
                cb_parameter_count
 using .Models: GlobalInterception, SeasonalInterception, HierarchicalMonthlyInterception,
@@ -109,8 +110,9 @@ export covariate_name, covariate_role, covariate_prior, covariate_features,
        covariate_column, covariate_oos, covariate_sides
 export AbstractRateGuard, ClampGuard, NoGuard
 export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
+       GlobalDispersion, HomeAwayDispersion,
        DixonColesCorrelation, FrankCopulaCorrelation
-export add!, add, replace!, validate, build_count_model
+export add!, add, replace!, validate, build, build_count_model
 export cb_varinfo_sites, cb_chain_columns, cb_parameter_count
 export GridWorkspace, SmileScoreGrid, alloc_score_grid, alloc_smile_buffers,
        alloc_market_book, compute_score_grid!, compute_score_grid,

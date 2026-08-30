@@ -31,6 +31,7 @@ export covariate_name, covariate_role, covariate_prior, covariate_features,
        covariate_column, covariate_oos, covariate_sides
 export AbstractRateGuard, ClampGuard, NoGuard
 export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
+       GlobalDispersion, HomeAwayDispersion,
        DixonColesCorrelation, FrankCopulaCorrelation
 export add!, add, replace!, validate, build, build_count_model
 export cb_covariates, cb_covariate_names, cb_varinfo_sites, cb_chain_columns,
