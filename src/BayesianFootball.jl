@@ -76,6 +76,7 @@ using .Models: AbstractPosteriorLatents, CountLatents, RecombLatents, SmileLaten
                RichardsSigmoid, ShiftedGamma, GaussianPrime, age_weight,
                ProductionWealthFeature, WealthCovariate,
                ProductionWealthCovariate, DistanceCovariate,
+               PxGCovariate, PxGRapmCovariate,
                covariate_name, covariate_role, covariate_prior, covariate_features,
                covariate_column, covariate_oos, covariate_sides,
                AbstractRateGuard, ClampGuard, NoGuard,
@@ -105,7 +106,13 @@ export AbstractCovariateRole, SupremacyRole, LevelRole
 export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
        AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
        age_weight, ProductionWealthFeature, WealthCovariate,
-       ProductionWealthCovariate, DistanceCovariate
+       ProductionWealthCovariate, DistanceCovariate,
+       PxGCovariate, PxGRapmCovariate
+# The two pxG covariate feeds live in `Features`, not the builder, because both reuse the
+# plus-minus segment/shot machinery. Re-exported here so a runner assembling a model can name the
+# feature and its covariate in the same breath, as it already can for production wealth.
+using .Features: PxGFeature, PxGRapmFeature
+export PxGFeature, PxGRapmFeature
 export covariate_name, covariate_role, covariate_prior, covariate_features,
        covariate_column, covariate_oos, covariate_sides
 export AbstractRateGuard, ClampGuard, NoGuard

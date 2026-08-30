@@ -678,6 +678,102 @@ function covariate_oos(c::DistanceCovariate, fs, df)
     return Float64.(getproperty(table, col))
 end
 
+"""
+    PxGCovariate
+
+Point-in-time proxy-expected-goals FORM, built by `Features.PxGFeature` from BBC live-text
+commentary (falling back to match-page shot counts, then goals). Every value is assembled from
+matches that kicked off strictly earlier, so a fixture never sees itself or its same-slot siblings.
+
+The role selects which of the feature's two assembled columns is read, which is the whole point of
+having both:
+
+  * `SupremacyRole()` (default) — `(att_h + def_a) - (att_a + def_h)`, the expected-pxG difference.
+    A side that creates more than the league average, or faces a defence that concedes more than the
+    league average, is pushed up. Moves the result, holds the total.
+  * `LevelRole()` — `(att_h + def_a) + (att_a + def_h)`, the expected-pxG total. Moves the total,
+    holds the result. Use this to give the count model a per-fixture volume adjustment.
+
+Both columns are DEVIATIONS from the running league mean, so a cold-start fixture contributes
+exactly `0.0` and the term `w * 0` vanishes without a mask.
+"""
+Base.@kwdef struct PxGCovariate{
+    F<:CB_Features.PxGFeature,
+    D<:UnivariateDistribution,
+    R<:AbstractCovariateRole,
+} <: AbstractCovariateConfig
+    feature::F = CB_Features.PxGFeature()
+    prior::D   = truncated(Normal(0.15, 0.10), lower = 0.0)
+    role::R    = SupremacyRole()
+end
+
+covariate_name(::PxGCovariate)      = :pxg
+covariate_role(c::PxGCovariate)     = c.role
+covariate_prior(c::PxGCovariate)    = c.prior
+covariate_features(c::PxGCovariate) = CB_Features.AbstractFeatureConfig[c.feature]
+
+# Dispatch on the role, not a branch: the column a pxG covariate reads IS its role.
+_cb_pxg_keys(::SupremacyRole) = (:flat_pxg_supremacy, :pxg_supremacy_by_match_id, :pxg_supremacy)
+_cb_pxg_keys(::LevelRole)     = (:flat_pxg_level,     :pxg_level_by_match_id,     :pxg_level)
+
+function covariate_column(c::PxGCovariate, fs)
+    key, _, _ = _cb_pxg_keys(c.role)
+    haskey(fs.data, key) || error("PxGCovariate($(nameof(typeof(c.role)))) requires :$key")
+    return Vector{Float64}(fs.data[key])
+end
+
+function covariate_oos(c::PxGCovariate, fs, df)
+    _, bridge_key, df_col = _cb_pxg_keys(c.role)
+    # A materialised column wins, so a caller can price a hypothetical form state.
+    hasproperty(df, df_col) && return Float64.(getproperty(df, df_col))
+    bridge = get(fs.data, bridge_key, Dict{Int,Float64}())
+    return Float64[get(bridge, Int(row.match_id), 0.0) for row in eachrow(df)]
+end
+
+"""
+    PxGRapmCovariate
+
+Starting-XI regularized adjusted plus-minus differential,
+`x = (sum of home XI ratings - sum of away XI ratings) / scale`, built by
+`Features.PxGRapmFeature` from stint segments.
+
+The ridge is fit on the fold's frozen history block, sparse players are shrunk toward the neutral
+zero player on their own segment exposure, and an unrated player contributes exactly `0.0`. The
+default target is `:y_xg` (pxG-APM), the least team-loaded of the four responses — which matters
+because the engine already carries team strength in `dyn.alpha`/`dyn.beta` and a covariate that
+re-derives it is fighting its own model.
+
+`SupremacyRole()` is the only sensible role: the column is antisymmetric in the two sides by
+construction, so a level reading would price "both teams are good" as "more goals", which is not
+what a plus-minus differential measures.
+"""
+Base.@kwdef struct PxGRapmCovariate{
+    F<:CB_Features.PxGRapmFeature,
+    D<:UnivariateDistribution,
+    R<:AbstractCovariateRole,
+} <: AbstractCovariateConfig
+    feature::F = CB_Features.PxGRapmFeature()
+    prior::D   = truncated(Normal(0.05, 0.05), lower = 0.0)
+    role::R    = SupremacyRole()
+end
+
+covariate_name(::PxGRapmCovariate)      = :pxg_rapm
+covariate_role(c::PxGRapmCovariate)     = c.role
+covariate_prior(c::PxGRapmCovariate)    = c.prior
+covariate_features(c::PxGRapmCovariate) = CB_Features.AbstractFeatureConfig[c.feature]
+
+function covariate_column(::PxGRapmCovariate, fs)
+    haskey(fs.data, :flat_pxg_rapm) || error("PxGRapmCovariate requires :flat_pxg_rapm")
+    return Vector{Float64}(fs.data[:flat_pxg_rapm])
+end
+
+function covariate_oos(::PxGRapmCovariate, fs, df)
+    # A materialised column wins, so a caller can price a hypothetical teamsheet.
+    hasproperty(df, :pxg_rapm) && return Float64.(df.pxg_rapm)
+    bridge = get(fs.data, :pxg_rapm_by_match_id, Dict{Int,Float64}())
+    return Float64[get(bridge, Int(row.match_id), 0.0) for row in eachrow(df)]
+end
+
 
 # ==============================================================================
 # ==============================================================================

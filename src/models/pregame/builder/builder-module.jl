@@ -26,7 +26,8 @@ export AbstractCovariateRole, SupremacyRole, LevelRole
 export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
        AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
        age_weight, ProductionWealthFeature, WealthCovariate,
-       ProductionWealthCovariate, DistanceCovariate
+       ProductionWealthCovariate, DistanceCovariate,
+       PxGCovariate, PxGRapmCovariate
 export covariate_name, covariate_role, covariate_prior, covariate_features,
        covariate_column, covariate_oos, covariate_sides
 export AbstractRateGuard, ClampGuard, NoGuard

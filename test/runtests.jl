@@ -24,6 +24,9 @@ using DataFrames, Dates, InlineStrings # Add any other packages your tests need 
     println("Running production-wealth feature tests...")
     include("test_production_wealth_feature.jl")
 
+    println("Running pxG and RAPM covariate feature tests...")
+    include("test_pxg_rapm_features.jl")
+
     println("Running Portfolio Module tests...")
     include("portfolio_tests.jl")
 
