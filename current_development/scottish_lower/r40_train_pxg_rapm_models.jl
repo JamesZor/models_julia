@@ -1,21 +1,19 @@
 # ==============================================================================
-# r40 — Do pxG form and stint RAPM earn their parameter?
+# r40 — Orthogonal benchmark: wealth, tuned pxG, bench depth, and RAPM control
 # Scottish Lower (tiers 56/57) · BayesianFootball.jl Unified V2 stack
 # ==============================================================================
 #
 # WHAT THIS IS
-#   A convergence and predictive-fit experiment over four composable count models,
+#   A convergence and predictive-fit experiment over six composable count models,
 #   fitted on genuine walk-forward folds and scored out of sample.
 #
-#   QUESTION. The unified builder already prices a fixture from team dynamics, home
-#   advantage and squad wealth. Does adding history-only CHANCE QUALITY — team pxG
-#   form (m06), or the players who generate it via stint RAPM (m07) — improve
-#   out-of-sample log loss against that stack?
+#   QUESTION. Which independently useful squad and chance-quality signals survive
+#   beside dynamic team ratings, and does RAPM still add anything in the all-in control?
 #
 #   CONTROL.       m00_baseline, the clean team-level arm.
-#   REFERENCE.     m05_production_wealth, the covariate that currently earns its keep.
+#   REFERENCE.     m05_prod_wealth, the covariate that currently earns its keep.
 #   HELD FIXED.    Interception, dynamics half-life, home advantage, observation
-#                  density, splitter, sampler and seed are identical across all four
+#                  density, splitter, sampler and seed are identical across all six
 #                  arms. The ONLY difference is which covariate is attached.
 #   DECISION RULE. An arm must (a) converge, and (b) beat m00 on fold-averaged
 #                  out-of-sample log loss. An arm that converges and does not beat
@@ -33,7 +31,7 @@
 #
 # FILTRATION CONTRACT
 #   Both new features are point-in-time by construction:
-#     * pxG form is built from matches that kicked off STRICTLY EARLIER, and same-slot
+#     * pxG form is built from matches that kicked off STRICTLY EARLIER, and same-day
 #       fixtures cannot see each other.
 #     * The RAPM ridge is fit on the fold's FROZEN HISTORY BLOCK (`fit_on = :history`),
 #       and for the `:y_xg` target the shot-xG cell table is refitted from those same
@@ -102,7 +100,7 @@ const R40_BASELINE_NAME = "m00_baseline"
 mkpath(R40_SAVE_ROOT)
 
 println("\n" * "="^100)
-println(" r40 · pxG FORM AND STINT RAPM AS UNIFIED-BUILDER COVARIATES")
+println(" r40 · WEALTH, TUNED pxG, BENCH DEPTH, AND RAPM CONTROL")
 println("="^100)
 println("  mode        : ", R40_SMOKE ? "SMOKE (fold 1 only)" : "FULL WALK-FORWARD")
 println("  target      : ", join(R40_TARGET_SEASONS, ", "), "  · history ", R40_HISTORY_SEASONS, " seasons")
@@ -139,19 +137,16 @@ splitter = Data.GroupedCVConfig(
 # 5. Model construction
 # ==============================================================================
 #
-# One structural spine, four covariate configurations. The spine is written out in
+# One structural spine, six orthogonal covariate configurations. The spine is written out in
 # full on every arm rather than factored into a helper, because the comparability
 # claim of this experiment IS that these lines are identical.
 
-println("\n[2/6] Assembling the four arms ...")
+println("\n[2/6] Assembling the six arms ...")
 
-# The pxG form feature. An eight-match flat window is roughly a quarter of a Scottish
-# lower-tier season — long enough to average out a single freak scoreline, short enough
-# to still be "form". Shrinkage toward the league baseline keeps an early-season team
-# with two matches from swinging the covariate.
+# Tuned team-form kernel from the held-out feature-discovery gauntlet.
 r40_pxg_feature = PxGFeature(
-    lookback = 8,
-    decay = :window,
+    decay = :exponential,
+    half_life_matches = 16.0,
     prior_weight = 3.0,
     min_matches = 3,
     fallback = :goals,
@@ -177,9 +172,10 @@ m00 = CountModelBuilder(:m00_baseline) |>
     add(GlobalInterception()) |>
     add(TimeDecayDynamics(days_half_life = R40_HALF_LIFE_DAYS)) |>
     add(GlobalHomeAdvantage()) |>
+    add(PoissonObservation()) |>
     build
 
-m05 = CountModelBuilder(:m05_production_wealth) |>
+m05 = CountModelBuilder(:m05_prod_wealth) |>
     add(GlobalInterception()) |>
     add(TimeDecayDynamics(days_half_life = R40_HALF_LIFE_DAYS)) |>
     add(GlobalHomeAdvantage()) |>
@@ -187,9 +183,10 @@ m05 = CountModelBuilder(:m05_production_wealth) |>
         feature = ProductionWealthFeature(curve = RichardsSigmoid(23.0, 0.80, 2.0)),
         prior   = truncated(Normal(0.10, 0.05), lower = 0.0),
     )) |>
+    add(PoissonObservation()) |>
     build
 
-m06 = CountModelBuilder(:m06_pxg) |>
+m06 = CountModelBuilder(:m06_pxg_exponential) |>
     add(GlobalInterception()) |>
     add(TimeDecayDynamics(days_half_life = R40_HALF_LIFE_DAYS)) |>
     add(GlobalHomeAdvantage()) |>
@@ -198,24 +195,46 @@ m06 = CountModelBuilder(:m06_pxg) |>
         prior   = truncated(Normal(0.15, 0.10), lower = 0.0),
         role    = SupremacyRole(),
     )) |>
+    add(PoissonObservation()) |>
     build
 
-m07 = CountModelBuilder(:m07_pxg_rapm) |>
+m07 = CountModelBuilder(:m07_bench_depth) |>
     add(GlobalInterception()) |>
     add(TimeDecayDynamics(days_half_life = R40_HALF_LIFE_DAYS)) |>
     add(GlobalHomeAdvantage()) |>
-    add(PxGRapmCovariate(
-        feature = r40_rapm_feature,
-        prior   = truncated(Normal(0.05, 0.05), lower = 0.0),
-        role    = SupremacyRole(),
-    )) |>
+    add(BenchDepthCovariate(log_transform = true)) |>
+    add(PoissonObservation()) |>
+    build
+
+m08 = CountModelBuilder(:m08_composite_allstar) |>
+    add(GlobalInterception()) |>
+    add(TimeDecayDynamics(days_half_life = R40_HALF_LIFE_DAYS)) |>
+    add(GlobalHomeAdvantage()) |>
+    add(ProductionWealthCovariate(
+        feature = ProductionWealthFeature(curve = RichardsSigmoid(23.0, 0.80, 2.0)))) |>
+    add(PxGCovariate(feature = r40_pxg_feature, role = SupremacyRole())) |>
+    add(BenchDepthCovariate(log_transform = true)) |>
+    add(PoissonObservation()) |>
+    build
+
+m09 = CountModelBuilder(:m09_rapm_control) |>
+    add(GlobalInterception()) |>
+    add(TimeDecayDynamics(days_half_life = R40_HALF_LIFE_DAYS)) |>
+    add(GlobalHomeAdvantage()) |>
+    add(ProductionWealthCovariate(
+        feature = ProductionWealthFeature(curve = RichardsSigmoid(23.0, 0.80, 2.0)))) |>
+    add(PxGCovariate(feature = r40_pxg_feature, role = SupremacyRole())) |>
+    add(PxGRapmCovariate(feature = r40_rapm_feature, role = SupremacyRole())) |>
+    add(PoissonObservation()) |>
     build
 
 r40_models = [
-    (R40_BASELINE_NAME,       m00),
-    ("m05_production_wealth", m05),
-    ("m06_pxg",               m06),
-    ("m07_pxg_rapm",          m07),
+    (R40_BASELINE_NAME,          m00),
+    ("m05_prod_wealth",         m05),
+    ("m06_pxg_exponential",     m06),
+    ("m07_bench_depth",         m07),
+    ("m08_composite_allstar",   m08),
+    ("m09_rapm_control",        m09),
 ]
 
 for (name, model) in r40_models
@@ -246,7 +265,7 @@ end
 # 7. Training
 # ==============================================================================
 
-sampler_config = NUTSConfig(
+sampler_config = QueuedNUTSConfig(
     n_samples   = R40_SAMPLES,
     n_warmup    = R40_WARMUP,
     n_chains    = R40_CHAINS,
@@ -267,7 +286,7 @@ for (name, model) in r40_models
         model     = model,
         splitter  = splitter,
         sampler   = sampler_config,
-        execution = AutoExecution(),
+        execution = QueuedExecution(),
         save_dir  = joinpath(R40_SAVE_ROOT, name),
     )
 

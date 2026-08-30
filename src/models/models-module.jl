@@ -19,8 +19,8 @@ using .PreGame: CountModelBuilder, PoissonCountModel, NegBinCountModel,
     AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
     AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
     age_weight, ProductionWealthFeature, WealthCovariate,
-    ProductionWealthCovariate, DistanceCovariate,
-    PxGCovariate, PxGRapmCovariate,
+    ProductionWealthCovariate, BenchDepthCovariate, DistanceCovariate,
+    PxGCovariate, LateGameChanceCovariate, PxGRapmCovariate,
     covariate_name, covariate_role, covariate_prior, covariate_features,
     covariate_column, covariate_oos, covariate_sides,
     AbstractRateGuard, ClampGuard, NoGuard,
@@ -47,9 +47,10 @@ export CountModelBuilder, PoissonCountModel, NegBinCountModel, ComposableCountMo
 export AbstractCovariateRole, SupremacyRole, LevelRole
 export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
        AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
-       age_weight, ProductionWealthFeature, WealthCovariate,
-       ProductionWealthCovariate, DistanceCovariate,
-       PxGCovariate, PxGRapmCovariate
+       age_weight, ProductionWealthFeature, BenchDepthFeature, LateGameChanceFeature,
+       WealthCovariate,
+       ProductionWealthCovariate, BenchDepthCovariate, DistanceCovariate,
+       PxGCovariate, LateGameChanceCovariate, PxGRapmCovariate
 export covariate_name, covariate_role, covariate_prior, covariate_features,
        covariate_column, covariate_oos, covariate_sides
 export AbstractRateGuard, ClampGuard, NoGuard

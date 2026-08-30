@@ -629,6 +629,53 @@ function covariate_oos(::ProductionWealthCovariate, fs, df)
 end
 
 """
+    BenchDepthCovariate(; role=SupremacyRole(), log_transform=true)
+
+Point-in-time substitute-bench valuation differential. The feature standardizes
+its design on the frozen history block; sparse benches are the structural zero.
+"""
+struct BenchDepthCovariate{
+    F<:CB_Features.BenchDepthFeature,
+    D<:UnivariateDistribution,
+    R<:AbstractCovariateRole,
+} <: AbstractCovariateConfig
+    feature::F
+    prior::D
+    role::R
+end
+
+function BenchDepthCovariate(;
+    feature::Union{Nothing,CB_Features.BenchDepthFeature}=nothing,
+    prior::UnivariateDistribution=Normal(0.0, 0.10),
+    role::AbstractCovariateRole=SupremacyRole(),
+    log_transform::Bool=true,
+    scale::Union{Float64,Nothing}=nothing,
+    min_bench_count::Int=3,
+)
+    selected = feature === nothing ? CB_Features.BenchDepthFeature(
+        ; log_transform, scale, min_bench_count) : feature
+    return BenchDepthCovariate(selected, prior, role)
+end
+
+covariate_name(::BenchDepthCovariate) = :bench_depth
+covariate_role(c::BenchDepthCovariate) = c.role
+covariate_prior(c::BenchDepthCovariate) = c.prior
+covariate_features(c::BenchDepthCovariate) =
+    CB_Features.AbstractFeatureConfig[c.feature]
+
+function covariate_column(::BenchDepthCovariate, fs)
+    haskey(fs.data, :flat_delta_bench_depth) ||
+        error("BenchDepthCovariate requires :flat_delta_bench_depth")
+    return Vector{Float64}(fs.data[:flat_delta_bench_depth])
+end
+
+function covariate_oos(::BenchDepthCovariate, fs, df)
+    hasproperty(df, :delta_bench_depth) && return Float64.(df.delta_bench_depth)
+    bridge = get(fs.data, :bench_depth_by_match_id, Dict{Int,Float64}())
+    return Float64[get(bridge, Int(row.match_id), 0.0) for row in eachrow(df)]
+end
+
+"""
     DistanceCovariate
 
 Static away-travel burden between the two grounds. Uses the production
@@ -727,6 +774,56 @@ function covariate_oos(c::PxGCovariate, fs, df)
     # A materialised column wins, so a caller can price a hypothetical form state.
     hasproperty(df, df_col) && return Float64.(getproperty(df, df_col))
     bridge = get(fs.data, bridge_key, Dict{Int,Float64}())
+    return Float64[get(bridge, Int(row.match_id), 0.0) for row in eachrow(df)]
+end
+
+"""
+    LateGameChanceCovariate(; role=SupremacyRole())
+
+Exponentially smoothed home-away differential in the historical share of proxy
+xG generated from minute 70 onward. The prior is intentionally signed because
+late chance share is a game-state proxy rather than an intrinsically positive
+strength measure.
+"""
+struct LateGameChanceCovariate{
+    F<:CB_Features.LateGameChanceFeature,
+    D<:UnivariateDistribution,
+    R<:AbstractCovariateRole,
+} <: AbstractCovariateConfig
+    feature::F
+    prior::D
+    role::R
+end
+
+function LateGameChanceCovariate(;
+    feature::Union{Nothing,CB_Features.LateGameChanceFeature}=nothing,
+    prior::UnivariateDistribution=Normal(0.0, 0.10),
+    role::AbstractCovariateRole=SupremacyRole(),
+    minute_threshold::Int=70,
+    half_life_matches::Float64=16.0,
+    scale::Union{Float64,Nothing}=nothing,
+)
+    selected = feature === nothing ? CB_Features.LateGameChanceFeature(
+        ; minute_threshold, half_life_matches, scale) : feature
+    return LateGameChanceCovariate(selected, prior, role)
+end
+
+covariate_name(::LateGameChanceCovariate) = :late_game_chance
+covariate_role(c::LateGameChanceCovariate) = c.role
+covariate_prior(c::LateGameChanceCovariate) = c.prior
+covariate_features(c::LateGameChanceCovariate) =
+    CB_Features.AbstractFeatureConfig[c.feature]
+
+function covariate_column(::LateGameChanceCovariate, fs)
+    haskey(fs.data, :flat_delta_late_game_chance) ||
+        error("LateGameChanceCovariate requires :flat_delta_late_game_chance")
+    return Vector{Float64}(fs.data[:flat_delta_late_game_chance])
+end
+
+function covariate_oos(::LateGameChanceCovariate, fs, df)
+    hasproperty(df, :delta_late_game_chance) &&
+        return Float64.(df.delta_late_game_chance)
+    bridge = get(fs.data, :late_game_chance_by_match_id, Dict{Int,Float64}())
     return Float64[get(bridge, Int(row.match_id), 0.0) for row in eachrow(df)]
 end
 

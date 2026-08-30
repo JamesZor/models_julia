@@ -22,8 +22,9 @@ export AbstractPlusMinusFeature, ShotsPlusMinusFeature, ShotsOnTargetPlusMinusFe
        GoalsPlusMinusFeature, XGPlusMinusFeature, pm_target, rating_base
 # Recombination & Open-Play Features
 export OpenPlayGoalsFeature, OpenPlayPxGFeature, SquadWealthFeature, RefereeOfficiatingFeature
-# Point-in-time proxy-xG form and stint RAPM covariate feeds for the composable count builder.
-export PxGFeature, PxGRapmFeature, pxg_match_observations, pxg_rapm_deltas
+# Point-in-time squad and chance-form feeds for the composable count builder.
+export BenchDepthFeature, PxGFeature, PxGRapmFeature, LateGameChanceFeature,
+       pxg_match_observations, pxg_rapm_deltas
 
 # Core Architecture
 include("./model_requirements.jl")
@@ -52,6 +53,8 @@ include("./extractors/open_play_extractors.jl")
 # shot-xG and ridge machinery both of these reuse verbatim.
 include("./pxg.jl")
 include("./pxg_rapm.jl")
+include("./bench_depth.jl")
+include("./late_game.jl")
 include("./display.jl")
 
 end # module

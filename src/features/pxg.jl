@@ -25,9 +25,9 @@
 # a second vector, and it means the cold start of a season degrades smoothly instead of cliff-edging.
 #
 # PIT SAFETY IS STRUCTURAL, NOT ASSERTED. Matches are walked in kickoff order and matches sharing a
-# kickoff are emitted as a GROUP before any of their observations update the state. A fixture can
-# therefore never see itself, and same-slot fixtures (the normal Saturday 15:00 card) never see each
-# other. There is no fold-dependence in that walk, which is why the same lookup serves both
+# calendar day are emitted as a GROUP before any of their observations update the state. A fixture
+# can therefore never see itself, and same-day fixtures never see each other. There is no
+# fold-dependence in that walk, which is why the same lookup serves both
 # `covariate_column` (in-fold) and `covariate_oos` (future fixtures).
 #
 # The one fold-dependent piece is the shot-xG CELL TABLE, which is fitted on the fold's permitted
@@ -47,8 +47,9 @@ using Statistics
 
 Point-in-time team attacking/defensive proxy-xG form.
 
-  * `lookback`           — number of most recent matches averaged when `decay = :window`.
-                           `0` means "every earlier match".
+  * `lookback_matches`   — number of recent matches averaged when `decay = :window`.
+                           `0` means "every earlier match". `lookback` is retained as a
+                           backwards-compatible keyword alias.
   * `decay`              — `:window` (flat k-match mean) or `:exponential` (0.5^(j/half_life)).
   * `half_life_matches`  — the exponential decay half-life, in matches, used when `decay = :exponential`.
   * `prior_weight`       — pseudo-matches of the league baseline mixed into every team mean. This is
@@ -61,9 +62,12 @@ Point-in-time team attacking/defensive proxy-xG form.
                            so `1.0` is already interpretable; raise it to shrink the prior's reach.
 """
 Base.@kwdef struct PxGFeature <: AbstractFeatureConfig
+    # `lookback_matches = lookback` lets old `lookback=...` call sites retain their
+    # exact window while making the public field name explicit.
     lookback::Int = 8
-    decay::Symbol = :window
-    half_life_matches::Float64 = 5.0
+    lookback_matches::Int = lookback
+    decay::Symbol = :exponential
+    half_life_matches::Float64 = 16.0
     prior_weight::Float64 = 3.0
     min_matches::Int = 2
     k::Float64 = 25.0
@@ -80,6 +84,7 @@ function _pxg_validate(config::PxGFeature)
     config.fallback in _PXG_FALLBACKS ||
         error("PxGFeature.fallback must be one of $(_PXG_FALLBACKS); got :$(config.fallback)")
     config.lookback >= 0 || error("PxGFeature.lookback must be >= 0")
+    config.lookback_matches >= 0 || error("PxGFeature.lookback_matches must be >= 0")
     isfinite(config.half_life_matches) && config.half_life_matches > 0.0 ||
         error("PxGFeature.half_life_matches must be finite and > 0")
     isfinite(config.prior_weight) && config.prior_weight >= 0.0 ||
@@ -225,13 +230,14 @@ function _pxg_weighted_mean(vals::Vector{Float64}, config::PxGFeature, baseline:
     den = 0.0
     if n > 0
         if config.decay === :exponential
+            log_two = log(2.0)
             for j in 0:(n - 1)
-                w = 0.5 ^ (j / config.half_life_matches)
+                w = exp(-log_two * j / config.half_life_matches)
                 num += w * vals[n - j]
                 den += w
             end
         else
-            m = config.lookback <= 0 ? n : min(config.lookback, n)
+            m = config.lookback_matches <= 0 ? n : min(config.lookback_matches, n)
             for j in 0:(m - 1)
                 num += vals[n - j]
                 den += 1.0
@@ -284,10 +290,12 @@ function _pxg_rolling_lookup(observations::Dict{Int, <:NamedTuple},
     i = 1
     n_rows = length(rows)
     while i <= n_rows
-        # Every fixture sharing this kickoff is emitted BEFORE any of them updates the state, so
-        # `stamp < kickoff` holds for same-slot fixtures too, not merely for different days.
+        # Every fixture sharing this calendar day is emitted BEFORE any of them updates the state.
+        # This is stricter than merely sorting by kickoff and prevents an early match from becoming
+        # an input to a later fixture on the same card.
         j = i
-        while j <= n_rows && rows[j].kickoff == rows[i].kickoff
+        kickoff_day = Date(rows[i].kickoff)
+        while j <= n_rows && Date(rows[j].kickoff) == kickoff_day
             j += 1
         end
         baseline = base_n == 0 ? 0.0 : base_sum / base_n

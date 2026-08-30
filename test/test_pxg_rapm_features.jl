@@ -40,8 +40,8 @@ function pxg_store(; matches = DataFrame(), lineups = DataFrame(),
 end
 
 """
-Five fixtures with hand-computable goals-rung pxG. Matches 3 and 4 SHARE a kickoff, which is the
-same-slot case the point-in-time walk has to get right.
+Five fixtures with hand-computable goals-rung pxG. Matches 3 and 4 share a calendar day but have
+different kickoffs, which is the same-card case the point-in-time walk has to get right.
 
     m1  2024-01-01  A 2-0 B
     m2  2024-01-08  C 1-1 D
@@ -58,7 +58,7 @@ function pxg_goal_matches(; m5_home_score = 1.0, m5_away_score = 1.0)
                           Date(2024, 1, 15), Date(2024, 1, 22)],
         start_timestamp = DateTime[
             DateTime(2024, 1, 1, 15), DateTime(2024, 1, 8, 15),
-            DateTime(2024, 1, 15, 15), DateTime(2024, 1, 15, 15),
+            DateTime(2024, 1, 15, 15), DateTime(2024, 1, 15, 18),
             DateTime(2024, 1, 22, 15)],
         home_team = ["alpha", "gamma", "alpha", "beta", "alpha"],
         away_team = ["beta", "delta", "gamma", "delta", "gamma"],
@@ -105,7 +105,9 @@ end
 # ==============================================================================
 
 @testset "PxGFeature / PxGRapmFeature configuration" begin
-    @test PxGFeature().decay === :window
+    @test PxGFeature().decay === :exponential
+    @test PxGFeature().half_life_matches == 16.0
+    @test PxGFeature(lookback=3).lookback_matches == 3
     @test PxGFeature().fallback === :goals
     @test PxGRapmFeature().target === :y_xg
     @test PxGRapmFeature().fit_on === :history
@@ -117,6 +119,7 @@ end
     ds = pxg_store(matches = pxg_goal_matches())
     for bad in (PxGFeature(decay = :ewma), PxGFeature(fallback = :xg),
                 PxGFeature(scale = 0.0), PxGFeature(lookback = -1),
+                PxGFeature(lookback_matches = -1),
                 PxGFeature(half_life_matches = 0.0), PxGFeature(prior_weight = -1.0))
         @test_throws ErrorException pxg_extract(bad, ds)
     end
@@ -208,7 +211,7 @@ end
     @test lev[3] ≈ 0.0
     @test F[:flat_pxg_available][3] == 1.0
 
-    # --- match 4 SHARES match 3's kickoff and must not have seen it -----------------------
+    # --- match 4 SHARES match 3's day and must not have seen it ---------------------------
     # Had m3 landed first the league baseline would have moved to 8/6, so these two values
     # are exactly the discriminator between a correct and an off-by-one-group walk.
     @test F[:flat_pxg_att_home][4] ≈ -1.0     # beta: scored 0, conceded 2
