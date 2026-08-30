@@ -98,8 +98,8 @@ splitter = Data.GroupedCVConfig(
     stop_early        = true,
 )
 
-# Production Sampler Config: 800 warmup + 800 samples x 4 chains
-sampler_cfg = NUTSConfig(
+# Production Sampler Config: 800 warmup + 800 samples x 4 chains with bounded task queue
+sampler_cfg = QueuedNUTSConfig(
     n_samples   = 800,
     n_warmup    = 800,
     n_chains    = 4,
@@ -124,7 +124,7 @@ for (name, model) in models
         model     = model,
         splitter  = splitter,
         sampler   = sampler_cfg,
-        execution = AutoExecution(),
+        execution = QueuedExecution(),
         save_dir  = joinpath(save_root, name)
     )
 
