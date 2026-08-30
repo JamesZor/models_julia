@@ -622,14 +622,18 @@ function _inf_footer(meta::FitMetadata, n_failed::Int)
     println(" in ", format_elapsed(meta.elapsed_seconds))
 end
 
-"A progress callback reporting percentage and ETA, throttled to one line per fold."
-function _inf_progress(start::Float64)
+"A progress callback updating an interactive ProgressMeter in-place, thread-safe, with start timestamp and ETA/speed."
+function _inf_progress(start_time::Float64 = time())
+    p = nothing
+    lk = ReentrantLock()
+    start_dt = Dates.format(Dates.now(), "HH:MM:SS")
     return function (done::Int, total::Int)
-        el = time() - start
-        eta = done == 0 ? 0.0 : (el / done) * (total - done)
-        printstyled(@sprintf("     %4d / %-4d (%5.1f%%)  elapsed %-9s eta %-9s\n",
-                             done, total, 100 * done / total,
-                             format_elapsed(el), format_elapsed(eta)),
-                    color = :green)
+        lock(lk) do
+            if p === nothing
+                desc = "     > [$start_dt] Sampling: "
+                p = ProgressMeter.Progress(total; desc = desc, color = :green, showspeed = true, output = stderr)
+            end
+            ProgressMeter.update!(p, done)
+        end
     end
 end

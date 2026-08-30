@@ -54,6 +54,7 @@ using JLD2
 using JSON3
 using MCMCChains
 using Printf
+using ProgressMeter
 using Random
 using Serialization
 

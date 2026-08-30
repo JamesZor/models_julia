@@ -846,4 +846,24 @@ end
     @test redirect_stderr(() -> INF.git_commit_id(mktempdir()), devnull) == "unknown"
 end
 
+
+@testset "ProgressMeter and Silence Flags" begin
+    # 1. Test NUTSConfig silence_initial_stepsize default
+    queued_nuts = BayesianFootball.Samplers.QueuedNUTSConfig(n_samples = 10, n_chains = 2)
+    @test queued_nuts.silence_initial_stepsize == true
+    
+    nuts = BayesianFootball.Samplers.NUTSConfig(n_samples = 10, n_chains = 2)
+    @test nuts.silence_initial_stepsize == true
+
+    # 2. Test progress callback initialization and execution
+    # It should not throw when executed.
+    cb = INF._inf_progress()
+    @test cb isa Function
+    # Emulate callback updates
+    cb(1, 10)
+    cb(5, 10)
+    cb(10, 10)
+    @test true # if it reaches here without error, it works
+end
+
 end # testset "Unified inference framework"
