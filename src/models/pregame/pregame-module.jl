@@ -89,6 +89,7 @@ export AbstractRecombinationConfig, EmpiricalRecombinationConfig, HierarchicalOf
 export AbstractSquadWealthConfig, NoSquadWealthConfig, LinearSquadWealthConfig
 export AbstractPxGObservationConfig, NoPxGObservationConfig, GammaPxGObservationConfig
 export TimeDecayDynamics, StaticZeroDynamics, PositionalPlayerDynamics, HierarchicalPlayerDynamicsConfig, OutfieldPlayerDynamicsConfig, HierarchicalFrankCopulaConfig, GlobalFrankCopulaConfig
+export GlobalDispersion, HomeAwayDispersion
 
 ##
 
