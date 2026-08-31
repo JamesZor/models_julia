@@ -15,8 +15,15 @@ println("="^120)
 
 ds = Data.load_datastore_cached(Data.ScottishLower(); max_age_hours = 100_000)
 
-poisson_dir = "/root/BayesianFootball/experiments/scottish_lower_2426"
-negbin_dir  = "/root/BayesianFootball/experiments/scottish_lower_2426_negbin"
+poisson_candidates = [
+    "/root/BayesianFootball/data/scottish_lower_2426_grid",
+    "/root/BayesianFootball/experiments/scottish_lower_2426",
+    joinpath(pwd(), "data", "scottish_lower_2426_grid")
+]
+poisson_dir = something(findfirst(isdir, poisson_candidates), 1) |> i -> poisson_candidates[i]
+negbin_dir  = isdir("/root/BayesianFootball/experiments/scottish_lower_2426_negbin") ? 
+    "/root/BayesianFootball/experiments/scottish_lower_2426_negbin" :
+    joinpath(pwd(), "experiments", "scottish_lower_2426_negbin")
 
 models_base = [
     ("m00", "Baseline"),
