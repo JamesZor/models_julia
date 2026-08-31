@@ -120,6 +120,14 @@ const R45_GUARD_MARGIN      = 0.50
 # two extra parameters — see l45_identification_gate.
 const R45_MIN_NU_SHRINKAGE  = 0.50
 
+# The smoke splitter gives 2 folds x 4 chains = 8 queue tasks per arm, so ONE arm can only
+# ever occupy half of a 16-core box (measured: load average 8.73). Arms are therefore fitted
+# two at a time with each queue capped, so the tasks in flight total `nthreads()` exactly.
+# Oversubscribing PINNED threads would be worse than the idle, hence the derived cap.
+# r46 needs none of this: 40 folds x 4 chains saturates the queue on its own.
+const R45_CONCURRENT_MODELS = 2
+const R45_TASKS_PER_MODEL   = max(1, Threads.nthreads() ÷ R45_CONCURRENT_MODELS)
+
 const R45_SAVE_ROOT   = "/tmp/scottish_lower_joint_gamma_poisson_smoke"
 const R45_BASELINE    = "m00_joint_baseline"
 
@@ -249,30 +257,19 @@ sampler_config = QueuedNUTSConfig(
 
 println("\n[5/7] Fitting fold 1 ...")
 
-r45_fits = Dict{String, Fit}()
-r45_rows = NamedTuple[]
+r45_fits, r45_elapsed = l45_fit_arms(
+    r45_models, ds, splitter, sampler_config, R45_SAVE_ROOT;
+    concurrent_models = R45_CONCURRENT_MODELS,
+    tasks_per_model   = R45_TASKS_PER_MODEL,
+)
 
-for (name, model) in r45_models
-    println("\n" * "-"^90)
-    println(" SMOKE FIT: $name")
-    println("-"^90)
-
-    fit_config = FitConfig(
-        name      = name,
-        model     = model,
-        splitter  = splitter,
-        sampler   = sampler_config,
-        execution = QueuedExecution(),
-        save_dir  = joinpath(R45_SAVE_ROOT, name),
-    )
-
-    started = time()
-    fit = fit_model(fit_config, ds; quiet = false)
-    elapsed = time() - started
-
-    r45_fits[name] = fit
-    push!(r45_rows, l45_summarise_fit(name, fit, ds, elapsed))
-end
+# Summarised SEQUENTIALLY and in declaration order, after every arm has landed. Scoring
+# inside the fitting tasks would nest `evaluate_predictions` under the model semaphore and
+# make the leaderboard's row order depend on which arm happened to finish first.
+r45_rows = NamedTuple[
+    l45_summarise_fit(name, r45_fits[name], ds, r45_elapsed[name])
+    for (name, _) in r45_models
+]
 
 # %%
 # ==============================================================================

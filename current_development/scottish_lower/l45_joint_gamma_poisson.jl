@@ -333,6 +333,82 @@ function l45_print_arm_preflight(table::DataFrame; min_decayed_share::Float64 = 
 end
 
 # ==============================================================================
+# 3b. FITTING THE ARMS, TWO AT A TIME
+# ==============================================================================
+#
+# WHY THIS EXISTS. `QueuedExecution` flattens FOLDS x CHAINS into one queue. The smoke
+# splitter produces 2 folds and 4 chains, so a single arm offers the queue only 8 tasks —
+# and on a 16-core box that measured a load average of 8.73, i.e. half the machine idle for
+# the whole run. The grid runner has no such problem (40 folds x 4 chains = 160 tasks
+# saturates 16 threads from the first wave); this is a smoke-test-only concern.
+#
+# THE CAP IS NOT OPTIONAL. Each `fit_model` builds its own `QueuedExecution` defaulting to
+# `max_concurrent_tasks = nthreads()`. Spawning two arms without capping gives 2 x 16 = 32
+# tasks on 16 PINNED cores, and oversubscribing pinned threads is worse than the idle it
+# was meant to fix. `tasks_per_model` is therefore derived, not guessed.
+#
+# REPRODUCIBILITY CAVEAT. `run_sampler` does not seed explicitly, so each chain's stream
+# comes from its task's RNG, which Julia derives from spawn order. Adding a model-level
+# spawn layer changes that tree, so a parallel run is NOT bit-comparable with a sequential
+# one. Statistically equivalent, not diffable — do not compare chains across the two modes.
+
+"""
+    l45_fit_arms(models, ds, splitter, sampler, save_root; concurrent_models, tasks_per_model)
+        -> (fits::Dict, elapsed::Dict)
+
+Fit every arm, `concurrent_models` at a time, each arm's queue capped so the total tasks in
+flight is at most `Threads.nthreads()`.
+
+`quiet = true` is forced: two arms sharing one terminal produce interleaved progress bars
+that are worse than no progress bars. The runner prints a line per arm as it lands.
+"""
+function l45_fit_arms(models, ds, splitter, sampler, save_root;
+                      concurrent_models::Int = 2,
+                      tasks_per_model::Int = max(1, Threads.nthreads() ÷ max(1, concurrent_models)))
+    fits = Dict{String, Any}()
+    elapsed = Dict{String, Float64}()
+    guard = ReentrantLock()
+    slots = Base.Semaphore(max(1, concurrent_models))
+
+    @printf("  %d arm(s), %d at a time, %d queue task(s) each (%d threads)\n",
+            length(models), concurrent_models, tasks_per_model, Threads.nthreads())
+
+    @sync for (name, model) in models
+        Threads.@spawn begin
+            Base.acquire(slots)
+            try
+                config = BayesianFootball.FitConfig(
+                    name      = name,
+                    model     = model,
+                    splitter  = splitter,
+                    sampler   = sampler,
+                    execution = BayesianFootball.QueuedExecution(
+                        max_concurrent_tasks = tasks_per_model),
+                    save_dir  = joinpath(save_root, name),
+                )
+                started = time()
+                fit = BayesianFootball.fit_model(config, ds; quiet = true)
+                took = time() - started
+                lock(guard) do
+                    fits[name] = fit
+                    elapsed[name] = took
+                    @printf("    landed %-30s %6.0fs  R̂ %.4f  div %d\n",
+                            name, took, fit.diagnostics.max_rhat, fit.diagnostics.n_divergent)
+                end
+            catch err
+                lock(guard) do
+                    @printf("    FAILED %-30s %s\n", name, sprint(showerror, err))
+                end
+                rethrow()
+            finally
+                Base.release(slots)
+            end
+        end
+    end
+    return fits, elapsed
+end
+
+# ==============================================================================
 # 4. SAFE CHAIN LOOKUPS
 # ==============================================================================
 
