@@ -41,13 +41,25 @@ model_pairs = [
     ("Production Wealth", "m05_production_wealth", "m05_negbin_production_wealth"),
 ]
 
+function resolve_fit_dir(path::String)
+    isfile(joinpath(path, "results.jld2")) && return path
+    if isdir(path)
+        subdirs = filter(d -> isfile(joinpath(path, d, "results.jld2")), readdir(path))
+        if !isempty(subdirs)
+            sort!(subdirs; rev = true)
+            return joinpath(path, first(subdirs))
+        end
+    end
+    return path
+end
+
 comparison_rows = []
 
 for (label, p_name, nb_name) in model_pairs
-    p_path  = joinpath(poisson_dir, p_name)
-    nb_path = joinpath(negbin_dir, nb_name)
+    p_path  = resolve_fit_dir(joinpath(poisson_dir, p_name))
+    nb_path = resolve_fit_dir(joinpath(negbin_dir, nb_name))
     
-    if !isdir(p_path) || !isdir(nb_path)
+    if !isfile(joinpath(p_path, "results.jld2")) || !isfile(joinpath(nb_path, "results.jld2"))
         continue
     end
     
