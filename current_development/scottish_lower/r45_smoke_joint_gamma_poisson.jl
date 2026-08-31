@@ -263,11 +263,20 @@ r45_fits, r45_elapsed = l45_fit_arms(
     tasks_per_model   = R45_TASKS_PER_MODEL,
 )
 
+# Persisted so a convergence failure can be inspected without re-sampling. The first run to
+# fail its audit had nothing on disk to interrogate.
+for (name, _) in r45_models
+    println("  saved: ", save_fit(r45_fits[name]))
+end
+
 # Summarised SEQUENTIALLY and in declaration order, after every arm has landed. Scoring
 # inside the fitting tasks would nest `evaluate_predictions` under the model semaphore and
 # make the leaderboard's row order depend on which arm happened to finish first.
+# Read from the SCORED fold, the same one the gates use. Reading fold 1 here while the
+# gates read fold 2 made the leaderboard report κ = 1.127 beside a gate reporting
+# κ = 1.105 — same chain family, different folds, and nothing on the page said so.
 r45_rows = NamedTuple[
-    l45_summarise_fit(name, r45_fits[name], ds, r45_elapsed[name])
+    l45_summarise_fit(name, r45_fits[name], ds, r45_elapsed[name]; fold = r45_gate_fold)
     for (name, _) in r45_models
 ]
 
@@ -289,6 +298,7 @@ for (name, model) in r45_models
     fold_features = first(r45_feature_sets[r45_gate_fold])
 
     append!(r45_gates, l45_smoke_gates(name, fit;
+                                       fold       = r45_gate_fold,
                                        max_rhat   = R45_MAX_RHAT,
                                        kappa_band = R45_KAPPA_BAND,
                                        nu_band    = R45_NU_BAND))

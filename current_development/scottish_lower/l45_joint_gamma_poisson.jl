@@ -464,11 +464,12 @@ What a single-fold smoke fit must show before a 40-fold grid is worth starting.
     diagnostics are silently mirroring the wrong quantity.
 """
 function l45_smoke_gates(name::AbstractString, fit;
+                         fold::Int = 1,
                          max_rhat::Float64 = 1.05,
                          kappa_band::Tuple{Float64,Float64} = (0.60, 1.60),
                          nu_band::Tuple{Float64,Float64} = (1.0, 12.0))
     diagnostics = fit.diagnostics
-    chain = fit.folds[1].chain
+    chain = fit.folds[fold].chain
 
     rhat = diagnostics.max_rhat
     divergences = diagnostics.n_divergent
@@ -476,12 +477,37 @@ function l45_smoke_gates(name::AbstractString, fit;
     ν = l45_proxy_precision(chain)
 
     gates = [
+        # The FRAMEWORK'S OWN verdict, first. R̂ and divergences are two of six gates
+        # `audit_convergence` applies (ESS, BFMI and tree-depth saturation are the others),
+        # so checking only the two this file happens to know about produced a run that
+        # printed "ALL GATES PASSED" directly above "Convergence: FAILED for ...". A smoke
+        # test that can contradict itself is worse than one that reports nothing.
+        l45_gate("$name · convergence audit",
+                 diagnostics.passed,
+                 diagnostics.passed ? "all $(length(diagnostics.folds)) fold(s) passed every gate" :
+                 "FAILED: " * (isempty(diagnostics.failed_gates) ? "(no gate names recorded)" :
+                               join(diagnostics.failed_gates, ", ")) *
+                 (isempty(diagnostics.failures) ? "" : "  |  " * join(diagnostics.failures, "; "))),
         l45_gate("$name · R̂ < $max_rhat",
                  !isnan(rhat) && rhat < max_rhat,
                  isnan(rhat) ? "R̂ unavailable" : @sprintf("max R̂ = %.4f", rhat)),
         l45_gate("$name · no divergences",
                  divergences == 0,
                  "$(divergences) divergent transition(s)"),
+        l45_gate("$name · BFMI ≥ $(diagnostics.thresholds.min_bfmi)",
+                 !isnan(diagnostics.min_bfmi) && diagnostics.min_bfmi >= diagnostics.thresholds.min_bfmi,
+                 @sprintf("min BFMI = %.4f (worst fold %d)",
+                          diagnostics.min_bfmi, diagnostics.worst_bfmi_fold)),
+        l45_gate("$name · tree-depth saturation ≤ $(100 * diagnostics.thresholds.max_treedepth_rate)%",
+                 diagnostics.treedepth_rate <= diagnostics.thresholds.max_treedepth_rate,
+                 @sprintf("%d transitions capped at depth %d (%.2f%%)",
+                          diagnostics.n_depth_capped, diagnostics.max_tree_depth,
+                          100 * diagnostics.treedepth_rate)),
+        l45_gate("$name · min ESS ≥ $(diagnostics.thresholds.min_ess)",
+                 !isnan(diagnostics.min_ess_bulk) && diagnostics.min_ess_bulk >= diagnostics.thresholds.min_ess,
+                 @sprintf("bulk %.0f (fold %d), tail %.0f",
+                          diagnostics.min_ess_bulk, diagnostics.worst_ess_bulk_fold,
+                          diagnostics.min_ess_tail)),
         l45_gate("$name · κ in $(kappa_band)",
                  !isnan(κ) && kappa_band[1] <= κ <= kappa_band[2],
                  isnan(κ) ? "obs.log_κ absent from the chain" :
@@ -766,9 +792,9 @@ end
 Convergence, the two joint-arm parameters, the covariate weights this arm carries,
 and out-of-sample proper scores.
 """
-function l45_summarise_fit(name::AbstractString, fit, ds, elapsed::Float64)
+function l45_summarise_fit(name::AbstractString, fit, ds, elapsed::Float64; fold::Int = 1)
     diagnostics = fit.diagnostics
-    chain = fit.folds[1].chain
+    chain = fit.folds[fold].chain
     report = BayesianFootball.evaluate_predictions(fit, ds)
 
     return (
