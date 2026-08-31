@@ -975,6 +975,68 @@ Base.@kwdef struct DixonColesCorrelation{C<:CB_PG.AbstractDixonColesConfig} <: A
 end
 
 """
+    JointGammaPoissonObservation
+
+TWO ARMS ON ONE LATENT. The shared log-intensity `η = log μ` is read by two densities at once:
+
+    ARM 1 (proxy xG)   pxg_h ~ Gamma(ν, μ_h / ν)      evaluated where the mask is 1
+    ARM 2 (goals)      y_h   ~ Poisson(κ · μ_h)       evaluated everywhere
+
+`Gamma(shape = ν, scale = μ/ν)` has mean `μ` and variance `μ²/ν`, so ν is a pure precision: the
+proxy measurement is unbiased for the latent by construction, and ν says how tightly. κ is the
+finishing factor that converts the same latent into goals; `log κ ~ Normal(0, 0.2)` keeps it near 1
+because pxG is already calibrated in goal units, and its posterior is a direct readout of whether
+the league finished above or below its chances.
+
+WHY THIS IS NOT A COVARIATE. A covariate adds information to the PREDICTOR. This adds a second
+LIKELIHOOD to the same predictor. The value of that shows up exactly where a covariate cannot help:
+the proxy arm sharpens μ on the seasons with BBC live text, and the goals arm — which needs no text
+at all — carries that sharpened μ back across the whole history. Neither arm is a fallback for the
+other; they are two measurements of one quantity.
+
+THE MASK IS REAL, NOT A ZERO. `MatchProxyXGFeature` emits `:flat_pxg_obs_available`, and matches
+before 23/24 sit at 0. The builder's usual "an absent value is a 0.0" shortcut does not apply,
+because the Gamma density is not linear in its observation and has no support at 0 — so the mask is
+carried explicitly and folded into the likelihood weights ONCE, in `observation_design`, outside
+`@model`. A masked-out match contributes a finite term multiplied by an exact zero.
+
+FIELDS
+  * `feature`         — the `MatchProxyXGFeature` supplying the arm-1 observation and its mask.
+  * `shape_prior`     — the prior on ν. Truncated well above 0: a Gamma shape at 0 is a density
+                        with no mode and an infinite spike at the origin.
+  * `log_kappa_prior` — the prior on `log κ`.
+"""
+Base.@kwdef struct JointGammaPoissonObservation{
+    F<:CB_Features.AbstractFeatureConfig,
+    S<:ContinuousUnivariateDistribution,
+    K<:ContinuousUnivariateDistribution,
+} <: AbstractObservationConfig
+    feature::F = CB_Features.MatchProxyXGFeature()
+    shape_prior::S = truncated(Normal(4.0, 1.5), 0.5, Inf)
+    log_kappa_prior::K = Normal(0.0, 0.2)
+end
+
+"""
+    JointGammaPoissonDesign
+
+Everything the joint likelihood reads that is DATA. Built once per fold in `observation_design` and
+frozen into a concrete struct so the engine argument is type-stable and the compiled tape sees one
+shape.
+
+`log_pxg_*` is precomputed because `log(x)` of an observation is data, not a parameter, and
+`mask_weights` folds the availability mask into the time-decay weights in the same pass — one
+broadcast at fit time instead of two on every gradient evaluation.
+"""
+struct JointGammaPoissonDesign
+    pxg_h::Vector{Float64}
+    pxg_a::Vector{Float64}
+    log_pxg_h::Vector{Float64}
+    log_pxg_a::Vector{Float64}
+    mask_weights::Vector{Float64}
+    n_observed::Int
+end
+
+"""
     FrankCopulaCorrelation
 
 Frank copula joint likelihood over the two negative-binomial marginals.
@@ -985,6 +1047,16 @@ specification §7.2.
 Base.@kwdef struct FrankCopulaCorrelation{C<:CB_PG.AbstractCopulaConfig} <: AbstractObservationConfig
     correlation::C = CB_PG.HierarchicalFrankCopulaConfig()
 end
+
+"""
+    CBPoissonFamilyObservation
+
+The observations whose SCORE GRID is the double-Poisson grid, and which therefore assemble into
+`PoissonCountModel`. Membership of this Union is the single place that decision is recorded; the
+struct's type parameter reads it, and `_assemble` dispatches on it.
+"""
+const CBPoissonFamilyObservation = Union{PoissonObservation, JointGammaPoissonObservation}
+
 
 # --- observation traits -------------------------------------------------------
 
@@ -998,6 +1070,7 @@ observation_family(::FrankCopulaCorrelation)       = :frank_copula
 "Is the observation density implemented in the production builder engine?"
 observation_wired(::AbstractObservationConfig)     = false
 observation_wired(::PoissonObservation)            = true
+observation_wired(::JointGammaPoissonObservation)  = true
 # The two scalar dispersion variants return a plain `(h, a)` pair, which the engine can
 # broadcast without a branch. `AdvancedVolatilityDispersion` returns per-team and per-month
 # volatility components that have to be re-assembled per match, and the `src` NegBin engine
@@ -1022,3 +1095,69 @@ observation_gap(::DixonColesCorrelation) =
     "τ low-score correction and DixonColesRates (ρ) extraction — specification §7.2"
 observation_gap(::FrankCopulaCorrelation) =
     "Frank copula joint density over NegBin marginals and κ extraction — specification §7.2"
+
+
+# --- what an observation asks the feature builder for --------------------------
+#
+# Until the joint arm existed, every observation read only the goals the structural block already
+# required, so `required_features` was derived from the covariates alone. An observation with its
+# own data channel needs its own hook — one method, exactly like a covariate's.
+
+"""
+    observation_features(o) -> Vector{<:AbstractFeatureConfig}
+
+Extra features this observation's likelihood reads. Concatenated onto the structural and covariate
+features by `Features.required_features`. Most observations read nothing beyond the goals.
+"""
+observation_features(::AbstractObservationConfig) = CB_Features.AbstractFeatureConfig[]
+observation_features(o::JointGammaPoissonObservation) =
+    CB_Features.AbstractFeatureConfig[o.feature]
+
+"""
+    observation_design(o, feature_set, n_matches, match_weights) -> Any
+
+The observation layer's own design data, assembled once per fold OUTSIDE `@model` and handed to
+`_observe` as a single argument. `nothing` for an observation that needs none, which dispatches the
+argument away at compile time exactly as `_cov_shift(η, ::Nothing)` does for covariates.
+
+`match_weights` is passed in rather than recomputed because the masked arm must run on the SAME
+time-decay clock as the goals arm; deriving it twice is two places for the half-life to drift.
+"""
+observation_design(::AbstractObservationConfig, feature_set, n_matches::Int,
+                   match_weights::Vector{Float64}) = nothing
+
+function observation_design(o::JointGammaPoissonObservation, feature_set, n_matches::Int,
+                            match_weights::Vector{Float64})
+    d = feature_set.data
+    for key in (:flat_pxg_home, :flat_pxg_away, :flat_pxg_obs_available)
+        haskey(d, key) || error(
+            "JointGammaPoissonObservation needs $(key) in the FeatureSet. It is emitted by " *
+            "MatchProxyXGFeature, which the observation declares through `observation_features`; " *
+            "a missing key means the model was built without going through `required_features`.")
+    end
+
+    pxg_h = Vector{Float64}(d[:flat_pxg_home])
+    pxg_a = Vector{Float64}(d[:flat_pxg_away])
+    mask  = Vector{Float64}(d[:flat_pxg_obs_available])
+
+    for (name, v) in (("flat_pxg_home", pxg_h), ("flat_pxg_away", pxg_a),
+                      ("flat_pxg_obs_available", mask))
+        length(v) == n_matches ||
+            error("$(name) has length $(length(v)); expected $(n_matches)")
+        all(isfinite, v) || error("$(name) has non-finite entries")
+    end
+    all(x -> x == 0.0 || x == 1.0, mask) ||
+        error("flat_pxg_obs_available must be exactly 0.0 or 1.0; a partial mask would weight the " *
+              "Gamma arm by an undeclared amount")
+
+    # Only the MASKED entries have to be inside the Gamma support. An unavailable match carries a
+    # finite dummy whose term is multiplied by an exact zero, so it never reaches the density —
+    # but it must still be positive, because `log` of it is taken unconditionally.
+    all(x -> x > 0.0, pxg_h) && all(x -> x > 0.0, pxg_a) || error(
+        "proxy xG must be strictly positive everywhere; Gamma has no support at 0 and the " *
+        "log-observation is precomputed for every match, masked or not. " *
+        "MatchProxyXGFeature enforces this with its `floor` and `dummy` fields.")
+
+    return JointGammaPoissonDesign(pxg_h, pxg_a, log.(pxg_h), log.(pxg_a),
+                                   mask .* match_weights, Int(sum(mask)))
+end

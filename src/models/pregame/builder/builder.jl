@@ -62,7 +62,7 @@ struct PoissonCountModel{
     T<:CB_PG.AbstractDynamicsConfig,
     H<:CB_PG.AbstractHomeAdvantageConfig,
     C<:Tuple,
-    O<:PoissonObservation,
+    O<:CBPoissonFamilyObservation,
     G<:AbstractRateGuard,
 } <: CB_TI.AbstractPoissonModel
     interception::I
@@ -94,6 +94,10 @@ const ComposableCountModel = Union{PoissonCountModel, NegBinCountModel}
 
 # `build` picks the struct from the observation config. Dispatch, not a branch.
 _assemble(o::PoissonObservation, i, t, h, c, g)          = PoissonCountModel(i, t, h, c, o, g)
+# The joint two-arm observation prices from its Poisson goals arm, so it belongs to the SAME
+# prediction family as a plain Poisson. Its Gamma arm is a fit-time likelihood and never touches a
+# score grid — which is why widening `O` above is safe rather than a loophole.
+_assemble(o::JointGammaPoissonObservation, i, t, h, c, g) = PoissonCountModel(i, t, h, c, o, g)
 _assemble(o::NegativeBinomialObservation, i, t, h, c, g) = NegBinCountModel(i, t, h, c, o, g)
 
 
@@ -376,6 +380,33 @@ function validate(b::CountModelBuilder)
         negbin_guard_valid ? "minimum η = $(guard.lo), above log(1e-6)" :
         "NegBin requires ClampGuard(lo >= $(log(1e-6))); NoGuard can cross the legacy μ floor"))
 
+    # The Gamma arm evaluates `exp(-η)`, which is unbounded as η -> -infinity. With NoGuard an early
+    # warmup trajectory can drive that to Inf and take the log-density to -Inf on a COMPILED tape,
+    # where there is no branch left to catch it. Requiring a finite lower clamp is the same
+    # reasoning as the NegBin mean-floor rule above: keep the pathology out of the tape rather than
+    # putting a value branch inside it.
+    joint_guard_valid = !(obs isa JointGammaPoissonObservation) ||
+        (guard isa ClampGuard && isfinite(guard.lo))
+    push!(out, cb_result("joint Gamma arm has a finite η floor",
+        joint_guard_valid,
+        !(obs isa JointGammaPoissonObservation) ? "not a joint observation" :
+        joint_guard_valid ? "minimum η = $(guard.lo), so exp(-η) <= $(exp(-guard.lo))" :
+        "JointGammaPoissonObservation requires a ClampGuard with a finite lo; the Gamma arm's " *
+        "exp(-η) term is unbounded below and NoGuard leaves it uncontrolled"))
+
+    # ν indexes a Gamma SHAPE. A shape at or below 0 is not a density; a shape that can reach 0
+    # gives a spike at the origin that no amount of warmup recovers from.
+    joint_priors_valid = !(obs isa JointGammaPoissonObservation) ||
+        (minimum(obs.shape_prior) > 0.0 && obs.feature isa CB_Features.MatchProxyXGFeature)
+    push!(out, cb_result("joint observation priors and feed are well posed",
+        joint_priors_valid,
+        !(obs isa JointGammaPoissonObservation) ? "not a joint observation" :
+        joint_priors_valid ?
+            "ν > $(minimum(obs.shape_prior)), fed by $(nameof(typeof(obs.feature)))" :
+        minimum(obs.shape_prior) > 0.0 ?
+            "feature must be a MatchProxyXGFeature; got $(nameof(typeof(obs.feature)))" :
+            "shape_prior must have strictly positive support; got minimum $(minimum(obs.shape_prior))"))
+
     # --- R6: covariate names are unique ---------------------------------------
     # Two covariates named `:wealth` would both sample the site `wealth.w`. Turing
     # does not stop you; the second silently overwrites the first's contribution in
@@ -532,6 +563,8 @@ _sites_dynamics(::CB_PG.TimeDecayDynamics)  =
 _sites_dynamics(::CB_PG.StaticZeroDynamics) = Symbol[]
 
 _sites_observation(::PoissonObservation) = Symbol[]
+# Declaration order inside `_joint_gamma_poisson_params`, which is the θ layout.
+_sites_observation(::JointGammaPoissonObservation) = [Symbol("obs.ν"), Symbol("obs.log_κ")]
 _sites_observation(o::NegativeBinomialObservation) = _sites_dispersion(o.dispersion)
 _sites_dispersion(::CB_PG.GlobalDispersion)   = [Symbol("disp.log_r")]
 _sites_dispersion(::CB_PG.HomeAwayDispersion) = [Symbol("disp.log_r"), Symbol("disp.δ_r_home")]
@@ -591,7 +624,7 @@ cb_parameter_count(m::ComposableCountModel, n_teams::Int, n_seasons::Int) =
     cb_parameter_count(m, n_teams; n_seasons)
 
 function Base.show(io::IO, m::ComposableCountModel)
-    fam = m isa PoissonCountModel ? "Poisson" : "NegBin"
+    fam = string(nameof(typeof(m.observation)))
     covs = isempty(m.covariates) ? "none" : join(string.(cb_covariate_names(m)), " + ")
     print(io, nameof(typeof(m)), "(", fam, "; ",
           nameof(typeof(m.interception)), " + ", nameof(typeof(m.home_advantage)), " + ",

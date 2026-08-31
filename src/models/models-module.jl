@@ -26,6 +26,8 @@ using .PreGame: CountModelBuilder, PoissonCountModel, NegBinCountModel,
     AbstractRateGuard, ClampGuard, NoGuard,
     AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
     DixonColesCorrelation, FrankCopulaCorrelation,
+    JointGammaPoissonObservation, JointGammaPoissonDesign,
+    observation_features, observation_design,
     add!, add, replace!, validate, build, build_count_model,
     cb_varinfo_sites, cb_chain_columns, cb_parameter_count,
     GlobalInterception, SeasonalInterception, HierarchicalMonthlyInterception,
@@ -56,7 +58,9 @@ export covariate_name, covariate_role, covariate_prior, covariate_features,
 export AbstractRateGuard, ClampGuard, NoGuard
 export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
        GlobalDispersion, HomeAwayDispersion,
-       DixonColesCorrelation, FrankCopulaCorrelation
+       DixonColesCorrelation, FrankCopulaCorrelation,
+       JointGammaPoissonObservation, JointGammaPoissonDesign,
+       observation_features, observation_design
 export add!, add, replace!, validate, build, build_count_model
 export cb_varinfo_sites, cb_chain_columns, cb_parameter_count
 export GlobalInterception, SeasonalInterception, HierarchicalMonthlyInterception

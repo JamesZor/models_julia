@@ -25,6 +25,8 @@ export OpenPlayGoalsFeature, OpenPlayPxGFeature, SquadWealthFeature, RefereeOffi
 # Point-in-time squad and chance-form feeds for the composable count builder.
 export BenchDepthFeature, PxGFeature, PxGRapmFeature, LateGameChanceFeature,
        pxg_match_observations, pxg_rapm_deltas
+# Match-level pxG as a masked OBSERVATION, for the two-arm joint likelihood.
+export MatchProxyXGFeature
 
 # Core Architecture
 include("./model_requirements.jl")
@@ -52,6 +54,8 @@ include("./extractors/open_play_extractors.jl")
 # Unified-builder covariate feeds. Loaded after plus_minus/ and the shot parser, whose segment,
 # shot-xG and ridge machinery both of these reuse verbatim.
 include("./pxg.jl")
+# Reuses `pxg_match_observations`' measurement ladder, so it must follow pxg.jl.
+include("./match_proxy_xg.jl")
 include("./pxg_rapm.jl")
 include("./bench_depth.jl")
 include("./late_game.jl")

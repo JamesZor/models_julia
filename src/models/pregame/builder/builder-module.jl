@@ -33,7 +33,10 @@ export covariate_name, covariate_role, covariate_prior, covariate_features,
 export AbstractRateGuard, ClampGuard, NoGuard
 export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
        GlobalDispersion, HomeAwayDispersion,
-       DixonColesCorrelation, FrankCopulaCorrelation
+       DixonColesCorrelation, FrankCopulaCorrelation,
+       JointGammaPoissonObservation, JointGammaPoissonDesign,
+       CBPoissonFamilyObservation,
+       observation_features, observation_design
 export add!, add, replace!, validate, build, build_count_model
 export cb_covariates, cb_covariate_names, cb_varinfo_sites, cb_chain_columns,
        cb_parameter_count

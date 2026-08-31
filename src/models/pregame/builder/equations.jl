@@ -17,7 +17,8 @@
 # moved it.
 #
 # SCOPE. Valid for the component set the demo exercises — GlobalInterception,
-# GlobalHomeAdvantage, TimeDecayDynamics, Poisson or scalar-dispersion NegBin.
+# GlobalHomeAdvantage, TimeDecayDynamics, and a Poisson, scalar-dispersion NegBin
+# or two-arm JointGammaPoisson observation.
 # `cb_equation_data` refuses anything else rather than silently referencing the
 # wrong maths, exactly as the arms' references do.
 #
@@ -48,6 +49,8 @@ Base.@kwdef struct CBParams
     raw_d::Vector{Float64}          # dyn.raw_d[1:n_teams]
     w::Vector{Float64}              # <covariate>.w, in build order
     log_r::Union{Nothing, Float64} = nothing   # disp.log_r (NegBin only)
+    ν::Union{Nothing, Float64} = nothing       # obs.ν      (joint only)
+    log_κ::Union{Nothing, Float64} = nothing   # obs.log_κ  (joint only)
 end
 
 """
@@ -73,6 +76,10 @@ function cb_params_from_varinfo(model::ComposableCountModel, vi)
         w     = Float64[Float64(v["$(covariate_name(c)).w"]) for c in model.covariates],
         log_r = model.observation isa NegativeBinomialObservation ?
                 Float64(v["disp.log_r"]) : nothing,
+        ν     = model.observation isa JointGammaPoissonObservation ?
+                Float64(v["obs.ν"]) : nothing,
+        log_κ = model.observation isa JointGammaPoissonObservation ?
+                Float64(v["obs.log_κ"]) : nothing,
     )
 end
 
@@ -102,18 +109,26 @@ function cb_equation_data(model::ComposableCountModel, feature_set)
     model.dynamics       isa CB_PG.TimeDecayDynamics   ||
         error("reference covers TimeDecayDynamics only; got $(nameof(typeof(model.dynamics)))")
     (model.observation isa PoissonObservation ||
+     model.observation isa JointGammaPoissonObservation ||
      (model.observation isa NegativeBinomialObservation &&
       model.observation.dispersion isa CB_PG.GlobalDispersion)) ||
-        error("reference covers PoissonObservation and NegBin+GlobalDispersion only")
+        error("reference covers PoissonObservation, JointGammaPoissonObservation and " *
+              "NegBin+GlobalDispersion only")
 
     d  = feature_set.data
     yh = Vector{Int}(d[:flat_home_goals])
     ya = Vector{Int}(d[:flat_away_goals])
 
+    # Read straight out of the FeatureSet, NOT out of `observation_design` — the reference must
+    # not borrow the thing it is checking. `nothing` where the observation has no proxy arm.
+    joint = model.observation isa JointGammaPoissonObservation
     return (;
         home    = Vector{Int}(d[:flat_home_ids]),
         away    = Vector{Int}(d[:flat_away_ids]),
         yh, ya,
+        pxg_h   = joint ? Vector{Float64}(d[:flat_pxg_home]) : nothing,
+        pxg_a   = joint ? Vector{Float64}(d[:flat_pxg_away]) : nothing,
+        mask    = joint ? Vector{Float64}(d[:flat_pxg_obs_available]) : nothing,
         weights = 0.5 .^ (Vector{Float64}(d[:dates]) ./ model.dynamics.days_half_life),
         # One column per covariate, in build order, plus its role.
         x       = [covariate_column(c, feature_set) for c in model.covariates],
@@ -169,6 +184,10 @@ function cb_logjoint(model::ComposableCountModel, p::CBParams, data)
     if model.observation isa NegativeBinomialObservation
         lp += logpdf(model.observation.dispersion.log_r, p.log_r)
     end
+    if model.observation isa JointGammaPoissonObservation
+        lp += logpdf(model.observation.shape_prior, p.ν) +
+              logpdf(model.observation.log_kappa_prior, p.log_κ)
+    end
 
     return lp + cb_loglik(model.observation, p, data, η_h, η_a)
 end
@@ -190,4 +209,27 @@ function cb_loglik(::NegativeBinomialObservation, p::CBParams, data, η_h, η_a)
     ll_a = loggamma.(data.ya .+ r) .- loggamma(r) .- data.lfa .+
            r .* (log(r) .- total_a) .+ data.ya .* (η_a .- total_a)
     return sum(data.weights .* ll_h) + sum(data.weights .* ll_a)
+end
+
+"""
+Two-arm joint log-likelihood, written from the DISTRIBUTIONS rather than from the engine's
+hand-expanded form. This is the whole value of the file: `engine.jl` inlines
+
+    log Gamma(x; ν, μ/ν) = (ν−1)·log x − ν·x·e^(−η) − ν·η + ν·log ν − log Γ(ν)
+
+for the tape's sake, and an algebra slip there would produce a perfectly smooth, perfectly
+differentiable, perfectly wrong posterior. `logpdf(Gamma(ν, μ/ν), x)` cannot make that slip.
+"""
+function cb_loglik(::JointGammaPoissonObservation, p::CBParams, data, η_h, η_a)
+    μ_h = exp.(η_h)
+    μ_a = exp.(η_a)
+    κ = exp(p.log_κ)
+
+    goals = sum(data.weights .* logpdf.(Poisson.(κ .* μ_h), data.yh)) +
+            sum(data.weights .* logpdf.(Poisson.(κ .* μ_a), data.ya))
+
+    proxy = sum(data.weights .* data.mask .* logpdf.(Gamma.(p.ν, μ_h ./ p.ν), data.pxg_h)) +
+            sum(data.weights .* data.mask .* logpdf.(Gamma.(p.ν, μ_a ./ p.ν), data.pxg_a))
+
+    return goals + proxy
 end

@@ -60,6 +60,9 @@ function CB_Features.required_features(model::ComposableCountModel)
     for c in model.covariates
         append!(out, covariate_features(c))
     end
+    # An observation with its own data channel — the joint model's proxy-xG arm is the first —
+    # declares it the same way a covariate does. Poisson and NegBin contribute nothing here.
+    append!(out, observation_features(model.observation))
     return out
 end
 
@@ -125,7 +128,7 @@ The log-factorial is data, precomputed in `build_turing_model`.
                          η_h, η_a,
                          yh::Vector{Int}, ya::Vector{Int}, wts::Vector{Float64},
                          lfh::Vector{Float64}, lfa::Vector{Float64},
-                         n_teams::Int, n_months::Int)
+                         n_teams::Int, n_months::Int, ::Nothing)
     # The decay weight is applied in its OWN broadcast, not fused into the tracked
     # likelihood expression. Same value to the last bit; 1.6x the gradient
     # throughput on fold 1: fusing a constant into the tracked expression widens the
@@ -166,7 +169,7 @@ compiled-tape-safe dispersion bound.
                          η_h, η_a,
                          yh::Vector{Int}, ya::Vector{Int}, wts::Vector{Float64},
                          lfh::Vector{Float64}, lfa::Vector{Float64},
-                         n_teams::Int, n_months::Int)
+                         n_teams::Int, n_months::Int, ::Nothing)
     disp ~ to_submodel(_build_count_dispersion(o.dispersion, n_teams, n_months))
     λ_h = exp.(η_h)
     λ_a = exp.(η_a)
@@ -186,6 +189,67 @@ compiled-tape-safe dispersion bound.
            disp.a .* (log.(disp.a) .- total_a) .+
            ya .* (η_a .- total_a)
     return sum(ll_h .* wts) + sum(ll_a .* wts)
+end
+
+
+"""
+The two scalars the joint observation owns. Declared in one submodel so the chain carries
+`obs.ν` and `obs.log_κ`, in this order — which is the θ layout `cb_varinfo_sites` reports.
+"""
+@model function _joint_gamma_poisson_params(o::JointGammaPoissonObservation)
+    ν ~ o.shape_prior
+    log_κ ~ o.log_kappa_prior
+    return (; ν, log_κ)
+end
+
+"""
+Two arms on one latent `μ = exp(η)`.
+
+    ARM 1   pxg ~ Gamma(ν, μ/ν)        masked to the matches that have a measurement
+    ARM 2   y   ~ Poisson(κ · μ)       every match in the fold
+
+Both are written out in log-intensity space with every data-only quantity precomputed, so the tape
+sees only broadcasts of tracked scalars against constant vectors:
+
+    log Gamma(x; ν, μ/ν) = (ν−1)·log x − ν·x·e^(−η) − ν·η + ν·log ν − log Γ(ν)
+    log Poisson(y; κμ)   = y·(η + log κ) − e^(η + log κ) − log Γ(y+1)
+
+`log x` and `log Γ(y+1)` are data. The availability mask is data, and it was multiplied into the
+time-decay weights ONCE in `observation_design` — so masking here costs the same single broadcast
+that weighting already cost, and a masked-out match contributes a finite term times an exact zero
+rather than a branch.
+
+WHY THE ARMS ARE NOT FUSED. Writing `sum((ll_goals .+ ll_proxy) .* wts)` would be the same number,
+but it widens the elementwise kernel ReverseDiff differentiates across two densities with different
+masks. Kept separate for the same measured reason `_observe(::PoissonObservation, …)` keeps the
+decay weight in its own broadcast — see docs/tickets/T002.
+"""
+@model function _observe(o::JointGammaPoissonObservation,
+                         η_h, η_a,
+                         yh::Vector{Int}, ya::Vector{Int}, wts::Vector{Float64},
+                         lfh::Vector{Float64}, lfa::Vector{Float64},
+                         n_teams::Int, n_months::Int, od::JointGammaPoissonDesign)
+    obs ~ to_submodel(_joint_gamma_poisson_params(o))
+    ν = obs.ν
+
+    # --- ARM 2: Poisson goals on λ = κ·μ, over the whole fold ------------------
+    ζ_h = η_h .+ obs.log_κ
+    ζ_a = η_a .+ obs.log_κ
+    ll_h = yh .* ζ_h .- exp.(ζ_h) .- lfh
+    ll_a = ya .* ζ_a .- exp.(ζ_a) .- lfa
+    goals_ll = sum(ll_h .* wts) + sum(ll_a .* wts)
+
+    # --- ARM 1: Gamma proxy xG on μ, over the covered matches only -------------
+    # `log_norm` collects the two terms that depend on ν alone. Broadcasting it in as a tracked
+    # scalar is one tape node; recomputing `loggamma(ν)` per match would be n.
+    log_norm = ν * log(ν) - SpecialFunctions.loggamma(ν)
+    inv_μ_h = exp.(.-η_h)
+    inv_μ_a = exp.(.-η_a)
+    g_h = (ν - 1.0) .* od.log_pxg_h .- (ν .* od.pxg_h) .* inv_μ_h .- ν .* η_h .+ log_norm
+    g_a = (ν - 1.0) .* od.log_pxg_a .- (ν .* od.pxg_a) .* inv_μ_a .- ν .* η_a .+ log_norm
+    proxy_ll = sum(g_h .* od.mask_weights) + sum(g_a .* od.mask_weights)
+
+    return goals_ll + proxy_ll
 end
 
 
@@ -213,6 +277,7 @@ end
     match_weights::Vector{Float64},
     covariate_columns::Tuple,
     log_fact_h::Vector{Float64}, log_fact_a::Vector{Float64},
+    observation_data,
     n_matches::Int, n_teams::Int, n_seasons::Int, n_months::Int,
     config::ComposableCountModel,
 )
@@ -242,7 +307,8 @@ end
 
     # --- 4. OBSERVATION -------------------------------------------------------
     ll ~ to_submodel(_observe(config.observation, η_h, η_a, home_goals, away_goals,
-                              match_weights, log_fact_h, log_fact_a, n_teams, n_months),
+                              match_weights, log_fact_h, log_fact_a, n_teams, n_months,
+                              observation_data),
                      false)
     Turing.@addlogprob! ll
 end
@@ -295,8 +361,12 @@ function cb_design(model::ComposableCountModel, feature_set)
     end
     all(isfinite, match_weights) || error("non-finite match weights (check days_half_life)")
 
+    # The observation layer's own design data, if it has any. Built AFTER the length checks so a
+    # mis-sized goals vector is reported as such rather than as a mask-length mismatch.
+    observation_data = observation_design(model.observation, feature_set, n_matches, match_weights)
+
     return (; home_ids, away_ids, season_ids, month_ids, home_goals, away_goals,
-              match_weights, covariate_columns, log_fact_h, log_fact_a,
+              match_weights, covariate_columns, log_fact_h, log_fact_a, observation_data,
               n_matches, n_teams = Int(d[:n_teams]), n_seasons = Int(d[:n_seasons]),
               n_months = 12)
 end
@@ -318,7 +388,7 @@ function CB_PG.build_turing_model(model::ComposableCountModel, feature_set)
     return composable_count_engine(
         z.home_ids, z.away_ids, z.season_ids, z.month_ids,
         z.home_goals, z.away_goals, z.match_weights,
-        z.covariate_columns, z.log_fact_h, z.log_fact_a,
+        z.covariate_columns, z.log_fact_h, z.log_fact_a, z.observation_data,
         z.n_matches, z.n_teams, z.n_seasons, z.n_months,
         model,
     )
@@ -401,6 +471,12 @@ end
 
 _cb_extract_observation(::PoissonObservation, chain, n_teams) = nothing
 
+function _cb_extract_observation(::JointGammaPoissonObservation, chain, n_teams)
+    ν = vec(Array(chain[Symbol("obs.ν")]))
+    κ = exp.(vec(Array(chain[Symbol("obs.log_κ")])))
+    return (; ν, κ)
+end
+
 function _cb_extract_observation(o::NegativeBinomialObservation{<:CB_PG.GlobalDispersion},
                                  chain, n_teams)
     log_r = vec(Array(chain[Symbol("disp.log_r")]))
@@ -421,6 +497,17 @@ end
 # reads. `true_xg_h/a` mirror λ so the downstream evaluation path is unchanged.
 _cb_rates(::PoissonObservation, λ_h, λ_a, _, h_idx, a_idx, m_idx) =
     (; λ_h, λ_a, true_xg_h = λ_h, true_xg_a = λ_a)
+
+# The joint model is the one case where λ and the expected xG genuinely differ, so `true_xg_*`
+# carries μ rather than mirroring λ: μ IS the quantity the Gamma arm measured, and κ is exactly the
+# league finishing factor separating the two. `extract_latents(::PoissonCountFamily, …)` reads
+# `λ_h/λ_a` and ignores the rest, so μ, κ and ν ride along as diagnostics without changing the grid.
+function _cb_rates(::JointGammaPoissonObservation, μ_h, μ_a, obs_nt, h_idx, a_idx, m_idx)
+    λ_h = obs_nt.κ .* μ_h
+    λ_a = obs_nt.κ .* μ_a
+    return (; λ_h, λ_a, μ_h, μ_a, κ = obs_nt.κ, ν = obs_nt.ν,
+              true_xg_h = μ_h, true_xg_a = μ_a)
+end
 
 function _cb_rates(::NegativeBinomialObservation, λ_h, λ_a, disp_nt, h_idx, a_idx, m_idx)
     r = CB_PG.reconstruct_dispersion(disp_nt, h_idx, a_idx, m_idx)

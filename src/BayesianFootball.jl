@@ -83,6 +83,8 @@ using .Models: AbstractPosteriorLatents, CountLatents, RecombLatents, SmileLaten
                 AbstractObservationConfig, PoissonObservation,
                 NegativeBinomialObservation, GlobalDispersion, HomeAwayDispersion,
                 DixonColesCorrelation, FrankCopulaCorrelation,
+                JointGammaPoissonObservation, JointGammaPoissonDesign,
+                observation_features, observation_design,
                 add!, add, replace!, validate,
                build_count_model, build, cb_varinfo_sites, cb_chain_columns,
                cb_parameter_count
@@ -111,14 +113,18 @@ export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
 # The two pxG covariate feeds live in `Features`, not the builder, because both reuse the
 # plus-minus segment/shot machinery. Re-exported here so a runner assembling a model can name the
 # feature and its covariate in the same breath, as it already can for production wealth.
-using .Features: BenchDepthFeature, PxGFeature, PxGRapmFeature, LateGameChanceFeature
-export BenchDepthFeature, PxGFeature, PxGRapmFeature, LateGameChanceFeature
+using .Features: BenchDepthFeature, PxGFeature, PxGRapmFeature, LateGameChanceFeature,
+                 MatchProxyXGFeature
+export BenchDepthFeature, PxGFeature, PxGRapmFeature, LateGameChanceFeature,
+       MatchProxyXGFeature
 export covariate_name, covariate_role, covariate_prior, covariate_features,
        covariate_column, covariate_oos, covariate_sides
 export AbstractRateGuard, ClampGuard, NoGuard
 export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
        GlobalDispersion, HomeAwayDispersion,
-       DixonColesCorrelation, FrankCopulaCorrelation
+       DixonColesCorrelation, FrankCopulaCorrelation,
+       JointGammaPoissonObservation, JointGammaPoissonDesign,
+       observation_features, observation_design
 export add!, add, replace!, validate, build, build_count_model
 export cb_varinfo_sites, cb_chain_columns, cb_parameter_count
 export GridWorkspace, SmileScoreGrid, alloc_score_grid, alloc_smile_buffers,
