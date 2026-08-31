@@ -207,17 +207,6 @@ end
 # ==============================================================================
 
 """
-    l45_arm_preflight(ds, model, splitter) -> DataFrame
-
-For every fold: the size of each arm's evidence, taken from the design the engine
-will actually receive rather than from the store.
-
-`decayed_mask_share` is the honest number. The Gamma arm's contribution is weighted
-by the same time-decay kernel as the goals arm, so a fold whose covered matches are
-all old contributes far less than its raw count suggests. `mask_share` counts
-matches; `decayed_mask_share` counts evidence.
-"""
-"""
     _l45_extremum(f, od) -> Float64
 
 `f` over the proxy values that actually reach the likelihood, or `NaN` when none do.
@@ -232,6 +221,17 @@ function _l45_extremum(f, od)
     return isempty(covered) ? NaN : f(covered)
 end
 
+"""
+    l45_arm_preflight(ds, model, splitter) -> DataFrame
+
+For every fold: the size of each arm's evidence, taken from the design the engine
+will actually receive rather than from the store.
+
+`decayed_mask_share` is the honest number. The Gamma arm's contribution is weighted
+by the same time-decay kernel as the goals arm, so a fold whose covered matches are
+all old contributes far less than its raw count suggests. `mask_share` counts
+matches; `decayed_mask_share` counts evidence.
+"""
 function l45_arm_preflight(ds::BayesianFootball.Data.DataStore, model, splitter)
     boundaries = BayesianFootball.Data.create_id_boundaries(ds, splitter)
     feature_sets = L45_FEATURES.create_features(boundaries, ds, model, splitter)
