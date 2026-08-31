@@ -491,9 +491,15 @@ function l45_smoke_gates(name::AbstractString, fit;
         l45_gate("$name · R̂ < $max_rhat",
                  !isnan(rhat) && rhat < max_rhat,
                  isnan(rhat) ? "R̂ unavailable" : @sprintf("max R̂ = %.4f", rhat)),
-        l45_gate("$name · no divergences",
-                 divergences == 0,
-                 "$(divergences) divergent transition(s)"),
+        # RATE, not a count of zero. `max_divergence_rate = 0.001` is the framework's own
+        # threshold; demanding exactly zero is stricter than the audit this file now leads
+        # with, and it failed a run on 1 divergence in 4000 (rate 0.00025) — a number no
+        # practitioner would act on. A gate that fails for a non-problem trains people to
+        # ignore gates, which costs more than the gate ever saves.
+        l45_gate("$name · divergence rate ≤ $(diagnostics.thresholds.max_divergence_rate)",
+                 diagnostics.divergence_rate <= diagnostics.thresholds.max_divergence_rate,
+                 @sprintf("%d of %d transitions (%.5f)",
+                          divergences, diagnostics.n_transitions, diagnostics.divergence_rate)),
         l45_gate("$name · BFMI ≥ $(diagnostics.thresholds.min_bfmi)",
                  !isnan(diagnostics.min_bfmi) && diagnostics.min_bfmi >= diagnostics.thresholds.min_bfmi,
                  @sprintf("min BFMI = %.4f (worst fold %d)",

@@ -125,7 +125,23 @@ const R45_MIN_NU_SHRINKAGE  = 0.50
 # two at a time with each queue capped, so the tasks in flight total `nthreads()` exactly.
 # Oversubscribing PINNED threads would be worse than the idle, hence the derived cap.
 # r46 needs none of this: 40 folds x 4 chains saturates the queue on its own.
-const R45_CONCURRENT_MODELS = 2
+# MEASURED AT 1: fitting two arms at once does NOT speed this up. Wall clock, run 3
+# (sequential) against run 4 (two at a time), same machine and configuration:
+#
+#     m00  229s -> 513s      m02  283s -> 520s      m03  259s -> 354s
+#     m04  285s -> 636s      m05  252s -> 555s      ctrl 115s -> 212s
+#
+# Every arm slowed by ~1.8-2.2x while two ran concurrently, so total throughput was flat.
+# Process CPU did rise (~800% -> ~1122%), which is why this looked like a win at first
+# glance — but CPU utilisation is not throughput. The 8 idle cores under sequential fitting
+# were not idle for lack of tasks; the run is bounded by something 16 tasks cannot
+# parallelise, most likely Julia's partly-serial GC under ReverseDiff tape allocation
+# (`--gcthreads` defaults to half the thread count) or memory bandwidth.
+#
+# Left at 1 because sequential is the same speed, simpler, and keeps chains bit-comparable
+# with earlier runs (spawn order seeds the RNG — see l45_fit_arms). Raise it to 2 to
+# reproduce the measurement above; `l45_fit_arms` handles the capping correctly either way.
+const R45_CONCURRENT_MODELS = 1
 const R45_TASKS_PER_MODEL   = max(1, Threads.nthreads() ÷ R45_CONCURRENT_MODELS)
 
 const R45_SAVE_ROOT   = "/tmp/scottish_lower_joint_gamma_poisson_smoke"
