@@ -95,8 +95,24 @@ const R46_DYNAMICS_COL      = :match_biweek
 const R46_HALF_LIFE_DAYS    = 180.0
 
 # The full walk-forward: every biweek of both target seasons.
-const R46_END_DYNAMICS      = 0
+#
+# `nothing` IS THE "RUN TO THE END" SENTINEL, not 0. `end_dynamics = 0` means "stop at
+# dynamic step zero" and produces a split with ZERO held-out matches — measured on this
+# store, targets 24/25+25/26:
+#
+#     end_dynamics = nothing  ->  40 folds, 38 scored, 6430 target matches
+#     end_dynamics = 1        ->   4 folds,  2 scored,   40 target matches
+#     end_dynamics = 0        ->   2 folds,  0 scored,      0 target matches
+#
+# This runner was launched once with 0. It passed both preflights and began sampling eight
+# arms against an empty evaluation set; nothing downstream would have objected, and the
+# leaderboard would have been scored on no matches at all. Hence the gate below.
+const R46_END_DYNAMICS      = nothing
 const R46_STOP_EARLY        = true
+
+# A "40-fold grid" that silently builds two folds is not a grid. Refuse to sample rather
+# than discover it from an empty leaderboard in the morning.
+const R46_MIN_SCORED_FOLDS  = 20
 
 const R46_SAMPLES     = parse(Int, get(ENV, "R46_SAMPLES", "800"))
 const R46_WARMUP      = parse(Int, get(ENV, "R46_WARMUP",  "800"))
@@ -159,7 +175,16 @@ splitter = Data.GroupedCVConfig(
 )
 
 boundaries = Data.create_id_boundaries(ds, splitter)
-println("  walk-forward folds: ", length(boundaries))
+
+# The split is the experiment. Check it before anything expensive depends on it.
+r46_scored_folds = count(b -> !isempty(first(b).target_match_ids), boundaries)
+r46_target_total = sum(length(first(b).target_match_ids) for b in boundaries; init = 0)
+println("  walk-forward folds: ", length(boundaries),
+        "  (scored: ", r46_scored_folds, ", held-out matches: ", r46_target_total, ")")
+r46_scored_folds >= R46_MIN_SCORED_FOLDS || error(
+    "splitter produced $(r46_scored_folds) scored fold(s) and $(r46_target_total) held-out " *
+    "match(es); expected at least $(R46_MIN_SCORED_FOLDS). Check `end_dynamics` — `nothing` " *
+    "runs to the end, 0 stops at step zero and yields an EMPTY evaluation set.")
 @printf("  fitted matches (fold 1 .. fold %d): %d .. %d\n",
         length(boundaries),
         length(first(boundaries[1]).history_match_ids),
