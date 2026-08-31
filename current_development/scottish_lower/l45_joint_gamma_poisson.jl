@@ -107,6 +107,25 @@ function l45_joint_arms(;
         add(observation) |>
         build
 
+    m07 = CountModelBuilder(:m07_joint_bench_depth) |>
+        add(GlobalInterception()) |>
+        add(TimeDecayDynamics(days_half_life = half_life_days)) |>
+        add(GlobalHomeAdvantage()) |>
+        add(BenchDepthCovariate(log_transform = true)) |>
+        add(observation) |>
+        build
+
+    m08 = CountModelBuilder(:m08_joint_composite) |>
+        add(GlobalInterception()) |>
+        add(TimeDecayDynamics(days_half_life = half_life_days)) |>
+        add(GlobalHomeAdvantage()) |>
+        add(ProductionWealthCovariate(
+            feature = ProductionWealthFeature(curve = curve),
+            prior   = wealth_prior)) |>
+        add(BenchDepthCovariate(log_transform = true)) |>
+        add(observation) |>
+        build
+
     # `Tuple{String,Any}` is deliberate. Each arm is a DIFFERENT concrete
     # `PoissonCountModel{...}` — its covariate tuple is baked into the type — so a
     # promoted eltype would depend on `typejoin`, and the runners `push!` a control arm
@@ -117,6 +136,8 @@ function l45_joint_arms(;
         ("m03_joint_distance",          m03),
         ("m04_joint_wealth_distance",   m04),
         ("m05_joint_production_wealth", m05),
+        ("m07_joint_bench_depth",       m07),
+        ("m08_joint_composite",         m08),
     ]
 end
 
@@ -406,6 +427,76 @@ function l45_fit_arms(models, ds, splitter, sampler, save_root;
         end
     end
     return fits, elapsed
+end
+
+"""
+    l45_covariate_preflight(ds, models, splitter) -> DataFrame
+
+Every arm's covariate design columns, one row per (arm, covariate, fold).
+
+WHY THIS IS A GATE AND NOT A DIAGNOSTIC. A covariate whose column is CONSTANT has an
+unidentified weight — the sampler explores its prior and reports it as a posterior — and a
+column that is mostly the neutral zero means the arm is quietly the baseline on most
+fixtures. Both produce a converged, plausible-looking leaderboard row. Bench depth is the
+first covariate here that depends on substitute lineup data, whose coverage is not
+guaranteed, so this check earns its place before an overnight run rather than after one.
+"""
+function l45_covariate_preflight(ds::BayesianFootball.Data.DataStore, models, splitter)
+    boundaries = BayesianFootball.Data.create_id_boundaries(ds, splitter)
+    rows = NamedTuple[]
+    for (name, model) in models
+        isempty(L45_PG.cb_covariates(model)) && continue
+        feature_sets = L45_FEATURES.create_features(boundaries, ds, model, splitter)
+        for (fold, (boundary, _)) in enumerate(boundaries)
+            fs = first(feature_sets[fold])
+            for covariate in L45_PG.cb_covariates(model)
+                column = L45_PG.covariate_column(covariate, fs)
+                push!(rows, (
+                    arm = String(name),
+                    covariate = String(L45_PG.covariate_name(covariate)),
+                    fold = fold,
+                    n_target = length(boundary.target_match_ids),
+                    n = length(column),
+                    sd = length(column) > 1 ? std(column) : 0.0,
+                    neutral_share = isempty(column) ? 1.0 : count(iszero, column) / length(column),
+                ))
+            end
+        end
+    end
+    return DataFrame(rows)
+end
+
+"""
+    l45_print_covariate_preflight(table) -> Bool
+
+Print the per-arm covariate summary and return whether it is safe to sample. Folds with no
+target block are excluded from the verdict: they are warm-ups the leaderboard never scores.
+"""
+function l45_print_covariate_preflight(table::DataFrame)
+    if nrow(table) == 0
+        println("  (no covariates in any arm)")
+        return true
+    end
+    scored = filter(r -> r.n_target > 0, table)
+    @printf("  %-28s | %-18s | %4s | %6s | %9s | %9s\n",
+            "arm", "covariate", "fold", "n", "sd", "neutral")
+    println("  " * "-"^88)
+    for r in eachrow(scored)
+        @printf("  %-28s | %-18s | %4d | %6d | %9.4f | %8.1f%%\n",
+                r.arm, r.covariate, r.fold, r.n, r.sd, 100 * r.neutral_share)
+    end
+
+    dead = [(r.arm, r.covariate, r.fold) for r in eachrow(scored) if r.sd < 1e-8]
+    thin = [(r.arm, r.covariate, r.fold) for r in eachrow(scored)
+            if r.sd >= 1e-8 && r.neutral_share > 0.5]
+    for (arm, cov, fold) in dead
+        println("  [STOP] $arm fold $fold: $cov is CONSTANT — its weight is unidentified.")
+    end
+    for (arm, cov, fold) in thin
+        println("  [WARN] $arm fold $fold: $cov is neutral on over half the fold.")
+    end
+    isempty(dead) && println("  [OK]   every covariate varies on every scored fold.")
+    return isempty(dead)
 end
 
 # ==============================================================================

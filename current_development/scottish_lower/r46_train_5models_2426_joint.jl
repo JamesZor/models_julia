@@ -4,7 +4,7 @@
 # ==============================================================================
 #
 # WHAT THIS IS
-#   The overnight grid. Five joint arms and one single-arm control, fitted on genuine
+#   The overnight grid. Seven joint arms and one single-arm control, fitted on genuine
 #   walk-forward folds across two seasons and scored out of sample.
 #
 #   QUESTION. Does adding a second likelihood — `pxg ~ Gamma(ν, μ/ν)` on the matches
@@ -172,7 +172,7 @@ println("  walk-forward folds: ", length(boundaries))
 # 5. Model construction
 # ==============================================================================
 
-println("\n[2/7] Assembling the five joint arms and the single-arm control ...")
+println("\n[2/7] Assembling the seven joint arms and the single-arm control ...")
 
 r46_proxy_feature = MatchProxyXGFeature(
     k        = R46_PXG_CELL_K,
@@ -211,6 +211,16 @@ l45_print_observation_coverage(l45_observation_coverage(ds, r46_proxy_feature))
 println("\n[4/7] Per-fold proxy-arm preflight (all $(length(boundaries)) folds) ...")
 r46_preflight = l45_arm_preflight(ds, r46_models[1][2], splitter)
 l45_print_arm_preflight(r46_preflight; min_decayed_share = R46_MIN_DECAYED_MASK)
+
+# A constant covariate column is an unidentified weight: the sampler explores its prior and
+# reports it as a posterior, and the leaderboard row looks entirely reasonable. Bench depth
+# is the first covariate here that depends on substitute lineup data, whose coverage is not
+# guaranteed, so this is checked BEFORE committing a night of sampling to it.
+println("\n[4b/7] Covariate design-column preflight ...")
+r46_cov_ok = l45_print_covariate_preflight(
+    l45_covariate_preflight(ds, r46_models, splitter))
+r46_cov_ok || error("Covariate preflight failed — a design column is constant on a scored " *
+                    "fold. Fix the feature before spending a night on it.")
 
 # %%
 # ==============================================================================
