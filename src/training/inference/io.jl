@@ -52,6 +52,34 @@ const INF_LATENTS_FILE = "oos_latents.jls"
 
 
 # ==============================================================================
+# 0. PLUGGABLE STORAGE BACKENDS
+# ==============================================================================
+
+"Persistence target for an inference fit."
+abstract type AbstractStorageBackend end
+
+"Filesystem persistence using the existing JLD2/JSON/Serialization layout."
+struct FileStorage <: AbstractStorageBackend
+    root_dir::String
+end
+FileStorage(root_dir::AbstractString) = FileStorage(String(root_dir))
+
+"PostgreSQL persistence for queryable summaries plus exact compressed artefacts."
+struct PostgresStorage <: AbstractStorageBackend
+    conn_str::String
+    experiment_name::String
+end
+PostgresStorage(conn_str::AbstractString, experiment_name::AbstractString) =
+    PostgresStorage(String(conn_str), String(experiment_name))
+
+"Write to the filesystem and PostgreSQL in one call."
+struct DualStorage <: AbstractStorageBackend
+    file::FileStorage
+    db::PostgresStorage
+end
+
+
+# ==============================================================================
 # 1. ATOMIC WRITES
 # ==============================================================================
 
@@ -207,6 +235,12 @@ function save_fit(f::Fit; path = nothing, quiet::Bool = false, latents::Bool = t
 end
 
 save_fit(f::Fit, path::AbstractString; kwargs...) = save_fit(f; path = String(path), kwargs...)
+
+"Save under `storage.root_dir`, retaining the fit's timestamped directory name."
+function save_fit(f::Fit, storage::FileStorage; kwargs...)
+    target = joinpath(storage.root_dir, basename(getfield(f, :save_path)))
+    return save_fit(f; path = target, kwargs...)
+end
 
 """
     save_latents(path, latents) -> String

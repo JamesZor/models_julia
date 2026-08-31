@@ -148,8 +148,11 @@ using .Training: Inference,
                  convergence_table,
                  AbstractExecution, AutoExecution, SequentialExecution,
                  ThreadedExecution, QueuedExecution,
+                 AbstractStorageBackend, FileStorage, PostgresStorage, DualStorage,
                  save_fit, load_fit, load_fits, list_fits, read_fit_meta,
-                 save_latents, load_latents,
+                 save_latents, load_latents, ensure_schema!, config_hash,
+                 compress_draws, decompress_draws,
+                 save_config, load_fit_config, load_portfolio_spec, list_configs,
                  merge_latents, extract_run_latents,
                  MatchState, kickoff_state, NHPPIntensityModel,
                  IngameRatesWorkspace, LiveMatchRates,
@@ -164,8 +167,11 @@ export ConvergenceThresholds, ConvergenceSummary, FoldConvergence,
        audit_convergence, audit_fold, summarise_convergence, convergence_table
 export AbstractExecution, AutoExecution, SequentialExecution, ThreadedExecution,
        QueuedExecution
+export AbstractStorageBackend, FileStorage, PostgresStorage, DualStorage
 export save_fit, load_fit, load_fits, list_fits, read_fit_meta,
-       save_latents, load_latents
+       save_latents, load_latents, ensure_schema!, config_hash,
+       compress_draws, decompress_draws,
+       save_config, load_fit_config, load_portfolio_spec, list_configs
 export merge_latents, extract_run_latents
 export MatchState, kickoff_state, NHPPIntensityModel,
        IngameRatesWorkspace, LiveMatchRates,
@@ -238,6 +244,7 @@ using .Portfolio: OddsIndex, MarketSlot, FallbackSlot, BookWorkspace, BuildRepor
                   slate_summary, path_metrics, bootstrap_roi, attribution,
                   portfolio_report, display_portfolio, daily_returns_table,
                   portfolio_markdown, as_namedtuple, log_growth, book_cache_key,
+                  save_portfolio_db, load_portfolio_db, portfolio_spec_hash,
                   book_match_id, book_date, book_selections, book_grid, book_payoff,
                   book_settle, book_alloc, book_shrink, book_kkt, book_converged,
                   sel_name, sel_odds_close, sel_odds_settle, sel_prob_model,
@@ -265,6 +272,7 @@ export simulate, simulate_portfolio, portfolio_summary, bootstrap_portfolio,
        path_metrics, bootstrap_roi, attribution
 export portfolio_report, display_portfolio, daily_returns_table, portfolio_markdown,
        as_namedtuple, log_growth, book_cache_key
+export save_portfolio_db, load_portfolio_db, portfolio_spec_hash
 export book_match_id, book_date, book_selections, book_grid, book_payoff, book_settle,
        book_alloc, book_shrink, book_kkt, book_converged
 export sel_name, sel_odds_close, sel_odds_settle, sel_prob_model, sel_prob_market, sel_edge

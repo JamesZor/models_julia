@@ -37,8 +37,11 @@ export ConvergenceThresholds, ConvergenceSummary, FoldConvergence,
        audit_convergence, audit_fold, summarise_convergence, convergence_table
 export AbstractExecution, AutoExecution, SequentialExecution, ThreadedExecution,
        QueuedExecution
+export AbstractStorageBackend, FileStorage, PostgresStorage, DualStorage
 export save_fit, load_fit, load_fits, list_fits, read_fit_meta,
-       save_latents, load_latents
+       save_latents, load_latents, ensure_schema!, config_hash,
+       compress_draws, decompress_draws,
+       save_config, load_fit_config, load_portfolio_spec, list_configs
 export merge_latents, extract_run_latents
 export MatchState, kickoff_state, NHPPIntensityModel,
        IngameRatesWorkspace, LiveMatchRates,

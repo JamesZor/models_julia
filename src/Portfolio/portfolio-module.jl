@@ -42,11 +42,15 @@ module Portfolio
 
 using DataFrames
 using Dates
+using JSON3
+using LibPQ
 using Statistics
 using LinearAlgebra
 using Random
 using Printf          # display.jl
 using Optim
+using SHA
+using UUIDs
 
 using ..Data
 using ..Predictions
@@ -110,6 +114,7 @@ include("alignment.jl")
 include("pricing.jl")
 include("simulation.jl")
 include("reporting.jl")
+include("db_storage.jl")
 include("compat.jl")
 
 # last: it dispatches on every type and component defined above
@@ -146,6 +151,9 @@ export
 
     # simulation results
     DailyState, PortfolioSummary, BootstrapCI, PortfolioResult, PortfolioReport,
-    portfolio_summary, portfolio_report
+    portfolio_summary, portfolio_report,
+
+    # PostgreSQL persistence
+    save_portfolio_db, load_portfolio_db, portfolio_spec_hash
 
 end

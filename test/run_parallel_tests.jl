@@ -23,6 +23,7 @@ const TEST_FILES = [
     "recombination_tests.jl",
     "latents_tests.jl",
     "inference_tests.jl",
+    "test_db_storage.jl",
     "evaluation_tests.jl",
     "unified_portfolio_tests.jl",
 ]

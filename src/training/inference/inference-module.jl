@@ -48,15 +48,20 @@
 module Inference
 
 using Base.Threads
+using CodecZstd
 using DataFrames
 using Dates
 using JLD2
 using JSON3
+using LibPQ
 using MCMCChains
 using Printf
 using ProgressMeter
 using Random
+using SHA
 using Serialization
+using Statistics
+using UUIDs
 
 using ...TypesInterfaces
 using ...Data
@@ -76,6 +81,7 @@ include("engine.jl")
 
 # 4. Persistence. Atomic writes, the scannable sidecar, discovery.
 include("io.jl")
+include("db_storage.jl")
 
 # 5. The zero-allocation live rate solver.
 include("ingame.jl")
@@ -103,8 +109,11 @@ export ConvergenceThresholds, ConvergenceSummary, FoldConvergence,
        diagnostics_line, bfmi
 
 # --- Persistence --------------------------------------------------------------
+export AbstractStorageBackend, FileStorage, PostgresStorage, DualStorage
 export save_fit, load_fit, load_fits, list_fits, read_fit_meta,
-       save_latents, load_latents, atomic_write, fit_meta, fit_config_json
+       save_latents, load_latents, atomic_write, fit_meta, fit_config_json,
+       ensure_schema!, config_hash, compress_draws, decompress_draws,
+       save_config, load_fit_config, load_portfolio_spec, list_configs
 
 # --- Latents ------------------------------------------------------------------
 export merge_latents, extract_run_latents
