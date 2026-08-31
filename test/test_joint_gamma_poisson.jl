@@ -96,9 +96,16 @@ A synthetic FeatureSet the engine can be built on directly. `mask` selects which
 proxy measurement, so a fold with partial BBC coverage — the real 22/23-into-23/24 case — is the
 default shape under test rather than a special case.
 """
+# The proxy columns are PERIODIC, not monotone in `i`. A ramp reads fine at n = 8 and walks
+# straight out of the Gamma support by n = 60, which is exactly what `observation_design`
+# refused when the AD testset below grew the fold — a fixture bug, but a real refusal.
+# Both sides stay inside a plausible match-pxG range (0.50 .. 1.50) for every n.
+_jgp_pxg_home(n) = Float64[0.60 + 0.15 * mod(i, 7) for i in 1:n]
+_jgp_pxg_away(n) = Float64[1.40 - 0.15 * mod(i, 7) for i in 1:n]
+
 function jgp_feature_set(n::Int = 6; mask = Float64[i > n ÷ 2 ? 1.0 : 0.0 for i in 1:n],
-                         pxg_h = Float64[0.6 + 0.2i for i in 1:n],
-                         pxg_a = Float64[1.4 - 0.1i for i in 1:n])
+                         pxg_h = _jgp_pxg_home(n),
+                         pxg_a = _jgp_pxg_away(n))
     return BayesianFootball.FeatureSet(Dict{Symbol,Any}(
         :flat_home_ids => Int[isodd(i) ? 1 : 2 for i in 1:n],
         :flat_away_ids => Int[isodd(i) ? 2 : 1 for i in 1:n],
@@ -143,6 +150,16 @@ end
 # ==============================================================================
 # 1. THE FEATURE: MatchProxyXGFeature
 # ==============================================================================
+
+@testset "the synthetic fixture stays inside the Gamma support" begin
+    # The fixture must be valid at every fold size the file uses, not just the small one.
+    for n in (6, 8, 60, 200)
+        fs = jgp_feature_set(n)
+        @test all(>(0.0), fs.data[:flat_pxg_home])
+        @test all(>(0.0), fs.data[:flat_pxg_away])
+        @test length(fs.data[:flat_pxg_obs_available]) == n
+    end
+end
 
 @testset "MatchProxyXGFeature configuration" begin
     c = MatchProxyXGFeature()
