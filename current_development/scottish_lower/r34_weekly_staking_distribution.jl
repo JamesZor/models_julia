@@ -108,18 +108,14 @@ for (label, p_name, nb_name) in model_pairs
                                                  bootstrap = false, require_converged = false)
         
         # Build ledger DataFrame with dates
-        bets_df = res.bets
+        bets_df = res.trajectory.bets
         
         # Match bet dates to calendar weeks
-        # Look up kickoff dates from ds.matches
-        match_date_map = Dict(r.match_id => r.kickoff for r in eachrow(ds.matches))
-        
-        # Calculate stake as % of current bankroll (or initial bankroll)
-        # In bets_df: match_id, stake, stake_fraction, etc.
-        # Group by Year-Week
-        if :kickoff in propertynames(bets_df)
-            bets_df.week = [(Dates.year(d), Dates.week(d)) for d in bets_df.kickoff]
+        # Group by Year-Week using :date in bets_df
+        if :date in propertynames(bets_df)
+            bets_df.week = [(Dates.year(d), Dates.week(d)) for d in bets_df.date]
         elseif :match_id in propertynames(bets_df)
+            match_date_map = Dict(r.match_id => r.kickoff for r in eachrow(ds.matches))
             dates = [get(match_date_map, mid, Date(2024, 8, 1)) for mid in bets_df.match_id]
             bets_df.week = [(Dates.year(d), Dates.week(d)) for d in dates]
         else
