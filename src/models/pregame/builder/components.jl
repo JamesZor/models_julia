@@ -1066,6 +1066,9 @@ observation_family(::PoissonObservation)           = :poisson
 observation_family(::NegativeBinomialObservation)  = :negbin
 observation_family(::DixonColesCorrelation)        = :dixon_coles
 observation_family(::FrankCopulaCorrelation)       = :frank_copula
+# Two arms, ONE prediction family: the goals arm is Poisson, so the score grid is the double-Poisson
+# grid. The proxy arm is a fit-time likelihood only — it never prices a market.
+observation_family(::JointGammaPoissonObservation)  = :poisson
 
 "Is the observation density implemented in the production builder engine?"
 observation_wired(::AbstractObservationConfig)     = false
@@ -1085,6 +1088,7 @@ observation_prefixes(::PoissonObservation)          = Symbol[]
 observation_prefixes(::NegativeBinomialObservation) = [:disp]
 observation_prefixes(::DixonColesCorrelation)       = [:dc]
 observation_prefixes(::FrankCopulaCorrelation)      = [:cop]
+observation_prefixes(::JointGammaPoissonObservation) = [:obs]
 
 "What still has to be built before this observation can be used."
 observation_gap(o::AbstractObservationConfig) = "no observation method in builder/engine.jl"

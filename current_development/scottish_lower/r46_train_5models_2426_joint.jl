@@ -4,7 +4,7 @@
 # ==============================================================================
 #
 # WHAT THIS IS
-#   The overnight grid. Five joint arms and one single-arm control, fitted on genuine
+#   The overnight grid. Seven joint arms and one single-arm control, fitted on genuine
 #   walk-forward folds across two seasons and scored out of sample.
 #
 #   QUESTION. Does adding a second likelihood — `pxg ~ Gamma(ν, μ/ν)` on the matches
@@ -95,8 +95,24 @@ const R46_DYNAMICS_COL      = :match_biweek
 const R46_HALF_LIFE_DAYS    = 180.0
 
 # The full walk-forward: every biweek of both target seasons.
-const R46_END_DYNAMICS      = 0
+#
+# `nothing` IS THE "RUN TO THE END" SENTINEL, not 0. `end_dynamics = 0` means "stop at
+# dynamic step zero" and produces a split with ZERO held-out matches — measured on this
+# store, targets 24/25+25/26:
+#
+#     end_dynamics = nothing  ->  40 folds, 38 scored, 6430 target matches
+#     end_dynamics = 1        ->   4 folds,  2 scored,   40 target matches
+#     end_dynamics = 0        ->   2 folds,  0 scored,      0 target matches
+#
+# This runner was launched once with 0. It passed both preflights and began sampling eight
+# arms against an empty evaluation set; nothing downstream would have objected, and the
+# leaderboard would have been scored on no matches at all. Hence the gate below.
+const R46_END_DYNAMICS      = nothing
 const R46_STOP_EARLY        = true
+
+# A "40-fold grid" that silently builds two folds is not a grid. Refuse to sample rather
+# than discover it from an empty leaderboard in the morning.
+const R46_MIN_SCORED_FOLDS  = 20
 
 const R46_SAMPLES     = parse(Int, get(ENV, "R46_SAMPLES", "800"))
 const R46_WARMUP      = parse(Int, get(ENV, "R46_WARMUP",  "800"))
@@ -105,7 +121,11 @@ const R46_ACCEPT_RATE = 0.65
 const R46_QUEUE_TASKS = Threads.nthreads()
 
 # The proxy arm's feed, identical to r45's so the smoke gates transfer.
-const R46_PXG_FALLBACK = :shots
+# COMMENTARY ONLY, per the work package's "evaluated when pxg_available == 1 (23/24+)".
+# `:shots` reaches ~100% of the store via BBC match-page shot counts, but that rung is
+# `shots x a league constant` — volume, not chance quality — and it would silently become
+# the majority of the Gamma arm's evidence. See r45's constant for the full reasoning.
+const R46_PXG_FALLBACK = :none
 const R46_PXG_CELL_K   = 25.0
 
 const R46_MIN_DECAYED_MASK = 0.10
@@ -155,7 +175,16 @@ splitter = Data.GroupedCVConfig(
 )
 
 boundaries = Data.create_id_boundaries(ds, splitter)
-println("  walk-forward folds: ", length(boundaries))
+
+# The split is the experiment. Check it before anything expensive depends on it.
+r46_scored_folds = count(b -> !isempty(first(b).target_match_ids), boundaries)
+r46_target_total = sum(length(first(b).target_match_ids) for b in boundaries; init = 0)
+println("  walk-forward folds: ", length(boundaries),
+        "  (scored: ", r46_scored_folds, ", held-out matches: ", r46_target_total, ")")
+r46_scored_folds >= R46_MIN_SCORED_FOLDS || error(
+    "splitter produced $(r46_scored_folds) scored fold(s) and $(r46_target_total) held-out " *
+    "match(es); expected at least $(R46_MIN_SCORED_FOLDS). Check `end_dynamics` — `nothing` " *
+    "runs to the end, 0 stops at step zero and yields an EMPTY evaluation set.")
 @printf("  fitted matches (fold 1 .. fold %d): %d .. %d\n",
         length(boundaries),
         length(first(boundaries[1]).history_match_ids),
@@ -168,7 +197,7 @@ println("  walk-forward folds: ", length(boundaries))
 # 5. Model construction
 # ==============================================================================
 
-println("\n[2/7] Assembling the five joint arms and the single-arm control ...")
+println("\n[2/7] Assembling the seven joint arms and the single-arm control ...")
 
 r46_proxy_feature = MatchProxyXGFeature(
     k        = R46_PXG_CELL_K,
@@ -207,6 +236,16 @@ l45_print_observation_coverage(l45_observation_coverage(ds, r46_proxy_feature))
 println("\n[4/7] Per-fold proxy-arm preflight (all $(length(boundaries)) folds) ...")
 r46_preflight = l45_arm_preflight(ds, r46_models[1][2], splitter)
 l45_print_arm_preflight(r46_preflight; min_decayed_share = R46_MIN_DECAYED_MASK)
+
+# A constant covariate column is an unidentified weight: the sampler explores its prior and
+# reports it as a posterior, and the leaderboard row looks entirely reasonable. Bench depth
+# is the first covariate here that depends on substitute lineup data, whose coverage is not
+# guaranteed, so this is checked BEFORE committing a night of sampling to it.
+println("\n[4b/7] Covariate design-column preflight ...")
+r46_cov_ok = l45_print_covariate_preflight(
+    l45_covariate_preflight(ds, r46_models, splitter))
+r46_cov_ok || error("Covariate preflight failed — a design column is constant on a scored " *
+                    "fold. Fix the feature before spending a night on it.")
 
 # %%
 # ==============================================================================

@@ -94,9 +94,15 @@ const R45_WARMUP            = 500
 const R45_CHAINS            = 4
 const R45_ACCEPT_RATE       = 0.65
 
-# The proxy arm's feed. `:shots` reaches matches with a BBC scoreline page but no live
-# text, which roughly doubles coverage on 23/24. `:goals` is refused by the feature.
-const R45_PXG_FALLBACK      = :shots
+# The proxy arm's feed. `:none` is COMMENTARY ONLY, which is what the work package
+# specifies ("evaluated when pxg_available == 1 (23/24+)").
+#
+# `:shots` was tried first and is wrong here: BBC match pages carry shot counts back to
+# 20/21, so rung 2 fires for ~100% of the store and the Gamma arm ends up observing
+# `shots x a league-average xG per shot` — a VOLUME measure with no chance-quality content.
+# That does not test the two-arm premise; it regresses goals on shot counts through an extra
+# parameter, and the coverage table reports a reassuring 100% while it happens.
+const R45_PXG_FALLBACK      = :none
 const R45_PXG_CELL_K        = 25.0
 
 # Gate bands. See the header for why each one is where it is.
@@ -104,6 +110,39 @@ const R45_MAX_RHAT          = 1.05
 const R45_KAPPA_BAND        = (0.60, 1.60)
 const R45_NU_BAND           = (1.0, 12.0)
 const R45_MIN_DECAYED_MASK  = 0.10
+# docs/turing_ad_performance_guide.md §10.1: < 0.1 ms at ~700 rows / ~50 params.
+const R45_MAX_GRADIENT_MS   = 0.10
+# §9: the clamp must not bind at the draws we use. The joint arm's `exp(-η)` puts the
+# LOWER bound under pressure, so this is a correctness check, not a tidiness one.
+const R45_GUARD_MARGIN      = 0.50
+# The posterior must contract ν to at most half the prior's spread. Below that, the Gamma
+# arm is not identifying its own precision and the joint model is a Poisson model wearing
+# two extra parameters — see l45_identification_gate.
+const R45_MIN_NU_SHRINKAGE  = 0.50
+
+# The smoke splitter gives 2 folds x 4 chains = 8 queue tasks per arm, so ONE arm can only
+# ever occupy half of a 16-core box (measured: load average 8.73). Arms are therefore fitted
+# two at a time with each queue capped, so the tasks in flight total `nthreads()` exactly.
+# Oversubscribing PINNED threads would be worse than the idle, hence the derived cap.
+# r46 needs none of this: 40 folds x 4 chains saturates the queue on its own.
+# MEASURED AT 1: fitting two arms at once does NOT speed this up. Wall clock, run 3
+# (sequential) against run 4 (two at a time), same machine and configuration:
+#
+#     m00  229s -> 513s      m02  283s -> 520s      m03  259s -> 354s
+#     m04  285s -> 636s      m05  252s -> 555s      ctrl 115s -> 212s
+#
+# Every arm slowed by ~1.8-2.2x while two ran concurrently, so total throughput was flat.
+# Process CPU did rise (~800% -> ~1122%), which is why this looked like a win at first
+# glance — but CPU utilisation is not throughput. The 8 idle cores under sequential fitting
+# were not idle for lack of tasks; the run is bounded by something 16 tasks cannot
+# parallelise, most likely Julia's partly-serial GC under ReverseDiff tape allocation
+# (`--gcthreads` defaults to half the thread count) or memory bandwidth.
+#
+# Left at 1 because sequential is the same speed, simpler, and keeps chains bit-comparable
+# with earlier runs (spawn order seeds the RNG — see l45_fit_arms). Raise it to 2 to
+# reproduce the measurement above; `l45_fit_arms` handles the capping correctly either way.
+const R45_CONCURRENT_MODELS = 1
+const R45_TASKS_PER_MODEL   = max(1, Threads.nthreads() ÷ R45_CONCURRENT_MODELS)
 
 const R45_SAVE_ROOT   = "/tmp/scottish_lower_joint_gamma_poisson_smoke"
 const R45_BASELINE    = "m00_joint_baseline"
@@ -211,8 +250,14 @@ l45_print_arm_preflight(r45_preflight; min_decayed_share = R45_MIN_DECAYED_MASK)
 # The feature sets and held-out frames the latent gate will reuse, built once from the
 # same splitter the fits use so the gate cannot accidentally see a different fold.
 r45_feature_sets = Features.create_features(boundaries, ds, r45_models[1][2], splitter)
-r45_oos_fixtures = l45_fold_fixtures(ds, first(boundaries[1]))
-@printf("  fold 1 held-out fixtures for the latent gate: %d\n", nrow(r45_oos_fixtures))
+
+# NOT necessarily fold 1: with `end_dynamics = 1` the leading boundary can be a
+# pure-history warm-up with an empty target block, and a gate reading it would report a
+# failure about the splitter that looks like a failure about the model.
+r45_gate_fold    = l45_first_scored_fold(boundaries)
+r45_oos_fixtures = l45_fold_fixtures(ds, first(boundaries[r45_gate_fold]))
+@printf("  latent gate evaluates fold %d — held-out fixtures: %d\n",
+        r45_gate_fold, nrow(r45_oos_fixtures))
 
 # %%
 # ==============================================================================
@@ -228,30 +273,28 @@ sampler_config = QueuedNUTSConfig(
 
 println("\n[5/7] Fitting fold 1 ...")
 
-r45_fits = Dict{String, Fit}()
-r45_rows = NamedTuple[]
+r45_fits, r45_elapsed = l45_fit_arms(
+    r45_models, ds, splitter, sampler_config, R45_SAVE_ROOT;
+    concurrent_models = R45_CONCURRENT_MODELS,
+    tasks_per_model   = R45_TASKS_PER_MODEL,
+)
 
-for (name, model) in r45_models
-    println("\n" * "-"^90)
-    println(" SMOKE FIT: $name")
-    println("-"^90)
-
-    fit_config = FitConfig(
-        name      = name,
-        model     = model,
-        splitter  = splitter,
-        sampler   = sampler_config,
-        execution = QueuedExecution(),
-        save_dir  = joinpath(R45_SAVE_ROOT, name),
-    )
-
-    started = time()
-    fit = fit_model(fit_config, ds; quiet = false)
-    elapsed = time() - started
-
-    r45_fits[name] = fit
-    push!(r45_rows, l45_summarise_fit(name, fit, ds, elapsed))
+# Persisted so a convergence failure can be inspected without re-sampling. The first run to
+# fail its audit had nothing on disk to interrogate.
+for (name, _) in r45_models
+    println("  saved: ", save_fit(r45_fits[name]))
 end
+
+# Summarised SEQUENTIALLY and in declaration order, after every arm has landed. Scoring
+# inside the fitting tasks would nest `evaluate_predictions` under the model semaphore and
+# make the leaderboard's row order depend on which arm happened to finish first.
+# Read from the SCORED fold, the same one the gates use. Reading fold 1 here while the
+# gates read fold 2 made the leaderboard report κ = 1.127 beside a gate reporting
+# κ = 1.105 — same chain family, different folds, and nothing on the page said so.
+r45_rows = NamedTuple[
+    l45_summarise_fit(name, r45_fits[name], ds, r45_elapsed[name]; fold = r45_gate_fold)
+    for (name, _) in r45_models
+]
 
 # %%
 # ==============================================================================
@@ -261,16 +304,44 @@ end
 println("\n[6/7] Gates ...")
 
 r45_gates = []
+r45_ad_rows = NamedTuple[]
+r45_ident_rows = NamedTuple[]
+
 for (name, model) in r45_models
     model.observation isa JointGammaPoissonObservation || continue
     fit = r45_fits[name]
+    chain = fit.folds[r45_gate_fold].chain
+    fold_features = first(r45_feature_sets[r45_gate_fold])
+
     append!(r45_gates, l45_smoke_gates(name, fit;
+                                       fold       = r45_gate_fold,
                                        max_rhat   = R45_MAX_RHAT,
                                        kappa_band = R45_KAPPA_BAND,
                                        nu_band    = R45_NU_BAND))
-    push!(r45_gates, l45_latent_gate(name, model, fit.folds[1].chain,
-                                     first(r45_feature_sets[1]), r45_oos_fixtures))
+    push!(r45_gates, l45_latent_gate(name, model, chain, fold_features, r45_oos_fixtures))
+    push!(r45_gates, l45_clamp_gate(name, model, chain, fold_features, r45_oos_fixtures;
+                                    margin = R45_GUARD_MARGIN))
+
+    ident_gates, ident_row = l45_identification_gate(name, chain, model.observation;
+                                                     min_shrinkage = R45_MIN_NU_SHRINKAGE)
+    append!(r45_gates, ident_gates)
+    ident_row === nothing || push!(r45_ident_rows, ident_row)
 end
+
+println("\n  Is the proxy arm informing ν, or is ν sampling its prior?")
+l45_print_identification(r45_ident_rows)
+
+# The AD audit is run ONCE, on the baseline arm. It measures the observation layer, and every
+# arm shares it — running it five times would measure the covariate walk five times over and
+# say nothing new about the Gamma term.
+println("\n  AD audit (turing_ad_performance_guide §10.1/§10.3), on m00_joint_baseline:")
+r45_ad_gates, r45_ad_row = l45_ad_audit("m00_joint_baseline", r45_models[1][2],
+                                        first(r45_feature_sets[r45_gate_fold]);
+                                        max_gradient_ms = R45_MAX_GRADIENT_MS)
+append!(r45_gates, r45_ad_gates)
+push!(r45_ad_rows, r45_ad_row)
+@printf("    %d parameters · %d tape instructions · %.4f ms warmed-minimum gradient\n",
+        r45_ad_row.n_params, r45_ad_row.instructions, r45_ad_row.gradient_ms)
 
 r45_passed = l45_print_gates(r45_gates)
 

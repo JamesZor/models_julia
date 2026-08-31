@@ -25,7 +25,12 @@ using DataFrames
 using Dates
 using Printf
 using Statistics
+using LinearAlgebra
 using MCMCChains
+using DynamicPPL
+using LogDensityProblems
+using ReverseDiff
+using ForwardDiff
 
 const L45_PG       = BayesianFootball.Models.PreGame
 const L45_FEATURES = BayesianFootball.Features
@@ -102,6 +107,25 @@ function l45_joint_arms(;
         add(observation) |>
         build
 
+    m07 = CountModelBuilder(:m07_joint_bench_depth) |>
+        add(GlobalInterception()) |>
+        add(TimeDecayDynamics(days_half_life = half_life_days)) |>
+        add(GlobalHomeAdvantage()) |>
+        add(BenchDepthCovariate(log_transform = true)) |>
+        add(observation) |>
+        build
+
+    m08 = CountModelBuilder(:m08_joint_composite) |>
+        add(GlobalInterception()) |>
+        add(TimeDecayDynamics(days_half_life = half_life_days)) |>
+        add(GlobalHomeAdvantage()) |>
+        add(ProductionWealthCovariate(
+            feature = ProductionWealthFeature(curve = curve),
+            prior   = wealth_prior)) |>
+        add(BenchDepthCovariate(log_transform = true)) |>
+        add(observation) |>
+        build
+
     # `Tuple{String,Any}` is deliberate. Each arm is a DIFFERENT concrete
     # `PoissonCountModel{...}` — its covariate tuple is baked into the type — so a
     # promoted eltype would depend on `typejoin`, and the runners `push!` a control arm
@@ -112,6 +136,8 @@ function l45_joint_arms(;
         ("m03_joint_distance",          m03),
         ("m04_joint_wealth_distance",   m04),
         ("m05_joint_production_wealth", m05),
+        ("m07_joint_bench_depth",       m07),
+        ("m08_joint_composite",         m08),
     ]
 end
 
@@ -148,29 +174,40 @@ function l45_observation_coverage(ds::BayesianFootball.Data.DataStore,
     matches = ds.matches
     nrow(matches) == 0 && return DataFrame()
 
-    F = Dict{Symbol,Any}()
-    ordered = Int.(matches.match_id)
-    L45_FEATURES.add_feature!(F, feature, ordered, Dict{String,Int}(), ds)
-    available = F[:flat_pxg_obs_available]
-    pxg_h = F[:flat_pxg_home]
-    pxg_a = F[:flat_pxg_away]
+    # Taken from the ladder directly, so the RUNG is visible per match. Reading only the
+    # feature's emitted mask would report "100% covered" for a store whose coverage is
+    # entirely shot-count pseudo-xG — which is a different measurement wearing the same name.
+    observations = L45_FEATURES.pxg_match_observations(
+        ds, L45_FEATURES.PxGFeature(k = feature.k, fallback = feature.fallback))
 
     by_season = Dict{String, Vector{Int}}()
-    for (i, season) in enumerate(matches.season)
-        push!(get!(by_season, String(season), Int[]), i)
+    for row in eachrow(matches)
+        push!(get!(by_season, String(row.season), Int[]), Int(row.match_id))
     end
 
     rows = NamedTuple[]
     for season in sort(collect(keys(by_season)))
-        idx = by_season[season]
-        covered = idx[available[idx] .== 1.0]
+        ids = by_season[season]
+        commentary = 0
+        shot_counts = 0
+        values_h = Float64[]
+        for id in ids
+            obs = get(observations, id, nothing)
+            obs === nothing && continue
+            obs.source === :commentary && (commentary += 1)
+            obs.source === :shot_counts && (shot_counts += 1)
+            push!(values_h, obs.h)
+        end
+        observed = commentary + shot_counts
         push!(rows, (
             season = season,
-            matches = length(idx),
-            observed = length(covered),
-            share = isempty(idx) ? 0.0 : length(covered) / length(idx),
-            mean_pxg_home = isempty(covered) ? NaN : mean(pxg_h[covered]),
-            mean_pxg_away = isempty(covered) ? NaN : mean(pxg_a[covered]),
+            matches = length(ids),
+            observed = observed,
+            commentary = commentary,
+            shot_counts = shot_counts,
+            share = isempty(ids) ? 0.0 : observed / length(ids),
+            commentary_share = isempty(ids) ? 0.0 : commentary / length(ids),
+            mean_pxg_home = isempty(values_h) ? NaN : mean(values_h),
         ))
     end
     return DataFrame(rows)
@@ -186,19 +223,32 @@ function l45_print_observation_coverage(table::DataFrame)
         println("  (no matches in the store)")
         return nothing
     end
-    @printf("  %-8s | %8s | %8s | %7s | %9s | %9s\n",
-            "season", "matches", "observed", "share", "mean pxG h", "mean pxG a")
-    println("  " * "-"^64)
+    @printf("  %-8s | %8s | %8s | %10s | %11s | %10s | %9s\n",
+            "season", "matches", "observed", "commentary", "shot counts", "commentary",
+            "mean pxG")
+    println("  " * "-"^80)
     for r in eachrow(table)
-        @printf("  %-8s | %8d | %8d | %6.1f%% | %9s | %9s\n",
-                r.season, r.matches, r.observed, 100 * r.share,
-                isnan(r.mean_pxg_home) ? "—" : @sprintf("%.3f", r.mean_pxg_home),
-                isnan(r.mean_pxg_away) ? "—" : @sprintf("%.3f", r.mean_pxg_away))
+        @printf("  %-8s | %8d | %8d | %10d | %11d | %9.1f%% | %9s\n",
+                r.season, r.matches, r.observed, r.commentary, r.shot_counts,
+                100 * r.commentary_share,
+                isnan(r.mean_pxg_home) ? "—" : @sprintf("%.3f", r.mean_pxg_home))
     end
     total = sum(table.matches)
     observed = sum(table.observed)
-    @printf("  TOTAL: %d of %d matches carry a proxy-xG observation (%.1f%%)\n",
-            observed, total, total == 0 ? 0.0 : 100 * observed / total)
+    commentary = sum(table.commentary)
+    @printf("  TOTAL: %d of %d matches observed (%.1f%%), of which %d are live-text commentary (%.1f%% of all matches)\n",
+            observed, total, total == 0 ? 0.0 : 100 * observed / total,
+            commentary, total == 0 ? 0.0 : 100 * commentary / total)
+
+    # The reading that matters. `shots x league-average xG per shot` is a VOLUME measure with
+    # no chance-quality content; a Gamma arm fed mostly that is not testing the two-arm
+    # premise, it is regressing goals on shot counts through an extra parameter.
+    if observed > 0 && commentary / observed < 0.5
+        @printf("  [WARN] only %.1f%% of the observed matches are live-text commentary; the rest is\n",
+                100 * commentary / observed)
+        println("         shot-count pseudo-xG (shots x a league constant), which carries volume")
+        println("         but no chance quality. Consider fallback = :none.")
+    end
     return nothing
 end
 
@@ -304,6 +354,152 @@ function l45_print_arm_preflight(table::DataFrame; min_decayed_share::Float64 = 
 end
 
 # ==============================================================================
+# 3b. FITTING THE ARMS, TWO AT A TIME
+# ==============================================================================
+#
+# WHY THIS EXISTS. `QueuedExecution` flattens FOLDS x CHAINS into one queue. The smoke
+# splitter produces 2 folds and 4 chains, so a single arm offers the queue only 8 tasks —
+# and on a 16-core box that measured a load average of 8.73, i.e. half the machine idle for
+# the whole run. The grid runner has no such problem (40 folds x 4 chains = 160 tasks
+# saturates 16 threads from the first wave); this is a smoke-test-only concern.
+#
+# THE CAP IS NOT OPTIONAL. Each `fit_model` builds its own `QueuedExecution` defaulting to
+# `max_concurrent_tasks = nthreads()`. Spawning two arms without capping gives 2 x 16 = 32
+# tasks on 16 PINNED cores, and oversubscribing pinned threads is worse than the idle it
+# was meant to fix. `tasks_per_model` is therefore derived, not guessed.
+#
+# REPRODUCIBILITY CAVEAT. `run_sampler` does not seed explicitly, so each chain's stream
+# comes from its task's RNG, which Julia derives from spawn order. Adding a model-level
+# spawn layer changes that tree, so a parallel run is NOT bit-comparable with a sequential
+# one. Statistically equivalent, not diffable — do not compare chains across the two modes.
+
+"""
+    l45_fit_arms(models, ds, splitter, sampler, save_root; concurrent_models, tasks_per_model)
+        -> (fits::Dict, elapsed::Dict)
+
+Fit every arm, `concurrent_models` at a time, each arm's queue capped so the total tasks in
+flight is at most `Threads.nthreads()`.
+
+`quiet = true` is forced: two arms sharing one terminal produce interleaved progress bars
+that are worse than no progress bars. The runner prints a line per arm as it lands.
+"""
+function l45_fit_arms(models, ds, splitter, sampler, save_root;
+                      concurrent_models::Int = 2,
+                      tasks_per_model::Int = max(1, Threads.nthreads() ÷ max(1, concurrent_models)))
+    fits = Dict{String, Any}()
+    elapsed = Dict{String, Float64}()
+    guard = ReentrantLock()
+    slots = Base.Semaphore(max(1, concurrent_models))
+
+    @printf("  %d arm(s), %d at a time, %d queue task(s) each (%d threads)\n",
+            length(models), concurrent_models, tasks_per_model, Threads.nthreads())
+
+    @sync for (name, model) in models
+        Threads.@spawn begin
+            Base.acquire(slots)
+            try
+                config = BayesianFootball.FitConfig(
+                    name      = name,
+                    model     = model,
+                    splitter  = splitter,
+                    sampler   = sampler,
+                    execution = BayesianFootball.QueuedExecution(
+                        max_concurrent_tasks = tasks_per_model),
+                    save_dir  = joinpath(save_root, name),
+                )
+                started = time()
+                fit = BayesianFootball.fit_model(config, ds; quiet = true)
+                took = time() - started
+                lock(guard) do
+                    fits[name] = fit
+                    elapsed[name] = took
+                    @printf("    landed %-30s %6.0fs  R̂ %.4f  div %d\n",
+                            name, took, fit.diagnostics.max_rhat, fit.diagnostics.n_divergent)
+                end
+            catch err
+                lock(guard) do
+                    @printf("    FAILED %-30s %s\n", name, sprint(showerror, err))
+                end
+                rethrow()
+            finally
+                Base.release(slots)
+            end
+        end
+    end
+    return fits, elapsed
+end
+
+"""
+    l45_covariate_preflight(ds, models, splitter) -> DataFrame
+
+Every arm's covariate design columns, one row per (arm, covariate, fold).
+
+WHY THIS IS A GATE AND NOT A DIAGNOSTIC. A covariate whose column is CONSTANT has an
+unidentified weight — the sampler explores its prior and reports it as a posterior — and a
+column that is mostly the neutral zero means the arm is quietly the baseline on most
+fixtures. Both produce a converged, plausible-looking leaderboard row. Bench depth is the
+first covariate here that depends on substitute lineup data, whose coverage is not
+guaranteed, so this check earns its place before an overnight run rather than after one.
+"""
+function l45_covariate_preflight(ds::BayesianFootball.Data.DataStore, models, splitter)
+    boundaries = BayesianFootball.Data.create_id_boundaries(ds, splitter)
+    rows = NamedTuple[]
+    for (name, model) in models
+        isempty(L45_PG.cb_covariates(model)) && continue
+        feature_sets = L45_FEATURES.create_features(boundaries, ds, model, splitter)
+        for (fold, (boundary, _)) in enumerate(boundaries)
+            fs = first(feature_sets[fold])
+            for covariate in L45_PG.cb_covariates(model)
+                column = L45_PG.covariate_column(covariate, fs)
+                push!(rows, (
+                    arm = String(name),
+                    covariate = String(L45_PG.covariate_name(covariate)),
+                    fold = fold,
+                    n_target = length(boundary.target_match_ids),
+                    n = length(column),
+                    sd = length(column) > 1 ? std(column) : 0.0,
+                    neutral_share = isempty(column) ? 1.0 : count(iszero, column) / length(column),
+                ))
+            end
+        end
+    end
+    return DataFrame(rows)
+end
+
+"""
+    l45_print_covariate_preflight(table) -> Bool
+
+Print the per-arm covariate summary and return whether it is safe to sample. Folds with no
+target block are excluded from the verdict: they are warm-ups the leaderboard never scores.
+"""
+function l45_print_covariate_preflight(table::DataFrame)
+    if nrow(table) == 0
+        println("  (no covariates in any arm)")
+        return true
+    end
+    scored = filter(r -> r.n_target > 0, table)
+    @printf("  %-28s | %-18s | %4s | %6s | %9s | %9s\n",
+            "arm", "covariate", "fold", "n", "sd", "neutral")
+    println("  " * "-"^88)
+    for r in eachrow(scored)
+        @printf("  %-28s | %-18s | %4d | %6d | %9.4f | %8.1f%%\n",
+                r.arm, r.covariate, r.fold, r.n, r.sd, 100 * r.neutral_share)
+    end
+
+    dead = [(r.arm, r.covariate, r.fold) for r in eachrow(scored) if r.sd < 1e-8]
+    thin = [(r.arm, r.covariate, r.fold) for r in eachrow(scored)
+            if r.sd >= 1e-8 && r.neutral_share > 0.5]
+    for (arm, cov, fold) in dead
+        println("  [STOP] $arm fold $fold: $cov is CONSTANT — its weight is unidentified.")
+    end
+    for (arm, cov, fold) in thin
+        println("  [WARN] $arm fold $fold: $cov is neutral on over half the fold.")
+    end
+    isempty(dead) && println("  [OK]   every covariate varies on every scored fold.")
+    return isempty(dead)
+end
+
+# ==============================================================================
 # 4. SAFE CHAIN LOOKUPS
 # ==============================================================================
 
@@ -359,11 +555,12 @@ What a single-fold smoke fit must show before a 40-fold grid is worth starting.
     diagnostics are silently mirroring the wrong quantity.
 """
 function l45_smoke_gates(name::AbstractString, fit;
+                         fold::Int = 1,
                          max_rhat::Float64 = 1.05,
                          kappa_band::Tuple{Float64,Float64} = (0.60, 1.60),
                          nu_band::Tuple{Float64,Float64} = (1.0, 12.0))
     diagnostics = fit.diagnostics
-    chain = fit.folds[1].chain
+    chain = fit.folds[fold].chain
 
     rhat = diagnostics.max_rhat
     divergences = diagnostics.n_divergent
@@ -371,12 +568,43 @@ function l45_smoke_gates(name::AbstractString, fit;
     ν = l45_proxy_precision(chain)
 
     gates = [
+        # The FRAMEWORK'S OWN verdict, first. R̂ and divergences are two of six gates
+        # `audit_convergence` applies (ESS, BFMI and tree-depth saturation are the others),
+        # so checking only the two this file happens to know about produced a run that
+        # printed "ALL GATES PASSED" directly above "Convergence: FAILED for ...". A smoke
+        # test that can contradict itself is worse than one that reports nothing.
+        l45_gate("$name · convergence audit",
+                 diagnostics.passed,
+                 diagnostics.passed ? "all $(length(diagnostics.folds)) fold(s) passed every gate" :
+                 "FAILED: " * (isempty(diagnostics.failed_gates) ? "(no gate names recorded)" :
+                               join(diagnostics.failed_gates, ", ")) *
+                 (isempty(diagnostics.failures) ? "" : "  |  " * join(diagnostics.failures, "; "))),
         l45_gate("$name · R̂ < $max_rhat",
                  !isnan(rhat) && rhat < max_rhat,
                  isnan(rhat) ? "R̂ unavailable" : @sprintf("max R̂ = %.4f", rhat)),
-        l45_gate("$name · no divergences",
-                 divergences == 0,
-                 "$(divergences) divergent transition(s)"),
+        # RATE, not a count of zero. `max_divergence_rate = 0.001` is the framework's own
+        # threshold; demanding exactly zero is stricter than the audit this file now leads
+        # with, and it failed a run on 1 divergence in 4000 (rate 0.00025) — a number no
+        # practitioner would act on. A gate that fails for a non-problem trains people to
+        # ignore gates, which costs more than the gate ever saves.
+        l45_gate("$name · divergence rate ≤ $(diagnostics.thresholds.max_divergence_rate)",
+                 diagnostics.divergence_rate <= diagnostics.thresholds.max_divergence_rate,
+                 @sprintf("%d of %d transitions (%.5f)",
+                          divergences, diagnostics.n_transitions, diagnostics.divergence_rate)),
+        l45_gate("$name · BFMI ≥ $(diagnostics.thresholds.min_bfmi)",
+                 !isnan(diagnostics.min_bfmi) && diagnostics.min_bfmi >= diagnostics.thresholds.min_bfmi,
+                 @sprintf("min BFMI = %.4f (worst fold %d)",
+                          diagnostics.min_bfmi, diagnostics.worst_bfmi_fold)),
+        l45_gate("$name · tree-depth saturation ≤ $(100 * diagnostics.thresholds.max_treedepth_rate)%",
+                 diagnostics.treedepth_rate <= diagnostics.thresholds.max_treedepth_rate,
+                 @sprintf("%d transitions capped at depth %d (%.2f%%)",
+                          diagnostics.n_depth_capped, diagnostics.max_tree_depth,
+                          100 * diagnostics.treedepth_rate)),
+        l45_gate("$name · min ESS ≥ $(diagnostics.thresholds.min_ess)",
+                 !isnan(diagnostics.min_ess_bulk) && diagnostics.min_ess_bulk >= diagnostics.thresholds.min_ess,
+                 @sprintf("bulk %.0f (fold %d), tail %.0f",
+                          diagnostics.min_ess_bulk, diagnostics.worst_ess_bulk_fold,
+                          diagnostics.min_ess_tail)),
         l45_gate("$name · κ in $(kappa_band)",
                  !isnan(κ) && kappa_band[1] <= κ <= kappa_band[2],
                  isnan(κ) ? "obs.log_κ absent from the chain" :
@@ -386,6 +614,22 @@ function l45_smoke_gates(name::AbstractString, fit;
                  isnan(ν) ? "obs.ν absent from the chain" : @sprintf("ν = %.3f", ν)),
     ]
     return gates
+end
+
+"""
+    l45_first_scored_fold(boundaries) -> Int
+
+The index of the first boundary that actually carries target matches.
+
+NOT always 1. With `end_dynamics = 1, stop_early = true` the leading boundary is a
+pure-history warm-up with an empty target block, so a gate that reads fold 1 blindly
+reports a failure about the SPLITTER while looking like a failure about the model.
+"""
+function l45_first_scored_fold(boundaries)
+    for (i, (boundary, _)) in enumerate(boundaries)
+        isempty(boundary.target_match_ids) || return i
+    end
+    error("no boundary carries target matches; the splitter produced only warm-up folds")
 end
 
 """
@@ -429,6 +673,195 @@ function l45_latent_gate(name::AbstractString, model, chain::Chains, feature_set
 end
 
 """
+    l45_identification_gate(name, chain, observation; min_shrinkage) -> (gates, row)
+
+Is the proxy arm actually informing ν and κ, or are they sampling their priors?
+
+THE QUESTION THIS EXISTS TO ANSWER. The first smoke run returned ν = 4.00, 4.00, 4.01,
+4.02, 4.02 across five independent fits — against a prior whose mean is exactly 4.0. A
+posterior MEAN cannot distinguish "the prior was well chosen" from "the likelihood said
+nothing", and the two have opposite consequences: in the second case the joint model is a
+Poisson model carrying two spare parameters, converging beautifully and meaning nothing.
+
+The discriminator is the posterior SD against the prior SD. A parameter the data has
+identified contracts; one sampling its prior does not. `shrinkage = 1 - sd_post/sd_prior`
+is that contraction: ~0 means the arm contributed nothing, ~1 means it dominated.
+
+ν is a GATE because an unidentified ν invalidates the whole two-arm premise. κ is reported
+but not gated — κ is identified by the GOALS arm, which is always present, so it tells you
+about the model rather than about the proxy feed.
+"""
+function l45_identification_gate(name::AbstractString, chain::Chains, observation;
+                                 min_shrinkage::Float64 = 0.5)
+    observation isa JointGammaPoissonObservation ||
+        return (NamedTuple[], nothing)
+
+    nu_draws = Symbol("obs.ν") in Set(Symbol.(names(chain))) ?
+               vec(Array(chain[Symbol("obs.ν")])) : Float64[]
+    lk_draws = Symbol("obs.log_κ") in Set(Symbol.(names(chain))) ?
+               vec(Array(chain[Symbol("obs.log_κ")])) : Float64[]
+
+    isempty(nu_draws) && return ([l45_gate("$name · ν identified", false,
+                                           "obs.ν absent from the chain")], nothing)
+
+    nu_prior_sd = std(observation.shape_prior)
+    lk_prior_sd = std(observation.log_kappa_prior)
+    nu_post_sd = std(nu_draws)
+    lk_post_sd = isempty(lk_draws) ? NaN : std(lk_draws)
+
+    nu_shrink = 1.0 - nu_post_sd / nu_prior_sd
+    lk_shrink = isnan(lk_post_sd) ? NaN : 1.0 - lk_post_sd / lk_prior_sd
+
+    row = (name = String(name),
+           nu_mean = mean(nu_draws), nu_post_sd = nu_post_sd,
+           nu_prior_sd = nu_prior_sd, nu_shrinkage = nu_shrink,
+           kappa_log_mean = isempty(lk_draws) ? NaN : mean(lk_draws),
+           kappa_post_sd = lk_post_sd, kappa_prior_sd = lk_prior_sd,
+           kappa_shrinkage = lk_shrink)
+
+    gates = [
+        l45_gate("$name · ν identified by the proxy arm", nu_shrink >= min_shrinkage,
+                 @sprintf("ν = %.3f ± %.3f against prior sd %.3f — shrinkage %.1f%%%s",
+                          row.nu_mean, nu_post_sd, nu_prior_sd, 100 * nu_shrink,
+                          nu_shrink < min_shrinkage ?
+                          "  (ν IS SAMPLING ITS PRIOR — the Gamma arm is contributing nothing)" : "")),
+    ]
+    return (gates, row)
+end
+
+"""
+    l45_print_identification(rows)
+
+The ν / κ identification table. Printed whether or not the gate passed, because the
+NUMBERS are the finding — a borderline shrinkage is a different conversation from a zero.
+"""
+function l45_print_identification(rows)
+    isempty(rows) && return nothing
+    @printf("  %-28s | %16s | %10s | %16s | %10s\n",
+            "Model", "ν (post sd)", "ν shrink", "log κ (post sd)", "κ shrink")
+    println("  " * "-"^92)
+    for r in rows
+        r === nothing && continue
+        @printf("  %-28s | %7.3f (%6.3f) | %9.1f%% | %7.4f (%6.4f) | %9.1f%%\n",
+                r.name, r.nu_mean, r.nu_post_sd, 100 * r.nu_shrinkage,
+                r.kappa_log_mean, r.kappa_post_sd, 100 * r.kappa_shrinkage)
+    end
+    return nothing
+end
+
+"""
+    l45_clamp_gate(name, model, chain, feature_set, oos) -> gate row
+
+Does the rate guard actually bind at the posterior draws this model produces?
+
+docs/turing_ad_performance_guide.md §9 asks this of every engine, and the joint arm is the
+one that most needs it asked. `clamp` is a value-dependent branch, so a compiled tape
+recorded outside the clamp is only valid while sampling stays outside it. The joint arm
+also carries `exp(-η)`: the guard's LOWER bound is the one under pressure, and a trajectory
+pressed against it is both a numerically suspect tape and a sign the Gamma arm is fighting
+the goals arm over the same intensity.
+
+η is read back as `log μ` from the fitted rates, so these are genuine posterior draws over
+the fixtures the model actually prices — not prior draws standing in for them.
+"""
+function l45_clamp_gate(name::AbstractString, model, chain::Chains, feature_set,
+                        oos::AbstractDataFrame; margin::Float64 = 0.5)
+    guard = model.guard
+    guard isa L45_PG.Builder.ClampGuard ||
+        return l45_gate("$name · guard headroom", true, "NoGuard — nothing to bind")
+    nrow(oos) == 0 && return l45_gate("$name · guard headroom", false, "no OOS fixtures")
+
+    rates = L45_PG.extract_parameters(model, oos, feature_set, chain)
+    lo_worst = Inf      # smallest η seen, distance above guard.lo is the headroom
+    hi_worst = -Inf
+    for id in Int.(oos.match_id)
+        r = rates[id]
+        μ = haskey(r, :μ_h) ? (r.μ_h, r.μ_a) : (r.λ_h, r.λ_a)
+        for side in μ
+            η = log.(side)
+            lo_worst = min(lo_worst, minimum(η))
+            hi_worst = max(hi_worst, maximum(η))
+        end
+    end
+
+    low_head = lo_worst - guard.lo
+    high_head = guard.hi - hi_worst
+    ok = low_head > margin && high_head > margin
+    return l45_gate("$name · guard headroom", ok,
+        @sprintf("η ∈ [%+.3f, %+.3f] against clamp [%.1f, %.1f] — headroom %.3f below, %.3f above",
+                 lo_worst, hi_worst, guard.lo, guard.hi, low_head, high_head))
+end
+
+"""
+    l45_ad_audit(name, model, feature_set; max_gradient_ms) -> (gates, row)
+
+The AD guide's §10.1 and §10.3 blocks, run on a REAL fold rather than a toy one.
+
+Reports tape instruction count and the warmed MINIMUM gradient time (§10.1 is explicit that
+a cold median is noise), and checks the compiled tape against a fresh ReverseDiff gradient
+and against ForwardDiff — including at perturbed points, which is the check that catches a
+branch smuggled into the tape.
+
+Returns the gate rows and a NamedTuple of the raw numbers, so the runner can print a table
+without re-running anything.
+"""
+function l45_ad_audit(name::AbstractString, model, feature_set;
+                      max_gradient_ms::Float64 = 0.10,
+                      reps::Int = 200, warmup::Int = 50)
+    turing_model = L45_PG.build_turing_model(model, feature_set)
+    vi = DynamicPPL.VarInfo(turing_model)
+    turing_model(vi)
+    θ = copy(vi[:])
+    lf = DynamicPPL.LogDensityFunction(turing_model)
+    f = x -> LogDensityProblems.logdensity(lf, x)
+
+    raw = ReverseDiff.GradientTape(f, θ)
+    tape = ReverseDiff.compile(raw)
+    g = similar(θ)
+    for _ in 1:warmup
+        ReverseDiff.gradient!(g, tape, θ)
+    end
+    gradient_ms = 1e3 * minimum(@elapsed(ReverseDiff.gradient!(g, tape, θ)) for _ in 1:reps)
+
+    g_tape = (h = similar(θ); ReverseDiff.gradient!(h, tape, θ); h)
+    g_fresh = ReverseDiff.gradient(f, θ)
+    g_forward = ForwardDiff.gradient(f, θ)
+    relerr(a, b) = norm(a - b) / max(norm(a), norm(b), 1.0)
+
+    err_fresh = relerr(g_fresh, g_tape)
+    err_forward = relerr(g_tape, g_forward)
+
+    # The same COMPILED tape at other points. A value branch baked into the tape shows up
+    # here and nowhere else.
+    err_perturbed = 0.0
+    for δ in (0.001, -0.002, 0.003)
+        θp = θ .+ δ .* sin.(collect(eachindex(θ)))
+        gp = similar(θp)
+        ReverseDiff.gradient!(gp, tape, θp)
+        err_perturbed = max(err_perturbed, relerr(gp, ReverseDiff.gradient(f, θp)))
+    end
+
+    row = (name = String(name), instructions = length(raw.tape), n_params = length(θ),
+           gradient_ms = gradient_ms, err_fresh = err_fresh,
+           err_forward = err_forward, err_perturbed = err_perturbed,
+           logdensity = f(θ))
+
+    gates = [
+        l45_gate("$name · logdensity finite", isfinite(row.logdensity),
+                 @sprintf("log p = %.4f at %d parameters", row.logdensity, row.n_params)),
+        l45_gate("$name · compiled == fresh ReverseDiff", err_fresh <= 1e-8,
+                 @sprintf("relerr %.3e", err_fresh)),
+        l45_gate("$name · ReverseDiff == ForwardDiff", err_forward <= 1e-6,
+                 @sprintf("relerr %.3e", err_forward)),
+        l45_gate("$name · compiled tape valid off-point", err_perturbed <= 1e-8,
+                 @sprintf("worst relerr %.3e over 3 perturbations", err_perturbed)),
+        l45_gate("$name · gradient < $(max_gradient_ms) ms", gradient_ms < max_gradient_ms,
+                 @sprintf("%.4f ms over %d tape instructions", gradient_ms, row.instructions)),
+    ]
+    return gates, row
+end
+
+"""
     l45_print_gates(gates) -> Bool
 
 Print every gate and return whether all of them passed. Printing the whole table
@@ -456,9 +889,9 @@ end
 Convergence, the two joint-arm parameters, the covariate weights this arm carries,
 and out-of-sample proper scores.
 """
-function l45_summarise_fit(name::AbstractString, fit, ds, elapsed::Float64)
+function l45_summarise_fit(name::AbstractString, fit, ds, elapsed::Float64; fold::Int = 1)
     diagnostics = fit.diagnostics
-    chain = fit.folds[1].chain
+    chain = fit.folds[fold].chain
     report = BayesianFootball.evaluate_predictions(fit, ds)
 
     return (
