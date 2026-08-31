@@ -474,6 +474,83 @@ function l45_latent_gate(name::AbstractString, model, chain::Chains, feature_set
 end
 
 """
+    l45_identification_gate(name, chain, observation; min_shrinkage) -> (gates, row)
+
+Is the proxy arm actually informing ν and κ, or are they sampling their priors?
+
+THE QUESTION THIS EXISTS TO ANSWER. The first smoke run returned ν = 4.00, 4.00, 4.01,
+4.02, 4.02 across five independent fits — against a prior whose mean is exactly 4.0. A
+posterior MEAN cannot distinguish "the prior was well chosen" from "the likelihood said
+nothing", and the two have opposite consequences: in the second case the joint model is a
+Poisson model carrying two spare parameters, converging beautifully and meaning nothing.
+
+The discriminator is the posterior SD against the prior SD. A parameter the data has
+identified contracts; one sampling its prior does not. `shrinkage = 1 - sd_post/sd_prior`
+is that contraction: ~0 means the arm contributed nothing, ~1 means it dominated.
+
+ν is a GATE because an unidentified ν invalidates the whole two-arm premise. κ is reported
+but not gated — κ is identified by the GOALS arm, which is always present, so it tells you
+about the model rather than about the proxy feed.
+"""
+function l45_identification_gate(name::AbstractString, chain::Chains, observation;
+                                 min_shrinkage::Float64 = 0.5)
+    observation isa JointGammaPoissonObservation ||
+        return (NamedTuple[], nothing)
+
+    nu_draws = Symbol("obs.ν") in Set(Symbol.(names(chain))) ?
+               vec(Array(chain[Symbol("obs.ν")])) : Float64[]
+    lk_draws = Symbol("obs.log_κ") in Set(Symbol.(names(chain))) ?
+               vec(Array(chain[Symbol("obs.log_κ")])) : Float64[]
+
+    isempty(nu_draws) && return ([l45_gate("$name · ν identified", false,
+                                           "obs.ν absent from the chain")], nothing)
+
+    nu_prior_sd = std(observation.shape_prior)
+    lk_prior_sd = std(observation.log_kappa_prior)
+    nu_post_sd = std(nu_draws)
+    lk_post_sd = isempty(lk_draws) ? NaN : std(lk_draws)
+
+    nu_shrink = 1.0 - nu_post_sd / nu_prior_sd
+    lk_shrink = isnan(lk_post_sd) ? NaN : 1.0 - lk_post_sd / lk_prior_sd
+
+    row = (name = String(name),
+           nu_mean = mean(nu_draws), nu_post_sd = nu_post_sd,
+           nu_prior_sd = nu_prior_sd, nu_shrinkage = nu_shrink,
+           kappa_log_mean = isempty(lk_draws) ? NaN : mean(lk_draws),
+           kappa_post_sd = lk_post_sd, kappa_prior_sd = lk_prior_sd,
+           kappa_shrinkage = lk_shrink)
+
+    gates = [
+        l45_gate("$name · ν identified by the proxy arm", nu_shrink >= min_shrinkage,
+                 @sprintf("ν = %.3f ± %.3f against prior sd %.3f — shrinkage %.1f%%%s",
+                          row.nu_mean, nu_post_sd, nu_prior_sd, 100 * nu_shrink,
+                          nu_shrink < min_shrinkage ?
+                          "  (ν IS SAMPLING ITS PRIOR — the Gamma arm is contributing nothing)" : "")),
+    ]
+    return (gates, row)
+end
+
+"""
+    l45_print_identification(rows)
+
+The ν / κ identification table. Printed whether or not the gate passed, because the
+NUMBERS are the finding — a borderline shrinkage is a different conversation from a zero.
+"""
+function l45_print_identification(rows)
+    isempty(rows) && return nothing
+    @printf("  %-28s | %16s | %10s | %16s | %10s\n",
+            "Model", "ν (post sd)", "ν shrink", "log κ (post sd)", "κ shrink")
+    println("  " * "-"^92)
+    for r in rows
+        r === nothing && continue
+        @printf("  %-28s | %7.3f (%6.3f) | %9.1f%% | %7.4f (%6.4f) | %9.1f%%\n",
+                r.name, r.nu_mean, r.nu_post_sd, 100 * r.nu_shrinkage,
+                r.kappa_log_mean, r.kappa_post_sd, 100 * r.kappa_shrinkage)
+    end
+    return nothing
+end
+
+"""
     l45_clamp_gate(name, model, chain, feature_set, oos) -> gate row
 
 Does the rate guard actually bind at the posterior draws this model produces?

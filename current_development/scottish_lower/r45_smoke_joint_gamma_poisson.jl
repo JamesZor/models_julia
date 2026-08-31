@@ -115,6 +115,10 @@ const R45_MAX_GRADIENT_MS   = 0.10
 # §9: the clamp must not bind at the draws we use. The joint arm's `exp(-η)` puts the
 # LOWER bound under pressure, so this is a correctness check, not a tidiness one.
 const R45_GUARD_MARGIN      = 0.50
+# The posterior must contract ν to at most half the prior's spread. Below that, the Gamma
+# arm is not identifying its own precision and the joint model is a Poisson model wearing
+# two extra parameters — see l45_identification_gate.
+const R45_MIN_NU_SHRINKAGE  = 0.50
 
 const R45_SAVE_ROOT   = "/tmp/scottish_lower_joint_gamma_poisson_smoke"
 const R45_BASELINE    = "m00_joint_baseline"
@@ -279,6 +283,7 @@ println("\n[6/7] Gates ...")
 
 r45_gates = []
 r45_ad_rows = NamedTuple[]
+r45_ident_rows = NamedTuple[]
 
 for (name, model) in r45_models
     model.observation isa JointGammaPoissonObservation || continue
@@ -293,7 +298,15 @@ for (name, model) in r45_models
     push!(r45_gates, l45_latent_gate(name, model, chain, fold_features, r45_oos_fixtures))
     push!(r45_gates, l45_clamp_gate(name, model, chain, fold_features, r45_oos_fixtures;
                                     margin = R45_GUARD_MARGIN))
+
+    ident_gates, ident_row = l45_identification_gate(name, chain, model.observation;
+                                                     min_shrinkage = R45_MIN_NU_SHRINKAGE)
+    append!(r45_gates, ident_gates)
+    ident_row === nothing || push!(r45_ident_rows, ident_row)
 end
+
+println("\n  Is the proxy arm informing ν, or is ν sampling its prior?")
+l45_print_identification(r45_ident_rows)
 
 # The AD audit is run ONCE, on the baseline arm. It measures the observation layer, and every
 # arm shares it — running it five times would measure the covariate walk five times over and
