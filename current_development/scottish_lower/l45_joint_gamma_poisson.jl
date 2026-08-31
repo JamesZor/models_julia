@@ -25,7 +25,12 @@ using DataFrames
 using Dates
 using Printf
 using Statistics
+using LinearAlgebra
 using MCMCChains
+using DynamicPPL
+using LogDensityProblems
+using ReverseDiff
+using ForwardDiff
 
 const L45_PG       = BayesianFootball.Models.PreGame
 const L45_FEATURES = BayesianFootball.Features
@@ -148,29 +153,40 @@ function l45_observation_coverage(ds::BayesianFootball.Data.DataStore,
     matches = ds.matches
     nrow(matches) == 0 && return DataFrame()
 
-    F = Dict{Symbol,Any}()
-    ordered = Int.(matches.match_id)
-    L45_FEATURES.add_feature!(F, feature, ordered, Dict{String,Int}(), ds)
-    available = F[:flat_pxg_obs_available]
-    pxg_h = F[:flat_pxg_home]
-    pxg_a = F[:flat_pxg_away]
+    # Taken from the ladder directly, so the RUNG is visible per match. Reading only the
+    # feature's emitted mask would report "100% covered" for a store whose coverage is
+    # entirely shot-count pseudo-xG — which is a different measurement wearing the same name.
+    observations = L45_FEATURES.pxg_match_observations(
+        ds, L45_FEATURES.PxGFeature(k = feature.k, fallback = feature.fallback))
 
     by_season = Dict{String, Vector{Int}}()
-    for (i, season) in enumerate(matches.season)
-        push!(get!(by_season, String(season), Int[]), i)
+    for row in eachrow(matches)
+        push!(get!(by_season, String(row.season), Int[]), Int(row.match_id))
     end
 
     rows = NamedTuple[]
     for season in sort(collect(keys(by_season)))
-        idx = by_season[season]
-        covered = idx[available[idx] .== 1.0]
+        ids = by_season[season]
+        commentary = 0
+        shot_counts = 0
+        values_h = Float64[]
+        for id in ids
+            obs = get(observations, id, nothing)
+            obs === nothing && continue
+            obs.source === :commentary && (commentary += 1)
+            obs.source === :shot_counts && (shot_counts += 1)
+            push!(values_h, obs.h)
+        end
+        observed = commentary + shot_counts
         push!(rows, (
             season = season,
-            matches = length(idx),
-            observed = length(covered),
-            share = isempty(idx) ? 0.0 : length(covered) / length(idx),
-            mean_pxg_home = isempty(covered) ? NaN : mean(pxg_h[covered]),
-            mean_pxg_away = isempty(covered) ? NaN : mean(pxg_a[covered]),
+            matches = length(ids),
+            observed = observed,
+            commentary = commentary,
+            shot_counts = shot_counts,
+            share = isempty(ids) ? 0.0 : observed / length(ids),
+            commentary_share = isempty(ids) ? 0.0 : commentary / length(ids),
+            mean_pxg_home = isempty(values_h) ? NaN : mean(values_h),
         ))
     end
     return DataFrame(rows)
@@ -186,19 +202,32 @@ function l45_print_observation_coverage(table::DataFrame)
         println("  (no matches in the store)")
         return nothing
     end
-    @printf("  %-8s | %8s | %8s | %7s | %9s | %9s\n",
-            "season", "matches", "observed", "share", "mean pxG h", "mean pxG a")
-    println("  " * "-"^64)
+    @printf("  %-8s | %8s | %8s | %10s | %11s | %10s | %9s\n",
+            "season", "matches", "observed", "commentary", "shot counts", "commentary",
+            "mean pxG")
+    println("  " * "-"^80)
     for r in eachrow(table)
-        @printf("  %-8s | %8d | %8d | %6.1f%% | %9s | %9s\n",
-                r.season, r.matches, r.observed, 100 * r.share,
-                isnan(r.mean_pxg_home) ? "—" : @sprintf("%.3f", r.mean_pxg_home),
-                isnan(r.mean_pxg_away) ? "—" : @sprintf("%.3f", r.mean_pxg_away))
+        @printf("  %-8s | %8d | %8d | %10d | %11d | %9.1f%% | %9s\n",
+                r.season, r.matches, r.observed, r.commentary, r.shot_counts,
+                100 * r.commentary_share,
+                isnan(r.mean_pxg_home) ? "—" : @sprintf("%.3f", r.mean_pxg_home))
     end
     total = sum(table.matches)
     observed = sum(table.observed)
-    @printf("  TOTAL: %d of %d matches carry a proxy-xG observation (%.1f%%)\n",
-            observed, total, total == 0 ? 0.0 : 100 * observed / total)
+    commentary = sum(table.commentary)
+    @printf("  TOTAL: %d of %d matches observed (%.1f%%), of which %d are live-text commentary (%.1f%% of all matches)\n",
+            observed, total, total == 0 ? 0.0 : 100 * observed / total,
+            commentary, total == 0 ? 0.0 : 100 * commentary / total)
+
+    # The reading that matters. `shots x league-average xG per shot` is a VOLUME measure with
+    # no chance-quality content; a Gamma arm fed mostly that is not testing the two-arm
+    # premise, it is regressing goals on shot counts through an extra parameter.
+    if observed > 0 && commentary / observed < 0.5
+        @printf("  [WARN] only %.1f%% of the observed matches are live-text commentary; the rest is\n",
+                100 * commentary / observed)
+        println("         shot-count pseudo-xG (shots x a league constant), which carries volume")
+        println("         but no chance quality. Consider fallback = :none.")
+    end
     return nothing
 end
 
@@ -389,6 +418,22 @@ function l45_smoke_gates(name::AbstractString, fit;
 end
 
 """
+    l45_first_scored_fold(boundaries) -> Int
+
+The index of the first boundary that actually carries target matches.
+
+NOT always 1. With `end_dynamics = 1, stop_early = true` the leading boundary is a
+pure-history warm-up with an empty target block, so a gate that reads fold 1 blindly
+reports a failure about the SPLITTER while looking like a failure about the model.
+"""
+function l45_first_scored_fold(boundaries)
+    for (i, (boundary, _)) in enumerate(boundaries)
+        isempty(boundary.target_match_ids) || return i
+    end
+    error("no boundary carries target matches; the splitter produced only warm-up folds")
+end
+
+"""
     l45_fold_fixtures(ds, boundary) -> DataFrame
 
 The fold's held-out fixtures, in match-id order. Rebuilt from the boundary rather than
@@ -426,6 +471,118 @@ function l45_latent_gate(name::AbstractString, model, chain::Chains, feature_set
          all(isfinite, probe.λ_h) && all(>(0.0), probe.λ_h)
     return l45_gate("$name · λ = κ·μ", ok,
         @sprintf("mean λ_h/μ_h = %.6f, chain κ = %.6f", ratio, κ))
+end
+
+"""
+    l45_clamp_gate(name, model, chain, feature_set, oos) -> gate row
+
+Does the rate guard actually bind at the posterior draws this model produces?
+
+docs/turing_ad_performance_guide.md §9 asks this of every engine, and the joint arm is the
+one that most needs it asked. `clamp` is a value-dependent branch, so a compiled tape
+recorded outside the clamp is only valid while sampling stays outside it. The joint arm
+also carries `exp(-η)`: the guard's LOWER bound is the one under pressure, and a trajectory
+pressed against it is both a numerically suspect tape and a sign the Gamma arm is fighting
+the goals arm over the same intensity.
+
+η is read back as `log μ` from the fitted rates, so these are genuine posterior draws over
+the fixtures the model actually prices — not prior draws standing in for them.
+"""
+function l45_clamp_gate(name::AbstractString, model, chain::Chains, feature_set,
+                        oos::AbstractDataFrame; margin::Float64 = 0.5)
+    guard = model.guard
+    guard isa L45_PG.Builder.ClampGuard ||
+        return l45_gate("$name · guard headroom", true, "NoGuard — nothing to bind")
+    nrow(oos) == 0 && return l45_gate("$name · guard headroom", false, "no OOS fixtures")
+
+    rates = L45_PG.extract_parameters(model, oos, feature_set, chain)
+    lo_worst = Inf      # smallest η seen, distance above guard.lo is the headroom
+    hi_worst = -Inf
+    for id in Int.(oos.match_id)
+        r = rates[id]
+        μ = haskey(r, :μ_h) ? (r.μ_h, r.μ_a) : (r.λ_h, r.λ_a)
+        for side in μ
+            η = log.(side)
+            lo_worst = min(lo_worst, minimum(η))
+            hi_worst = max(hi_worst, maximum(η))
+        end
+    end
+
+    low_head = lo_worst - guard.lo
+    high_head = guard.hi - hi_worst
+    ok = low_head > margin && high_head > margin
+    return l45_gate("$name · guard headroom", ok,
+        @sprintf("η ∈ [%+.3f, %+.3f] against clamp [%.1f, %.1f] — headroom %.3f below, %.3f above",
+                 lo_worst, hi_worst, guard.lo, guard.hi, low_head, high_head))
+end
+
+"""
+    l45_ad_audit(name, model, feature_set; max_gradient_ms) -> (gates, row)
+
+The AD guide's §10.1 and §10.3 blocks, run on a REAL fold rather than a toy one.
+
+Reports tape instruction count and the warmed MINIMUM gradient time (§10.1 is explicit that
+a cold median is noise), and checks the compiled tape against a fresh ReverseDiff gradient
+and against ForwardDiff — including at perturbed points, which is the check that catches a
+branch smuggled into the tape.
+
+Returns the gate rows and a NamedTuple of the raw numbers, so the runner can print a table
+without re-running anything.
+"""
+function l45_ad_audit(name::AbstractString, model, feature_set;
+                      max_gradient_ms::Float64 = 0.10,
+                      reps::Int = 200, warmup::Int = 50)
+    turing_model = L45_PG.build_turing_model(model, feature_set)
+    vi = DynamicPPL.VarInfo(turing_model)
+    turing_model(vi)
+    θ = copy(vi[:])
+    lf = DynamicPPL.LogDensityFunction(turing_model)
+    f = x -> LogDensityProblems.logdensity(lf, x)
+
+    raw = ReverseDiff.GradientTape(f, θ)
+    tape = ReverseDiff.compile(raw)
+    g = similar(θ)
+    for _ in 1:warmup
+        ReverseDiff.gradient!(g, tape, θ)
+    end
+    gradient_ms = 1e3 * minimum(@elapsed(ReverseDiff.gradient!(g, tape, θ)) for _ in 1:reps)
+
+    g_tape = (h = similar(θ); ReverseDiff.gradient!(h, tape, θ); h)
+    g_fresh = ReverseDiff.gradient(f, θ)
+    g_forward = ForwardDiff.gradient(f, θ)
+    relerr(a, b) = norm(a - b) / max(norm(a), norm(b), 1.0)
+
+    err_fresh = relerr(g_fresh, g_tape)
+    err_forward = relerr(g_tape, g_forward)
+
+    # The same COMPILED tape at other points. A value branch baked into the tape shows up
+    # here and nowhere else.
+    err_perturbed = 0.0
+    for δ in (0.001, -0.002, 0.003)
+        θp = θ .+ δ .* sin.(collect(eachindex(θ)))
+        gp = similar(θp)
+        ReverseDiff.gradient!(gp, tape, θp)
+        err_perturbed = max(err_perturbed, relerr(gp, ReverseDiff.gradient(f, θp)))
+    end
+
+    row = (name = String(name), instructions = length(raw.tape), n_params = length(θ),
+           gradient_ms = gradient_ms, err_fresh = err_fresh,
+           err_forward = err_forward, err_perturbed = err_perturbed,
+           logdensity = f(θ))
+
+    gates = [
+        l45_gate("$name · logdensity finite", isfinite(row.logdensity),
+                 @sprintf("log p = %.4f at %d parameters", row.logdensity, row.n_params)),
+        l45_gate("$name · compiled == fresh ReverseDiff", err_fresh <= 1e-8,
+                 @sprintf("relerr %.3e", err_fresh)),
+        l45_gate("$name · ReverseDiff == ForwardDiff", err_forward <= 1e-6,
+                 @sprintf("relerr %.3e", err_forward)),
+        l45_gate("$name · compiled tape valid off-point", err_perturbed <= 1e-8,
+                 @sprintf("worst relerr %.3e over 3 perturbations", err_perturbed)),
+        l45_gate("$name · gradient < $(max_gradient_ms) ms", gradient_ms < max_gradient_ms,
+                 @sprintf("%.4f ms over %d tape instructions", gradient_ms, row.instructions)),
+    ]
+    return gates, row
 end
 
 """

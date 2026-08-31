@@ -94,9 +94,15 @@ const R45_WARMUP            = 500
 const R45_CHAINS            = 4
 const R45_ACCEPT_RATE       = 0.65
 
-# The proxy arm's feed. `:shots` reaches matches with a BBC scoreline page but no live
-# text, which roughly doubles coverage on 23/24. `:goals` is refused by the feature.
-const R45_PXG_FALLBACK      = :shots
+# The proxy arm's feed. `:none` is COMMENTARY ONLY, which is what the work package
+# specifies ("evaluated when pxg_available == 1 (23/24+)").
+#
+# `:shots` was tried first and is wrong here: BBC match pages carry shot counts back to
+# 20/21, so rung 2 fires for ~100% of the store and the Gamma arm ends up observing
+# `shots x a league-average xG per shot` — a VOLUME measure with no chance-quality content.
+# That does not test the two-arm premise; it regresses goals on shot counts through an extra
+# parameter, and the coverage table reports a reassuring 100% while it happens.
+const R45_PXG_FALLBACK      = :none
 const R45_PXG_CELL_K        = 25.0
 
 # Gate bands. See the header for why each one is where it is.
@@ -104,6 +110,11 @@ const R45_MAX_RHAT          = 1.05
 const R45_KAPPA_BAND        = (0.60, 1.60)
 const R45_NU_BAND           = (1.0, 12.0)
 const R45_MIN_DECAYED_MASK  = 0.10
+# docs/turing_ad_performance_guide.md §10.1: < 0.1 ms at ~700 rows / ~50 params.
+const R45_MAX_GRADIENT_MS   = 0.10
+# §9: the clamp must not bind at the draws we use. The joint arm's `exp(-η)` puts the
+# LOWER bound under pressure, so this is a correctness check, not a tidiness one.
+const R45_GUARD_MARGIN      = 0.50
 
 const R45_SAVE_ROOT   = "/tmp/scottish_lower_joint_gamma_poisson_smoke"
 const R45_BASELINE    = "m00_joint_baseline"
@@ -211,8 +222,14 @@ l45_print_arm_preflight(r45_preflight; min_decayed_share = R45_MIN_DECAYED_MASK)
 # The feature sets and held-out frames the latent gate will reuse, built once from the
 # same splitter the fits use so the gate cannot accidentally see a different fold.
 r45_feature_sets = Features.create_features(boundaries, ds, r45_models[1][2], splitter)
-r45_oos_fixtures = l45_fold_fixtures(ds, first(boundaries[1]))
-@printf("  fold 1 held-out fixtures for the latent gate: %d\n", nrow(r45_oos_fixtures))
+
+# NOT necessarily fold 1: with `end_dynamics = 1` the leading boundary can be a
+# pure-history warm-up with an empty target block, and a gate reading it would report a
+# failure about the splitter that looks like a failure about the model.
+r45_gate_fold    = l45_first_scored_fold(boundaries)
+r45_oos_fixtures = l45_fold_fixtures(ds, first(boundaries[r45_gate_fold]))
+@printf("  latent gate evaluates fold %d — held-out fixtures: %d\n",
+        r45_gate_fold, nrow(r45_oos_fixtures))
 
 # %%
 # ==============================================================================
@@ -261,16 +278,34 @@ end
 println("\n[6/7] Gates ...")
 
 r45_gates = []
+r45_ad_rows = NamedTuple[]
+
 for (name, model) in r45_models
     model.observation isa JointGammaPoissonObservation || continue
     fit = r45_fits[name]
+    chain = fit.folds[r45_gate_fold].chain
+    fold_features = first(r45_feature_sets[r45_gate_fold])
+
     append!(r45_gates, l45_smoke_gates(name, fit;
                                        max_rhat   = R45_MAX_RHAT,
                                        kappa_band = R45_KAPPA_BAND,
                                        nu_band    = R45_NU_BAND))
-    push!(r45_gates, l45_latent_gate(name, model, fit.folds[1].chain,
-                                     first(r45_feature_sets[1]), r45_oos_fixtures))
+    push!(r45_gates, l45_latent_gate(name, model, chain, fold_features, r45_oos_fixtures))
+    push!(r45_gates, l45_clamp_gate(name, model, chain, fold_features, r45_oos_fixtures;
+                                    margin = R45_GUARD_MARGIN))
 end
+
+# The AD audit is run ONCE, on the baseline arm. It measures the observation layer, and every
+# arm shares it — running it five times would measure the covariate walk five times over and
+# say nothing new about the Gamma term.
+println("\n  AD audit (turing_ad_performance_guide §10.1/§10.3), on m00_joint_baseline:")
+r45_ad_gates, r45_ad_row = l45_ad_audit("m00_joint_baseline", r45_models[1][2],
+                                        first(r45_feature_sets[r45_gate_fold]);
+                                        max_gradient_ms = R45_MAX_GRADIENT_MS)
+append!(r45_gates, r45_ad_gates)
+push!(r45_ad_rows, r45_ad_row)
+@printf("    %d parameters · %d tape instructions · %.4f ms warmed-minimum gradient\n",
+        r45_ad_row.n_params, r45_ad_row.instructions, r45_ad_row.gradient_ms)
 
 r45_passed = l45_print_gates(r45_gates)
 

@@ -105,7 +105,11 @@ const R46_ACCEPT_RATE = 0.65
 const R46_QUEUE_TASKS = Threads.nthreads()
 
 # The proxy arm's feed, identical to r45's so the smoke gates transfer.
-const R46_PXG_FALLBACK = :shots
+# COMMENTARY ONLY, per the work package's "evaluated when pxg_available == 1 (23/24+)".
+# `:shots` reaches ~100% of the store via BBC match-page shot counts, but that rung is
+# `shots x a league constant` — volume, not chance quality — and it would silently become
+# the majority of the Gamma arm's evidence. See r45's constant for the full reasoning.
+const R46_PXG_FALLBACK = :none
 const R46_PXG_CELL_K   = 25.0
 
 const R46_MIN_DECAYED_MASK = 0.10
