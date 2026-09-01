@@ -126,6 +126,39 @@ function pg48_load_fit(name::AbstractString)
 end
 
 # ==============================================================================
+# 2b. Value equality for configs
+# ==============================================================================
+#
+# NEITHER `==` NOR `string()` IS SAFE HERE, for opposite reasons.
+#
+# `==` on these structs falls back to `===`, and their Vector fields (`tournament_groups`,
+# `target_seasons`) are distinct objects after each Fit is deserialised — so two identical
+# splitters compare UNEQUAL. That is a false alarm that would block a valid ingestion.
+#
+# `string()` is worse. `GroupedCVConfig`'s `show` renders only targets and history depth:
+#
+#     GroupedCVConfig(Targets=["24/25", "25/26"], Hist=2)
+#
+# It elides `dynamics_col`, `warmup_period`, `end_dynamics` and `stop_early`. Two splitters
+# differing in `end_dynamics` — the difference between a 40-fold grid and one with ZERO
+# out-of-sample fixtures, which cost this experiment a wasted launch — stringify identically.
+# The framework's own `_truth_config_canonical` uses `string(config)`, so the same blind spot
+# reaches `configs.config_hash`; see NOTES.md.
+#
+# Field-by-field `isequal` is the only comparison that is both value-based and complete.
+
+function pg48_same_config(a, b)
+    typeof(a) === typeof(b) || return false
+    return all(isequal(getfield(a, f), getfield(b, f)) for f in fieldnames(typeof(a)))
+end
+
+"Every field and value, so a refusal names the difference instead of merely asserting one."
+function pg48_config_fingerprint(c)
+    parts = ["$(f)=$(repr(getfield(c, f)))" for f in fieldnames(typeof(c))]
+    return string(nameof(typeof(c)), "(", join(parts, ", "), ")")
+end
+
+# ==============================================================================
 # 3. Relational score and portfolio helpers
 # ==============================================================================
 
@@ -218,11 +251,15 @@ function pg48_sync_to_postgres()
     reference = fits[PG48_CONTROL].config
     for name in PG48_ARMS
         cfg = fits[name].config
-        cfg.splitter == reference.splitter || error(
+        pg48_same_config(cfg.splitter, reference.splitter) || error(
             "$name was fitted with a different splitter than $PG48_CONTROL; the arms are " *
-            "not comparable and must not be ingested as one experiment.")
-        cfg.sampler == reference.sampler || error(
-            "$name was fitted with a different sampler than $PG48_CONTROL.")
+            "not comparable and must not be ingested as one experiment.\n" *
+            "  $name: $(pg48_config_fingerprint(cfg.splitter))\n" *
+            "  $PG48_CONTROL: $(pg48_config_fingerprint(reference.splitter))")
+        pg48_same_config(cfg.sampler, reference.sampler) || error(
+            "$name was fitted with a different sampler than $PG48_CONTROL.\n" *
+            "  $name: $(pg48_config_fingerprint(cfg.sampler))\n" *
+            "  $PG48_CONTROL: $(pg48_config_fingerprint(reference.sampler))")
     end
     println("  splitter and sampler verified identical across all $(length(PG48_ARMS)) arms")
 
