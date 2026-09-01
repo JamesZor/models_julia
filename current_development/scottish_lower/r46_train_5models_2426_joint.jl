@@ -177,14 +177,26 @@ splitter = Data.GroupedCVConfig(
 boundaries = Data.create_id_boundaries(ds, splitter)
 
 # The split is the experiment. Check it before anything expensive depends on it.
+#
+# `target_match_ids` IS NOT THE HELD-OUT SET. `splitting/methods.jl:221` names the union of
+# history and target `fitted_ids`: the target block is the walk-forward's next TRAINING
+# step, and it EXPANDS each fold to cover the target season so far. Summing it over folds
+# therefore double-counts heavily (6430 here) and is not an out-of-sample count.
+#
+# The genuinely held-out fixtures come from `get_next_matches`, which returns the NEXT
+# step within the target season — roughly 19 per fold, ~710 across the grid, matching
+# experiment 01's reported out-of-sample total.
 r46_scored_folds = count(b -> !isempty(first(b).target_match_ids), boundaries)
-r46_target_total = sum(length(first(b).target_match_ids) for b in boundaries; init = 0)
+r46_fitted_target = sum(length(first(b).target_match_ids) for b in boundaries; init = 0)
+r46_oos_total = sum(nrow(Data.get_next_matches(ds, first(b), splitter)) for b in boundaries; init = 0)
 println("  walk-forward folds: ", length(boundaries),
-        "  (scored: ", r46_scored_folds, ", held-out matches: ", r46_target_total, ")")
+        "  (scored: ", r46_scored_folds,
+        ", fitted target-step matches: ", r46_fitted_target,
+        ", out-of-sample fixtures: ", r46_oos_total, ")")
 r46_scored_folds >= R46_MIN_SCORED_FOLDS || error(
-    "splitter produced $(r46_scored_folds) scored fold(s) and $(r46_target_total) held-out " *
-    "match(es); expected at least $(R46_MIN_SCORED_FOLDS). Check `end_dynamics` — `nothing` " *
-    "runs to the end, 0 stops at step zero and yields an EMPTY evaluation set.")
+    "splitter produced $(r46_scored_folds) scored fold(s) and $(r46_oos_total) out-of-sample " *
+    "fixture(s); expected at least $(R46_MIN_SCORED_FOLDS) folds. Check `end_dynamics` — " *
+    "`nothing` runs to the end, 0 stops at step zero and yields an EMPTY evaluation set.")
 @printf("  fitted matches (fold 1 .. fold %d): %d .. %d\n",
         length(boundaries),
         length(first(boundaries[1]).history_match_ids),
