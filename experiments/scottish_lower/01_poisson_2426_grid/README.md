@@ -27,3 +27,8 @@ Evaluated 5 composable count model variants across a 40-fold walk-forward cross-
 - `r20_train_5models_2426_unified.jl`: Unified 40-fold MCMC training runner.
 - `r21_compare_5models_2426.jl`: Model diagnostics, R-hat, ESS, and score evaluation.
 - `r22_portfolio_betfair_5models.jl`: Betfair Exchange portfolio backtester.
+- `r21_sync_to_postgres.jl`: Password-safe registration and ingestion into the
+  `scottish_lower_poisson_2426` experiment namespace; imports completed local Fits and uses a
+  deterministic, explicitly labelled no-MCMC fallback when they are absent.
+- `r22_verify_postgres_sync.jl`: End-to-end config-hash, chain/latent, component-loader,
+  portfolio-summary, and REPL explorer verification.

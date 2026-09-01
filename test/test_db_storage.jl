@@ -8,6 +8,10 @@ using MCMCChains
 using Random
 using UUIDs
 
+# Loads canonical Poisson-grid constructors without executing the runner's guarded main.
+include(joinpath(@__DIR__, "..", "experiments", "scottish_lower",
+                 "01_poisson_2426_grid", "r21_sync_to_postgres.jl"))
+
 struct DBStorageMockModel <: BayesianFootball.AbstractFootballModel end
 
 function db_storage_fit(root::AbstractString)
@@ -212,6 +216,53 @@ end
             @test loaded.latents.match_ids == fit.latents.match_ids
             @test loaded.latents.λ_home == fit.latents.λ_home
             @test Array(loaded[1].chain) == Array(fit[1].chain)
+
+            @testset "Canonical Poisson 2426 registry and five-run round trip" begin
+                grid_models = pg21_models()
+                grid_splitter = pg21_splitter()
+                grid_sampler = pg21_sampler()
+                grid_configs = pg21_fit_configs(grid_models, grid_splitter, grid_sampler)
+                grid_model_ids = Dict{String,Int}()
+                grid_run_ids = Dict{String,UUID}()
+
+                for (name, model) in grid_models
+                    grid_model_ids[name] = save_model(
+                        storage, name, model;
+                        description = PG21_MODEL_DESCRIPTIONS[name], tags = PG21_TAGS)
+                end
+                canonical_splitter_id = save_splitter(
+                    storage, "scottish_lower_2426_40fold", grid_splitter;
+                    tags = PG21_TAGS)
+                canonical_sampler_id = save_sampler(
+                    storage, "queued_nuts_4x800", grid_sampler; tags = PG21_TAGS)
+                for name in PG21_MODEL_NAMES
+                    hash = save_config(storage, name * "_fit", grid_configs[name];
+                                       tags = PG21_TAGS)
+                    @test length(hash) == 64
+                    canonical_fit = Fit(grid_configs[name], fit.folds, fit.latents,
+                                        fit.diagnostics, fit.metadata, fit.save_path)
+                    grid_run_ids[name] = save_fit(canonical_fit, storage)
+                    round_trip = load_fit(storage, name)
+                    @test Array(round_trip[1].chain) == Array(fit[1].chain)
+                    @test round_trip.latents.λ_home == fit.latents.λ_home
+                    @test config_hash(canonical_fit, storage) ==
+                          config_hash(round_trip, storage)
+                end
+
+                @test length(unique(values(grid_run_ids))) == 5
+                @test load_model(storage, "m05_production_wealth") isa
+                      BayesianFootball.Models.ComposableCountModel
+                @test string(load_model(storage, grid_model_ids["m05_production_wealth"])) ==
+                      string(load_model(storage, "m05_production_wealth"))
+                @test string(load_splitter(storage, canonical_splitter_id)) ==
+                      string(grid_splitter)
+                @test string(load_sampler(storage, canonical_sampler_id)) ==
+                      string(grid_sampler)
+                wealth_rows = search_configs(storage, "wealth"; io = devnull)
+                wealth_names = Set(String.(wealth_rows.name))
+                @test "m02_wealth" in wealth_names
+                @test "m05_production_wealth" in wealth_names
+            end
 
             conn_for_id = LibPQ.Connection(test_url)
             run_rows = try
