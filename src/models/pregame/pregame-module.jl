@@ -82,6 +82,7 @@ using .Builder: CountModelBuilder, PoissonCountModel, NegBinCountModel,
     covariate_column, covariate_oos, covariate_sides,
     AbstractRateGuard, ClampGuard, NoGuard,
     AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
+    NegBinObservation,
     DixonColesCorrelation, FrankCopulaCorrelation,
     JointGammaPoissonObservation, JointGammaPoissonDesign,
     observation_features, observation_design,
@@ -115,6 +116,7 @@ export covariate_name, covariate_role, covariate_prior, covariate_features,
        covariate_column, covariate_oos, covariate_sides
 export AbstractRateGuard, ClampGuard, NoGuard
 export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservation,
+       NegBinObservation,
        DixonColesCorrelation, FrankCopulaCorrelation,
        JointGammaPoissonObservation, JointGammaPoissonDesign,
        observation_features, observation_design

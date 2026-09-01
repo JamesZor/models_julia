@@ -957,6 +957,9 @@ Base.@kwdef struct NegativeBinomialObservation{D<:CB_PG.AbstractDispersionConfig
     dispersion::D = CB_PG.GlobalDispersion()
 end
 
+# Concise public spelling used by model recipes and the player-lineup work package.
+const NegBinObservation = NegativeBinomialObservation
+
 """
     DixonColesCorrelation
 

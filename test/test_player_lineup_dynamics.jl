@@ -144,10 +144,11 @@ end
 end
 
 @testset "Player lineup dynamics supports every wired observation" begin
+    @test NegBinObservation === NegativeBinomialObservation
     fs = pld_feature_set()
     observations = (
         PoissonObservation(),
-        NegativeBinomialObservation(),
+        NegBinObservation(),
         JointGammaPoissonObservation(),
     )
     for observation in observations
