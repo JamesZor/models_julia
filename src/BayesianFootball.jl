@@ -157,6 +157,7 @@ using .Training: Inference,
                  load_model, load_splitter, load_sampler, load_fit_config,
                  load_book_spec, load_policy_spec, load_portfolio_spec, list_configs,
                  explore_experiments, search_configs, show_config,
+                 preview_extension, extend_fit,
                  merge_latents, extract_run_latents,
                  MatchState, kickoff_state, NHPPIntensityModel,
                  IngameRatesWorkspace, LiveMatchRates,
@@ -179,7 +180,8 @@ export save_fit, load_fit, load_fits, list_fits, read_fit_meta,
        save_book_spec, save_policy_spec,
        load_model, load_splitter, load_sampler, load_fit_config,
        load_book_spec, load_policy_spec, load_portfolio_spec, list_configs,
-       explore_experiments, search_configs, show_config
+       explore_experiments, search_configs, show_config,
+       preview_extension, extend_fit
 export merge_latents, extract_run_latents
 export MatchState, kickoff_state, NHPPIntensityModel,
        IngameRatesWorkspace, LiveMatchRates,
@@ -253,6 +255,7 @@ using .Portfolio: OddsIndex, MarketSlot, FallbackSlot, BookWorkspace, BuildRepor
                   portfolio_report, display_portfolio, daily_returns_table,
                   portfolio_markdown, as_namedtuple, log_growth, book_cache_key,
                   save_portfolio_db, load_portfolio_db, portfolio_spec_hash,
+                  extend_portfolio,
                   book_match_id, book_date, book_selections, book_grid, book_payoff,
                   book_settle, book_alloc, book_shrink, book_kkt, book_converged,
                   sel_name, sel_odds_close, sel_odds_settle, sel_prob_model,
@@ -280,7 +283,7 @@ export simulate, simulate_portfolio, portfolio_summary, bootstrap_portfolio,
        path_metrics, bootstrap_roi, attribution
 export portfolio_report, display_portfolio, daily_returns_table, portfolio_markdown,
        as_namedtuple, log_growth, book_cache_key
-export save_portfolio_db, load_portfolio_db, portfolio_spec_hash
+export save_portfolio_db, load_portfolio_db, portfolio_spec_hash, extend_portfolio
 export book_match_id, book_date, book_selections, book_grid, book_payoff, book_settle,
        book_alloc, book_shrink, book_kkt, book_converged
 export sel_name, sel_odds_close, sel_odds_settle, sel_prob_model, sel_prob_market, sel_edge

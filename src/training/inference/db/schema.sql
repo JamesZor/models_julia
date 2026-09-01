@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS fold_results (
     brier DOUBLE PRECISION,
     rps DOUBLE PRECISION,
     runtime_seconds DOUBLE PRECISION,
+    n_matches INT,
+    first_match_date DATE,
+    last_match_date DATE,
     UNIQUE (run_id, fold_idx)
 );
 
@@ -113,7 +116,9 @@ CREATE TABLE IF NOT EXISTS fit_artifacts (
 
 CREATE TABLE IF NOT EXISTS portfolio_artifacts (
     portfolio_run_id UUID PRIMARY KEY REFERENCES portfolio_runs(portfolio_run_id) ON DELETE CASCADE,
-    result_blob BYTEA NOT NULL
+    result_blob BYTEA NOT NULL,
+    book_spec_blob BYTEA,
+    policy_spec_blob BYTEA
 );
 
 -- Add lookup IDs when migrating a database created by the UUID-only v1 schema. Existing UUID
@@ -122,6 +127,11 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS id BIGSERIAL;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS name VARCHAR;
 ALTER TABLE portfolio_runs ADD COLUMN IF NOT EXISTS id BIGSERIAL;
 ALTER TABLE config_registry ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+ALTER TABLE fold_results ADD COLUMN IF NOT EXISTS n_matches INT;
+ALTER TABLE fold_results ADD COLUMN IF NOT EXISTS first_match_date DATE;
+ALTER TABLE fold_results ADD COLUMN IF NOT EXISTS last_match_date DATE;
+ALTER TABLE portfolio_artifacts ADD COLUMN IF NOT EXISTS book_spec_blob BYTEA;
+ALTER TABLE portfolio_artifacts ADD COLUMN IF NOT EXISTS policy_spec_blob BYTEA;
 UPDATE runs SET name = experiment_name WHERE name IS NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_id ON runs(id);

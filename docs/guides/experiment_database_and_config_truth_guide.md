@@ -5,7 +5,9 @@
 >
 > **Implementation:**
 > [`src/training/inference/db_storage.jl`](../../src/training/inference/db_storage.jl),
-> [`src/Portfolio/db_storage.jl`](../../src/Portfolio/db_storage.jl), and
+> [`src/training/inference/extension.jl`](../../src/training/inference/extension.jl),
+> [`src/Portfolio/db_storage.jl`](../../src/Portfolio/db_storage.jl),
+> [`src/Portfolio/extension.jl`](../../src/Portfolio/extension.jl), and
 > [`src/training/inference/db/schema.sql`](../../src/training/inference/db/schema.sql).
 
 ---
@@ -148,6 +150,8 @@ One diagnostics/evaluation row per inference fold.
 | `brier` | `DOUBLE PRECISION` | Nullable Brier score. |
 | `rps` | `DOUBLE PRECISION` | Nullable ranked probability score. |
 | `runtime_seconds` | `DOUBLE PRECISION` | Nullable fold runtime. |
+| `n_matches` | `INT` | Nullable OOS fixture count, populated by incremental extensions. |
+| `first_match_date`, `last_match_date` | `DATE` | Nullable OOS date range, populated by incremental extensions. |
 
 Indexes and constraints: `idx_fold_results_run_id` and unique `(run_id, fold_idx)`. The
 current `save_fit` path writes convergence diagnostics and runtime, but initially stores
@@ -259,6 +263,8 @@ relational latent rows exist.
 |---|---|---|
 | `portfolio_run_id` | `UUID` | Primary key and foreign key to `portfolio_runs(portfolio_run_id)` with `ON DELETE CASCADE`. |
 | `result_blob` | `BYTEA` | Not null Zstd-compressed serialized `PortfolioResult`. |
+| `book_spec_blob` | `BYTEA` | Nullable exact `BookSpec`, used for lossless roll-forward. |
+| `policy_spec_blob` | `BYTEA` | Nullable exact `PolicySpec`, used for lossless roll-forward. |
 
 The artefact preserves daily states, bootstrap output, custom metrics, attribution, and all
 other values not represented by the headline tables.
@@ -421,6 +427,23 @@ addresses = save_fit(fit, storage; quiet = true)
 # addresses.path   -> filesystem directory
 # addresses.run_id -> PostgreSQL UUID
 ```
+
+### 5.5 Incrementally extend live runs
+
+```julia
+plan = preview_extension(db, run_uuid, latest_ds)
+fit = extend_fit(db, run_uuid, latest_ds)
+result = extend_portfolio(db, portfolio_uuid, fit, latest_ds.odds, latest_ds)
+```
+
+`preview_extension` derives current splitter boundaries and reports only positions absent from
+`fold_results`. `extend_fit` samples those positions and updates fold diagnostics, OOS scores,
+compressed match latents, the exact Fit artefact, and run telemetry in one transaction. Pass
+`splitter = updated_splitter` when opening a new target season. `extend_portfolio` prices fixtures
+absent from the existing bet ledger, continues from the closing bankroll, and atomically refreshes
+the bet ledger, headline summary, and exact result artefact. Book and policy specs are recovered
+from `portfolio_artifacts` when they were supplied to `save_portfolio_db`; otherwise pass them
+explicitly or register matching canonical specs.
 
 ---
 

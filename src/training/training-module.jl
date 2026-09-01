@@ -45,7 +45,8 @@ export save_fit, load_fit, load_fits, list_fits, read_fit_meta,
        save_book_spec, save_policy_spec,
        load_model, load_splitter, load_sampler, load_fit_config,
        load_book_spec, load_policy_spec, load_portfolio_spec, list_configs,
-       explore_experiments, search_configs, show_config
+       explore_experiments, search_configs, show_config,
+       preview_extension, extend_fit
 export merge_latents, extract_run_latents
 export MatchState, kickoff_state, NHPPIntensityModel,
        IngameRatesWorkspace, LiveMatchRates,

@@ -115,6 +115,7 @@ include("pricing.jl")
 include("simulation.jl")
 include("reporting.jl")
 include("db_storage.jl")
+include("extension.jl")
 include("compat.jl")
 
 # last: it dispatches on every type and component defined above
@@ -154,6 +155,6 @@ export
     portfolio_summary, portfolio_report,
 
     # PostgreSQL persistence
-    save_portfolio_db, load_portfolio_db, portfolio_spec_hash
+    save_portfolio_db, load_portfolio_db, portfolio_spec_hash, extend_portfolio
 
 end

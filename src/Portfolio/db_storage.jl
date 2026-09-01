@@ -75,10 +75,16 @@ function save_portfolio_db(result::PortfolioResult, run_id::UUID,
             end
 
             artifact = Training.Inference._db_artifact_blob(result)
+            book_blob = book_spec === nothing ? missing :
+                        Training.Inference._db_bytea(Training.Inference._db_artifact_blob(book_spec))
+            policy_blob = policy_spec === nothing ? missing :
+                          Training.Inference._db_bytea(Training.Inference._db_artifact_blob(policy_spec))
             Training.Inference._db_exec(conn, """
-                INSERT INTO portfolio_artifacts (portfolio_run_id, result_blob)
-                VALUES (\$1::uuid, \$2::bytea);
-            """, (string(portfolio_run_id), Training.Inference._db_bytea(artifact)))
+                INSERT INTO portfolio_artifacts (
+                    portfolio_run_id, result_blob, book_spec_blob, policy_spec_blob
+                ) VALUES (\$1::uuid, \$2::bytea, \$3::bytea, \$4::bytea);
+            """, (string(portfolio_run_id), Training.Inference._db_bytea(artifact),
+                  book_blob, policy_blob))
             Training.Inference._db_exec(conn, "COMMIT;")
         catch
             try

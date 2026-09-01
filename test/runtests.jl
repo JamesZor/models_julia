@@ -54,6 +54,9 @@ using DataFrames, Dates, InlineStrings # Add any other packages your tests need 
     println("Running experiment database storage tests...")
     include("test_db_storage.jl")
 
+    println("Running incremental live extension tests...")
+    include("test_extension.jl")
+
     println("Running unified evaluation framework tests...")
     include("evaluation_tests.jl")
 
