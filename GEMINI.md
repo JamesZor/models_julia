@@ -7,9 +7,9 @@ A sophisticated Bayesian hierarchical modeling framework for football (soccer) a
 `BayesianFootball` is a multi-tier Bayesian predictive and portfolio system built in Julia:
 - **Layer 0 (Data):** Strictly typed PostgreSQL extraction, memory-optimized DataStores, and vig-removed market math.
 - **Layer 1 (Bayesian Engines):** Fast Turing.jl hierarchical models using ReverseDiff compiled tapes for team ratings, player dynamics, and score distributions.
-- **Layer 2 (Unified Inference & Latents):** Automated MCMC convergence audits, typed posterior latents (`CountLatents`), and zero-allocation score tensor kernels.
+- **Layer 2 (Unified Inference, Latents & Experiment Truth):** Automated MCMC convergence audits, typed posterior latents (`CountLatents`), zero-allocation score tensor kernels, and PostgreSQL-backed run tracking plus canonical configuration discovery.
 - **Layer 3 (Unified Evaluation):** Point-in-time prediction pricing, Log-Loss, CRPS, Brier score, RPS, and Expected Calibration Error (ECE) against market closing odds.
-- **Layer 4 (Zero-Alloc Portfolio & Staking):** Fast odds indexing (`OddsIndex`), fold-level pre-allocated workspaces (`BookWorkspace`), Baker-McHale parameter shrinkage, and fractional Kelly staking simulation with automated bankroll convergence gating.
+- **Layer 4 (Zero-Alloc Portfolio, Staking & Audit):** Fast odds indexing (`OddsIndex`), fold-level pre-allocated workspaces (`BookWorkspace`), Baker-McHale parameter shrinkage, fractional Kelly staking, and queryable PostgreSQL portfolio/trade persistence.
 
 ---
 
@@ -24,21 +24,24 @@ A sophisticated Bayesian hierarchical modeling framework for football (soccer) a
 - **`CountLatents`**: Typed container for $\lambda_{\text{home}}, \lambda_{\text{away}}$ posterior draws.
 - **`SmileScoreGrid`**: Zero-allocation in-place score grid kernels for Poisson, Negative Binomial, and Dixon-Coles distributions.
 
-### 3. Unified Inference Lifecycle (`src/training/inference/`)
+### 3. Unified Inference Lifecycle & Experiment Truth (`src/training/inference/`)
 - **`Fit` Container**: Atomic unit of an estimated model, carrying `config`, `folds`, `latents`, `diagnostics`, and `metadata`.
 - **`fit_model(FitConfig, ds)`**: End-to-end inference orchestrator with automatic ReverseDiff tape compilation.
 - **Automated Convergence Diagnostics (`ConvergenceSummary`)**: Hard audit gates for $\hat{R} < 1.05$, Bulk/Tail ESS, and divergences.
 - **Execution Strategies**: `AutoExecution()`, `QueuedExecution()`, `ThreadedExecution()`, `SequentialExecution()`.
+- **PostgreSQL Experiment Tracking**: `PostgresStorage` stores queryable runs, fold diagnostics, match latents, and exact `Fit` artefacts; `DualStorage` also keeps an atomic filesystem copy.
+- **Config Truth Engine**: `config_registry`, `save_model`, `save_config`, `search_configs`, and `show_config` provide named, tagged, hash-addressed recipes shared across machines. See the [database guide](docs/guides/experiment_database_and_config_truth_guide.md).
 
 ### 4. Unified Evaluation Framework (`src/evaluation/`)
 - **`OddsView` & `EvaluationWorkspace`**: Zero-copy dense views over odds matrices with strict Point-In-Time (`stamp < kickoff`) assertions.
 - **`evaluate_predictions(fit, ds)`**: Prices match probabilities across the posterior score grid and scores Log-Loss, CRPS, Brier score, RPS, and calibration curves vs market closing odds.
 - **Convergence Refusal**: Evaluators refuse unconverged fits to prevent misleading benchmarks.
 
-### 5. Unified Portfolio & Staking (`src/Portfolio/`)
+### 5. Unified Portfolio, Staking & Audit (`src/Portfolio/`)
 - **`OddsIndex`**: O(1) indexed lookups for match markets, eliminating expensive full-frame scans.
 - **`BookWorkspace`**: One pre-allocated matrix and probability buffer per fold, enabling zero-allocation Kelly allocation sweeps.
 - **`simulate_portfolio` & `run_portfolio_simulation`**: Simulates bankroll trajectories under fractional Kelly staking, slate drawdown caps, and commission modeling.
+- **PostgreSQL Audit Trail**: `save_portfolio_db` stores headline ROI/risk metrics, individual bets, and an exact `PortfolioResult` artefact linked to the model run UUID.
 - **Convergence Gating**: Unconverged models throw a `ConvergenceRefusal` before bankroll capital is risked.
 
 ---
@@ -64,7 +67,7 @@ model = CountModelBuilder(:poisson_timedecay_2425) |>
     add(PoissonObservation()) |>
     build
 
-# 4. Train via Unified Inference Engine
+# 4. Define the Unified Inference recipe
 fit_cfg = FitConfig(
     name      = "poisson_2425",
     model     = model,
@@ -72,13 +75,25 @@ fit_cfg = FitConfig(
     sampler   = NUTSConfig(n_samples = 1_000, n_chains = 4, target_accept = 0.85),
     execution = AutoExecution()
 )
-fit = fit_model(fit_cfg, ds)
 
-# 5. Evaluate forecast accuracy vs closing odds
+# 5. Register the canonical recipe before scheduling compute.
+# Credentials resolve from BF_EXPERIMENTS_DB_URL or ~/.pgpass.
+db = PostgresStorage("scottish_lower_2426")
+ensure_schema!(db)
+save_model(db, "poisson_timedecay_2425", model; tags = ["production"])
+save_splitter(db, "split_2425", fit_cfg.splitter; tags = ["walkforward"])
+save_sampler(db, "nuts_4x1000", fit_cfg.sampler; tags = ["production"])
+save_config(db, "poisson_2425", fit_cfg; tags = ["production"])
+
+# 6. Train and persist the queryable experiment record
+fit = fit_model(fit_cfg, ds)
+run_id = save_fit(fit, db)
+
+# 7. Evaluate forecast accuracy vs closing odds
 eval_report = evaluate_predictions(fit, ds)
 println(eval_report)
 
-# 6. Simulate fractional Kelly portfolio with risk policy
+# 8. Simulate fractional Kelly portfolio with risk policy
 spec = BookSpec(
     markets   = Data.MarketConfig([Data.Market1X2(), Data.MarketOverUnder(2.5), Data.MarketBTTS()]),
     price     = DeArb(),
@@ -90,8 +105,17 @@ policy = PolicySpec(
     risk      = SlateDrawdown(20.0),  # 20% max slate risk
     cap       = FixedCap(0.25)        # 25% max bankroll exposure
 )
+save_book_spec(db, "closing_main", spec; tags = ["production"])
+save_policy_spec(db, "quarter_kelly", policy; tags = ["production"])
 
 result, books, rep = run_portfolio_simulation(spec, policy, fit, ds.odds, ds)
+portfolio_run_id = save_portfolio_db(
+    result,
+    run_id,
+    db;
+    book_spec = spec,
+    policy_spec = policy,
+)
 display(portfolio_report(result))
 ```
 

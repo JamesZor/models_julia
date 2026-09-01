@@ -113,3 +113,35 @@ tmux send-keys -t scottish_runner:1.1 'include("current_development/scottish_low
 # Inspect REPL output
 tmux capture-pane -t scottish_runner:1.1 -p -S -60
 ```
+
+---
+
+## 6. Experiment Database & Config Truth Engine Protocol
+
+See the production guide:
+[`docs/guides/experiment_database_and_config_truth_guide.md`](docs/guides/experiment_database_and_config_truth_guide.md).
+
+1. **Keep credentials out of source and output.** Never commit, paste into prompts, or print a
+   raw database password or credential-bearing URL. Construct
+   `PostgresStorage(experiment_name)` and let it resolve
+   `ENV["BF_EXPERIMENTS_DB_URL"]` or libpq's `~/.pgpass`. Its masked `show` method is safe;
+   manually printing `storage.conn_str` is not.
+2. **Register canonical recipes before execution.** Save production models with `save_model`,
+   splitters with `save_splitter`, samplers with `save_sampler`, and the assembled `FitConfig`
+   with `save_config`. Register `BookSpec` and `PolicySpec` with `save_book_spec` and
+   `save_policy_spec`. Use stable names, descriptions, and tags in `config_registry`; do not
+   treat an untracked REPL object as the source of truth.
+3. **Preflight expensive sampling.** Before launching MCMC, query `configs.config_hash` for
+   the approved inference-recipe hash. If a completed run already exists, load it instead of
+   consuming compute. `save_fit` also deduplicates by hash, but that save-time guard cannot
+   recover time already spent sampling. Do not confuse the registry component hash with the
+   run-deduplication hash; see the guide's hash-domain section.
+4. **Persist immutable run addresses.** `run_id = save_fit(fit, db)` returns the model run
+   UUID. Pass that UUID to `save_portfolio_db(result, run_id, db; book_spec, policy_spec)` and
+   retain the returned portfolio UUID in reports.
+5. **Reconstruct typed objects through the API.** Use `load_fit(db, run_integer_id)`,
+   `load_fit(db, fit_name)`, or `load_fit(db, run_uuid)` to recover an exact `Fit`, including
+   relationally reconstructed `CountLatents`. Use
+   `load_portfolio_db(portfolio_run_uuid, db)` to recover the exact `PortfolioResult` from
+   `portfolio_artifacts`. Portfolio loading currently requires its UUID; obtain it from
+   `portfolio_runs` when starting from the sequential `id`.
