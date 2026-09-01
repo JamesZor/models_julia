@@ -70,6 +70,9 @@ include("./engines/player_level/time_decay/goals_funnel_plus_minus_league.jl")
 include("./builder/builder-module.jl")
 using .Builder: CountModelBuilder, PoissonCountModel, NegBinCountModel,
     ComposableCountModel, AbstractCovariateRole, SupremacyRole, LevelRole,
+    AbstractPlayerAggregation, OutfieldPlayerAggregation,
+    BenchWeightedPlayerAggregation, PositionalPlayerAggregation,
+    MinuteWeightedPlayerAggregation, PlayerLineupDynamics,
     AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
     AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
     age_weight, ProductionWealthFeature, WealthCovariate,
@@ -99,6 +102,9 @@ export GlobalDispersion, HomeAwayDispersion
 export Builder
 export CountModelBuilder, PoissonCountModel, NegBinCountModel, ComposableCountModel
 export AbstractCovariateRole, SupremacyRole, LevelRole
+export AbstractPlayerAggregation, OutfieldPlayerAggregation,
+       BenchWeightedPlayerAggregation, PositionalPlayerAggregation,
+       MinuteWeightedPlayerAggregation, PlayerLineupDynamics
 export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
        AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
        age_weight, ProductionWealthFeature, BenchDepthFeature, LateGameChanceFeature,

@@ -17,12 +17,16 @@ const CB_Features = Features
 const CB_TI = TypesInterfaces
 
 include("components.jl")
+include("player_dynamics.jl")
 include("builder.jl")
 include("engine.jl")
 include("equations.jl")
 
 export CountModelBuilder, PoissonCountModel, NegBinCountModel, ComposableCountModel
 export AbstractCovariateRole, SupremacyRole, LevelRole
+export AbstractPlayerAggregation, OutfieldPlayerAggregation,
+       BenchWeightedPlayerAggregation, PositionalPlayerAggregation,
+       MinuteWeightedPlayerAggregation, PlayerLineupDynamics
 export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
        AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
        age_weight, ProductionWealthFeature, WealthCovariate,

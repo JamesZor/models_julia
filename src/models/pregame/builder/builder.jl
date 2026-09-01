@@ -288,7 +288,9 @@ _cb_interception_supported(::Union{
 }) = true
 
 _cb_dynamics_supported(::CB_PG.AbstractDynamicsConfig) = false
-_cb_dynamics_supported(::Union{CB_PG.TimeDecayDynamics,CB_PG.StaticZeroDynamics}) = true
+_cb_dynamics_supported(::Union{
+    CB_PG.TimeDecayDynamics,CB_PG.StaticZeroDynamics,PlayerLineupDynamics,
+}) = true
 
 _cb_home_advantage_supported(::CB_PG.AbstractHomeAdvantageConfig) = false
 _cb_home_advantage_supported(::Union{
@@ -342,18 +344,33 @@ function validate(b::CountModelBuilder)
         push!(out, cb_result("$slot supported by composable engine", pass, detail))
     end
 
-    # --- R4: the engine reads the decay half-life off the dynamics config ------
+    # --- R4: likelihood weighting is explicit per dynamics family --------------
     dyn = b.dynamics
-    has_half_life = dyn !== nothing && hasproperty(dyn, :days_half_life)
-    valid_half_life = has_half_life && dyn.days_half_life isa Real &&
-                      isfinite(dyn.days_half_life) && dyn.days_half_life > 0
-    push!(out, cb_result("dynamics exposes a positive days_half_life",
-        valid_half_life,
-        dyn === nothing ? "no dynamics config" :
-        !has_half_life ?
-            "$(nameof(typeof(dyn))) has no days_half_life; the likelihood weights come from it" :
-        valid_half_life ? "half-life = $(dyn.days_half_life) days" :
-            "days_half_life must be finite and > 0; got $(dyn.days_half_life)"))
+    valid_weighting = dyn !== nothing && _dynamics_weighting_valid(dyn)
+    weighting_detail = dyn === nothing ? "no dynamics config" :
+                       _dynamics_weighting_detail(dyn)
+    push!(out, cb_result("dynamics likelihood weighting is valid",
+        valid_weighting, weighting_detail))
+
+    player_priors_valid = !(dyn isa PlayerLineupDynamics) ||
+        (dyn.w_att_prior isa ContinuousUnivariateDistribution &&
+         dyn.w_def_prior isa ContinuousUnivariateDistribution &&
+         (dyn.w_bench_prior === nothing ||
+          dyn.w_bench_prior isa ContinuousUnivariateDistribution))
+    push!(out, cb_result("player-lineup priors are continuous univariate",
+        player_priors_valid,
+        !(dyn isa PlayerLineupDynamics) ? "not player-lineup dynamics" :
+        player_priors_valid ? "attack, defence, and optional bench priors are valid" :
+        "w_att_prior, w_def_prior, and optional w_bench_prior must be continuous univariate"))
+
+    bench_weight_valid = !(dyn isa PlayerLineupDynamics) ||
+        !(dyn.aggregation isa BenchWeightedPlayerAggregation) ||
+        (isfinite(dyn.aggregation.w_bench) && 0.0 <= dyn.aggregation.w_bench <= 1.0)
+    push!(out, cb_result("fixed bench weight is in [0, 1]",
+        bench_weight_valid,
+        !(dyn isa PlayerLineupDynamics) ? "not player-lineup dynamics" :
+        dyn.aggregation isa BenchWeightedPlayerAggregation ?
+            "w_bench = $(dyn.aggregation.w_bench)" : "aggregation has no configurable fixed weight"))
 
     # --- R5: the observation family must actually have an engine method --------
     push!(out, cb_result("observation is wired", observation_wired(obs),
@@ -561,6 +578,20 @@ _sites_home_advantage(::CB_PG.HierarchicalTeamHomeAdvantage)    =
 _sites_dynamics(::CB_PG.TimeDecayDynamics)  =
     [Symbol("dyn.σ_a"), Symbol("dyn.σ_d"), Symbol("dyn.raw_a"), Symbol("dyn.raw_d")]
 _sites_dynamics(::CB_PG.StaticZeroDynamics) = Symbol[]
+_sites_dynamics(::PlayerLineupDynamics{<:Any,<:Union{
+    OutfieldPlayerAggregation,MinuteWeightedPlayerAggregation,
+}}) = [Symbol("dyn.w_att"), Symbol("dyn.w_def")]
+function _sites_dynamics(config::PlayerLineupDynamics{<:Any,<:BenchWeightedPlayerAggregation})
+    sites = [Symbol("dyn.w_att"), Symbol("dyn.w_def")]
+    config.w_bench_prior === nothing || push!(sites, Symbol("dyn.w_bench"))
+    return sites
+end
+function _sites_dynamics(config::PlayerLineupDynamics{<:Any,<:PositionalPlayerAggregation})
+    sites = [Symbol("dyn.w_att_F"), Symbol("dyn.w_att_M"),
+             Symbol("dyn.w_def_D"), Symbol("dyn.w_def_M")]
+    config.w_bench_prior === nothing || push!(sites, Symbol("dyn.w_bench"))
+    return sites
+end
 
 _sites_observation(::PoissonObservation) = Symbol[]
 # Declaration order inside `_joint_gamma_poisson_params`, which is the θ layout.

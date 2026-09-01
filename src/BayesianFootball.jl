@@ -71,6 +71,9 @@ using .Models: AbstractPosteriorLatents, CountLatents, RecombLatents, SmileLaten
                to_legacy_dataframe,
                CountModelBuilder, PoissonCountModel, NegBinCountModel,
                ComposableCountModel, AbstractCovariateRole, SupremacyRole, LevelRole,
+               AbstractPlayerAggregation, OutfieldPlayerAggregation,
+               BenchWeightedPlayerAggregation, PositionalPlayerAggregation,
+               MinuteWeightedPlayerAggregation, PlayerLineupDynamics,
                AbstractCovariateConfig, LogSumWealthFeature,
                SLFPLogSumWealthFeature, AbstractAgeWeightingCurve,
                RichardsSigmoid, ShiftedGamma, GaussianPrime, age_weight,
@@ -105,6 +108,9 @@ export extract_latents, latent_family, latents_from_legacy_dataframe,
        to_legacy_dataframe
 export CountModelBuilder, PoissonCountModel, NegBinCountModel, ComposableCountModel
 export AbstractCovariateRole, SupremacyRole, LevelRole
+export AbstractPlayerAggregation, OutfieldPlayerAggregation,
+       BenchWeightedPlayerAggregation, PositionalPlayerAggregation,
+       MinuteWeightedPlayerAggregation, PlayerLineupDynamics
 export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
        AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
        age_weight, ProductionWealthFeature, WealthCovariate,

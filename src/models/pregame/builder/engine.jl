@@ -57,6 +57,7 @@ const CB_STRUCTURAL_FEATURES = (
 
 function CB_Features.required_features(model::ComposableCountModel)
     out = CB_Features.AbstractFeatureConfig[T() for T in CB_STRUCTURAL_FEATURES]
+    append!(out, dynamics_features(model.dynamics))
     for c in model.covariates
         append!(out, covariate_features(c))
     end
@@ -270,11 +271,32 @@ end
 # `_engw`/`_engd`/`_engj` exactly, so the θ vector this model produces is
 # element-for-element the θ vector the hand-written arms produce.
 
+@model function _cb_dynamics_effects(
+    config::Union{CB_PG.TimeDecayDynamics,CB_PG.StaticZeroDynamics},
+    home_ids::Vector{Int}, away_ids::Vector{Int}, ::Nothing, n_teams::Int,
+)
+    state ~ to_submodel(CB_PG.build_dynamics(config, n_teams), false)
+    return (;
+        att_h = state.α[home_ids], def_a = state.β[away_ids],
+        att_a = state.α[away_ids], def_h = state.β[home_ids],
+    )
+end
+
+@model function _cb_dynamics_effects(
+    config::PlayerLineupDynamics,
+    home_ids::Vector{Int}, away_ids::Vector{Int},
+    design::AbstractPlayerLineupDesign, n_teams::Int,
+)
+    effects ~ to_submodel(_player_lineup_effects(config, design), false)
+    return effects
+end
+
 @model function composable_count_engine(
     home_ids::Vector{Int}, away_ids::Vector{Int},
     season_ids::Vector{Int}, month_ids::Vector{Int},
     home_goals::Vector{Int}, away_goals::Vector{Int},
     match_weights::Vector{Float64},
+    dynamics_data,
     covariate_columns::Tuple,
     log_fact_h::Vector{Float64}, log_fact_a::Vector{Float64},
     observation_data,
@@ -284,7 +306,8 @@ end
     # --- 1. STRUCTURAL COMPONENTS (reused from src, unmodified) ---------------
     inter ~ to_submodel(CB_PG.build_interception(config.interception, n_seasons, n_months))
     ha    ~ to_submodel(CB_PG.build_home_advantage(config.home_advantage, n_teams))
-    dyn   ~ to_submodel(CB_PG.build_dynamics(config.dynamics, n_teams))
+    dyn   ~ to_submodel(_cb_dynamics_effects(
+        config.dynamics, home_ids, away_ids, dynamics_data, n_teams))
 
     # --- 2. COVARIATES (unrolled over the typed tuple) ------------------------
     cov ~ to_submodel(_cov_block(config.covariates, covariate_columns, n_matches), false)
@@ -300,10 +323,10 @@ end
 
     η_h = apply_guard(config.guard,
                       _cov_shift(base .+ ha[home_ids] .+
-                                 dyn.α[home_ids] .+ dyn.β[away_ids], cov.h))
+                                 dyn.att_h .+ dyn.def_a, cov.h))
     η_a = apply_guard(config.guard,
                       _cov_shift(base .+
-                                 dyn.α[away_ids] .+ dyn.β[home_ids], cov.a))
+                                 dyn.att_a .+ dyn.def_h, cov.a))
 
     # --- 4. OBSERVATION -------------------------------------------------------
     ll ~ to_submodel(_observe(config.observation, η_h, η_a, home_goals, away_goals,
@@ -340,13 +363,17 @@ function cb_design(model::ComposableCountModel, feature_set)
     away_goals = Vector{Int}(d[:flat_away_goals])
     n_matches  = length(home_ids)
 
-    # Exponential decay on the likelihood weights; the half-life is the dynamics
-    # component's, which is why `validate` insists the dynamics config exposes it.
-    match_weights = 0.5 .^ (Vector{Float64}(d[:dates]) ./ model.dynamics.days_half_life)
+    # Team dynamics retain their configured exponential decay. Pure lineup dynamics
+    # uses uniform weights: its ratings are already point-in-time and its config contains
+    # no hidden half-life modelling decision.
+    match_weights = dynamics_match_weights(
+        model.dynamics, Vector{Float64}(d[:dates]))
 
     # Precomputed once, outside `@model`: log Γ(y+1) is data, not a parameter.
     log_fact_h = SpecialFunctions.loggamma.(Float64.(home_goals) .+ 1.0)
     log_fact_a = SpecialFunctions.loggamma.(Float64.(away_goals) .+ 1.0)
+
+    dynamics_data = dynamics_design(model.dynamics, feature_set, n_matches)
 
     # `map` over a Tuple returns a Tuple, so the covariate columns arrive at the
     # engine with their count baked into the type.
@@ -366,7 +393,7 @@ function cb_design(model::ComposableCountModel, feature_set)
     observation_data = observation_design(model.observation, feature_set, n_matches, match_weights)
 
     return (; home_ids, away_ids, season_ids, month_ids, home_goals, away_goals,
-              match_weights, covariate_columns, log_fact_h, log_fact_a, observation_data,
+              match_weights, dynamics_data, covariate_columns, log_fact_h, log_fact_a, observation_data,
               n_matches, n_teams = Int(d[:n_teams]), n_seasons = Int(d[:n_seasons]),
               n_months = 12)
 end
@@ -388,7 +415,7 @@ function CB_PG.build_turing_model(model::ComposableCountModel, feature_set)
     return composable_count_engine(
         z.home_ids, z.away_ids, z.season_ids, z.month_ids,
         z.home_goals, z.away_goals, z.match_weights,
-        z.covariate_columns, z.log_fact_h, z.log_fact_a, z.observation_data,
+        z.dynamics_data, z.covariate_columns, z.log_fact_h, z.log_fact_a, z.observation_data,
         z.n_matches, z.n_teams, z.n_seasons, z.n_months,
         model,
     )
@@ -404,6 +431,36 @@ end
 # order and reads `<name>.w` out of the chain — the site name the engine created
 # from the same `covariate_name`. Nothing here mentions wealth or distance.
 
+function _cb_extract_dynamics(chain::Chains,
+                              config::Union{CB_PG.TimeDecayDynamics,CB_PG.StaticZeroDynamics},
+                              prefix::String, n_teams::Int)
+    return CB_PG.extract_dynamics(chain, config, prefix, n_teams)
+end
+
+function _cb_extract_dynamics(chain::Chains, config::PlayerLineupDynamics,
+                              prefix::String, n_teams::Int)
+    return extract_player_dynamics(chain, config, prefix)
+end
+
+function _cb_oos_dynamics(
+    config::Union{CB_PG.TimeDecayDynamics,CB_PG.StaticZeroDynamics}, draw,
+    lineup_map, match_id::Int, home_index::Int, away_index::Int, n_samples::Int,
+)
+    return (;
+        att_h = home_index > 0 ? draw.α[:, home_index] : zeros(n_samples),
+        def_a = away_index > 0 ? draw.β[:, away_index] : zeros(n_samples),
+        att_a = away_index > 0 ? draw.α[:, away_index] : zeros(n_samples),
+        def_h = home_index > 0 ? draw.β[:, home_index] : zeros(n_samples),
+    )
+end
+
+function _cb_oos_dynamics(config::PlayerLineupDynamics, draw, lineup_map,
+                          match_id::Int, home_index::Int, away_index::Int,
+                          n_samples::Int)
+    value = get(lineup_map, match_id, _player_neutral_aggregate())
+    return player_oos_effects(config.aggregation, draw, value)
+end
+
 function CB_PG.extract_parameters(model::ComposableCountModel,
                                   df::AbstractDataFrame,
                                   feature_set,
@@ -416,7 +473,9 @@ function CB_PG.extract_parameters(model::ComposableCountModel,
 
     inter_nt = CB_PG.extract_interception(chain, model.interception, n_seasons)
     ha_mat   = CB_PG.extract_home_advantage(chain, model.home_advantage, n_teams)
-    dyn_nt   = CB_PG.extract_dynamics(chain, model.dynamics, "dyn", n_teams)
+    dyn_nt   = _cb_extract_dynamics(chain, model.dynamics, "dyn", n_teams)
+    lineup_map = get(d, :player_lineup_ratings_map,
+                     Dict{Int,CB_Features.PMLineupAggregate}())
 
     # Per covariate: the posterior weight (n_samples) and the OOS design column (nrow(df)).
     weights = [vec(Array(chain[Symbol("$(covariate_name(c)).w")])) for c in model.covariates]
@@ -433,10 +492,8 @@ function CB_PG.extract_parameters(model::ComposableCountModel,
         h_idx = get(team_map, row.home_team, 0)
         a_idx = get(team_map, row.away_team, 0)
 
-        α_h = h_idx > 0 ? dyn_nt.α[:, h_idx] : zeros(n_samples)
-        β_h = h_idx > 0 ? dyn_nt.β[:, h_idx] : zeros(n_samples)
-        α_a = a_idx > 0 ? dyn_nt.α[:, a_idx] : zeros(n_samples)
-        β_a = a_idx > 0 ? dyn_nt.β[:, a_idx] : zeros(n_samples)
+        effects = _cb_oos_dynamics(model.dynamics, dyn_nt, lineup_map, mid,
+                                    h_idx, a_idx, n_samples)
         γ_h = global_ha ? ha_mat[:, 1] : (h_idx > 0 ? ha_mat[:, h_idx] : zeros(n_samples))
 
         s_idx = hasproperty(row, :season_idx) ? Int(row.season_idx) : n_seasons
@@ -450,8 +507,10 @@ function CB_PG.extract_parameters(model::ComposableCountModel,
             q_a .+= qa
         end
 
-        η_h = apply_guard(model.guard, base .+ γ_h .+ α_h .+ β_a .+ q_h)
-        η_a = apply_guard(model.guard, base .+       α_a .+ β_h .+ q_a)
+        η_h = apply_guard(model.guard,
+                          base .+ γ_h .+ effects.att_h .+ effects.def_a .+ q_h)
+        η_a = apply_guard(model.guard,
+                          base .+       effects.att_a .+ effects.def_h .+ q_a)
         λ_h = exp.(η_h)
         λ_a = exp.(η_a)
 
