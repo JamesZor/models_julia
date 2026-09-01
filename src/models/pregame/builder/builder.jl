@@ -129,13 +129,13 @@ mutable struct CountModelBuilder
     home_advantage::Union{Nothing, CB_PG.AbstractHomeAdvantageConfig}
     observation::Union{Nothing, AbstractObservationConfig}
     guard::Union{Nothing, AbstractRateGuard}
-    covariates::Vector{AbstractCovariateConfig}
+    covariates::Vector{AbstractPredictorTerm}
     provenance::Vector{String}
 end
 
 CountModelBuilder(kind::Symbol = :scottish_count) =
     CountModelBuilder(kind, nothing, nothing, nothing, nothing, nothing,
-                      AbstractCovariateConfig[], String[])
+                      AbstractPredictorTerm[], String[])
 
 function Base.show(io::IO, b::CountModelBuilder)
     slot(x) = x === nothing ? "—" : string(nameof(typeof(x)))
@@ -147,8 +147,8 @@ function Base.show(io::IO, b::CountModelBuilder)
               "— (defaults to PoissonObservation)" : slot(b.observation))
     print(io, "\n  rate guard     : ", b.guard === nothing ?
               "— (defaults to ClampGuard)" : guard_describe(b.guard))
-    print(io, "\n  covariates     : ", isempty(b.covariates) ? "none" :
-              join(string.(covariate_name.(b.covariates)), ", "))
+    print(io, "\n  predictors     : ", isempty(b.covariates) ? "none" :
+              join(string.(predictor_name.(b.covariates)), ", "))
 end
 
 
@@ -182,9 +182,9 @@ add!(b::CountModelBuilder, c::CB_PG.AbstractDispersionConfig) = add!(b, Negative
 add!(b::CountModelBuilder, c::CB_PG.AbstractDixonColesConfig) = add!(b, DixonColesCorrelation(c))
 add!(b::CountModelBuilder, c::CB_PG.AbstractCopulaConfig)     = add!(b, FrankCopulaCorrelation(c))
 
-function add!(b::CountModelBuilder, c::AbstractCovariateConfig)
+function add!(b::CountModelBuilder, c::AbstractPredictorTerm)
     push!(b.covariates, c)
-    push!(b.provenance, "add! covariate  $(covariate_name(c)) :: $(nameof(typeof(c)))")
+    push!(b.provenance, "add! predictor  $(predictor_name(c)) :: $(nameof(typeof(c)))")
     return b
 end
 
@@ -201,7 +201,7 @@ add!(b::CountModelBuilder, c) = error(
     "  Components are routed by ABSTRACT supertype. Accepted families:\n" *
     "    AbstractInterceptionConfig, AbstractDynamicsConfig, AbstractHomeAdvantageConfig,\n" *
     "    AbstractObservationConfig (or a raw AbstractDispersionConfig / AbstractDixonColesConfig /\n" *
-    "    AbstractCopulaConfig), AbstractRateGuard, AbstractCovariateConfig.\n" *
+    "    AbstractCopulaConfig), AbstractRateGuard, AbstractPredictorTerm.\n" *
     "  To add a new family, write one `add!` method — see builder/builder.jl §3.")
 
 """
@@ -289,7 +289,7 @@ _cb_interception_supported(::Union{
 
 _cb_dynamics_supported(::CB_PG.AbstractDynamicsConfig) = false
 _cb_dynamics_supported(::Union{
-    CB_PG.TimeDecayDynamics,CB_PG.StaticZeroDynamics,PlayerLineupDynamics,
+    CB_PG.TimeDecayDynamics,CB_PG.StaticZeroDynamics,
 }) = true
 
 _cb_home_advantage_supported(::CB_PG.AbstractHomeAdvantageConfig) = false
@@ -352,25 +352,32 @@ function validate(b::CountModelBuilder)
     push!(out, cb_result("dynamics likelihood weighting is valid",
         valid_weighting, weighting_detail))
 
-    player_priors_valid = !(dyn isa PlayerLineupDynamics) ||
-        (dyn.w_att_prior isa ContinuousUnivariateDistribution &&
-         dyn.w_def_prior isa ContinuousUnivariateDistribution &&
-         (dyn.w_bench_prior === nothing ||
-          dyn.w_bench_prior isa ContinuousUnivariateDistribution))
+    lineup_terms = [t for t in b.covariates if t isa PlayerLineupPillar]
+    lineup_count_valid = length(lineup_terms) <= 1
+    push!(out, cb_result("at most one player-lineup pillar", lineup_count_valid,
+        lineup_count_valid ? "$(length(lineup_terms)) lineup pillar(s)" :
+        "multiple lineup pillars share one feature bridge; configure at most one"))
+
+    player_priors_valid = all(t ->
+        t.w_att_prior isa ContinuousUnivariateDistribution &&
+        t.w_def_prior isa ContinuousUnivariateDistribution &&
+        (t.w_bench_prior === nothing ||
+         t.w_bench_prior isa ContinuousUnivariateDistribution), lineup_terms)
     push!(out, cb_result("player-lineup priors are continuous univariate",
         player_priors_valid,
-        !(dyn isa PlayerLineupDynamics) ? "not player-lineup dynamics" :
+        isempty(lineup_terms) ? "no player-lineup pillar" :
         player_priors_valid ? "attack, defence, and optional bench priors are valid" :
         "w_att_prior, w_def_prior, and optional w_bench_prior must be continuous univariate"))
 
-    bench_weight_valid = !(dyn isa PlayerLineupDynamics) ||
-        !(dyn.aggregation isa BenchWeightedPlayerAggregation) ||
-        (isfinite(dyn.aggregation.w_bench) && 0.0 <= dyn.aggregation.w_bench <= 1.0)
+    bench_weight_valid = all(t ->
+        !(t.aggregation isa BenchWeightedPlayerAggregation) ||
+        (isfinite(t.aggregation.w_bench) && 0.0 <= t.aggregation.w_bench <= 1.0),
+        lineup_terms)
     push!(out, cb_result("fixed bench weight is in [0, 1]",
         bench_weight_valid,
-        !(dyn isa PlayerLineupDynamics) ? "not player-lineup dynamics" :
-        dyn.aggregation isa BenchWeightedPlayerAggregation ?
-            "w_bench = $(dyn.aggregation.w_bench)" : "aggregation has no configurable fixed weight"))
+        isempty(lineup_terms) ? "no player-lineup pillar" :
+        bench_weight_valid ? "all fixed bench weights are in [0, 1]" :
+        "a fixed bench weight is outside [0, 1]"))
 
     # --- R5: the observation family must actually have an engine method --------
     push!(out, cb_result("observation is wired", observation_wired(obs),
@@ -431,7 +438,7 @@ function validate(b::CountModelBuilder)
     names = Symbol[]
     dup_ok = true
     for c in b.covariates
-        n = covariate_name(c)
+        n = predictor_name(c)
         n in names && (dup_ok = false)
         push!(names, n)
     end
@@ -458,6 +465,7 @@ function validate(b::CountModelBuilder)
     # FeatureSet, so its presence is checked by method lookup instead.
     incomplete = String[]
     for c in b.covariates
+        c isa AbstractCovariateConfig || continue
         for hook in (covariate_name, covariate_role, covariate_prior, covariate_features)
             try
                 hook(c)
@@ -477,6 +485,7 @@ function validate(b::CountModelBuilder)
     # --- R10: priors on covariate weights are univariate continuous -----------
     bad_prior = String[]
     for c in b.covariates
+        c isa AbstractCovariateConfig || continue
         p = try covariate_prior(c) catch; nothing end
         (p isa ContinuousUnivariateDistribution) ||
             push!(bad_prior, String(covariate_name(c)))
@@ -489,10 +498,10 @@ function validate(b::CountModelBuilder)
     # A covariate whose design vector comes from nowhere is a covariate whose
     # design vector is all zeros, and an all-zero column samples its prior and
     # reports it as a posterior.
-    featureless = [String(covariate_name(c)) for c in b.covariates
-                   if isempty(try covariate_features(c) catch; [] end)]
-    push!(out, cb_result("covariates declare features", isempty(featureless),
-        isempty(featureless) ? "$(sum(length(covariate_features(c)) for c in b.covariates; init=0)) feature config(s) contributed" :
+    featureless = [String(predictor_name(c)) for c in b.covariates
+                   if isempty(try predictor_features(c) catch; [] end)]
+    push!(out, cb_result("predictors declare features", isempty(featureless),
+        isempty(featureless) ? "$(sum(length(predictor_features(c)) for c in b.covariates; init=0)) feature config(s) contributed" :
         "declare no features: $(join(featureless, ", "))"))
 
     return out
@@ -543,11 +552,17 @@ build(b::CountModelBuilder) = build_count_model(b)
 # whole point: a new covariate changes these answers without any of these
 # functions being touched.
 
-"The covariate configs, in parameter-layout order."
-cb_covariates(m::ComposableCountModel) = m.covariates
+"All predictor terms, in parameter-layout order."
+cb_predictor_terms(m::ComposableCountModel) = m.covariates
 
-"Covariate site names, in parameter-layout order."
-cb_covariate_names(m::ComposableCountModel) = map(covariate_name, m.covariates)
+"The ordinary scalar covariates, retained as a compatibility view."
+cb_covariates(m::ComposableCountModel) = Tuple(t for t in m.covariates if t isa AbstractCovariateConfig)
+
+"Predictor names, in parameter-layout order."
+cb_predictor_names(m::ComposableCountModel) = map(predictor_name, m.covariates)
+
+"Ordinary covariate names, in parameter-layout order."
+cb_covariate_names(m::ComposableCountModel) = map(covariate_name, cb_covariates(m))
 
 """
     cb_varinfo_sites(model) -> Vector{Symbol}
@@ -560,8 +575,8 @@ function cb_varinfo_sites(m::ComposableCountModel)
     append!(sites, _sites_interception(m.interception))
     append!(sites, _sites_home_advantage(m.home_advantage))
     append!(sites, _sites_dynamics(m.dynamics))
-    for c in m.covariates
-        push!(sites, Symbol(covariate_name(c), ".w"))
+    for term in m.covariates
+        append!(sites, predictor_sites(term))
     end
     append!(sites, _sites_observation(m.observation))
     return sites
@@ -578,20 +593,6 @@ _sites_home_advantage(::CB_PG.HierarchicalTeamHomeAdvantage)    =
 _sites_dynamics(::CB_PG.TimeDecayDynamics)  =
     [Symbol("dyn.σ_a"), Symbol("dyn.σ_d"), Symbol("dyn.raw_a"), Symbol("dyn.raw_d")]
 _sites_dynamics(::CB_PG.StaticZeroDynamics) = Symbol[]
-_sites_dynamics(::PlayerLineupDynamics{<:Any,<:Union{
-    OutfieldPlayerAggregation,MinuteWeightedPlayerAggregation,
-}}) = [Symbol("dyn.w_att"), Symbol("dyn.w_def")]
-function _sites_dynamics(config::PlayerLineupDynamics{<:Any,<:BenchWeightedPlayerAggregation})
-    sites = [Symbol("dyn.w_att"), Symbol("dyn.w_def")]
-    config.w_bench_prior === nothing || push!(sites, Symbol("dyn.w_bench"))
-    return sites
-end
-function _sites_dynamics(config::PlayerLineupDynamics{<:Any,<:PositionalPlayerAggregation})
-    sites = [Symbol("dyn.w_att_F"), Symbol("dyn.w_att_M"),
-             Symbol("dyn.w_def_D"), Symbol("dyn.w_def_M")]
-    config.w_bench_prior === nothing || push!(sites, Symbol("dyn.w_bench"))
-    return sites
-end
 
 _sites_observation(::PoissonObservation) = Symbol[]
 # Declaration order inside `_joint_gamma_poisson_params`, which is the θ layout.
@@ -656,9 +657,9 @@ cb_parameter_count(m::ComposableCountModel, n_teams::Int, n_seasons::Int) =
 
 function Base.show(io::IO, m::ComposableCountModel)
     fam = string(nameof(typeof(m.observation)))
-    covs = isempty(m.covariates) ? "none" : join(string.(cb_covariate_names(m)), " + ")
+    covs = isempty(m.covariates) ? "none" : join(string.(cb_predictor_names(m)), " + ")
     print(io, nameof(typeof(m)), "(", fam, "; ",
           nameof(typeof(m.interception)), " + ", nameof(typeof(m.home_advantage)), " + ",
-          nameof(typeof(m.dynamics)), "; covariates: ", covs,
+          nameof(typeof(m.dynamics)), "; predictors: ", covs,
           "; guard: ", nameof(typeof(m.guard)), ")")
 end

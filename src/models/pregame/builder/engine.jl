@@ -12,18 +12,19 @@
 #
 # HOW IT STAYS FAST  (docs/turing_ad_performance_guide.md)
 #
-#   The covariate set is a TYPED TUPLE on the model object, so
-#   `_cov_block(::Tuple{A,B}, ...)` recurses through `Base.tail` and Julia unrolls
-#   it at compile time into straight-line code. There is no runtime loop over
-#   covariates, no runtime branch, and no `Vector{AbstractCovariateConfig}`
+#   The predictor set is a TYPED TUPLE on the model object, so
+#   `_predictor_block(::Tuple{A,B}, ...)` recurses through `Base.tail` and Julia
+#   unrolls it at compile time into straight-line code. There is no runtime loop
+#   over predictors, no runtime branch, and no `Vector{AbstractPredictorTerm}`
 #   dispatch inside `@model` — the tape sees exactly the same instruction sequence
 #   a hand-written engine would emit.
 #
-#   The zero-covariate case returns `nothing`, and `_cov_shift(η, ::Nothing) = η`
-#   dispatches the addition away entirely. A model with no covariates therefore
+#   The zero-predictor case returns `nothing`, and
+#   `_predictor_shift(η, ::Nothing) = η` dispatches the addition away entirely.
+#   A model with no predictors therefore
 #   records a tape IDENTICAL to the baseline engine's — composition costs nothing
 #   when you compose nothing. (Returning `zeros(n)` instead would have added two
-#   broadcast nodes per gradient, forever, to every model that uses no covariates.)
+#   broadcast nodes per gradient, forever, to every model that uses no predictors.)
 #
 #   Everything conditional lives in `build_turing_model`: log-factorials, decay
 #   weights, design-vector validation, type casting. Inside `@model` there is only
@@ -43,7 +44,7 @@
 # ==============================================================================
 #
 # Not written per model. The structural block is fixed by the linear predictor;
-# the rest is whatever the assembled covariates ask for. Add a covariate and this
+# the rest is whatever the assembled predictors ask for. Add a term and this
 # function's answer changes without this function changing.
 
 "The features every composable count model needs, whatever else is bolted on."
@@ -58,8 +59,8 @@ const CB_STRUCTURAL_FEATURES = (
 function CB_Features.required_features(model::ComposableCountModel)
     out = CB_Features.AbstractFeatureConfig[T() for T in CB_STRUCTURAL_FEATURES]
     append!(out, dynamics_features(model.dynamics))
-    for c in model.covariates
-        append!(out, covariate_features(c))
+    for term in model.covariates
+        append!(out, predictor_features(term))
     end
     # An observation with its own data channel — the joint model's proxy-xG arm is the first —
     # declares it the same way a covariate does. Poisson and NegBin contribute nothing here.
@@ -69,7 +70,7 @@ end
 
 
 # ==============================================================================
-# 2. THE COVARIATE BLOCK  (compile-time unrolled)
+# 2. THE PREDICTOR BLOCK  (compile-time unrolled)
 # ==============================================================================
 
 """
@@ -77,40 +78,51 @@ One covariate: sample its scalar weight, return its signed contribution to each
 side. The site is named `w`; the caller prefixes it with the covariate's own name,
 so the chain carries `wealth.w`, `distance.w`, … derived from the components.
 """
-@model function _cov_term(c::AbstractCovariateConfig, x::Vector{Float64})
+@model function _predictor_term(c::AbstractCovariateConfig, x::Vector{Float64})
     w ~ covariate_prior(c)
     q = w .* x
     h, a = covariate_sides(covariate_role(c), q)
     return (; h, a)
 end
 
+@model function _predictor_term(c::PlayerLineupPillar,
+                                design::AbstractPlayerLineupDesign)
+    effects ~ to_submodel(_player_lineup_term(c, design), false)
+    return effects
+end
+
 """
-The unrolled walk over the covariate tuple.
+The unrolled walk over the predictor tuple.
 
 `to_submodel(..., false)` suppresses DynamicPPL's automatic left-hand-side
 prefixing so that the explicit `prefix(..., Val(name))` is the ONLY prefix a
-covariate site carries; without it the recursion would nest names
-(`head.head.head.w`) and the chain schema would depend on how many covariates
+predictor site carries; without it the recursion would nest names
+(`head.head.head.w`) and the chain schema would depend on how many predictors
 happened to precede this one.
 """
-@model function _cov_block(cs::Tuple, xs::Tuple, n::Int)
+@model function _predictor_block(terms::Tuple, designs::Tuple, n::Int)
     head ~ to_submodel(
-        DynamicPPL.prefix(_cov_term(first(cs), first(xs)), Val(covariate_name(first(cs)))),
+        DynamicPPL.prefix(
+            _predictor_term(first(terms), first(designs)),
+            Val(predictor_name(first(terms))),
+        ),
         false)
-    rest ~ to_submodel(_cov_block(Base.tail(cs), Base.tail(xs), n), false)
-    return (; h = _cov_acc(head.h, rest.h), a = _cov_acc(head.a, rest.a))
+    rest ~ to_submodel(
+        _predictor_block(Base.tail(terms), Base.tail(designs), n), false)
+    return (; h = _predictor_acc(head.h, rest.h),
+              a = _predictor_acc(head.a, rest.a))
 end
 
-"Base case: no covariates, no site, no tape node. `nothing` is a structural zero."
-@model function _cov_block(cs::Tuple{}, xs::Tuple{}, n::Int)
+"Base case: no predictors, no site, no tape node. `nothing` is a structural zero."
+@model function _predictor_block(::Tuple{}, ::Tuple{}, n::Int)
     return (; h = nothing, a = nothing)
 end
 
 # Dispatch, not a branch: resolved from the type at compile time.
-_cov_acc(x, ::Nothing) = x
-_cov_acc(x, y)         = x .+ y
-_cov_shift(η, ::Nothing) = η
-_cov_shift(η, q)         = η .+ q
+_predictor_acc(x, ::Nothing) = x
+_predictor_acc(x, y)         = x .+ y
+_predictor_shift(η, ::Nothing) = η
+_predictor_shift(η, q)         = η .+ q
 
 
 # ==============================================================================
@@ -267,7 +279,7 @@ end
 # r01_demo.jl §7 checks that the clamp never binds at the draws it compares, which
 # is what makes the two settings the same function there.
 #
-# Declaration order is inter → ha → dyn → covariates → observation, matching
+# Declaration order is inter → ha → dyn → predictors → observation, matching
 # `_engw`/`_engd`/`_engj` exactly, so the θ vector this model produces is
 # element-for-element the θ vector the hand-written arms produce.
 
@@ -282,22 +294,13 @@ end
     )
 end
 
-@model function _cb_dynamics_effects(
-    config::PlayerLineupDynamics,
-    home_ids::Vector{Int}, away_ids::Vector{Int},
-    design::AbstractPlayerLineupDesign, n_teams::Int,
-)
-    effects ~ to_submodel(_player_lineup_effects(config, design), false)
-    return effects
-end
-
 @model function composable_count_engine(
     home_ids::Vector{Int}, away_ids::Vector{Int},
     season_ids::Vector{Int}, month_ids::Vector{Int},
     home_goals::Vector{Int}, away_goals::Vector{Int},
     match_weights::Vector{Float64},
     dynamics_data,
-    covariate_columns::Tuple,
+    predictor_designs::Tuple,
     log_fact_h::Vector{Float64}, log_fact_a::Vector{Float64},
     observation_data,
     n_matches::Int, n_teams::Int, n_seasons::Int, n_months::Int,
@@ -309,8 +312,9 @@ end
     dyn   ~ to_submodel(_cb_dynamics_effects(
         config.dynamics, home_ids, away_ids, dynamics_data, n_teams))
 
-    # --- 2. COVARIATES (unrolled over the typed tuple) ------------------------
-    cov ~ to_submodel(_cov_block(config.covariates, covariate_columns, n_matches), false)
+    # --- 2. PREDICTORS (unrolled over the typed tuple) ------------------------
+    pred ~ to_submodel(
+        _predictor_block(config.covariates, predictor_designs, n_matches), false)
 
     # --- 3. LOG-INTENSITIES ---------------------------------------------------
     # `A[idx]`, NOT `view(A, idx)`. The AD guide's Rule 4 says the opposite and is
@@ -322,11 +326,11 @@ end
     base = inter.μ_base[season_ids] .+ inter.δ_month[month_ids]
 
     η_h = apply_guard(config.guard,
-                      _cov_shift(base .+ ha[home_ids] .+
-                                 dyn.att_h .+ dyn.def_a, cov.h))
+                      _predictor_shift(base .+ ha[home_ids] .+
+                                       dyn.att_h .+ dyn.def_a, pred.h))
     η_a = apply_guard(config.guard,
-                      _cov_shift(base .+
-                                 dyn.att_a .+ dyn.def_h, cov.a))
+                      _predictor_shift(base .+
+                                       dyn.att_a .+ dyn.def_h, pred.a))
 
     # --- 4. OBSERVATION -------------------------------------------------------
     ll ~ to_submodel(_observe(config.observation, η_h, η_a, home_goals, away_goals,
@@ -345,7 +349,7 @@ end
     cb_design(model, feature_set) -> NamedTuple
 
 Every vector the engine consumes, cast to a concrete type, checked, and — for the
-covariates — assembled into a Tuple whose TYPE encodes how many there are. This is
+predictors — assembled into a Tuple whose TYPE encodes how many there are. This is
 the only place that touches the `FeatureSet`.
 
 The checks are not defensive padding. A covariate column of the wrong length is a
@@ -363,9 +367,8 @@ function cb_design(model::ComposableCountModel, feature_set)
     away_goals = Vector{Int}(d[:flat_away_goals])
     n_matches  = length(home_ids)
 
-    # Team dynamics retain their configured exponential decay. Pure lineup dynamics
-    # uses uniform weights: its ratings are already point-in-time and its config contains
-    # no hidden half-life modelling decision.
+    # The structural team dynamics exclusively own likelihood recency. A lineup
+    # pillar is a point-in-time predictor and cannot alter this clock.
     match_weights = dynamics_match_weights(
         model.dynamics, Vector{Float64}(d[:dates]))
 
@@ -375,9 +378,10 @@ function cb_design(model::ComposableCountModel, feature_set)
 
     dynamics_data = dynamics_design(model.dynamics, feature_set, n_matches)
 
-    # `map` over a Tuple returns a Tuple, so the covariate columns arrive at the
-    # engine with their count baked into the type.
-    covariate_columns = map(c -> _cb_checked_column(c, feature_set, n_matches), model.covariates)
+    # `map` over a Tuple returns a Tuple, so predictor count and design types are
+    # baked into the engine specialization and the recursion is compile-time unrolled.
+    predictor_designs = map(
+        term -> predictor_design(term, feature_set, n_matches), model.covariates)
 
     for (name, v) in (("home_ids", home_ids), ("away_ids", away_ids),
                       ("season_ids", season_ids), ("month_ids", month_ids),
@@ -393,21 +397,9 @@ function cb_design(model::ComposableCountModel, feature_set)
     observation_data = observation_design(model.observation, feature_set, n_matches, match_weights)
 
     return (; home_ids, away_ids, season_ids, month_ids, home_goals, away_goals,
-              match_weights, dynamics_data, covariate_columns, log_fact_h, log_fact_a, observation_data,
+              match_weights, dynamics_data, predictor_designs, log_fact_h, log_fact_a, observation_data,
               n_matches, n_teams = Int(d[:n_teams]), n_seasons = Int(d[:n_seasons]),
               n_months = 12)
-end
-
-function _cb_checked_column(c::AbstractCovariateConfig, feature_set, n_matches::Int)
-    x = covariate_column(c, feature_set)
-    x isa Vector{Float64} ||
-        error("covariate_column($(nameof(typeof(c)))) must return Vector{Float64}, got $(typeof(x))")
-    length(x) == n_matches ||
-        error("covariate $(covariate_name(c)) column has length $(length(x)); expected $n_matches")
-    all(isfinite, x) ||
-        error("covariate $(covariate_name(c)) column has non-finite entries; " *
-              "an absent value must be imputed to 0.0 by the feature extractor")
-    return x
 end
 
 function CB_PG.build_turing_model(model::ComposableCountModel, feature_set)
@@ -415,7 +407,7 @@ function CB_PG.build_turing_model(model::ComposableCountModel, feature_set)
     return composable_count_engine(
         z.home_ids, z.away_ids, z.season_ids, z.month_ids,
         z.home_goals, z.away_goals, z.match_weights,
-        z.dynamics_data, z.covariate_columns, z.log_fact_h, z.log_fact_a, z.observation_data,
+        z.dynamics_data, z.predictor_designs, z.log_fact_h, z.log_fact_a, z.observation_data,
         z.n_matches, z.n_teams, z.n_seasons, z.n_months,
         model,
     )
@@ -437,11 +429,6 @@ function _cb_extract_dynamics(chain::Chains,
     return CB_PG.extract_dynamics(chain, config, prefix, n_teams)
 end
 
-function _cb_extract_dynamics(chain::Chains, config::PlayerLineupDynamics,
-                              prefix::String, n_teams::Int)
-    return extract_player_dynamics(chain, config, prefix)
-end
-
 function _cb_oos_dynamics(
     config::Union{CB_PG.TimeDecayDynamics,CB_PG.StaticZeroDynamics}, draw,
     lineup_map, match_id::Int, home_index::Int, away_index::Int, n_samples::Int,
@@ -452,13 +439,6 @@ function _cb_oos_dynamics(
         att_a = away_index > 0 ? draw.α[:, away_index] : zeros(n_samples),
         def_h = home_index > 0 ? draw.β[:, home_index] : zeros(n_samples),
     )
-end
-
-function _cb_oos_dynamics(config::PlayerLineupDynamics, draw, lineup_map,
-                          match_id::Int, home_index::Int, away_index::Int,
-                          n_samples::Int)
-    value = get(lineup_map, match_id, _player_neutral_aggregate())
-    return player_oos_effects(config.aggregation, draw, value)
 end
 
 function CB_PG.extract_parameters(model::ComposableCountModel,
@@ -477,23 +457,29 @@ function CB_PG.extract_parameters(model::ComposableCountModel,
     lineup_map = get(d, :player_lineup_ratings_map,
                      Dict{Int,CB_Features.PMLineupAggregate}())
 
-    # Per covariate: the posterior weight (n_samples) and the OOS design column (nrow(df)).
-    weights = [vec(Array(chain[Symbol("$(covariate_name(c)).w")])) for c in model.covariates]
-    columns = [_cb_checked_oos(c, feature_set, df) for c in model.covariates]
-    roles   = [covariate_role(c) for c in model.covariates]
+    # Team and predictor posterior blocks are reconstructed independently. In
+    # particular, a missing lineup bridge entry cannot erase dyn.α/dyn.β.
+    predictor_draws = [
+        predictor_extract(chain, term, String(predictor_name(term)))
+        for term in model.covariates
+    ]
+    predictor_sources = [
+        _cb_predictor_oos_source(term, feature_set, df, lineup_map)
+        for term in model.covariates
+    ]
 
     disp_nt = _cb_extract_observation(model.observation, chain, n_teams)
 
     global_ha = model.home_advantage isa CB_PG.GlobalHomeAdvantage
     results = Dict{Int, NamedTuple}()
 
-    for (i, row) in enumerate(eachrow(df))
+    for row in eachrow(df)
         mid   = Int(row.match_id)
         h_idx = get(team_map, row.home_team, 0)
         a_idx = get(team_map, row.away_team, 0)
 
-        effects = _cb_oos_dynamics(model.dynamics, dyn_nt, lineup_map, mid,
-                                    h_idx, a_idx, n_samples)
+        team_effects = _cb_oos_dynamics(model.dynamics, dyn_nt, lineup_map, mid,
+                                         h_idx, a_idx, n_samples)
         γ_h = global_ha ? ha_mat[:, 1] : (h_idx > 0 ? ha_mat[:, h_idx] : zeros(n_samples))
 
         s_idx = hasproperty(row, :season_idx) ? Int(row.season_idx) : n_seasons
@@ -501,16 +487,17 @@ function CB_PG.extract_parameters(model::ComposableCountModel,
 
         q_h = zeros(n_samples)
         q_a = zeros(n_samples)
-        for k in eachindex(weights)
-            qh, qa = covariate_sides(roles[k], weights[k] .* columns[k][i])
-            q_h .+= qh
-            q_a .+= qa
+        for k in eachindex(model.covariates)
+            q = predictor_oos(
+                model.covariates[k], predictor_draws[k], predictor_sources[k], row)
+            q_h .+= q.h
+            q_a .+= q.a
         end
 
         η_h = apply_guard(model.guard,
-                          base .+ γ_h .+ effects.att_h .+ effects.def_a .+ q_h)
+                          base .+ γ_h .+ team_effects.att_h .+ team_effects.def_a .+ q_h)
         η_a = apply_guard(model.guard,
-                          base .+       effects.att_a .+ effects.def_h .+ q_a)
+                          base .+       team_effects.att_a .+ team_effects.def_h .+ q_a)
         λ_h = exp.(η_h)
         λ_a = exp.(η_a)
 
@@ -518,6 +505,12 @@ function CB_PG.extract_parameters(model::ComposableCountModel,
                                  Dates.month(row.match_date))
     end
     return results
+end
+
+_cb_predictor_oos_source(::PlayerLineupPillar, feature_set, df, lineup_map) = lineup_map
+function _cb_predictor_oos_source(c::AbstractCovariateConfig, feature_set, df, lineup_map)
+    values = _cb_checked_oos(c, feature_set, df)
+    return Dict(Int(row.match_id) => values[i] for (i, row) in enumerate(eachrow(df)))
 end
 
 function _cb_checked_oos(c::AbstractCovariateConfig, feature_set, df)

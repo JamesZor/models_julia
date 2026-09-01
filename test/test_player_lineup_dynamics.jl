@@ -51,6 +51,9 @@ function pld_feature_set(n::Int=12)
         :flat_pxg_home => fill(1.4, n),
         :flat_pxg_away => fill(1.1, n),
         :flat_pxg_obs_available => ones(Float64, n),
+        :flat_delta_production_wealth => zeros(Float64, n),
+        :production_wealth_oos_bridge_by_match_id => Dict{Int,Float64}(),
+        :flat_distance => zeros(Float64, n),
     ))
 end
 
@@ -58,8 +61,13 @@ function pld_model(aggregation, observation=PoissonObservation(); bench_prior=no
     return build_count_model(
         :player_lineup_test,
         GlobalInterception(μ=Normal(0.2, 0.1)),
+        TimeDecayDynamics(
+            days_half_life=180.0,
+            σ_att=Gamma(2.0, 0.15),
+            σ_def=Gamma(2.0, 0.15),
+        ),
         GlobalHomeAdvantage(γ_global=Normal(0.2, 0.2)),
-        PlayerLineupDynamics(
+        PlayerLineupPillar(
             feature=PLD_F.XGPlusMinusFeature(),
             aggregation=aggregation,
             w_att_prior=Normal(0.0, 0.3),
@@ -70,6 +78,37 @@ function pld_model(aggregation, observation=PoissonObservation(); bench_prior=no
         ClampGuard(),
     )
 end
+
+function pld_joint_contract_models()
+    base() = (
+        GlobalInterception(μ=Normal(0.2, 0.1)),
+        TimeDecayDynamics(days_half_life=180.0),
+        GlobalHomeAdvantage(γ_global=Normal(0.2, 0.2)),
+    )
+    lineup() = PlayerLineupPillar(
+        feature=PLD_F.XGPlusMinusFeature(),
+        aggregation=OutfieldPlayerAggregation(),
+    )
+    wealth() = ProductionWealthCovariate()
+    distance() = DistanceCovariate()
+    observation() = JointGammaPoissonObservation()
+    return Dict(
+        :m05 => build_count_model(:m05, base()..., wealth(), observation()),
+        :m09 => build_count_model(:m09, base()..., lineup(), observation()),
+        :m10 => build_count_model(:m10, base()..., lineup(), observation()),
+        :m11 => build_count_model(:m11, base()..., lineup(), observation()),
+        :m12 => build_count_model(:m12, base()..., lineup(), wealth(), observation()),
+        :m13 => build_count_model(
+            :m13, base()..., lineup(), wealth(), distance(), observation()),
+    )
+end
+
+pld_expected_params(name::Symbol, n_teams::Int) =
+    name === :m05 ? 2 * n_teams + 7 :
+    name in (:m09, :m10, :m11) ? 2 * n_teams + 8 :
+    name === :m12 ? 2 * n_teams + 9 :
+    name === :m13 ? 2 * n_teams + 10 :
+    error("no structural parameter contract for $name")
 
 function pld_density(model, fs; seed=711)
     turing_model = PLD_PG.build_turing_model(model, fs)
@@ -127,9 +166,10 @@ end
     for strategy in strategies
         model = pld_model(strategy)
         @test model isa PoissonCountModel
-        @test model.dynamics isa PlayerLineupDynamics
+        @test model.dynamics isa TimeDecayDynamics
+        @test first(cb_predictor_terms(model)) isa PlayerLineupPillar
         @test any(f -> f isa PLD_F.XGPlusMinusFeature, PLD_F.required_features(model))
-        design = @inferred PLD_API.dynamics_design(model.dynamics, fs, 12)
+        design = @inferred predictor_design(first(cb_predictor_terms(model)), fs, 12)
         @test design isa PLD_API.AbstractPlayerLineupDesign
         artifacts = pld_density(model, fs)
         @test isfinite(artifacts.f(artifacts.theta))
@@ -140,7 +180,39 @@ end
         PoissonObservation();
         bench_prior=truncated(Normal(0.25, 0.10), 0.0, 1.0),
     )
-    @test Symbol("dyn.w_bench") in cb_varinfo_sites(learned_bench)
+    @test Symbol("lineup.w_bench") in cb_varinfo_sites(learned_bench)
+end
+
+@testset "Hybrid structural model contract" begin
+    n_teams = 14
+    models = pld_joint_contract_models()
+    team_sites = Set(Symbol.(("dyn.raw_a", "dyn.raw_d", "dyn.σ_a", "dyn.σ_d")))
+    lineup_sites = Set(Symbol.(("lineup.w_att", "lineup.w_def")))
+
+    for (name, model) in models
+        n_params = cb_parameter_count(model, n_teams)
+        @test n_params == pld_expected_params(name, n_teams)
+        sites = Set(cb_varinfo_sites(model))
+        columns = Set(cb_chain_columns(model, n_teams))
+        @test team_sites ⊆ sites
+        @test "dyn.σ_a" in columns
+        @test "dyn.σ_d" in columns
+        @test "dyn.raw_a[1]" in columns
+        @test "dyn.raw_d[1]" in columns
+        if name !== :m05
+            @test lineup_sites ⊆ sites
+            @test "lineup.w_att" in columns
+            @test "lineup.w_def" in columns
+        end
+        if name in (:m05, :m12, :m13)
+            @test Symbol("production_wealth.w") in sites
+            @test "production_wealth.w" in columns
+        end
+    end
+
+    hybrid_design = PLD_API.cb_design(models[:m12], pld_feature_set(12))
+    @test hybrid_design.match_weights ==
+          0.5 .^ (collect(0.0:11.0) ./ 180.0)
 end
 
 @testset "Player lineup dynamics supports every wired observation" begin
@@ -171,17 +243,28 @@ end
     values = zeros(Float64, 3, length(columns), 1)
     values[:, findfirst(==("inter.μ"), columns), 1] .= 0.2
     values[:, findfirst(==("ha.γ_global"), columns), 1] .= 0.1
-    values[:, findfirst(==("dyn.w_att"), columns), 1] .= 0.25
-    values[:, findfirst(==("dyn.w_def"), columns), 1] .= 0.15
+    values[:, findfirst(==("dyn.σ_a"), columns), 1] .= 0.2
+    values[:, findfirst(==("dyn.σ_d"), columns), 1] .= 0.2
+    values[:, findfirst(==("dyn.raw_a[1]"), columns), 1] .= 1.0
+    values[:, findfirst(==("dyn.raw_a[2]"), columns), 1] .= -1.0
+    values[:, findfirst(==("lineup.w_att"), columns), 1] .= 0.25
+    values[:, findfirst(==("lineup.w_def"), columns), 1] .= 0.15
     chain = Chains(values, Symbol.(columns))
     fixtures = DataFrame(
-        match_id=[99], home_team=["home"], away_team=["away"],
-        match_date=[Date(2025, 1, 4)], season_idx=[1],
+        match_id=[99, 100, 101],
+        home_team=["home", "home", "away"],
+        away_team=["away", "away", "home"],
+        match_date=fill(Date(2025, 1, 4), 3),
+        season_idx=ones(Int, 3),
     )
-    extracted = PLD_PG.extract_parameters(model, fixtures, fs, chain)[99]
-    @test all(isfinite, extracted.λ_h)
-    @test all(isfinite, extracted.λ_a)
-    @test extracted.λ_h != extracted.λ_a
+    extracted = PLD_PG.extract_parameters(model, fixtures, fs, chain)
+    @test all(isfinite, extracted[99].λ_h)
+    @test all(isfinite, extracted[99].λ_a)
+    @test extracted[99].λ_h != extracted[99].λ_a
+
+    # 100 and 101 have identical neutral (missing) lineup inputs. Their rates
+    # must still differ because dyn.α/dyn.β preserve team identity OOS.
+    @test extracted[100].λ_h != extracted[101].λ_h
 end
 
 @testset "Player lineup ReverseDiff tape is fast and gradient-correct" begin
@@ -216,8 +299,8 @@ end
     model = pld_model(OutfieldPlayerAggregation())
     turing_model = PLD_PG.build_turing_model(model, pld_feature_set(24))
     chain = sample(turing_model, NUTS(5, 0.65), 12; progress=false)
-    w_att = vec(Array(chain[Symbol("dyn.w_att")]))
-    w_def = vec(Array(chain[Symbol("dyn.w_def")]))
+    w_att = vec(Array(chain[Symbol("lineup.w_att")]))
+    w_def = vec(Array(chain[Symbol("lineup.w_def")]))
     @test length(w_att) == 12
     @test length(w_def) == 12
     @test all(isfinite, w_att)

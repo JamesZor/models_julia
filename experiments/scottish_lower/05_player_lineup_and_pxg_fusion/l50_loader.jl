@@ -50,7 +50,7 @@ l50_production_wealth() = ProductionWealthCovariate(
     prior = truncated(Normal(0.10, 0.05), lower = 0.0),
 )
 
-l50_shots_dynamics(aggregation) = PlayerLineupDynamics(
+l50_shots_pillar(aggregation) = PlayerLineupPillar(
     feature = L50_FEATURES.ShotsPlusMinusFeature(
         w_sim = 0.0,
         λ = 1000.0,
@@ -62,7 +62,7 @@ l50_shots_dynamics(aggregation) = PlayerLineupDynamics(
     w_def_prior = Normal(0.0, 0.3),
 )
 
-l50_pxg_dynamics(aggregation) = PlayerLineupDynamics(
+l50_pxg_pillar(aggregation) = PlayerLineupPillar(
     feature = L50_FEATURES.XGPlusMinusFeature(
         w_sim = 0.0,
         λ = 200.0,
@@ -88,29 +88,33 @@ function l50_models()
 
     m09 = CountModelBuilder(:m09_player_shots_rapm_outfield) |>
         add(GlobalInterception()) |>
-        add(l50_shots_dynamics(OutfieldPlayerAggregation())) |>
+        add(TimeDecayDynamics(days_half_life = 180.0)) |>
         add(GlobalHomeAdvantage()) |>
+        add(l50_shots_pillar(OutfieldPlayerAggregation())) |>
         add(observation) |>
         build
 
     m10 = CountModelBuilder(:m10_player_shots_rapm_bench) |>
         add(GlobalInterception()) |>
-        add(l50_shots_dynamics(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
+        add(TimeDecayDynamics(days_half_life = 180.0)) |>
         add(GlobalHomeAdvantage()) |>
+        add(l50_shots_pillar(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
         add(observation) |>
         build
 
     m11 = CountModelBuilder(:m11_player_pxg_rapm_bench) |>
         add(GlobalInterception()) |>
-        add(l50_pxg_dynamics(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
+        add(TimeDecayDynamics(days_half_life = 180.0)) |>
         add(GlobalHomeAdvantage()) |>
+        add(l50_pxg_pillar(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
         add(observation) |>
         build
 
     m12 = CountModelBuilder(:m12_hybrid_production_wealth_player_rapm) |>
         add(GlobalInterception()) |>
-        add(l50_shots_dynamics(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
+        add(TimeDecayDynamics(days_half_life = 180.0)) |>
         add(GlobalHomeAdvantage()) |>
+        add(l50_shots_pillar(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
         add(l50_production_wealth()) |>
         add(observation) |>
         build

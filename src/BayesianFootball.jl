@@ -73,13 +73,16 @@ using .Models: AbstractPosteriorLatents, CountLatents, RecombLatents, SmileLaten
                ComposableCountModel, AbstractCovariateRole, SupremacyRole, LevelRole,
                AbstractPlayerAggregation, OutfieldPlayerAggregation,
                BenchWeightedPlayerAggregation, PositionalPlayerAggregation,
-               MinuteWeightedPlayerAggregation, PlayerLineupDynamics,
+               MinuteWeightedPlayerAggregation, PlayerLineupPillar,
+               PlayerLineupDynamics, AbstractPredictorTerm,
                AbstractCovariateConfig, LogSumWealthFeature,
                SLFPLogSumWealthFeature, AbstractAgeWeightingCurve,
                RichardsSigmoid, ShiftedGamma, GaussianPrime, age_weight,
                ProductionWealthFeature, WealthCovariate,
                ProductionWealthCovariate, BenchDepthCovariate, DistanceCovariate,
                PxGCovariate, LateGameChanceCovariate, PxGRapmCovariate,
+               predictor_name, predictor_features, predictor_design, predictor_sites,
+               predictor_extract, predictor_oos,
                covariate_name, covariate_role, covariate_prior, covariate_features,
                covariate_column, covariate_oos, covariate_sides,
                AbstractRateGuard, ClampGuard, NoGuard,
@@ -90,7 +93,8 @@ using .Models: AbstractPosteriorLatents, CountLatents, RecombLatents, SmileLaten
                 JointGammaPoissonObservation, JointGammaPoissonDesign,
                 observation_features, observation_design,
                 add!, add, replace!, validate,
-               build_count_model, build, cb_varinfo_sites, cb_chain_columns,
+               build_count_model, build, cb_predictor_terms, cb_predictor_names,
+               cb_covariates, cb_covariate_names, cb_varinfo_sites, cb_chain_columns,
                cb_parameter_count
 using .Models: GlobalInterception, SeasonalInterception, HierarchicalMonthlyInterception,
                GlobalHomeAdvantage, HierarchicalTeamHomeAdvantage, HierarchicalLeagueHomeAdvantage,
@@ -111,8 +115,9 @@ export CountModelBuilder, PoissonCountModel, NegBinCountModel, ComposableCountMo
 export AbstractCovariateRole, SupremacyRole, LevelRole
 export AbstractPlayerAggregation, OutfieldPlayerAggregation,
        BenchWeightedPlayerAggregation, PositionalPlayerAggregation,
-       MinuteWeightedPlayerAggregation, PlayerLineupDynamics
-export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
+       MinuteWeightedPlayerAggregation, PlayerLineupPillar, PlayerLineupDynamics
+export AbstractPredictorTerm, AbstractCovariateConfig,
+       LogSumWealthFeature, SLFPLogSumWealthFeature,
        AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
        age_weight, ProductionWealthFeature, WealthCovariate,
        ProductionWealthCovariate, BenchDepthCovariate, DistanceCovariate,
@@ -124,6 +129,8 @@ using .Features: BenchDepthFeature, PxGFeature, PxGRapmFeature, LateGameChanceFe
                  MatchProxyXGFeature
 export BenchDepthFeature, PxGFeature, PxGRapmFeature, LateGameChanceFeature,
        MatchProxyXGFeature
+export predictor_name, predictor_features, predictor_design, predictor_sites,
+       predictor_extract, predictor_oos
 export covariate_name, covariate_role, covariate_prior, covariate_features,
        covariate_column, covariate_oos, covariate_sides
 export AbstractRateGuard, ClampGuard, NoGuard
@@ -134,7 +141,8 @@ export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservatio
        JointGammaPoissonObservation, JointGammaPoissonDesign,
        observation_features, observation_design
 export add!, add, replace!, validate, build, build_count_model
-export cb_varinfo_sites, cb_chain_columns, cb_parameter_count
+export cb_predictor_terms, cb_predictor_names, cb_covariates,
+       cb_covariate_names, cb_varinfo_sites, cb_chain_columns, cb_parameter_count
 export GridWorkspace, SmileScoreGrid, alloc_score_grid, alloc_smile_buffers,
        alloc_market_book, compute_score_grid!, compute_score_grid,
        fill_smile_buffers!, price_market!, price_market, market_keys

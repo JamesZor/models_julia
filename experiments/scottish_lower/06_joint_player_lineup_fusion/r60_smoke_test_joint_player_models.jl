@@ -5,7 +5,7 @@
 #
 # CONTRACT
 #   Seven gates per candidate, all asserted through `@testset`:
-#     1. the compiled ReverseDiff gradient tape builds and replays under 0.1 ms;
+#     1. the compiled ReverseDiff gradient tape builds and replays under 0.05 ms;
 #     2. NUTS sampling completes with no crashed chain or fold;
 #     3. the six-part convergence audit passes;
 #     4. chain parameter extraction and held-out `CountLatents` succeed;
@@ -35,7 +35,9 @@ using UUIDs
 
 pinthreads(:cores)
 LinearAlgebra.BLAS.set_num_threads(1)
-Threads.nthreads() == 8 || error("r60 must run with `julia --project -t 8`; got $(Threads.nthreads()) threads")
+Threads.nthreads() in (8, 16) || error(
+    "r60 must run with `julia --project -t 8` locally or `-t 16` on mcmc-beast; " *
+    "got $(Threads.nthreads()) threads")
 
 include(joinpath(@__DIR__, "l60_loader.jl"))
 
@@ -57,7 +59,7 @@ const R60_THRESHOLDS = ConvergenceThresholds(
 
 # Gate 1's budget. The compiled tape is replayed many times per NUTS leapfrog step,
 # so this is the number that decides whether a 40-fold production grid is affordable.
-const R60_GRADIENT_BUDGET_MS = 0.10
+const R60_GRADIENT_BUDGET_MS = 0.05
 const R60_GRADIENT_REPLAYS = 200
 
 # CVConfig calls the historical-window field `history_seasons` in the installed API.
@@ -130,6 +132,57 @@ function r60_assert_gradient_tape(model, feature_set; seed::Int = 20260901)
     latency_ms = best_ns / 1.0e6
     @test latency_ms < R60_GRADIENT_BUDGET_MS
     return (; latency_ms, n_instructions = length(raw.tape), n_params = length(θ))
+end
+
+function r60_expected_params(name::String, n_teams::Int)
+    name == L60_MODEL_NAMES[1] && return 2 * n_teams + 7
+    name in L60_MODEL_NAMES[2:4] && return 2 * n_teams + 8
+    name == L60_MODEL_NAMES[5] && return 2 * n_teams + 9
+    name == L60_MODEL_NAMES[6] && return 2 * n_teams + 10
+    error("no structural parameter contract for $name")
+end
+
+function r60_assert_structural_contract(name, model, feature_set, chain, oos, n_params)
+    n_teams = Int(feature_set.data[:n_teams])
+    @test n_params == r60_expected_params(name, n_teams)
+    @test cb_parameter_count(model, n_teams) == n_params
+
+    grouped_sites = Set(cb_varinfo_sites(model))
+    @test Set(Symbol.(("dyn.raw_a", "dyn.raw_d", "dyn.σ_a", "dyn.σ_d"))) ⊆ grouped_sites
+    if name != L60_MODEL_NAMES[1]
+        @test Set(Symbol.(("lineup.w_att", "lineup.w_def"))) ⊆ grouped_sites
+    end
+    if name in (L60_MODEL_NAMES[1], L60_MODEL_NAMES[5], L60_MODEL_NAMES[6])
+        @test Symbol("production_wealth.w") in grouped_sites
+    end
+
+    chain_names = String.(names(chain))
+    @test "dyn.σ_a" in chain_names
+    @test "dyn.σ_d" in chain_names
+    @test any(value -> startswith(value, "dyn.raw_a["), chain_names)
+    @test any(value -> startswith(value, "dyn.raw_d["), chain_names)
+    name == L60_MODEL_NAMES[1] || begin
+        @test "lineup.w_att" in chain_names
+        @test "lineup.w_def" in chain_names
+    end
+    if name in (L60_MODEL_NAMES[1], L60_MODEL_NAMES[5], L60_MODEL_NAMES[6])
+        @test "production_wealth.w" in chain_names
+    end
+
+    teams = collect(keys(feature_set.data[:team_map]))
+    length(teams) >= 3 || error("team identity contract needs at least three fitted teams")
+    fixtures = DataFrame(
+        match_id=[-9_100_001, -9_100_002],
+        home_team=[teams[1], teams[2]],
+        away_team=[teams[3], teams[3]],
+        match_date=fill(oos.match_date[1], 2),
+        season_idx=fill(
+            hasproperty(oos, :season_idx) ? Int(oos.season_idx[1]) :
+            Int(feature_set.data[:n_seasons]), 2),
+    )
+    rates = R60_PG.extract_parameters(model, fixtures, feature_set, chain)
+    @test rates[-9_100_001].λ_h != rates[-9_100_002].λ_h
+    return nothing
 end
 
 function r60_assert_six_gate_audit(diagnostics)
@@ -249,6 +302,9 @@ summary = NamedTuple[]
 
             @test length(fit.folds) == 1
             r60_assert_six_gate_audit(fit.diagnostics)
+            r60_assert_structural_contract(
+                name, model, first(feature_sets[1]), fit.folds[1].chain, oos[1],
+                tape.n_params)
             r60_assert_parameter_extraction(model, fit, feature_sets, oos)
             r60_neutral_smile_grid(fit.latents)
 

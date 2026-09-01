@@ -72,12 +72,15 @@ using .Builder: CountModelBuilder, PoissonCountModel, NegBinCountModel,
     ComposableCountModel, AbstractCovariateRole, SupremacyRole, LevelRole,
     AbstractPlayerAggregation, OutfieldPlayerAggregation,
     BenchWeightedPlayerAggregation, PositionalPlayerAggregation,
-    MinuteWeightedPlayerAggregation, PlayerLineupDynamics,
-    AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
+    MinuteWeightedPlayerAggregation, PlayerLineupPillar, PlayerLineupDynamics,
+    AbstractPredictorTerm, AbstractCovariateConfig,
+    LogSumWealthFeature, SLFPLogSumWealthFeature,
     AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
     age_weight, ProductionWealthFeature, WealthCovariate,
     ProductionWealthCovariate, BenchDepthCovariate, DistanceCovariate,
     PxGCovariate, LateGameChanceCovariate, PxGRapmCovariate,
+    predictor_name, predictor_features, predictor_design, predictor_sites,
+    predictor_extract, predictor_oos,
     covariate_name, covariate_role, covariate_prior, covariate_features,
     covariate_column, covariate_oos, covariate_sides,
     AbstractRateGuard, ClampGuard, NoGuard,
@@ -87,7 +90,8 @@ using .Builder: CountModelBuilder, PoissonCountModel, NegBinCountModel,
     JointGammaPoissonObservation, JointGammaPoissonDesign,
     observation_features, observation_design,
     add!, add, replace!, validate, build, build_count_model,
-    cb_covariates, cb_covariate_names, cb_varinfo_sites, cb_chain_columns,
+    cb_predictor_terms, cb_predictor_names, cb_covariates, cb_covariate_names,
+    cb_varinfo_sites, cb_chain_columns,
     cb_parameter_count
 
 export DynamicGoalsModel, DynamicGoalsTimeDecayModel, DynamicMarketGoalsTimeDecayModel, DynamicXGModel, DynamicXGTimeDecayModel, DynamicMarketGoalsModel, DynamicMarketXGModel, DynamicMarketXGTimeDecayModel, DynamicMarketXGPlayerModel, DynamicMarketXGPlayerTimeDecayModel, DynamicMarketXGHierarchicalPlayerTimeDecayModel, DynamicMarketXGOutfieldPlayerTimeDecayModel, DynamicXGOutfieldPlayerTimeDecayModel, DynamicCopulaGoalsTimeDecayModel, DynamicDixonColesXGOutfieldPlayerTimeDecayModel, DynamicDixonColesXGFullPositionPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel, DynamicSmileDoublePoissonGoalsLeagueTimeDecayModel, DynamicFunnelDoublePoissonGoalsLeagueTimeDecayModel, DynamicDoubleNegBinXGOutfieldPlayerTimeDecayModel, DynamicDoublePoissonXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDixonColesXGOutfieldPlayerTimeDecayNoMarketModel, DynamicDoublePoissonBigChanceOutfieldPlayerTimeDecayModel, DynamicGoalsPlusMinusLeagueTimeDecayModel, DynamicFunnelPlusMinusGoalsLeagueTimeDecayModel
@@ -105,13 +109,16 @@ export CountModelBuilder, PoissonCountModel, NegBinCountModel, ComposableCountMo
 export AbstractCovariateRole, SupremacyRole, LevelRole
 export AbstractPlayerAggregation, OutfieldPlayerAggregation,
        BenchWeightedPlayerAggregation, PositionalPlayerAggregation,
-       MinuteWeightedPlayerAggregation, PlayerLineupDynamics
-export AbstractCovariateConfig, LogSumWealthFeature, SLFPLogSumWealthFeature,
+       MinuteWeightedPlayerAggregation, PlayerLineupPillar, PlayerLineupDynamics
+export AbstractPredictorTerm, AbstractCovariateConfig,
+       LogSumWealthFeature, SLFPLogSumWealthFeature,
        AbstractAgeWeightingCurve, RichardsSigmoid, ShiftedGamma, GaussianPrime,
        age_weight, ProductionWealthFeature, BenchDepthFeature, LateGameChanceFeature,
        WealthCovariate,
        ProductionWealthCovariate, BenchDepthCovariate, DistanceCovariate,
        PxGCovariate, LateGameChanceCovariate, PxGRapmCovariate
+export predictor_name, predictor_features, predictor_design, predictor_sites,
+       predictor_extract, predictor_oos
 export covariate_name, covariate_role, covariate_prior, covariate_features,
        covariate_column, covariate_oos, covariate_sides
 export AbstractRateGuard, ClampGuard, NoGuard
@@ -121,7 +128,8 @@ export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservatio
        JointGammaPoissonObservation, JointGammaPoissonDesign,
        observation_features, observation_design
 export add!, add, replace!, validate, build, build_count_model
-export cb_covariates, cb_covariate_names, cb_varinfo_sites, cb_chain_columns,
+export cb_predictor_terms, cb_predictor_names, cb_covariates,
+       cb_covariate_names, cb_varinfo_sites, cb_chain_columns,
        cb_parameter_count
 export build_turing_model, extract_parameters
 

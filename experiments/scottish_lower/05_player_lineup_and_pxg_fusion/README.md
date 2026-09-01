@@ -16,7 +16,7 @@ provide complementary information rather than merely whether any one signal work
 
 1. **`m05_joint_production_wealth`** — control two-arm joint model with Richards-sigmoid
    age-adjusted production wealth.
-2. **`m09_player_shots_rapm_outfield`** — two-arm joint model whose structural dynamics are the
+2. **`m09_player_shots_rapm_outfield`** — two-arm joint team-state model adjusted by the
    starting outfield XI's shots RAPM ratings.
 3. **`m10_player_shots_rapm_bench`** — the shots-RAPM starter model plus substitute-bench ratings
    at a fixed weight of `0.10`.
@@ -25,9 +25,10 @@ provide complementary information rather than merely whether any one signal work
 5. **`m12_hybrid_production_wealth_player_rapm`** — the master synergy arm: shots-RAPM starters,
    bench weight `0.10`, and Richards-sigmoid production wealth in one two-arm joint model.
 
-All five models use `GlobalInterception`, `GlobalHomeAdvantage`, a bounded rate guard, and the same
-`JointGammaPoissonObservation`. Player arms replace latent team time dynamics with
-`PlayerLineupDynamics`; the control retains 180-day time-decay team dynamics.
+All five models use `GlobalInterception`, `TimeDecayDynamics(days_half_life = 180)`,
+`GlobalHomeAdvantage`, a bounded rate guard, and the same `JointGammaPoissonObservation`.
+Player arms add a `PlayerLineupPillar` beside team attack/defence; missing lineup data therefore
+falls back to team state rather than erasing team identity.
 
 ## Files
 

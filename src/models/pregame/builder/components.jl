@@ -72,8 +72,6 @@ covariate_sides(::LevelRole,     q) = (q,  q)
 # There are deliberately NO working fallbacks. A covariate that forgets a method
 # fails in `build_count_model()` with the method's name, not during sampling.
 
-abstract type AbstractCovariateConfig <: CB_PG.AbstractModelComponent end
-
 """
     covariate_name(c) -> Symbol
 
@@ -128,6 +126,45 @@ out-of-sample fixtures through a point-in-time bridge stashed at feature-build t
 covariate_oos(c::AbstractCovariateConfig, fs, df) = _cov_missing(c, :covariate_oos)
 
 _cov_missing(c, hook::Symbol) = error("$(typeof(c)) must implement $(hook)")
+
+# Unified predictor-term contract. Ordinary scalar covariates adapt their existing
+# six-method contract; richer terms (the lineup pillar is the first) specialize
+# these hooks directly.
+predictor_name(t::AbstractPredictorTerm) =
+    error("$(typeof(t)) must implement predictor_name")
+predictor_features(t::AbstractPredictorTerm) =
+    error("$(typeof(t)) must implement predictor_features")
+predictor_design(t::AbstractPredictorTerm, fs, n_matches::Int) =
+    error("$(typeof(t)) must implement predictor_design")
+predictor_sites(t::AbstractPredictorTerm) =
+    error("$(typeof(t)) must implement predictor_sites")
+predictor_extract(chain::Chains, t::AbstractPredictorTerm, prefix::String) =
+    error("$(typeof(t)) must implement predictor_extract")
+predictor_oos(t::AbstractPredictorTerm, draw, source, context) =
+    error("$(typeof(t)) must implement predictor_oos")
+
+predictor_name(c::AbstractCovariateConfig) = covariate_name(c)
+predictor_features(c::AbstractCovariateConfig) = covariate_features(c)
+function predictor_design(c::AbstractCovariateConfig, fs, n_matches::Int)
+    x = covariate_column(c, fs)
+    x isa Vector{Float64} || error(
+        "covariate_column($(nameof(typeof(c)))) must return Vector{Float64}, got $(typeof(x))")
+    length(x) == n_matches || error(
+        "covariate $(covariate_name(c)) column has length $(length(x)); expected $n_matches")
+    all(isfinite, x) || error(
+        "covariate $(covariate_name(c)) column has non-finite entries; " *
+        "an absent value must be imputed to 0.0 by the feature extractor")
+    return x
+end
+predictor_sites(c::AbstractCovariateConfig) = [Symbol(predictor_name(c), ".w")]
+function predictor_extract(chain::Chains, c::AbstractCovariateConfig, prefix::String)
+    return (; w = vec(Array(chain[Symbol("$prefix.w")])))
+end
+function predictor_oos(c::AbstractCovariateConfig, draw, bridge, row)
+    q = draw.w .* get(bridge, Int(row.match_id), 0.0)
+    h, a = covariate_sides(covariate_role(c), q)
+    return (; h, a)
+end
 
 
 # ==============================================================================

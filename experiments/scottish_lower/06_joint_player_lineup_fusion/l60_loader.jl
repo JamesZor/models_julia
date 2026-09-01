@@ -67,7 +67,7 @@ l60_distance() = DistanceCovariate(
     prior = truncated(Normal(0.04, 0.03), lower = 0.0),
 )
 
-l60_shots_dynamics(aggregation) = PlayerLineupDynamics(
+l60_shots_pillar(aggregation) = PlayerLineupPillar(
     feature = L60_FEATURES.ShotsPlusMinusFeature(
         w_sim = 0.0,
         λ = 1000.0,
@@ -79,7 +79,7 @@ l60_shots_dynamics(aggregation) = PlayerLineupDynamics(
     w_def_prior = Normal(0.0, 0.3),
 )
 
-l60_pxg_dynamics(aggregation) = PlayerLineupDynamics(
+l60_pxg_pillar(aggregation) = PlayerLineupPillar(
     feature = L60_FEATURES.XGPlusMinusFeature(
         w_sim = 0.0,
         λ = 200.0,
@@ -105,37 +105,42 @@ function l60_models()
 
     m09 = CountModelBuilder(:m09_joint_player_shots_outfield) |>
         add(GlobalInterception()) |>
-        add(l60_shots_dynamics(OutfieldPlayerAggregation())) |>
+        add(TimeDecayDynamics(days_half_life = 180.0)) |>
         add(GlobalHomeAdvantage()) |>
+        add(l60_shots_pillar(OutfieldPlayerAggregation())) |>
         add(observation) |>
         build
 
     m10 = CountModelBuilder(:m10_joint_player_shots_bench) |>
         add(GlobalInterception()) |>
-        add(l60_shots_dynamics(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
+        add(TimeDecayDynamics(days_half_life = 180.0)) |>
         add(GlobalHomeAdvantage()) |>
+        add(l60_shots_pillar(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
         add(observation) |>
         build
 
     m11 = CountModelBuilder(:m11_joint_player_pxg_bench) |>
         add(GlobalInterception()) |>
-        add(l60_pxg_dynamics(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
+        add(TimeDecayDynamics(days_half_life = 180.0)) |>
         add(GlobalHomeAdvantage()) |>
+        add(l60_pxg_pillar(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
         add(observation) |>
         build
 
     m12 = CountModelBuilder(:m12_joint_hybrid_synergy) |>
         add(GlobalInterception()) |>
-        add(l60_shots_dynamics(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
+        add(TimeDecayDynamics(days_half_life = 180.0)) |>
         add(GlobalHomeAdvantage()) |>
+        add(l60_shots_pillar(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
         add(l60_production_wealth()) |>
         add(observation) |>
         build
 
     m13 = CountModelBuilder(:m13_joint_composite) |>
         add(GlobalInterception()) |>
-        add(l60_shots_dynamics(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
+        add(TimeDecayDynamics(days_half_life = 180.0)) |>
         add(GlobalHomeAdvantage()) |>
+        add(l60_shots_pillar(BenchWeightedPlayerAggregation(w_bench = 0.10))) |>
         add(l60_production_wealth()) |>
         add(l60_distance()) |>
         add(observation) |>
