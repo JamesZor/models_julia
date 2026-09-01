@@ -42,6 +42,9 @@ using DataFrames, Dates, InlineStrings # Add any other packages your tests need 
     println("Running MatchDay Module tests...")
     include("matchday_tests.jl")
 
+    println("Running MatchDay live pipeline (slate, ledger, console) tests...")
+    include("test_matchday_live_pipeline.jl")
+
     println("Running Caching and OOS Predictions tests...")
     include("caching_tests.jl")
 
