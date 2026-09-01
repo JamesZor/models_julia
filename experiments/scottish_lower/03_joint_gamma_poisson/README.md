@@ -96,7 +96,25 @@ The joint model's *better calibration cost* (ECE 0.0160 vs the control's 0.0099,
 - Closing prices with perfect fixture knowledge; **no slippage, liquidity limits or market impact are modelled**. Treat levels as optimistic and rankings as the result.
 - `r47`'s own summary line reports "Beat the control on Sharpe: [all seven]". That is true and, on its own, misleading — §4.1 is the honest reading.
 
-## 5. Scripts
+## 5. PostgreSQL Ingestion
+Persisted to namespace **`scottish_lower_joint_2426`** by `r48_sync_to_postgres.jl`. All eight fits round-tripped at 40 folds.
+
+| Model | config ID | `runs` UUID |
+| :--- | :---: | :--- |
+| `m00_joint_baseline` | 85 | `2c6e859c-29e7-4ae7-aa0a-e88343ba7672` |
+| `m02_joint_squad_wealth` | 86 | `17315a41-665a-44db-81c5-a244316b5b4a` |
+| `m03_joint_distance` | 87 | `c1e9854b-bc48-46a4-b878-d3f7e6b656f8` |
+| `m04_joint_wealth_distance` | 88 | `7af622f3-1c17-4e0f-b7ee-ef6adef12251` |
+| `m05_joint_production_wealth` | 89 | `5eff755c-3591-48d1-a2cc-5fc2744ddf88` |
+| `m07_joint_bench_depth` | 90 | `9e65ff44-aeed-4704-8e08-eced05f66c86` |
+| `m08_joint_composite` | 91 | `61fc5d87-1bd6-46d1-bb2b-c2aaad39e348` |
+| `m00_poisson_control` | 92 | `d63f8877-b825-40ae-9ae5-d829e8b8a7f7` |
+
+Shared components: splitter **93**, sampler **94**, book **95**, policy **96**. Portfolio UUIDs are in `NOTES.md` §1.
+
+> ⚠ **The database's `portfolio_runs` use bookmaker `ds.odds`, not the Betfair closing prices of §4.** The same posteriors return **−4.95% to −26.31%** against bookmaker prices and **+102% to +135%** on the exchange. Against bookmaker margins the joint model's advantage is *large* (control −26.31%, joint arms −5% to −14%); against the closing line it nearly vanishes. See `NOTES.md` §2 before reading any `portfolio_runs` row as a return.
+
+## 6. Scripts
 - `r45_smoke_joint_gamma_poisson.jl`: Single-fold smoke test with 55 gates — convergence audit, κ/ν bands, ν identification, λ = κ·μ extraction, clamp headroom, and the AD guide's §10.1/§10.3 battery.
 - `r46_train_5models_2426_joint.jl`: 40-fold multi-season walk-forward grid on `mcmc-beast` (~19h, 8 arms).
 - `r47_portfolio_betfair_joint.jl`: Betfair Exchange portfolio backtest against the Poisson control.
@@ -104,7 +122,7 @@ The joint model's *better calibration cost* (ECE 0.0160 vs the control's 0.0099,
 - `experiments/regate_r45.jl`: re-runs the r45 gate battery against SAVED fits without re-sampling.
 - `experiments/r46_metrics.jl`: full evaluation metrics from saved fits, no re-sampling.
 
-## 6. Implementation Notes & Traps
+## 7. Implementation Notes & Traps
 - **`MatchProxyXGFeature` refuses `fallback = :goals`.** Feeding goals to the Gamma arm would hand it the counts the Poisson arm already reads and double-count every goal. The feature errors rather than allowing it.
 - **The mask key is `:flat_pxg_obs_available`, not `:flat_pxg_available`.** `PxGFeature` already owns the latter for pre-match *form* availability; a model carrying both feeds would have had one silently overwrite the other.
 - **`JointGammaPoissonObservation` requires a `ClampGuard` with finite `lo`.** The Gamma arm's $e^{-\eta}$ term is unbounded below, and a compiled ReverseDiff tape has no branch left to catch the overflow. Measured headroom on posterior draws: $\eta \in [-0.79, +1.10]$ against a $[-10, 10]$ clamp, so the guard never binds.
