@@ -25,6 +25,9 @@ function db_storage_fit(root::AbstractString)
     return Fit(base.config, base.folds, latents, base.diagnostics, base.metadata, base.save_path)
 end
 
+db_storage_count_model() = build_count_model(
+    :m00_joint_baseline, GlobalInterception(), StaticZeroDynamics(), GlobalHomeAdvantage())
+
 function db_storage_portfolio_result()
     bets = DataFrame(match_id = [101, 102], date = [Date(2025, 1, 1), Date(2025, 1, 1)],
                      family = ["1X2_home", "O/U 2.5_over_25"],
@@ -74,7 +77,39 @@ end
         end
         @test occursin("idx_configs_config_hash", schema)
         @test occursin("idx_match_latents_match_id", schema)
+        @test occursin(r"CREATE TABLE IF NOT EXISTS runs \(\s*id BIGSERIAL PRIMARY KEY"s,
+                       schema)
+        @test occursin(r"CREATE TABLE IF NOT EXISTS portfolio_runs \(\s*id BIGSERIAL PRIMARY KEY"s,
+                       schema)
+        @test occursin(r"CREATE TABLE IF NOT EXISTS config_registry \(\s*id BIGSERIAL PRIMARY KEY"s,
+                       schema)
+        @test occursin("idx_config_registry_name", schema)
         @test PostgresStorage("postgresql://localhost/x", "unit").experiment_name == "unit"
+
+        secret_url = "postgresql://postgres:super_secret@db.internal:5544/experiments"
+        from_env = withenv("BF_EXPERIMENTS_DB_URL" => secret_url) do
+            PostgresStorage("masked")
+        end
+        shown = sprint(show, from_env)
+        @test from_env.host == "db.internal"
+        @test from_env.port == 5544
+        @test from_env.dbname == "experiments"
+        @test occursin("experiment=\"masked\"", shown)
+        @test !occursin("super_secret", shown)
+        @test !occursin("postgresql://", shown)
+
+        fallback = withenv("BF_EXPERIMENTS_DB_URL" => "") do
+            PostgresStorage("fallback")
+        end
+        @test fallback.conn_str ==
+              "postgresql://postgres@mcmc-beast:5432/mcmc_experiments"
+
+        from_keywords = PostgresStorage(host = "localhost", port = 5439,
+                                        dbname = "local_experiments",
+                                        experiment_name = "scottish")
+        @test from_keywords.conn_str ==
+              "postgresql://postgres@localhost:5439/local_experiments"
+        @test !occursin("password", lowercase(sprint(show, from_keywords)))
     end
 
     # Integration is opt-in so the package suite remains hermetic. CI or a developer can point
@@ -119,11 +154,52 @@ end
             @test nrow(list_configs(storage; tag = "poisson")) == 1
             @test nrow(list_configs(storage; config_type = "portfolio")) == 1
             @test list_configs(storage; tag = "production").tags isa Vector
+            fit_config_id = only(listed.id[listed.config_type .== "fit"])
+            @test load_fit_config(storage, fit_config_id).name == fit.config.name
 
             # Updating a name replaces its metadata without creating a second recipe row.
             @test save_config(storage, "production-fit", fit.config;
                               description = "promoted", tags = ["production"]) == fit_hash
             @test nrow(list_configs(storage; config_type = "fit")) == 1
+
+            model = db_storage_count_model()
+            splitter = Data.CVConfig(target_seasons = ["24/25"])
+            sampler = BayesianFootball.Samplers.MAPConfig()
+            model_id = save_model(storage, "m00_joint_baseline", model;
+                                  description = "baseline count model", tags = ["baseline"])
+            splitter_id = save_splitter(storage, "split_2426", splitter; tags = ["walkforward"])
+            sampler_id = save_sampler(storage, "map_smoke", sampler; tags = ["smoke"])
+            book_id = save_book_spec(storage, "main_book", book; tags = ["production"])
+            policy_id = save_policy_spec(storage, "flat_policy", policy; tags = ["production"])
+            @test all(id -> id isa Integer,
+                      (model_id, splitter_id, sampler_id, book_id, policy_id))
+
+            @test string(load_model(storage, model_id)) == string(model)
+            @test string(load_model(storage, "m00_joint_baseline")) == string(model)
+            @test string(load_model(storage, :m00_joint_baseline)) == string(model)
+            @test string(load_splitter(storage, splitter_id)) == string(splitter)
+            @test string(load_splitter(storage, "split_2426")) == string(splitter)
+            @test string(load_sampler(storage, sampler_id)) == string(sampler)
+            @test string(load_sampler(storage, "map_smoke")) == string(sampler)
+            @test string(load_book_spec(storage, book_id)) == string(book)
+            @test string(load_book_spec(storage, "main_book")) == string(book)
+            @test string(load_policy_spec(storage, policy_id)) == string(policy)
+            @test string(load_policy_spec(storage, "flat_policy")) == string(policy)
+            @test_throws ErrorException load_model(storage, sampler_id)
+
+            search_io = IOBuffer()
+            search_result = search_configs(storage, "baseline"; io = search_io)
+            @test nrow(search_result) == 1
+            @test occursin("m00_joint_baseline", String(take!(search_io)))
+            @test nrow(search_configs(storage, "tag=\"production\""; io = devnull)) == 4
+            @test nrow(search_configs(storage, "config_type=:model"; io = devnull)) == 1
+
+            show_io = IOBuffer()
+            shown_model = show_config(storage, model_id; io = show_io)
+            show_text = String(take!(show_io))
+            @test shown_model isa BayesianFootball.Models.ComposableCountModel
+            @test occursin("Architecture", show_text)
+            @test occursin("interception", show_text)
 
             run_id = save_fit(fit, storage)
             @test run_id isa UUID
@@ -136,6 +212,23 @@ end
             @test loaded.latents.match_ids == fit.latents.match_ids
             @test loaded.latents.λ_home == fit.latents.λ_home
             @test Array(loaded[1].chain) == Array(fit[1].chain)
+
+            conn_for_id = LibPQ.Connection(test_url)
+            run_rows = try
+                DataFrame(LibPQ.execute(conn_for_id,
+                    "SELECT id FROM runs WHERE run_id = \$1::uuid;", (string(run_id),)))
+            finally
+                close(conn_for_id)
+            end
+            run_integer_id = Int(run_rows.id[1])
+            @test load_fit(storage, run_integer_id).latents.λ_home == fit.latents.λ_home
+            @test load_fit(storage, fit.config.name).latents.λ_home == fit.latents.λ_home
+            @test load_fit(storage, Symbol(fit.config.name)).latents.λ_home == fit.latents.λ_home
+
+            explore_io = IOBuffer()
+            experiments = explore_experiments(storage; io = explore_io)
+            @test storage.experiment_name in experiments.experiment_name
+            @test occursin("Top LogLoss", String(take!(explore_io)))
 
             dual = DualStorage(FileStorage(mktempdir()), storage)
             both = save_fit(fit, dual; quiet = true)

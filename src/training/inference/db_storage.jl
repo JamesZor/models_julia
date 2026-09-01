@@ -33,6 +33,17 @@ function _db_rows(conn::LibPQ.Connection, sql::AbstractString, params = ())
     end
 end
 
+function _db_has_column(conn::LibPQ.Connection, table::AbstractString,
+                        column::AbstractString)
+    rows = _db_rows(conn, """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = \$1 AND column_name = \$2
+        ) AS present;
+    """, (String(table), String(column)))
+    return nrow(rows) == 1 && rows.present[1]
+end
+
 "PostgreSQL text representation for a `bytea` query parameter."
 _db_bytea(bytes::AbstractVector{UInt8}) = "\\x" * bytes2hex(bytes)
 
@@ -43,6 +54,14 @@ function ensure_schema!(storage::PostgresStorage)
     try
         for statement in split(read(schema_path, String), ';')
             isempty(strip(statement)) || _db_exec(conn, statement)
+        end
+        # The v1 config_registry used a required UUID primary key. Keep it as a stable legacy
+        # identifier during migration, but make new inserts rely on the BIGSERIAL lookup ID.
+        if _db_has_column(conn, "config_registry", "registry_id")
+            _db_exec(conn, """
+                ALTER TABLE config_registry
+                ALTER COLUMN registry_id SET DEFAULT gen_random_uuid();
+            """)
         end
     finally
         close(conn)
@@ -172,11 +191,16 @@ end
 
 function _truth_config_type(config)
     config isa FitConfig && return "fit"
+    config isa ComposableCountModel && return "model"
+    config isa Data.AbstractSplitter && return "splitter"
+    config isa Samplers.AbstractSamplerConfig && return "sampler"
+    nameof(typeof(config)) === :BookSpec && return "book_spec"
+    nameof(typeof(config)) === :PolicySpec && return "policy_spec"
     if config isa Tuple && length(config) == 2 &&
        nameof(typeof(config[1])) === :BookSpec && nameof(typeof(config[2])) === :PolicySpec
         return "portfolio"
     end
-    return string(nameof(typeof(config)))
+    return lowercase(string(nameof(typeof(config))))
 end
 
 function _truth_config_canonical(config::FitConfig)
@@ -217,33 +241,22 @@ end
 _truth_config_json(config) = Dict("type" => _truth_config_type(config),
                                   "value" => _db_config_description(config))
 
-"""
-    save_config(db::PostgresStorage, name::String, config; description = "", tags = [])
-
-Save or replace one named recipe in the PostgreSQL configuration registry and return its
-SHA-256 hash. `config` may be a `FitConfig`, `(BookSpec, PolicySpec)`, or `PortfolioSystem`.
-Names are unique within `db.experiment_name`; hashes identify equivalent recipe values.
-"""
-function save_config(db::PostgresStorage, name::String, config;
-                     description::AbstractString = "", tags = [])
+function _save_truth_config(db::PostgresStorage, name::String, config;
+                            description::AbstractString = "", tags = [])
     isempty(strip(name)) && error("save_config: name must not be empty.")
     value = _truth_config_value(config)
     kind = _truth_config_type(value)
     tag_strings = String[string(tag) for tag in tags]
     hash = _truth_config_hash(value)
-    summary_json = JSON3.write(_truth_config_json(value))
-    tags_json = JSON3.write(tag_strings)
-    blob = _db_artifact_blob(value)
     timestamp = now()
-
     conn = _db_connect(db)
     try
-        _db_exec(conn, """
+        rows = _db_rows(conn, """
             INSERT INTO config_registry (
-                registry_id, experiment_name, name, config_hash, config_type, config_json,
+                experiment_name, name, config_hash, config_type, config_json,
                 config_blob, description, tags, created_at, updated_at
-            ) VALUES (\$1::uuid, \$2, \$3, \$4, \$5, \$6::jsonb, \$7::bytea,
-                      \$8, \$9::jsonb, \$10, \$10)
+            ) VALUES (\$1, \$2, \$3, \$4, \$5::jsonb, \$6::bytea,
+                      \$7, \$8::jsonb, \$9, \$9)
             ON CONFLICT (experiment_name, name) DO UPDATE SET
                 config_hash = EXCLUDED.config_hash,
                 config_type = EXCLUDED.config_type,
@@ -251,83 +264,274 @@ function save_config(db::PostgresStorage, name::String, config;
                 config_blob = EXCLUDED.config_blob,
                 description = EXCLUDED.description,
                 tags = EXCLUDED.tags,
-                updated_at = EXCLUDED.updated_at;
-        """, (string(uuid4()), db.experiment_name, name, hash, kind, summary_json,
-              _db_bytea(blob), String(description), tags_json, timestamp))
+                updated_at = EXCLUDED.updated_at
+            RETURNING id, config_hash;
+        """, (db.experiment_name, name, hash, kind,
+              JSON3.write(_truth_config_json(value)), _db_bytea(_db_artifact_blob(value)),
+              String(description), JSON3.write(tag_strings), timestamp))
+        return (id = Int(rows.id[1]), hash = String(rows.config_hash[1]))
     finally
         close(conn)
     end
-    return hash
 end
 
+"Save any supported recipe and return its SHA-256 identity (legacy generic API)."
+function save_config(db::PostgresStorage, name::String, config; kwargs...)
+    return _save_truth_config(db, name, config; kwargs...).hash
+end
 save_config(db::PostgresStorage, name::AbstractString, config; kwargs...) =
     save_config(db, String(name), config; kwargs...)
 
-function _load_truth_config(db::PostgresStorage, name_or_hash::String)
+function _save_component(db::PostgresStorage, name::String, config, expected::String; kwargs...)
+    actual = _truth_config_type(config)
+    actual == expected || error("Cannot save $(typeof(config)) as $expected (classified as $actual).")
+    return _save_truth_config(db, name, config; kwargs...).id
+end
+
+save_model(db::PostgresStorage, name::String, model; kwargs...) =
+    _save_component(db, name, model, "model"; kwargs...)
+save_splitter(db::PostgresStorage, name::String, splitter; kwargs...) =
+    _save_component(db, name, splitter, "splitter"; kwargs...)
+save_sampler(db::PostgresStorage, name::String, sampler; kwargs...) =
+    _save_component(db, name, sampler, "sampler"; kwargs...)
+save_book_spec(db::PostgresStorage, name::String, spec; kwargs...) =
+    _save_component(db, name, spec, "book_spec"; kwargs...)
+save_policy_spec(db::PostgresStorage, name::String, spec; kwargs...) =
+    _save_component(db, name, spec, "policy_spec"; kwargs...)
+
+for fn in (:save_model, :save_splitter, :save_sampler, :save_book_spec, :save_policy_spec)
+    @eval $fn(db::PostgresStorage, name::AbstractString, value; kwargs...) =
+        $fn(db, String(name), value; kwargs...)
+end
+
+function _registry_row(db::PostgresStorage, id::Integer)
     conn = _db_connect(db)
     try
         rows = _db_rows(conn, """
-            SELECT config_blob FROM config_registry
-            WHERE experiment_name = \$1 AND (name = \$2 OR config_hash = \$2)
-            ORDER BY CASE WHEN name = \$2 THEN 0 ELSE 1 END, updated_at DESC
+            SELECT id, name, config_hash, config_type, description, tags, config_json,
+                   config_blob, created_at, updated_at
+            FROM config_registry
+            WHERE experiment_name = \$1 AND id = \$2
             LIMIT 1;
-        """, (db.experiment_name, name_or_hash))
+        """, (db.experiment_name, Int(id)))
         nrow(rows) == 1 || error(
-            "No saved config named or hashed '$name_or_hash' in experiment '$(db.experiment_name)'.")
-        return _db_artifact_value(rows.config_blob[1])
+            "No config ID $id in experiment '$(db.experiment_name)'.")
+        return rows[1, :]
     finally
         close(conn)
     end
 end
 
-"Load a named/hashed exact `FitConfig` from the configuration registry."
-function load_fit_config(db::PostgresStorage, name_or_hash::String)
-    config = _load_truth_config(db, name_or_hash)
-    config isa FitConfig || error(
-        "load_fit_config: '$name_or_hash' holds $(typeof(config)), not a FitConfig.")
-    return config
-end
-
-load_fit_config(db::PostgresStorage, name_or_hash::AbstractString) =
-    load_fit_config(db, String(name_or_hash))
-
-"Load a named/hashed `(BookSpec, PolicySpec)` tuple from the configuration registry."
-function load_portfolio_spec(db::PostgresStorage, name_or_hash::String)
-    config = _load_truth_config(db, name_or_hash)
-    valid = config isa Tuple && length(config) == 2 &&
-            nameof(typeof(config[1])) === :BookSpec && nameof(typeof(config[2])) === :PolicySpec
-    valid || error(
-        "load_portfolio_spec: '$name_or_hash' holds $(typeof(config)), not " *
-        "(BookSpec, PolicySpec).")
-    return config
-end
-
-load_portfolio_spec(db::PostgresStorage, name_or_hash::AbstractString) =
-    load_portfolio_spec(db, String(name_or_hash))
-
-"""
-    list_configs(db::PostgresStorage; tag = nothing, config_type = nothing) -> DataFrame
-
-List saved recipes newest first. `tag` requires exact membership in the JSON tag array;
-`config_type` accepts `"fit"`, `"portfolio"`, or another registry type name.
-"""
-function list_configs(db::PostgresStorage; tag = nothing, config_type = nothing)
-    tag_value = tag === nothing ? missing : string(tag)
-    type_value = config_type === nothing ? missing : string(config_type)
+function _registry_row(db::PostgresStorage, name_or_hash::AbstractString)
+    key = String(name_or_hash)
     conn = _db_connect(db)
     try
         rows = _db_rows(conn, """
-            SELECT name, config_hash, config_type, description, tags, created_at, updated_at
+            SELECT id, name, config_hash, config_type, description, tags, config_json,
+                   config_blob, created_at, updated_at
+            FROM config_registry
+            WHERE experiment_name = \$1 AND (name = \$2 OR config_hash = \$2)
+            ORDER BY CASE WHEN name = \$2 THEN 0 ELSE 1 END, updated_at DESC
+            LIMIT 1;
+        """, (db.experiment_name, key))
+        nrow(rows) == 1 || error(
+            "No config named or hashed '$key' in experiment '$(db.experiment_name)'.")
+        return rows[1, :]
+    finally
+        close(conn)
+    end
+end
+_registry_row(db::PostgresStorage, key::Symbol) = _registry_row(db, String(key))
+
+_load_truth_config(db::PostgresStorage, key) =
+    _db_artifact_value(_registry_row(db, key).config_blob)
+
+function _load_component(db::PostgresStorage, key, expected::String, predicate::Function)
+    row = _registry_row(db, key)
+    row.config_type == expected || error(
+        "Config $(row.id) '$(row.name)' is type $(row.config_type), expected $expected.")
+    value = _db_artifact_value(row.config_blob)
+    predicate(value) || error("Config $(row.id) deserialised as $(typeof(value)), expected $expected.")
+    return value
+end
+
+_load_model(db, key) =
+    _load_component(db, key, "model", value -> value isa ComposableCountModel)
+_load_splitter(db, key) =
+    _load_component(db, key, "splitter", value -> value isa Data.AbstractSplitter)
+_load_sampler(db, key) =
+    _load_component(db, key, "sampler", value -> value isa Samplers.AbstractSamplerConfig)
+_load_book_spec(db, key) =
+    _load_component(db, key, "book_spec", value -> nameof(typeof(value)) === :BookSpec)
+_load_policy_spec(db, key) =
+    _load_component(db, key, "policy_spec", value -> nameof(typeof(value)) === :PolicySpec)
+_load_fit_config(db, key) =
+    _load_component(db, key, "fit", value -> value isa FitConfig)
+_load_portfolio_spec(db, key) =
+    _load_component(db, key, "portfolio", value ->
+        value isa Tuple && length(value) == 2 &&
+        nameof(typeof(value[1])) === :BookSpec && nameof(typeof(value[2])) === :PolicySpec)
+
+for (public, internal) in ((:load_model, :_load_model),
+                           (:load_splitter, :_load_splitter),
+                           (:load_sampler, :_load_sampler),
+                           (:load_book_spec, :_load_book_spec),
+                           (:load_policy_spec, :_load_policy_spec),
+                           (:load_fit_config, :_load_fit_config),
+                           (:load_portfolio_spec, :_load_portfolio_spec))
+    @eval begin
+        $public(db::PostgresStorage, key::Integer) = $internal(db, key)
+        $public(db::PostgresStorage, key::AbstractString) = $internal(db, key)
+        $public(db::PostgresStorage, key::Symbol) = $internal(db, key)
+    end
+end
+
+function _decode_config_tags!(rows::DataFrame)
+    :tags in propertynames(rows) || return rows
+    rows.tags = [String[string(x) for x in JSON3.read(String(value))] for value in rows.tags]
+    return rows
+end
+
+function list_configs(db::PostgresStorage; tag = nothing, config_type = nothing)
+    tag_value = tag === nothing ? missing : string(tag)
+    type_value = config_type === nothing ? missing : lowercase(string(config_type))
+    conn = _db_connect(db)
+    try
+        rows = _db_rows(conn, """
+            SELECT id, name, config_hash, config_type, description, tags, config_json,
+                   created_at, updated_at
             FROM config_registry
             WHERE experiment_name = \$1
               AND (\$2::varchar IS NULL OR tags ? \$2)
               AND (\$3::varchar IS NULL OR config_type = \$3)
-            ORDER BY updated_at DESC, name;
+            ORDER BY id;
         """, (db.experiment_name, tag_value, type_value))
-        if :tags in propertynames(rows)
-            rows.tags = [String[string(x) for x in JSON3.read(String(value))]
-                         for value in rows.tags]
+        return _decode_config_tags!(rows)
+    finally
+        close(conn)
+    end
+end
+
+_db_cell(value) = ismissing(value) ? "—" : string(value)
+_db_truncate(value, width::Int) = length(_db_cell(value)) <= width ? _db_cell(value) :
+    first(_db_cell(value), max(width - 1, 1)) * "…"
+
+function _print_db_table(io::IO, headers::Vector{String}, data::Vector{Vector{String}};
+                         max_widths::Vector{Int} = fill(40, length(headers)))
+    widths = [min(max_widths[j], maximum(length.([headers[j]; [row[j] for row in data]])))
+              for j in eachindex(headers)]
+    border = "+" * join(["-"^(w + 2) for w in widths], "+") * "+"
+    println(io, border)
+    println(io, "| " * join([rpad(_db_truncate(headers[j], widths[j]), widths[j])
+                              for j in eachindex(headers)], " | ") * " |")
+    println(io, border)
+    for row in data
+        println(io, "| " * join([rpad(_db_truncate(row[j], widths[j]), widths[j])
+                                  for j in eachindex(headers)], " | ") * " |")
+    end
+    println(io, border)
+    return nothing
+end
+
+function _search_query_parts(query::AbstractString)
+    tag_match = match(r"(?i)tag\s*=\s*[\"']?([^\"'\s]+)", query)
+    type_match = match(r"(?i)config_type\s*=\s*:?[\"']?([^\"'\s]+)", query)
+    keyword = replace(String(query),
+                      r"(?i)tag\s*=\s*[\"']?[^\"'\s]+[\"']?" => "",
+                      r"(?i)config_type\s*=\s*:?[\"']?[^\"'\s]+[\"']?" => "")
+    return (keyword = lowercase(strip(keyword)),
+            tag = tag_match === nothing ? nothing : tag_match.captures[1],
+            config_type = type_match === nothing ? nothing : lowercase(type_match.captures[1]))
+end
+
+"Search and print `[ID | Type | Name | Tags | Description]` for the active experiment."
+function search_configs(db::PostgresStorage, query::String = ""; tag = nothing,
+                        config_type = nothing, io::IO = stdout)
+    parsed = _search_query_parts(query)
+    selected_tag = tag === nothing ? parsed.tag : string(tag)
+    selected_type = config_type === nothing ? parsed.config_type : lowercase(string(config_type))
+    rows = list_configs(db; tag = selected_tag, config_type = selected_type)
+    if !isempty(parsed.keyword)
+        keep = [occursin(parsed.keyword, lowercase(join(
+                    (string(row.name), string(row.config_type), string(row.description),
+                     join(row.tags, " "), string(row.config_json)), " "))) for row in eachrow(rows)]
+        rows = rows[keep, :]
+    end
+    table = [[string(row.id), String(row.config_type), String(row.name),
+              join(row.tags, ", "), String(row.description)] for row in eachrow(rows)]
+    _print_db_table(io, ["ID", "Type", "Name", "Tags", "Description"], table;
+                    max_widths = [8, 16, 30, 30, 50])
+    return rows
+end
+search_configs(db::PostgresStorage, query::Symbol; kwargs...) =
+    search_configs(db, String(query); kwargs...)
+
+function _show_config_tree(io::IO, value, indent::Int = 0, depth::Int = 0)
+    prefix = "  "^indent
+    if value isa Union{Nothing,Missing,Bool,Number,AbstractString,Symbol}
+        println(io, prefix, repr(value))
+    elseif value isa AbstractArray
+        println(io, prefix, nameof(typeof(value)), " ", size(value),
+                length(value) <= 6 ? " " * repr(value) : "")
+    elseif value isa Tuple
+        println(io, prefix, nameof(typeof(value)))
+        for (i, item) in enumerate(value)
+            print(io, prefix, "  [", i, "] ")
+            _show_config_tree(io, item, indent + 1, depth + 1)
         end
+    elseif depth >= 6 || fieldcount(typeof(value)) == 0
+        println(io, prefix, value)
+    else
+        println(io, prefix, nameof(typeof(value)))
+        for field in fieldnames(typeof(value))
+            print(io, prefix, "  ", field, ": ")
+            _show_config_tree(io, getfield(value, field), indent + 1, depth + 1)
+        end
+    end
+    return nothing
+end
+
+"Pretty-print metadata and the full component tree for a config ID or name."
+function show_config(db::PostgresStorage, key::Union{Integer,AbstractString,Symbol};
+                     io::IO = stdout)
+    row = _registry_row(db, key)
+    value = _db_artifact_value(row.config_blob)
+    tags = String[string(x) for x in JSON3.read(String(row.tags))]
+    println(io, "Config #", row.id, " — ", row.name)
+    println(io, "  type        : ", row.config_type)
+    println(io, "  experiment  : ", db.experiment_name)
+    println(io, "  hash        : ", row.config_hash)
+    println(io, "  tags        : ", isempty(tags) ? "—" : join(tags, ", "))
+    println(io, "  description : ", isempty(row.description) ? "—" : row.description)
+    println(io, "  updated     : ", row.updated_at)
+    println(io, "Architecture")
+    _show_config_tree(io, value, 1)
+    return value
+end
+
+"Print one row per experiment with run/model counts, best scores, and last activity."
+function explore_experiments(db::PostgresStorage; io::IO = stdout)
+    conn = _db_connect(db)
+    try
+        rows = _db_rows(conn, """
+            SELECT r.experiment_name,
+                   COUNT(DISTINCT r.id)::int AS n_runs,
+                   COUNT(DISTINCT c.model_config->>'type')::int AS n_models,
+                   MIN(fr.logloss) AS best_logloss,
+                   MIN(fr.brier) AS best_brier,
+                   COALESCE(MAX(r.finished_at), MAX(r.created_at)) AS last_active
+            FROM runs r
+            LEFT JOIN configs c ON c.config_id = r.run_id
+            LEFT JOIN fold_results fr ON fr.run_id = r.run_id
+            GROUP BY r.experiment_name
+            ORDER BY last_active DESC;
+        """)
+        table = [[String(row.experiment_name), string(row.n_runs), string(row.n_models),
+                  _db_cell(row.best_logloss), _db_cell(row.best_brier),
+                  _db_cell(row.last_active)] for row in eachrow(rows)]
+        _print_db_table(io, ["Experiment", "Runs", "Models", "Top LogLoss", "Top Brier",
+                             "Last Active"], table;
+                        max_widths = [28, 8, 8, 14, 14, 24])
         return rows
     finally
         close(conn)
@@ -400,11 +604,12 @@ function save_fit(fit::Fit, storage::PostgresStorage)
         _db_exec(conn, "BEGIN;")
         try
             _db_exec(conn, """
-                INSERT INTO runs (run_id, experiment_name, status, git_commit, git_branch,
+                INSERT INTO runs (run_id, name, experiment_name, status, git_commit, git_branch,
                                   created_at, finished_at, duration_seconds)
-                VALUES (\$1::uuid, \$2, \$3, \$4, \$5, \$6, \$7, \$8);
-            """, (string(run_id), storage.experiment_name, "completed", metadata.git_commit,
-                  _db_git_branch(), created_at, metadata.timestamp, metadata.elapsed_seconds))
+                VALUES (\$1::uuid, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9);
+            """, (string(run_id), fit.config.name, storage.experiment_name, "completed",
+                  metadata.git_commit, _db_git_branch(), created_at, metadata.timestamp,
+                  metadata.elapsed_seconds))
             _db_exec(conn, """
                 INSERT INTO configs (config_id, config_hash, model_config, split_config,
                                      sampler_config)
@@ -510,3 +715,41 @@ function load_fit(run_id::UUID, storage::PostgresStorage)
 end
 
 load_fit(run_id::AbstractString, storage::PostgresStorage) = load_fit(UUID(run_id), storage)
+
+function _run_uuid(db::PostgresStorage, id::Integer)
+    conn = _db_connect(db)
+    try
+        rows = _db_rows(conn, """
+            SELECT run_id FROM runs
+            WHERE experiment_name = \$1 AND id = \$2
+            LIMIT 1;
+        """, (db.experiment_name, Int(id)))
+        nrow(rows) == 1 || error("No run ID $id in experiment '$(db.experiment_name)'.")
+        return UUID(string(rows.run_id[1]))
+    finally
+        close(conn)
+    end
+end
+
+function _run_uuid(db::PostgresStorage, name::AbstractString)
+    conn = _db_connect(db)
+    try
+        rows = _db_rows(conn, """
+            SELECT run_id FROM runs
+            WHERE experiment_name = \$1 AND (name = \$2 OR run_id::text = \$2)
+            ORDER BY id DESC
+            LIMIT 1;
+        """, (db.experiment_name, String(name)))
+        nrow(rows) == 1 || error(
+            "No run named or identified '$name' in experiment '$(db.experiment_name)'.")
+        return UUID(string(rows.run_id[1]))
+    finally
+        close(conn)
+    end
+end
+
+"Load a PostgreSQL fit by sequential run ID, fit name, UUID text, or UUID."
+load_fit(db::PostgresStorage, id::Integer) = load_fit(_run_uuid(db, id), db)
+load_fit(db::PostgresStorage, name::AbstractString) = load_fit(_run_uuid(db, name), db)
+load_fit(db::PostgresStorage, name::Symbol) = load_fit(db, String(name))
+load_fit(db::PostgresStorage, run_id::UUID) = load_fit(run_id, db)

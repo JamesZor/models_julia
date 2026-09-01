@@ -2,7 +2,9 @@
 -- Idempotent so scripts/setup_experiments_db.sh can also be used as a migration runner.
 
 CREATE TABLE IF NOT EXISTS runs (
-    run_id UUID PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
+    run_id UUID NOT NULL UNIQUE,
+    name VARCHAR NOT NULL,
     experiment_name VARCHAR NOT NULL,
     status VARCHAR NOT NULL,
     git_commit VARCHAR NOT NULL,
@@ -55,7 +57,8 @@ CREATE TABLE IF NOT EXISTS match_latents (
 );
 
 CREATE TABLE IF NOT EXISTS portfolio_runs (
-    portfolio_run_id UUID PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
+    portfolio_run_id UUID NOT NULL UNIQUE,
     model_run_id UUID NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
     book_spec_hash VARCHAR NOT NULL,
     policy_spec_hash VARCHAR NOT NULL,
@@ -86,15 +89,15 @@ CREATE TABLE IF NOT EXISTS portfolio_bets (
 -- Named, versioned recipes are the configuration single source of truth. The JSON summary is
 -- inspectable from SQL, while config_blob is the exact compressed value used to recreate it.
 CREATE TABLE IF NOT EXISTS config_registry (
-    registry_id UUID PRIMARY KEY,
-    experiment_name VARCHAR NOT NULL,
+    id BIGSERIAL PRIMARY KEY,
     name VARCHAR NOT NULL,
-    config_hash VARCHAR NOT NULL,
+    experiment_name VARCHAR NOT NULL,
     config_type VARCHAR NOT NULL,
-    config_json JSONB NOT NULL,
-    config_blob BYTEA NOT NULL,
     description VARCHAR NOT NULL DEFAULT '',
     tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    config_json JSONB NOT NULL,
+    config_blob BYTEA NOT NULL,
+    config_hash VARCHAR NOT NULL,
     created_at TIMESTAMP NOT NULL,
     updated_at TIMESTAMP NOT NULL,
     UNIQUE (experiment_name, name)
@@ -113,11 +116,24 @@ CREATE TABLE IF NOT EXISTS portfolio_artifacts (
     result_blob BYTEA NOT NULL
 );
 
+-- Add lookup IDs when migrating a database created by the UUID-only v1 schema. Existing UUID
+-- keys remain unique stable foreign-key targets. Fresh databases use BIGSERIAL primary keys.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS name VARCHAR;
+ALTER TABLE portfolio_runs ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+ALTER TABLE config_registry ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+UPDATE runs SET name = experiment_name WHERE name IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_id ON runs(id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_runs_id ON portfolio_runs(id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_config_registry_id ON config_registry(id);
 CREATE INDEX IF NOT EXISTS idx_configs_config_hash ON configs(config_hash);
+CREATE INDEX IF NOT EXISTS idx_runs_name ON runs(name);
 CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_match_latents_match_id ON match_latents(match_id);
 CREATE INDEX IF NOT EXISTS idx_portfolio_runs_created_at ON portfolio_runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_portfolio_bets_match_id ON portfolio_bets(match_id);
+CREATE INDEX IF NOT EXISTS idx_config_registry_name ON config_registry(name);
 CREATE INDEX IF NOT EXISTS idx_config_registry_hash ON config_registry(config_hash);
 CREATE INDEX IF NOT EXISTS idx_config_registry_created_at ON config_registry(created_at);
 CREATE INDEX IF NOT EXISTS idx_config_registry_type ON config_registry(config_type);

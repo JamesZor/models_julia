@@ -68,9 +68,57 @@ FileStorage(root_dir::AbstractString) = FileStorage(String(root_dir))
 struct PostgresStorage <: AbstractStorageBackend
     conn_str::String
     experiment_name::String
+    host::String
+    port::Int
+    dbname::String
 end
-PostgresStorage(conn_str::AbstractString, experiment_name::AbstractString) =
-    PostgresStorage(String(conn_str), String(experiment_name))
+
+function _postgres_endpoint(conn_str::AbstractString)
+    # Accept URI connection strings and libpq keyword strings. This extracts display metadata
+    # only; credentials remain opaque and are never rendered by `show`.
+    uri = match(r"^postgres(?:ql)?://(?:[^@/]+@)?([^:/?]+)(?::([0-9]+))?/([^?]+)",
+                String(conn_str))
+    if uri !== nothing
+        port = uri.captures[2] === nothing ? 5432 : parse(Int, uri.captures[2])
+        return (host = uri.captures[1], port = port, dbname = uri.captures[3])
+    end
+    host_match = match(r"(?:^|\s)host=([^\s]+)", String(conn_str))
+    port_match = match(r"(?:^|\s)port=([0-9]+)", String(conn_str))
+    db_match = match(r"(?:^|\s)dbname=([^\s]+)", String(conn_str))
+    return (host = host_match === nothing ? "unknown" : host_match.captures[1],
+            port = port_match === nothing ? 5432 : parse(Int, port_match.captures[1]),
+            dbname = db_match === nothing ? "unknown" : db_match.captures[1])
+end
+
+function PostgresStorage(conn_str::AbstractString, experiment_name::AbstractString)
+    endpoint = _postgres_endpoint(conn_str)
+    return PostgresStorage(String(conn_str), String(experiment_name), endpoint.host,
+                           endpoint.port, endpoint.dbname)
+end
+
+"Resolve the URL from `BF_EXPERIMENTS_DB_URL`, otherwise let libpq read `~/.pgpass`."
+function PostgresStorage(experiment_name::String)
+    configured = get(ENV, "BF_EXPERIMENTS_DB_URL", "")
+    url = isempty(strip(configured)) ?
+          "postgresql://postgres@mcmc-beast:5432/mcmc_experiments" : configured
+    return PostgresStorage(url, experiment_name)
+end
+PostgresStorage(experiment_name::AbstractString) = PostgresStorage(String(experiment_name))
+
+function PostgresStorage(; host::AbstractString = "mcmc-beast", port::Integer = 5432,
+                         dbname::AbstractString = "mcmc_experiments",
+                         experiment_name::AbstractString = "scottish_lower",
+                         user::AbstractString = "postgres")
+    # Omitting a password is deliberate: libpq resolves the matching entry from ~/.pgpass.
+    url = "postgresql://$(user)@$(host):$(Int(port))/$(dbname)"
+    return PostgresStorage(url, String(experiment_name))
+end
+
+function Base.show(io::IO, storage::PostgresStorage)
+    print(io, "PostgresStorage(host=\"", storage.host, "\", port=", storage.port,
+          ", db=\"", storage.dbname, "\", experiment=\"",
+          storage.experiment_name, "\")")
+end
 
 "Write to the filesystem and PostgreSQL in one call."
 struct DualStorage <: AbstractStorageBackend
