@@ -145,6 +145,64 @@ and subtracted, and the header shows `ms/tick`.
 5. Press **Results** for the leg-by-leg table, the aggregate ROI and beat-close, and the equity
    before/after bars.
 
+### The two views
+
+The header carries two tabs over the **same** state — switching is client-side and posts nothing,
+so playback, the scrubber, the model and the match day stay exactly where they were.
+
+**▦ Slate Cards (Radar)** is the card grid the live console shows, plus two depth facts per leg:
+
+- a **WOM pill** (`████████░░ 68% WOM`) — the share of the three archived levels of resting size
+  that sits on the BACK side. Green above 60% (money queued to back, price shortening), pink
+  below 40% (queued to lay, drifting), slate in between.
+- `depth £X (3 lvls)` — the whole archived ladder on the side the order would consume, against
+  `depth_touch`, which is only the first level.
+- `↗ Ladder Desk` — opens that fixture on the desk.
+
+**☱ Multi-Ladder Desk** is the exchange screen: one fixture, one market, every runner side by
+side as a classic Bet Angel vertical ladder.
+
+| part | what it shows |
+|---|---|
+| runner header | fair odds `1/p_model`, the market mid, EV%, and the model/market overhang bars |
+| WOM bar | back share against lay share, three levels deep |
+| ask levels | the three lay prices, worst-first, so the touch sits against the spread row |
+| spread row | `SPREAD 0.15 (3 ticks) 4.26%` — currency, **ticks**, and relative |
+| bid levels | the three back prices, touch-first |
+| order marker | amber, on the runner the order actually **touches**, with the £ consumed per level |
+| footer | matched volume and the **book** VWAP (see below) |
+| `📈 chart` | opens that runner's trajectory window |
+
+Markets: `[ Match Odds ] [ Over/Under 2.5 ] [ BTTS ]`. Fixtures come from a dropdown, and
+`?desk=<match_id>[&market=…][&chart=home]` is a deep link to any of it.
+
+Three things the desk does **not** pretend to know:
+
+1. **A traded VWAP.** `betfair_live.order_book_1m` archives resting depth and a running
+   `market_matched` total, never a traded price series. What is shown is `book vwap` — the
+   probability-space volume-weighted average of the visible ladder — and it is labelled as such.
+2. **Levels beyond the third.** The archive carries at most three, verified over 635,765 rows, so
+   every depth and WOM figure says `(3 lvls)`.
+3. **A model opinion on a gated fixture.** The model column is priced by the same pipeline the
+   card grid uses, on the same gate-passed set; a refused fixture shows its book and an empty
+   model column rather than a number derived from inputs the pipeline declined to use.
+
+### The trajectory chart
+
+`📈 chart` opens a draggable, minimisable window over the desk:
+
+- **top pane** — market best back (blue) and best lay (pink) against the model's fair odds
+  (green, dashed, **stepped**). On m12 the green line steps at the minute the XI became visible;
+  on m00 and m05 it is flat, which is the control. A shaded band marks the T−25…T−12 execution
+  window, a dashed amber vertical marks the lineup drop, and a solid blue needle tracks the
+  replay clock.
+- **bottom pane** — matched volume, i.e. the liquidity S-curve into kick-off.
+
+`GET /api/replay/history` is the same data without the browser. The model is evaluated on a
+coarse grid with the drop minute pinned, not every minute: the posterior is memoised on the
+lineup signature and moves only when an XI lands, so a 165-minute chart costs two extractions
+rather than 165.
+
 ### Switching models mid-replay
 
 `POST /api/replay/set_model {"model": "m00"|"m05"|"m12"}` swaps the posterior **in the running
@@ -214,8 +272,8 @@ Two things it does **not** claim:
 julia --project -t 8 test/test_matchday_replay.jl
 ```
 
-587 assertions in three tiers — pure (clock, filtration contract, console surface; no database),
-ledger (`paper_replay` execution and settlement, plus a direct assertion that `paper_runbook`
+803 assertions in four tiers — pure (clock, filtration contract; no database), the ladder desk
+(ticks, weight of money, the three-level book, the order marker, one runner's history), ledger (`paper_replay` execution and settlement, plus a direct assertion that `paper_runbook`
 row counts are unchanged), and models (a real Saturday, real canonical fits, hot-swapping and the
 lineup shock). The ledger and model tiers skip **with a message** when the database or the
 DataStore cache is out of reach, never silently.
@@ -227,6 +285,8 @@ GET  /                          the page
 GET  /api/snapshot              the whole payload (replay · account · batch · cards · settlement)
 GET  /api/health                liveness, client count, port, schema, current minute
 GET  /api/replay/matchdays      which days are replayable, and how well
+GET  /api/replay/ladder         ?match_id=…&market=MATCH_ODDS|OVER_UNDER_25|BOTH_TEAMS_TO_SCORE
+GET  /api/replay/history        ?match_id=…&symbol=home&market=…[&from=-60&to=105]
 POST /api/replay/play
 POST /api/replay/pause
 POST /api/replay/speed          {"speed": 1|5|30|60}

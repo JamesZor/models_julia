@@ -5,7 +5,7 @@
 # WHY THIS IS NOT `MD.ConsoleState`. The live console has four routes and one intent, because at
 # T-12 on a Saturday there is exactly one decision to make and every extra control is a way to
 # make it wrong. A replay is the opposite instrument: it exists to be scrubbed, re-modelled and
-# re-run, so it carries eleven routes and a transport. Bolting those onto `console/server.jl`
+# re-run, so it carries seventeen routes and a transport. Bolting those onto `console/server.jl`
 # would put a `POST /api/replay/seek` on the process that can commit real paper money, and the
 # only reason that is safe TODAY is that nothing in this file is loaded by it.
 #
@@ -15,8 +15,13 @@
 # WHY THE PAYLOAD EXTENDS RATHER THAN REPLACES. `slate_snapshot` is the live console's read model
 # and the card/leg shape it emits is the thing the operator has learned to read: two bars on one
 # 0-1 scale, the overhang IS the edge. The replay adds a `replay` block and a `settlement` block
-# and changes NOTHING inside `cards`, so a card means the same thing on both consoles. If it did
+# and REMOVES nothing from `cards`, so a card means the same thing on both consoles. If it did
 # not, a habit formed on the replay would misread the live one.
+#
+# The one thing it does add inside `cards` is two ladder figures per leg -- `wom` and
+# `depth_3lvl`, see `enriched_cards` -- and they are added HERE, in a wrapper, rather than in
+# `MD.card_payload`. That function is what 8085 serves; a field added to it would change the live
+# page, which this file exists not to do.
 
 import HTTP
 import JSON3
@@ -50,7 +55,7 @@ function replay_payload(st::ReplayState)
         base = slate === nothing ?
             (batch = _empty_batch(st), cards = NamedTuple[], blocked = NamedTuple[]) :
             (batch = MD.batch_payload(slate, _batch_status(st, slate)),
-             cards = MD.card_payload(slate),
+             cards = enriched_cards(st, slate),
              blocked = [(match_id = c.fixture.m_id,
                          fixture = c.fixture.home * " v " * c.fixture.away,
                          kickoff = string(c.fixture.kickoff),
@@ -67,6 +72,41 @@ function replay_payload(st::ReplayState)
             settlement = st.settlement,
         )
     end
+end
+
+"""
+    enriched_cards(st, slate) -> Vector{NamedTuple}
+
+`MD.card_payload` with two ladder figures added to every leg: `wom` and `depth_3lvl`.
+
+**A wrapper rather than an edit to `MD.card_payload`, and that is deliberate.** That function is
+the LIVE console's read model, served on 8085 against `paper_runbook`; this work package is not
+allowed to change what the live page renders. Adding the fields here gives the replay's overview
+cards their WOM pills and depth previews with no extra API call, and leaves the 8085 payload byte
+for byte what it was.
+
+Both figures are read off the VENUE runner's archived ladder -- the book the order would actually
+touch -- for the reason `annotate_capacity!` gives: on a synthetic the model selection and the
+venue runner are different runners, and a depth pill measured on the wrong one describes a book
+nothing will be placed in. `depth_3lvl` is the side the order consumes (bid for a back, ask for a
+lay); `wom` is the whole runner's two-sided pressure and is therefore side-independent.
+"""
+function enriched_cards(st::ReplayState, slate::MD.PricedSlate)
+    out = NamedTuple[]
+    for c in MD.card_payload(slate)
+        legs = NamedTuple[]
+        for l in c.legs
+            vkey = (group = l.market, line = l.line, selection = Symbol(l.venue_selection))
+            lv = get(slate.books, (c.match_id, vkey), nothing)
+            w = lv === nothing ? nothing : wom_pct(lv)
+            d3 = lv === nothing ? 0.0 :
+                 l.side == "back" ? top_depth(lv.back_size) : top_depth(lv.lay_size)
+            push!(legs, merge(l, (wom = w === nothing ? nothing : round(w, digits = 1),
+                                  depth_3lvl = round(d3, digits = 2))))
+        end
+        push!(out, merge(c, (legs = legs,)))
+    end
+    return out
 end
 
 function _replay_block(st::ReplayState)
@@ -109,15 +149,25 @@ function _replay_block(st::ReplayState)
                            n_latent_states = length(m.latents),
                            active = m.key == slot.key)
                           for m in st.models],
+        # `lineup_drop_min` here is a POSITIVE lead time ("the XI arrived 39 minutes out"),
+        # which is how the fixture dropdown labels it; the ladder and history payloads carry the
+        # same instant SIGNED, because there it is an axis coordinate. Both are derived from
+        # `lineup_drop_minute`, so the two never disagree about which minute it was -- they
+        # disagreed by one on a sub-minute scrape while this one rounded and that one did not.
         fixtures       = [(match_id = f.m_id, fixture = f.home * " v " * f.away,
-                           lineup_drop_min = haskey(card.lineup_drop, f.m_id) ?
-                               Int(round(Dates.value(f.kickoff -
-                                   card.lineup_drop[f.m_id]) / 60_000)) : nothing)
+                           lineup_drop_min = let d = lineup_drop_minute(card, f)
+                               d === nothing ? nothing : -d
+                           end)
                           for f in card.fixtures],
         book_from      = card.book_span[1] === nothing ? nothing : string(card.book_span[1]),
         book_to        = card.book_span[2] === nothing ? nothing : string(card.book_span[2]),
         n_lineups      = length(card.lineup_drop),
         n_fixtures     = length(card.fixtures),
+        # The desk's market pills come from the server so the page cannot offer a market the
+        # ladder extractor does not know how to key.
+        ladder_markets = collect(LADDER_MARKETS),
+        window_open    = T_WINDOW_OPEN,
+        window_close   = T_WINDOW_CLOSE,
     )
 end
 
@@ -204,6 +254,7 @@ _json(x; status::Int = 200) =
 
 const REPLAY_ROUTES = [
     "GET  /", "GET  /api/snapshot", "GET  /api/health", "GET  /api/replay/matchdays",
+    "GET  /api/replay/ladder", "GET  /api/replay/history",
     "POST /api/replay/play", "POST /api/replay/pause", "POST /api/replay/speed",
     "POST /api/replay/step", "POST /api/replay/jump", "POST /api/replay/seek",
     "POST /api/replay/set_model", "POST /api/replay/set_matchday",
@@ -239,6 +290,22 @@ function route_replay(srv::ReplayServer, req::HTTP.Request)
     elseif method == "GET" && target == "/api/replay/matchdays"
         return _json(_intent(() -> (ok = true,
             matchdays = [NamedTuple(r) for r in eachrow(available_matchdays(st.conn))])))
+    elseif method == "GET" && target == "/api/replay/ladder"
+        # GET rather than POST, and it is not an oversight: a ladder read changes nothing, and
+        # making it a GET is what lets an operator paste the URL into a second tab and watch one
+        # fixture's book while the console scrubs.
+        q = _query_args(uri)
+        return _json(_intent(() -> fixture_ladder(st,
+            Int(round(_num(q, "match_id", Float64(_default_match(st))))),
+            _str(q, "market", "MATCH_ODDS"))))
+    elseif method == "GET" && target == "/api/replay/history"
+        q = _query_args(uri)
+        return _json(_intent(() -> selection_history(st,
+            Int(round(_num(q, "match_id", Float64(_default_match(st))))),
+            _str(q, "symbol", "home"),
+            _str(q, "market", "MATCH_ODDS");
+            from = Int(round(_num(q, "from", Float64(T_START)))),
+            to = haskey(q, "to") ? Int(round(_num(q, "to", Float64(st.clock.t)))) : nothing)))
     end
 
     args = _body_args(req, uri)
@@ -315,6 +382,22 @@ function _intent(f::Function)
         return (ok = false, error = sprint(showerror, e))
     end
 end
+
+"""
+The query string as the same `Dict{String,Any}` the POST helpers read, so `_num` and `_str` serve
+both transports and a default is written once.
+"""
+_query_args(uri::HTTP.URI) =
+    Dict{String,Any}(String(k) => v for (k, v) in HTTP.queryparams(uri))
+
+"""
+The fixture a desk request means when it names none: the first on the card.
+
+An error would be the alternative and it would be the wrong one -- the page asks for a ladder
+before the operator has chosen a fixture, on first paint.
+"""
+_default_match(st::ReplayState) =
+    isempty(st.card.fixtures) ? 0 : first(st.card.fixtures).m_id
 
 "Merge a JSON body with the query string, so every control is also reachable with `curl -X POST`."
 function _body_args(req::HTTP.Request, uri::HTTP.URI)

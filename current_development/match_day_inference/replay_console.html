@@ -5,12 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MatchDay — Replay Console (8086)</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<!-- Chart.js is loaded WITHOUT `defer` and BEFORE Alpine on purpose: the trailing script block
+     registers a plugin against the global `Chart`, and a deferred library would not exist yet. -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
 <style>
   :root {
     --bg:#0a0c10; --panel:#11151c; --line:#1d232e; --ink:#d7dee9; --dim:#7c8798;
     --accent:#4ade80; --accent-dim:#14532d; --market:#3f4a5a; --warn:#fbbf24; --bad:#f87171;
     --replay:#60a5fa; --replay-dim:#1e3a5f;
+    /* The two ladder sides. Blue is the BID side (prices available to back), pink the ASK side
+       (prices available to lay) -- the same assignment every exchange screen uses, so a habit
+       formed here transfers rather than inverts. */
+    --back:#2563eb; --back-dim:#12244a; --lay:#db2777; --lay-dim:#3d0f28;
+    --fill:#f59e0b; --fill-dim:#3a2a08;
   }
   html,body{background:var(--bg);color:var(--ink);}
   body{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
@@ -35,6 +43,9 @@
   .vcr{padding:4px 10px;border:1px solid var(--line);border-radius:3px;background:#161b24;}
   .vcr:hover:not(:disabled){border-color:var(--replay);}
   .vcr.on{border-color:var(--replay);color:var(--replay);background:var(--replay-dim);}
+  .tab{padding:6px 16px;border:1px solid var(--line);border-bottom:none;border-radius:4px 4px 0 0;
+       background:#0e1219;color:var(--dim);}
+  .tab.on{background:var(--panel);color:var(--replay);border-color:var(--replay);}
   .tick{animation:tick .5s ease;}
   @keyframes tick{from{background:#132033}to{background:transparent}}
   .scrub{-webkit-appearance:none;appearance:none;height:22px;background:transparent;width:100%;}
@@ -51,6 +62,46 @@
   th{color:var(--dim);font-weight:normal;position:sticky;top:0;background:var(--panel);}
   .num{text-align:right;}
   .scrollx{overflow-x:auto;}
+
+  /* ── THE LADDER ────────────────────────────────────────────────────────────────
+     One row is a price and the size resting at it, with the size drawn as a bar
+     BEHIND the number. The bar is the reading an operator takes at a glance; the
+     number is the one they take before pressing anything. */
+  .lad{display:grid;grid-template-columns:64px 1fr;height:20px;align-items:center;
+       border-bottom:1px solid #141922;position:relative;}
+  .lad .px{padding-left:6px;color:var(--ink);}
+  .lad .vol{position:relative;height:100%;display:flex;align-items:center;justify-content:flex-end;
+            padding-right:6px;overflow:hidden;}
+  .lad .vol>i{position:absolute;left:0;top:0;bottom:0;display:block;opacity:.55;}
+  .lad .vol>b{position:relative;font-weight:normal;}
+  .lad.ask .vol>i{background:var(--lay);}
+  .lad.bid .vol>i{background:var(--back);}
+  .lad.ask .px{color:#f9a8d4;}
+  .lad.bid .px{color:#93c5fd;}
+  .lad.touch{border-left:2px solid currentColor;}
+  .lad.empty .px, .lad.empty .vol{color:#39424f;}
+  .lad.hit{outline:1px solid var(--fill);background:var(--fill-dim);}
+  .lad.hit .px{color:var(--fill);}
+  .spread{display:flex;align-items:center;justify-content:center;gap:8px;height:22px;
+          background:#0e1219;border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+          color:var(--dim);letter-spacing:.5px;}
+  .womb{display:flex;height:10px;border-radius:2px;overflow:hidden;background:#161b24;}
+  .womb>span{display:block;height:100%;transition:width .25s ease;}
+  .womb>.b{background:var(--back);}
+  .womb>.l{background:var(--lay);}
+  .pill{display:inline-flex;align-items:center;gap:4px;padding:0 5px;border-radius:3px;
+        background:#161b24;border:1px solid var(--line);}
+  .grid-lad{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));}
+
+  /* ── THE FLOATING CHART WINDOW ─────────────────────────────────────────────── */
+  .float{position:fixed;z-index:50;background:var(--panel);border:1px solid var(--replay);
+         box-shadow:0 10px 40px rgba(0,0,0,.6);border-radius:4px;display:flex;flex-direction:column;}
+  .float .hd{display:flex;align-items:center;gap:8px;padding:4px 8px;background:#0e1219;
+             border-bottom:1px solid var(--line);cursor:move;user-select:none;}
+  .float .wbtn{width:20px;height:18px;line-height:16px;text-align:center;border:1px solid var(--line);
+               border-radius:2px;background:#161b24;cursor:pointer;}
+  .float .wbtn:hover{border-color:var(--replay);}
+  .float .bd{padding:6px 8px;overflow:auto;}
 </style>
 </head>
 <body>
@@ -222,6 +273,27 @@
     <div x-show="b.warning" class="mt-1 text-[var(--warn)]" x-text="'select_split: ' + b.warning"></div>
   </div>
 
+  <!-- ── VIEW TABS ────────────────────────────────────────────────────────────────
+       Two views over the SAME state. Switching is a client-side toggle and posts
+       nothing, which is what keeps playback, the scrubber, the model and the match day
+       exactly where they were: the tab is a lens, not a mode. -->
+  <div class="flex items-end gap-1 border-b border-[var(--line)] mb-3">
+    <button class="tab" :class="{'on': tab==='cards'}" @click="setTab('cards')">
+      ▦ Slate Cards (Radar)
+    </button>
+    <button class="tab" :class="{'on': tab==='ladder'}" @click="setTab('ladder')">
+      ☱ Multi-Ladder Desk
+    </button>
+    <span class="ml-auto pb-1 text-[var(--dim)]"
+          x-text="tab==='cards' ? cards.length + ' cards · ' + blocked.length + ' blocked'
+                                : (ladder ? ladder.fixture + ' · ' + ladder.market_label : '—')"></span>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════════
+       TAB 1 — SLATE CARDS
+       ════════════════════════════════════════════════════════════════════════════ -->
+  <div x-show="tab==='cards'">
+
   <!-- ── FILTERS ───────────────────────────────────────────────────────────────── -->
   <div class="panel p-2 mb-3 flex flex-wrap gap-4 items-center">
     <span class="text-[var(--dim)]">sort</span>
@@ -242,7 +314,9 @@
 
   <!-- ── CARD GRID ─────────────────────────────────────────────────────────────────
        Identical in shape to the live console, deliberately: a card must mean the same
-       thing on both, or a habit formed here misreads the real one. -->
+       thing on both, or a habit formed here misreads the real one. The two things it
+       adds -- the WOM pill and the depth preview -- are DEPTH facts, not pricing ones,
+       and they are what tell an operator whether the edge above them is reachable. -->
   <div class="grid-cards">
     <template x-for="c in visible()" :key="c.match_id">
       <div class="card p-2" :class="{'pos': c.ev_pct > 0, 'noxi': c.lineup_source==='none',
@@ -252,7 +326,11 @@
           <span class="font-bold truncate" x-text="c.home + ' v ' + c.away"></span>
           <span class="text-[var(--dim)] shrink-0 ml-2" x-text="'T' + tminus(c.minutes_to_kickoff)"></span>
         </div>
-        <div class="text-[var(--dim)]" x-text="fmtTime(c.kickoff) + ' · tid ' + c.tournament_id"></div>
+        <div class="flex justify-between items-baseline">
+          <span class="text-[var(--dim)]" x-text="fmtTime(c.kickoff) + ' · tid ' + c.tournament_id"></span>
+          <button class="vcr py-0 px-2 text-[var(--replay)]" @click="openDesk(c.match_id)"
+                  title="open this fixture on the Multi-Ladder Desk">↗ Ladder Desk</button>
+        </div>
 
         <div class="flex justify-between items-baseline mt-1 mb-1 border-t border-b border-[var(--line)] py-1">
           <span class="text-lg font-bold"
@@ -289,6 +367,20 @@
                     x-text="'depth ' + money(l.depth_touch)
                             + (l.slippage_pct!==null ? ' · slip ' + l.slippage_pct + '%' : '')"></span>
             </div>
+            <!-- Weight of money, three levels deep. Above 60% is money queued to BACK this
+                 runner (steam, price shortening); below 40% is money queued to lay it (drift).
+                 It is resting size and not traded size, which is why it sits next to the
+                 depth figure rather than next to the edge. -->
+            <div class="flex justify-between items-center mt-0.5">
+              <span class="pill" :class="womClass(l.wom)"
+                    :title="'weight of money, 3 levels: ' + (l.wom===null ? 'no two-sided book'
+                            : l.wom + '% of resting size is on the back side')">
+                <span class="dots" x-text="womBlocks(l.wom)"></span>
+                <span x-text="(l.wom===null ? '—' : l.wom + '%') + ' WOM'"></span>
+              </span>
+              <span class="text-[var(--dim)]"
+                    x-text="'depth ' + money(l.depth_3lvl) + ' (3 lvls)'"></span>
+            </div>
           </div>
         </template>
 
@@ -324,6 +416,176 @@
       </div>
     </template>
   </div>
+
+  </div><!-- /tab cards -->
+
+  <!-- ════════════════════════════════════════════════════════════════════════════
+       TAB 2 — MULTI-LADDER DESK
+       The exchange screen. One fixture, one market, every runner's full archived
+       ladder side by side, with the model's view above it and our own order marked
+       where it would land.
+       ════════════════════════════════════════════════════════════════════════════ -->
+  <div x-show="tab==='ladder'">
+
+    <div class="panel p-2 mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+      <label class="flex items-center gap-1">
+        <span class="text-[var(--dim)]">fixture</span>
+        <select @change="setDeskMatch($event.target.value)">
+          <template x-for="f in r.fixtures" :key="f.match_id">
+            <option :value="f.match_id" :selected="f.match_id===desk.match_id"
+                    x-text="f.fixture + (f.lineup_drop_min!==null ? '  (XI T−'+f.lineup_drop_min+'m)' : '  (no XI)')"></option>
+          </template>
+        </select>
+      </label>
+
+      <span class="text-[var(--dim)]">market</span>
+      <template x-for="m in (r.ladder_markets||['MATCH_ODDS'])" :key="m">
+        <button class="vcr" :class="{'on': desk.market===m}" @click="setDeskMarket(m)"
+                x-text="marketLabel(m)"></button>
+      </template>
+
+      <template x-if="ladder">
+        <span class="text-[var(--dim)]"
+              x-text="'book sum ' + (ladder.book_sum===null ? 'incomplete'
+                       : (100*ladder.book_sum).toFixed(1) + '%')
+                       + ' · model ' + ladder.model + ' [' + ladder.model_status + ']'
+                       + (ladder.lineup_drop_min!==null ? ' · XI T'+ladder.lineup_drop_min+'m' : ' · no XI')"></span>
+      </template>
+      <span class="text-[var(--warn)]" x-show="ladder && ladder.stale"
+            x-text="'order marks are from T' + tsign(ladder.priced_t) + 'm'"></span>
+      <span class="ml-auto text-[var(--dim)]"
+            x-text="'book at T' + tsign(r.t) + 'm · ' + fmtTime(r.as_of)"></span>
+    </div>
+
+    <div x-show="ladder && !ladder.resolved" class="panel p-2 mb-3 text-[var(--bad)]">
+      This fixture has no resolved Betfair identity on this match day, so there is no archived
+      ladder to show. The card grid reports it under GATED.
+    </div>
+
+    <div class="grid-lad" x-show="ladder">
+      <template x-for="rn in (ladder ? ladder.runners : [])" :key="rn.symbol">
+        <div class="panel p-2">
+
+          <!-- RUNNER HEADER: what the model thinks, what the market thinks, and what the
+               portfolio would therefore place. Same two-bar device as the cards. -->
+          <div class="flex justify-between items-baseline">
+            <span class="font-bold truncate" x-text="rn.label"></span>
+            <button class="vcr py-0 px-2" @click="openChart(rn)"
+                    title="odds trajectory and liquidity for this runner">📈 chart</button>
+          </div>
+
+          <div class="flex justify-between items-baseline mt-1">
+            <span class="text-[var(--dim)]">fair</span>
+            <span class="text-[var(--accent)]"
+                  x-text="rn.fair_odds===null ? '—' : rn.fair_odds.toFixed(2)"></span>
+            <span class="text-[var(--dim)]">mkt</span>
+            <span x-text="rn.mid===null ? '—' : rn.mid.toFixed(2)"></span>
+            <span class="text-[var(--dim)]">EV</span>
+            <span :class="rn.ev_pct>0?'text-[var(--accent)]':'text-[var(--dim)]'"
+                  x-text="rn.ev_pct===null ? '—' : (rn.ev_pct>0?'+':'') + rn.ev_pct + '%'"></span>
+          </div>
+
+          <div class="bar bar-model mt-1"><span :style="'width:'+(100*(rn.p_model||0))+'%'"></span></div>
+          <div class="bar bar-market mt-0.5"><span :style="'width:'+(100*(rn.p_market||0))+'%'"></span></div>
+          <div class="flex justify-between text-[var(--dim)] mt-0.5">
+            <span x-text="'model ' + (rn.p_model===null?'—':rn.p_model.toFixed(3))
+                          + ' · mkt ' + (rn.p_market===null?'—':rn.p_market.toFixed(3))"></span>
+            <span :class="rn.edge_pp>0?'text-[var(--accent)]':''"
+                  x-text="rn.edge_pp===null ? '' : (rn.edge_pp>0?'+':'') + rn.edge_pp + 'pp'"></span>
+          </div>
+
+          <!-- WEIGHT OF MONEY: one split bar, back against lay, three levels deep. -->
+          <div class="mt-2">
+            <div class="flex justify-between text-[var(--dim)]">
+              <span x-text="'back ' + (rn.wom===null?'—':rn.wom+'%')"></span>
+              <span>WOM (3 lvls)</span>
+              <span x-text="(rn.wom_lay===null?'—':rn.wom_lay+'%') + ' lay'"></span>
+            </div>
+            <div class="womb mt-0.5">
+              <span class="b" :style="'width:'+(rn.wom===null?50:rn.wom)+'%'"></span>
+              <span class="l" :style="'width:'+(rn.wom_lay===null?50:rn.wom_lay)+'%'"></span>
+            </div>
+          </div>
+
+          <!-- THE LADDER. Asks descend to the touch, then the spread, then the bids.
+               That ordering is not a preference: it puts the two prices that actually
+               trade adjacent to each other, with the gap between them drawn to scale. -->
+          <div class="mt-2">
+            <template x-for="(lv, i) in askRows(rn)" :key="'a'+i">
+              <div class="lad ask" :class="{'touch': lv.touch, 'empty': lv.price===null,
+                                            'hit': lv.hit>0}">
+                <span class="px" x-text="lv.price===null ? '—' : lv.price.toFixed(2)"></span>
+                <span class="vol">
+                  <i :style="'width:'+barPct(lv.size, rn.depth_max)+'%'"></i>
+                  <b x-text="lv.size===null ? '' : money(lv.size)"></b>
+                </span>
+              </div>
+            </template>
+
+            <div class="spread">
+              <span x-text="'SPREAD ' + (rn.spread===null ? '—' : rn.spread.toFixed(2))"></span>
+              <span x-text="rn.spread_ticks===null ? '' : '(' + rn.spread_ticks + ' tick'
+                            + (rn.spread_ticks===1?'':'s') + ')'"></span>
+              <span x-text="rn.spread_pct===null ? '' : rn.spread_pct + '%'"></span>
+            </div>
+
+            <template x-for="(lv, i) in bidRows(rn)" :key="'b'+i">
+              <div class="lad bid" :class="{'touch': lv.touch, 'empty': lv.price===null,
+                                            'hit': lv.hit>0}">
+                <span class="px" x-text="lv.price===null ? '—' : lv.price.toFixed(2)"></span>
+                <span class="vol">
+                  <i :style="'width:'+barPct(lv.size, rn.depth_max)+'%'"></i>
+                  <b x-text="lv.size===null ? '' : money(lv.size)"></b>
+                </span>
+              </div>
+            </template>
+          </div>
+
+          <!-- OUR ORDER. Amber wherever it rests, and it names the runner it actually
+               touches: on a synthetic the model selection and the venue runner differ, and
+               a marker that hid that would put the order on the wrong book. -->
+          <div class="mt-2 px-1 py-1 rounded" style="background:var(--fill-dim)"
+               x-show="rn.order">
+            <template x-if="rn.order">
+              <div>
+                <div class="flex justify-between" style="color:var(--fill)">
+                  <span x-text="'▸ ' + rn.order.side.toUpperCase() + ' ' + money(rn.order.venue_stake)
+                                + ' @ ' + rn.order.venue_odds.toFixed(2)"></span>
+                  <span x-text="rn.order.levels_used + ' lvl'
+                                + (rn.order.levels_used===1?'':'s')
+                                + (rn.order.fillable ? '' : ' · PARTIAL')"></span>
+                </div>
+                <div class="flex justify-between text-[var(--dim)]">
+                  <span x-text="'for ' + rn.order.selection + ' · risk ' + money(rn.order.risk)"></span>
+                  <span x-text="(rn.order.fill_vwap===null ? '' : 'vwap ' + rn.order.fill_vwap.toFixed(3))
+                                + (rn.order.slippage_pct===null ? '' : ' · slip ' + rn.order.slippage_pct + '%')"></span>
+                </div>
+                <div class="text-[var(--bad)]" x-show="rn.order.unfilled>0"
+                     x-text="money(rn.order.unfilled) + ' would not fill in the archived 3 levels'"></div>
+              </div>
+            </template>
+          </div>
+
+          <!-- FOOTER: what has actually traded, and the average of what is resting. -->
+          <div class="flex justify-between text-[var(--dim)] border-t border-[var(--line)] mt-2 pt-1">
+            <span x-text="'matched ' + (rn.matched===null ? '—' : money(rn.matched))"></span>
+            <!-- A BOOK vwap: `order_book_1m` archives resting depth and a running matched
+                 total, never a traded price series, so a traded vwap cannot be computed from
+                 it and is not invented here. -->
+            <span title="volume-weighted average of the visible bid ladder (book, not traded)"
+                  x-text="'book vwap ' + (rn.vwap_book===null ? '—' : rn.vwap_book.toFixed(3))"></span>
+          </div>
+          <div class="text-[var(--dim)]"
+               x-text="rn.book_ts===null ? 'no book at this minute'
+                       : 'book ' + fmtTime(rn.book_ts) + ' (' + rn.book_age_s + 's old)'"></div>
+        </div>
+      </template>
+    </div>
+
+    <div class="panel p-3" x-show="!ladder">
+      <span class="text-[var(--dim)]">no ladder loaded — pick a fixture above.</span>
+    </div>
+  </div><!-- /tab ladder -->
 
   <!-- ── SETTLEMENT ────────────────────────────────────────────────────────────────
        What actually happened. Leg by leg first, aggregate second: an ROI with no legs
@@ -432,9 +694,92 @@
     </div>
   </div>
   </template>
+
+  <!-- ── FLOATING TRAJECTORY CHART ────────────────────────────────────────────────
+       Kept in the DOM and hidden rather than created on demand: a canvas that does not
+       exist cannot be handed to Chart.js, and re-creating the two charts on every open
+       would leak a context per open.
+
+       TOP PANE   market best back / best lay against the model's fair odds. The green
+                  line STEPS at the XI drop for a lineup-reading model and is flat for a
+                  team-level one -- that difference, on one axis with the price, is the
+                  whole reason this window exists.
+       BOTTOM     matched volume, which is the liquidity S-curve into kick-off. -->
+  <div class="float" x-show="chart.open" x-cloak
+       :style="floatStyle()">
+    <div class="hd" @mousedown="dragStart($event)">
+      <span class="font-bold text-[var(--replay)]" x-text="chart.title"></span>
+      <span class="text-[var(--dim)]" x-text="chart.sub"></span>
+      <span class="ml-auto flex gap-1">
+        <span class="wbtn" @click.stop="chart.min = !chart.min; resizeCharts()" title="minimise">—</span>
+        <span class="wbtn" @click.stop="chart.max = !chart.max; resizeCharts()" title="maximise">□</span>
+        <span class="wbtn" @click.stop="closeChart()" title="close">✕</span>
+      </span>
+    </div>
+    <div class="bd" x-show="!chart.min">
+      <div class="flex flex-wrap gap-x-4 text-[var(--dim)] mb-1">
+        <span><span style="color:#60a5fa">──</span> best back</span>
+        <span><span style="color:#f472b6">──</span> best lay</span>
+        <span><span style="color:#4ade80">╌╌</span> model fair odds 1/p</span>
+        <span><span style="color:#4ade80">▓</span> exec window T−25…T−12</span>
+        <span><span style="color:#fbbf24">┊</span> lineups confirmed</span>
+        <span><span style="color:#60a5fa">┃</span> replay clock</span>
+      </div>
+      <div :style="'height:'+(chart.max?300:180)+'px'"><canvas id="pxChart"></canvas></div>
+      <div class="text-[var(--dim)] mt-2">matched volume (£) — liquidity into kick-off</div>
+      <div :style="'height:'+(chart.max?160:100)+'px'"><canvas id="lqChart"></canvas></div>
+      <div class="text-[var(--dim)] mt-1" x-show="chart.note" x-text="chart.note"></div>
+    </div>
+  </div>
 </div>
 
 <script>
+// The marker layer. Chart.js draws series; the instants a replay is ABOUT -- the XI drop, the
+// execution window, and where the scrubber is right now -- are not series and must not be
+// smuggled in as one, or they would appear in the legend and in the tooltips as though they
+// were data.
+if (window.Chart) {
+  Chart.register({
+    id: 'replayMarkers',
+    beforeDatasetsDraw(chart) {
+      const o = (chart.options.plugins && chart.options.plugins.replayMarkers) || {};
+      const x = chart.scales.x; if (!x) return;
+      const {ctx, chartArea: ca} = chart; if (!ca) return;
+      ctx.save();
+      if (o.band) {
+        const a = x.getPixelForValue(o.band[0]), b = x.getPixelForValue(o.band[1]);
+        ctx.fillStyle = 'rgba(74,222,128,.10)';
+        ctx.fillRect(Math.min(a,b), ca.top, Math.abs(b-a), ca.bottom - ca.top);
+      }
+      (o.lines || []).forEach(L => {
+        if (L.at === null || L.at === undefined) return;
+        const px = x.getPixelForValue(L.at);
+        if (!isFinite(px)) return;
+        ctx.beginPath();
+        ctx.setLineDash(L.dash || [4,4]);
+        ctx.strokeStyle = L.color; ctx.lineWidth = L.width || 1;
+        ctx.moveTo(px, ca.top); ctx.lineTo(px, ca.bottom); ctx.stroke();
+        if (L.label) {
+          ctx.setLineDash([]);
+          ctx.fillStyle = L.color;
+          ctx.font = '10px ui-monospace, monospace';
+          ctx.fillText(L.label, px + 3, ca.top + 10);
+        }
+      });
+      ctx.restore();
+    }
+  });
+}
+
+// THE CHART INSTANCES LIVE HERE, OUTSIDE ALPINE, AND THAT IS NOT A STYLE CHOICE.
+// Alpine 3 deep-proxies every property of a component's data object. A `Chart` handed to it
+// comes back wrapped, and Chart.js then writes through the proxy into its own internals -- which
+// fails at the first layout box with `TypeError: Cannot set properties of undefined (setting
+// 'fullSize')`, leaving an empty canvas and no series. Holding the two instances in a plain
+// module-scope object keeps them opaque to the framework; nothing about them needs to be
+// reactive, because the canvas is redrawn by `chart.update()` and never by a binding.
+const CHARTS = { px: null, lq: null };
+
 function replay_() { return {
   a:{equity:0,free:0,is_live:false},
   b:{window:'',status:'',n_legs:0,n_fixtures:0,exposure_pct:0,cap_pct:25,total_risk:0,
@@ -443,18 +788,36 @@ function replay_() { return {
      markers:{lineups:-30,exec:-15,kickoff:0},models:[],active_model:'',stale:false,
      priced_t:-60,note:'',error:'',reprice_ms:0,tick_seq:0,schema:'',account_id:'',
      n_executed:0,n_fixtures:0,n_lineups:0,book_from:null,book_to:null,fixtures:[],
-     in_play:false},
+     in_play:false,ladder_markets:['MATCH_ODDS','OVER_UNDER_25','BOTH_TEAMS_TO_SCORE'],
+     window_open:-25,window_close:-12},
   cards:[], blocked:[], settlement:null, matchdays:[],
   connected:false, autosort:true, sortKey:'ev_pct',
   markets:['1X2','OverUnder','BTTS'], msg:'', msgOk:true, ws:null,
   showSettlement:false, flash:false, lastSeq:-1,
+
+  // ── the desk ──────────────────────────────────────────────────────────────────
+  tab:'cards',
+  desk:{match_id:null, market:'MATCH_ODDS'},
+  ladder:null, ladderBusy:false, ladderAt:0,
+  chart:{open:false, min:false, max:false, title:'', sub:'', note:'', drop:null,
+         match_id:null, symbol:null, market:null, x:null, y:null, busy:false, at:0},
+  drag:null, pendingChart:null,
 
   start(){
     this.pull(); this.connect(); this.loadMatchdays();
     // `?results=1` opens the results view on load. A deep link is how an operator sends a
     // settled replay to someone else, and it is the only way to reach this view without a
     // click - which is also what makes it screenshottable in CI.
-    if (new URLSearchParams(location.search).get('results')) this.showSettlement = true;
+    const qs = new URLSearchParams(location.search);
+    if (qs.get('results')) this.showSettlement = true;
+    // `?desk=<match_id>` opens the ladder desk on one fixture, and `?chart=<symbol>` opens
+    // that runner's trajectory window on top of it, for the same reason: it is how one view of
+    // one runner is sent to someone else, and it is the only way to reach either without a
+    // click -- which is also what makes them screenshottable in CI.
+    if (qs.get('desk')) { this.desk.match_id = Number(qs.get('desk')); this.tab = 'ladder'; }
+    else if (qs.get('tab') === 'ladder') this.tab = 'ladder';
+    if (qs.get('market')) this.desk.market = qs.get('market');
+    this.pendingChart = qs.get('chart');
     // The keyboard is the scrubber an operator actually uses: space to play, arrows to
     // step, and the four jump targets on their initials.
     window.addEventListener('keydown', e => {
@@ -466,8 +829,11 @@ function replay_() { return {
       if (e.key === 'e') this.jump('exec');
       if (e.key === 'k') this.jump('kickoff');
       if (e.key === 'f') this.jump('settlement');
-      if (e.key === 'Escape') this.showSettlement = false;
+      if (e.key === 'l') this.setTab(this.tab === 'ladder' ? 'cards' : 'ladder');
+      if (e.key === 'Escape') { this.showSettlement = false; this.closeChart(); }
     });
+    window.addEventListener('mousemove', e => this.dragMove(e));
+    window.addEventListener('mouseup',   () => this.drag = null);
   },
 
   connect(){
@@ -489,12 +855,18 @@ function replay_() { return {
     if (!s || s.error) return;
     this.a = s.account; this.b = s.batch; this.r = s.replay;
     this.cards = s.cards; this.blocked = s.blocked; this.settlement = s.settlement;
+    if (this.desk.match_id === null && this.r.fixtures.length)
+      this.desk.match_id = this.r.fixtures[0].match_id;
     // Flash only when the SLATE was actually re-priced, not on every pushed frame. A grid
     // that flashes at the push rate would read as motion where there was none.
     if (s.replay.tick_seq !== this.lastSeq) {
       this.lastSeq = s.replay.tick_seq;
       this.flash = true; setTimeout(() => this.flash = false, 500);
     }
+    // The desk and the chart follow the clock, throttled: the push is 2 Hz and neither view
+    // carries new information faster than the 1-minute book underneath it does.
+    if (this.tab === 'ladder') this.loadLadder();
+    if (this.chart.open) { this.needle(); this.loadHistory(); }
   },
 
   // Disabled while a gate is failing. The reservation is all-or-nothing, so a half-valid
@@ -521,9 +893,11 @@ function replay_() { return {
   jump(x){ this.post('/api/replay/jump', {target:x}); },
   setSpeed(s){ this.post('/api/replay/speed', {speed:s}); },
   setModel(k){ this.msg = 'loading ' + k + '…'; this.msgOk = true;
-               this.post('/api/replay/set_model', {model:k}); },
+               this.post('/api/replay/set_model', {model:k})
+                   .then(()=>{ this.loadLadder(true); this.loadHistory(true); }); },
   setMatchday(d){ if (d === this.r.day) return;
                   this.msg = 'loading ' + d + '…'; this.msgOk = true;
+                  this.ladder = null; this.closeChart(); this.desk.match_id = null;
                   this.post('/api/replay/set_matchday', {day:d}); },
   execute(){ this.post('/api/replay/execute'); },
   settle(){ this.post('/api/replay/settle'); },
@@ -540,6 +914,180 @@ function replay_() { return {
       this.sortKey === 'minutes_to_kickoff' ? x[this.sortKey] - y[this.sortKey]
                                             : y[this.sortKey] - x[this.sortKey]);
     return v;
+  },
+
+  // ── TABS AND THE DESK ─────────────────────────────────────────────────────────
+  setTab(t){
+    this.tab = t;
+    if (t === 'ladder') this.loadLadder(true);
+  },
+  openDesk(mid){ this.desk.match_id = mid; this.tab = 'ladder'; this.loadLadder(true); },
+  setDeskMatch(mid){ this.desk.match_id = Number(mid); this.ladder = null;
+                     this.closeChart(); this.loadLadder(true); },
+  setDeskMarket(m){ this.desk.market = m; this.ladder = null;
+                    this.closeChart(); this.loadLadder(true); },
+  marketLabel(m){ return m === 'MATCH_ODDS' ? 'Match Odds'
+                       : m === 'BOTH_TEAMS_TO_SCORE' ? 'BTTS'
+                       : m.startsWith('OVER_UNDER_')
+                         ? 'Over/Under ' + (Number(m.slice(11))/10).toFixed(1) : m; },
+
+  async loadLadder(force){
+    if (this.desk.match_id === null) return;
+    const now = Date.now();
+    if (!force && (this.ladderBusy || now - this.ladderAt < 400)) return;
+    this.ladderBusy = true; this.ladderAt = now;
+    try {
+      const j = await (await fetch('/api/replay/ladder?match_id=' + this.desk.match_id
+                                   + '&market=' + this.desk.market)).json();
+      if (j.ok) {
+        this.ladder = j;
+        if (this.pendingChart) {
+          const rn = j.runners.find(x => x.symbol === this.pendingChart);
+          this.pendingChart = null;
+          if (rn) this.openChart(rn);
+        }
+      }
+      else { this.msg = j.error || 'ladder refused'; this.msgOk = false; }
+    } catch(e){}
+    finally { this.ladderBusy = false; }
+  },
+
+  // Asks are drawn from the WORST price down to the touch so the best lay sits immediately
+  // above the spread row, and bids from the touch down -- the classic ladder, in which the
+  // two prices that can actually trade are adjacent and the gap between them is the spread.
+  askRows(rn){
+    const f = rn.order && rn.order.side === 'lay' ? rn.order.level_fills : null;
+    return [2,1,0].map(i => ({price: rn.lay[i].price, size: rn.lay[i].size,
+                              touch: i === 0, hit: f && f[i] ? f[i] : 0}));
+  },
+  bidRows(rn){
+    const f = rn.order && rn.order.side === 'back' ? rn.order.level_fills : null;
+    return [0,1,2].map(i => ({price: rn.back[i].price, size: rn.back[i].size,
+                              touch: i === 0, hit: f && f[i] ? f[i] : 0}));
+  },
+  barPct(size, max){ return (!size || !max) ? 0 : Math.max(2, Math.min(100, 100*size/max)); },
+
+  // ── WEIGHT OF MONEY ───────────────────────────────────────────────────────────
+  womBlocks(w){
+    if (w === null || w === undefined) return '░░░░░░░░░░';
+    const n = Math.max(0, Math.min(10, Math.round(w/10)));
+    return '█'.repeat(n) + '░'.repeat(10-n);
+  },
+  womClass(w){
+    if (w === null || w === undefined) return 'text-[var(--dim)]';
+    return w > 60 ? 'text-[var(--accent)]' : w < 40 ? 'text-[var(--bad)]' : 'text-[var(--dim)]';
+  },
+
+  // ── THE FLOATING CHART ────────────────────────────────────────────────────────
+  openChart(rn){
+    this.chart.open = true; this.chart.min = false;
+    this.chart.match_id = this.desk.match_id;
+    this.chart.symbol = rn.symbol; this.chart.market = this.desk.market;
+    this.chart.title = rn.label;
+    this.chart.sub = (this.ladder ? this.ladder.fixture + ' · ' : '') + this.marketLabel(this.desk.market);
+    if (this.chart.x === null) { this.chart.x = 60; this.chart.y = 90; }
+    this.$nextTick(() => { this.ensureCharts(); this.loadHistory(true); });
+  },
+  closeChart(){ this.chart.open = false; },
+  floatStyle(){
+    const w = this.chart.max ? 900 : 560;
+    return 'left:' + (this.chart.x||60) + 'px;top:' + (this.chart.y||90) + 'px;width:' + w + 'px;';
+  },
+  dragStart(e){ this.drag = {dx: e.clientX - (this.chart.x||60),
+                             dy: e.clientY - (this.chart.y||90)}; },
+  dragMove(e){
+    if (!this.drag) return;
+    this.chart.x = Math.max(0, e.clientX - this.drag.dx);
+    this.chart.y = Math.max(0, e.clientY - this.drag.dy);
+  },
+  resizeCharts(){ this.$nextTick(() => {
+    if (CHARTS.px) CHARTS.px.resize();
+    if (CHARTS.lq) CHARTS.lq.resize();
+  }); },
+
+  chartOpts(yTitle){
+    return {
+      responsive:true, maintainAspectRatio:false, animation:false,
+      interaction:{mode:'nearest', intersect:false},
+      scales:{
+        x:{type:'linear', min:this.r.t_start, max:this.r.t_end,
+           ticks:{color:'#7c8798', callback:v => (v<0?'T'+v:'T+'+v)},
+           grid:{color:'#1d232e'}},
+        y:{ticks:{color:'#7c8798'}, grid:{color:'#1d232e'},
+            title:{display:true, text:yTitle, color:'#7c8798'}}
+      },
+      plugins:{
+        legend:{display:false},
+        tooltip:{callbacks:{title: it => 'T' + (it[0].parsed.x<0?'':'+') + it[0].parsed.x + 'm'}},
+        replayMarkers:{band:[this.r.window_open, this.r.window_close], lines:[]}
+      }
+    };
+  },
+
+  ensureCharts(){
+    if (!window.Chart) { this.chart.note = 'Chart.js did not load — the CDN is unreachable.'; return; }
+    const px = document.getElementById('pxChart'), lq = document.getElementById('lqChart');
+    if (!px || !lq) return;
+    if (!CHARTS.px) {
+      CHARTS.px = new Chart(px, {type:'line', data:{datasets:[
+        {label:'best back', borderColor:'#60a5fa', backgroundColor:'#60a5fa',
+         borderWidth:1.5, pointRadius:0, spanGaps:false, data:[]},
+        {label:'best lay', borderColor:'#f472b6', backgroundColor:'#f472b6',
+         borderWidth:1.5, pointRadius:0, spanGaps:false, data:[]},
+        {label:'fair odds', borderColor:'#4ade80', backgroundColor:'#4ade80',
+         borderWidth:1.5, borderDash:[5,4], pointRadius:0, spanGaps:false, stepped:true, data:[]},
+      ]}, options:this.chartOpts('decimal odds')});
+    }
+    if (!CHARTS.lq) {
+      CHARTS.lq = new Chart(lq, {type:'line', data:{datasets:[
+        {label:'matched', borderColor:'#a78bfa', backgroundColor:'rgba(167,139,250,.18)',
+         borderWidth:1.5, pointRadius:0, fill:true, spanGaps:false, data:[]},
+      ]}, options:this.chartOpts('£ matched')});
+    }
+  },
+
+  async loadHistory(force){
+    if (!this.chart.open || this.chart.match_id === null) return;
+    const now = Date.now();
+    if (!force && (this.chart.busy || now - this.chart.at < 1500)) return;
+    this.chart.busy = true; this.chart.at = now;
+    try {
+      const j = await (await fetch('/api/replay/history?match_id=' + this.chart.match_id
+                                   + '&symbol=' + encodeURIComponent(this.chart.symbol)
+                                   + '&market=' + this.chart.market)).json();
+      if (!j.ok) { this.chart.note = j.error || 'history refused'; return; }
+      this.ensureCharts();
+      if (!CHARTS.px) return;
+      const xs = j.minutes_to_ko;
+      const pts = arr => xs.map((m,i) => ({x:m, y:arr[i]}));
+      CHARTS.px.data.datasets[0].data = pts(j.best_back);
+      CHARTS.px.data.datasets[1].data = pts(j.best_lay);
+      CHARTS.px.data.datasets[2].data = pts(j.fair_odds);
+      CHARTS.lq.data.datasets[0].data = pts(j.market_matched);
+      this.chart.drop = j.lineup_drop_min;   // signed against kick-off: -30 is half an hour out
+      this.chart.note = j.model_status === 'ready' ? ''
+        : 'model ' + j.model + ' is ' + j.model_status + ' — no fair-odds line until it loads';
+      this.needle();
+    } catch(e){ this.chart.note = String(e); }
+    finally { this.chart.busy = false; }
+  },
+
+  // The needle is redrawn on every frame and the series are not: the clock moves at 60x and
+  // the 1-minute book does not, so refetching the series at the push rate would be 120 reads
+  // a minute of a series that changed in one place.
+  needle(){
+    const lines = [
+      {at:this.chart.drop === undefined ? null : this.chart.drop, color:'#fbbf24',
+       dash:[3,3], label:'XI'},
+      {at:this.r.markers.kickoff, color:'#f87171', dash:[2,4], label:'KO'},
+      {at:this.r.t, color:'#60a5fa', dash:[], width:1.5},
+    ];
+    [CHARTS.px, CHARTS.lq].forEach(c => {
+      if (!c) return;
+      c.options.plugins.replayMarkers.lines = lines;
+      c.options.plugins.replayMarkers.band = [this.r.window_open, this.r.window_close];
+      c.update('none');
+    });
   },
 
   pct(t){ return 100 * (t - this.r.t_start) / (this.r.t_end - this.r.t_start); },

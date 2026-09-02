@@ -9,19 +9,28 @@
 #
 # THREE TIERS, and they fail for three different reasons.
 #
-#   R1-R14   PURE. A synthetic match day built in memory: hand-made ladders, a hand-made XI, a
-#            hand-made stake sheet. No database, no DataStore, no trained fit. These are the
+#   R1-R14,  PURE. A synthetic match day built in memory: hand-made ladders, a hand-made XI, a
+#   R24-R29  hand-made stake sheet. No database, no DataStore, no trained fit. These are the
 #            tests that must never be skipped, because they cover the filtration contract -- if
 #            `PreloadedBook` can see past `as_of`, every number the console shows is fiction.
+#            R24-R29 are the ladder desk: ticks, weight of money, the three-level book, the
+#            order marker and one runner's history. They are numbered AFTER the console-surface
+#            and ledger tiers rather than inserted among them so that no existing test changes
+#            name -- a report saying "R17 failed" must go on meaning the ledger test it always
+#            meant.
 #
-#   R15-R19  LEDGER. PostgreSQL, `paper_replay` ONLY. Skipped with a message when `BF_DB_URL` is
+#   R15-R16, CONSOLE SURFACE. HTTP and WebSocket against a real socket on a random high port,
+#   R30      with no database behind it. R30 covers the two desk endpoints.
+#
+#   R17-R20  LEDGER. PostgreSQL, `paper_replay` ONLY. Skipped with a message when `BF_DB_URL` is
 #            unset or unreachable. R18 asserts the isolation claim directly by counting
 #            `paper_runbook` rows either side of a full execute-and-settle.
 #
-#   R20-R22  MODELS. A real Saturday, real canonical fits from `mcmc_experiments`. Slow (the
-#            hybrid player pillar costs about a minute to build its features) and skipped with a
+#   R21-R23, MODELS. A real Saturday, real canonical fits from `mcmc_experiments`. Slow (the
+#   R31-R32  hybrid player pillar costs about a minute to build its features) and skipped with a
 #            message when the DataStore cache or the experiment database is out of reach. This is
-#            the tier that proves hot-swapping and the lineup shock.
+#            the tier that proves hot-swapping, the lineup shock, and that the fair-odds line on
+#            the trajectory chart steps exactly where the teamsheet landed.
 #
 # RUN:
 #   julia --project -t 8 test/test_matchday_replay.jl
@@ -475,6 +484,408 @@ end
 end
 
 # ===================================================================
+# 3b. THE LADDER DESK  (pure -- no database, no model, no fit)
+# ===================================================================
+#
+# Numbered from R24 rather than inserted as R15 so that every existing test keeps the name it
+# had: a regression report that says "R17 failed" must go on meaning the ledger test it has
+# always meant.
+#
+# These cover the desk's four claims:
+#
+#   R24  a spread quoted in ticks means the same thing at 1.50 and at 6.00, and one quoted in
+#        currency does not.
+#   R25  weight of money is a THREE-LEVEL reading of RESTING size, and says so.
+#   R26  a market's runners come from the pipeline's own `betfair_to_key`, not from a second
+#        table of symbols that could drift from it.
+#   R27  the ladder is the archived book at `as_of` and nothing else -- three levels of both
+#        sides, de-vigged where that is legitimate, and NO model number when no model is loaded.
+#   R28  our order is marked on the runner it would actually touch, consuming the levels the
+#        fill simulation consumes.
+#   R29  one runner's history walks forward, and a model that cannot price leaves a GAP.
+
+"""
+A 903 fixture whose MATCH_ODDS book is genuinely three levels deep on both sides, with sizes
+chosen so every aggregate below is checkable by hand:
+
+    home  back 500/300/200 (Σ 1000)   lay 250/150/100 (Σ 500)   -> WOM 1000/1500 = 66.7%
+    draw  back 100/50/25   (Σ 175)    lay 300/200/100 (Σ 600)   -> WOM 175/775   = 22.6%
+    away  back 200/200/200 (Σ 600)    lay 200/200/200 (Σ 600)   -> WOM 50.0%
+
+Two snapshots per runner again -- T-15 and T-0 -- because the ladder must be shown to move with
+the clock and not merely to exist.
+"""
+function _deep_card()
+    exec_ts, close_ts = KO - Minute(15), KO
+    f = _fixture(903, "epsilon", "zeta")
+    L = Dict{Int,Dict{MD.SelectionKey,Vector{MD.BookLevels}}}()
+    S = Dict{Int,Dict{MD.SelectionKey,Vector{DateTime}}}()
+    per_sel = Dict{MD.SelectionKey,Vector{MD.BookLevels}}()
+    per_ts  = Dict{MD.SelectionKey,Vector{DateTime}}()
+
+    function put!(sel, back, back_sz, lay, lay_sz, matched)
+        snaps = [_levels(back, back_sz, lay, lay_sz; matched = matched, ts = exec_ts),
+                 # the close: one tick shorter on the back side, and twice the matched volume
+                 _levels(back .- 0.02, back_sz, lay .- 0.02, lay_sz;
+                         matched = 2 * matched, ts = close_ts)]
+        key = _key("1X2", 0.0, sel)
+        per_sel[key] = snaps
+        per_ts[key]  = [s.ts for s in snaps]
+    end
+
+    put!(:home, [2.50, 2.48, 2.46], [500.0, 300.0, 200.0],
+                [2.54, 2.56, 2.58], [250.0, 150.0, 100.0], 4_000.0)
+    put!(:draw, [3.60, 3.55, 3.50], [100.0,  50.0,  25.0],
+                [3.70, 3.75, 3.80], [300.0, 200.0, 100.0], 1_500.0)
+    put!(:away, [3.80, 3.75, 3.70], [200.0, 200.0, 200.0],
+                [3.90, 3.95, 4.00], [200.0, 200.0, 200.0], 2_000.0)
+    L[903] = per_sel; S[903] = per_ts
+
+    ids = Dict{Int,Union{MD.Resolved,MD.Unresolved}}(903 => _resolved(f))
+    return ReplayCard(Date(KO), [f], KO, ids, PreloadedBook(L, S, Hour(2)),
+                      PreloadedLineups(Dict(903 => _synthetic_lineup_rows(903))),
+                      Dict(903 => (2, 1)), Dict(903 => KO - Minute(30)),
+                      (exec_ts, close_ts))
+end
+
+_deep_state() = ReplayState(nothing, nothing, _deep_card(); system = _system(),
+                            bankroll = 1_000.0, account_id = "replay_ladder",
+                            schema = REPLAY_SCHEMA)
+
+"""
+A hand-built slate over the deep card carrying exactly two orders, one of each side:
+
+* `home`, BACKED for £900 at the venue. The bid ladder is 500/300/200, so the sweep takes the
+  whole touch, the whole second level and £100 of the third -- three levels, fully filled.
+* `draw`, expressed by LAYING `draw` for £700. The ask ladder is 300/200/100 = £600, so £100
+  cannot fill in the archived three levels. That partial is the point of the leg.
+"""
+function _deep_slate(card::ReplayCard; as_of::DateTime = KO - Minute(15))
+    sheet = DataFrame(
+        slate = fill(Date(KO), 2), match_id = [903, 903], family = ["1X2_home", "1X2_draw"],
+        group = ["1X2", "1X2"], line = [0.0, 0.0], selection = [:home, :draw],
+        venue_selection = [:home, :draw], side = [:back, :lay],
+        odds_quoted = [2.50, 1.3846], odds = [2.50, 1.3846],
+        p_model = [0.45, 0.30], p_market = [0.40, 0.28],
+        edge = [0.05, 0.02], frac = [0.90, 0.70],
+        stake = [900.0, 700.0], k_risk = fill(0.04, 2), slate_exposure = fill(0.20, 2),
+        capped = fill(false, 2), settled = fill(false, 2),
+        venue_odds = [2.50, 3.70], risk = [900.0, 1_890.0], venue_stake = [900.0, 700.0],
+        depth_touch = [500.0, 300.0], depth_book = [1000.0, 600.0],
+        expected_fill = [900.0, 600.0], expected_vwap = [2.487, 3.74],
+        expected_slippage = [0.005, -0.01], fillable = [true, false],
+        fill_confidence = [:medium, :low])
+
+    cards = MD.FixtureCard[MD.FixtureCard(f, card.identities[f.m_id], as_of)
+                           for f in card.fixtures]
+    for c in cards
+        c.readiness = MD.Ready()
+    end
+    books = Dict{Tuple{Int,MD.SelectionKey},MD.BookLevels}()
+    for (sel, lv) in MD.quotes(card.book, card.identities[903], as_of)
+        books[(903, sel)] = lv
+    end
+    k_home = _key("1X2", 0.0, :home); k_draw = _key("1X2", 0.0, :draw)
+    insts = Dict{Tuple{Int,MD.SelectionKey},MD.Instrument}(
+        (903, k_home) => MD.Instrument(k_home, 2.50, :back, 2.50, 1.0, k_home),
+        (903, k_draw) => MD.Instrument(k_draw, 3.70 / 2.70, :lay, 3.70, 1 / 2.70, k_draw))
+    return MD.PricedSlate(uuid4(), "replay_ladder", Date(KO), as_of, 1_000.0, sheet,
+                          DataFrame(), cards, MD.FixtureCard[], insts, books,
+                          0.04, 0.20, false, 20.0, 0.25, 2_790.0, 7, "")
+end
+
+@testset "R24 a spread is quoted in ticks because currency is not comparable across prices" begin
+    # THE reason the tick count is carried at all. 0.05 is a wide spread on a 1.50 shot and is
+    # not even one increment on a 6.00 one; a desk that only showed the currency difference
+    # would rank those two the same way.
+    @test spread_ticks(1.50, 1.55) == 5
+    @test spread_ticks(6.00, 6.05) == 0
+
+    # the ladder itself, at every band boundary
+    @test tick_index(1.01) == 0
+    @test tick_index(2.00) == 99
+    @test tick_index(3.00) == 149
+    @test tick_index(4.00) == 169
+    @test tick_index(6.00) == 189
+    @test tick_index(10.0) == 209
+    @test tick_index(20.0) == 229
+    @test tick_index(30.0) == 239
+    @test tick_index(50.0) == 249
+    @test tick_index(100.0) == 259
+    @test tick_index(1000.0) == 349
+
+    # a price BETWEEN two ticks floors to the one at or below it rather than erroring: the
+    # archive carries prices the current ladder does not (2.55 is not on it), and a spread that
+    # threw on one would blank a whole column.
+    @test tick_index(2.55) == tick_index(2.54)
+    @test spread_ticks(2.50, 2.54) == 2
+
+    # an absent side is UNMEASURED, not zero. A zero-tick spread and no book at all are
+    # different states and `MaxSpread` treats them differently.
+    @test spread_ticks(NaN, 2.0) === nothing
+    @test spread_ticks(2.0, NaN) === nothing
+    @test tick_index(1.0) === nothing            # below the ladder entirely
+    @test tick_index(NaN) === nothing
+end
+
+@testset "R25 weight of money is three levels of RESTING size, and no more" begin
+    @test wom_pct([100.0, 50.0, 25.0], [75.0, 25.0, 0.0]) ≈ 100 * 175 / 275
+
+    # the archive carries three levels; a fourth that a richer feed might supply is IGNORED
+    # rather than silently changing what the gauge means between sources.
+    @test wom_pct([100.0, 50.0, 25.0, 10_000.0], [75.0, 25.0, 0.0]) ≈ 100 * 175 / 275
+    @test top_depth([100.0, 50.0, 25.0, 10_000.0]) == 175.0
+
+    # a one-sided book still reads, and a two-sided-empty one is `nothing` rather than 50%:
+    # an absent gauge and a balanced one must stay distinguishable.
+    @test wom_pct([100.0], Float64[]) == 100.0
+    @test wom_pct(Float64[], [100.0]) == 0.0
+    @test wom_pct(Float64[], Float64[]) === nothing
+    @test top_depth(Float64[]) == 0.0
+
+    # the book VWAP is in PROBABILITY space, which is not the arithmetic mean of the prices
+    @test vwap_book([2.0, 2.5], [100.0, 100.0]) ≈ 200 / (100 / 2.0 + 100 / 2.5)
+    @test !isapprox(vwap_book([2.0, 2.5], [100.0, 100.0]), 2.25; atol = 1e-6)
+    @test vwap_book(Float64[], Float64[]) === nothing
+end
+
+@testset "R26 a market's runners come from the pipeline's own key mapping" begin
+    f = _fixture(903, "epsilon", "zeta")
+
+    mo = market_runners("MATCH_ODDS", f)
+    @test [r.key for r in mo] == [_key("1X2", 0.0, s) for s in (:home, :draw, :away)]
+    # the columns are headed with TEAM NAMES: a desk column an operator can check against the
+    # exchange screen next to it
+    @test [r.label for r in mo] == ["epsilon", "Draw", "zeta"]
+
+    ou = market_runners("OVER_UNDER_25", f)
+    @test [r.key for r in ou] == [_key("OverUnder", 2.5, :over_25),
+                                  _key("OverUnder", 2.5, :under_25)]
+    @test all(r -> r.key.line == 2.5, ou)
+
+    btts = market_runners("BOTH_TEAMS_TO_SCORE", f)
+    @test [r.key.selection for r in btts] == [:btts_yes, :btts_no]
+
+    @test "MATCH_ODDS" in LADDER_MARKETS && "BOTH_TEAMS_TO_SCORE" in LADDER_MARKETS
+    @test_throws ErrorException market_runners("CORRECT_SCORE", f)
+
+    # one runner is addressable by anything an operator or a URL would write
+    @test runner_of("MATCH_ODDS", "home", f).key == _key("1X2", 0.0, :home)
+    @test runner_of("MATCH_ODDS", "epsilon", f).key == _key("1X2", 0.0, :home)
+    @test runner_of("OVER_UNDER_25", "over_25", f).key == _key("OverUnder", 2.5, :over_25)
+    @test runner_of("OVER_UNDER_25", "Over", f).key == _key("OverUnder", 2.5, :over_25)
+    @test_throws ErrorException runner_of("MATCH_ODDS", "under_25", f)
+end
+
+@testset "R27 the ladder is three levels of the archived book at `as_of`, and nothing else" begin
+    st = _deep_state()
+    seek!(st, T_EXEC)
+    lad = fixture_ladder(st, 903, "MATCH_ODDS")
+
+    @test lad.ok && lad.resolved
+    @test lad.match_id == 903 && lad.market == "MATCH_ODDS"
+    @test lad.t == T_EXEC
+    @test length(lad.runners) == 3
+    @test [r.symbol for r in lad.runners] == ["home", "draw", "away"]
+
+    home = lad.runners[1]
+    # THREE levels on both sides, always, so a short book renders as a visibly short one
+    @test length(home.back) == 3 && length(home.lay) == 3
+    @test [l.price for l in home.back] == [2.50, 2.48, 2.46]
+    @test [l.size  for l in home.back] == [500.0, 300.0, 200.0]
+    @test [l.price for l in home.lay]  == [2.54, 2.56, 2.58]
+    @test home.best_back == 2.50 && home.best_lay == 2.54
+    @test home.spread ≈ 0.04
+    @test home.spread_ticks == 2                      # 2.50 -> 2.54 is two 0.02 increments
+    @test home.mid ≈ 2.52
+
+    # the WOM arithmetic, by hand: 1000 resting to back against 500 resting to lay
+    @test home.wom ≈ round(100 * 1000 / 1500, digits = 1)
+    @test home.wom_lay ≈ round(100 - 100 * 1000 / 1500, digits = 1)
+    @test home.wom + home.wom_lay ≈ 100.0
+    @test home.depth_back == 1_000.0 && home.depth_lay == 500.0
+    @test home.depth_touch_back == 500.0 && home.depth_touch_lay == 250.0
+    @test home.matched == 4_000.0
+    @test home.vwap_book ≈ 1000 / (500 / 2.50 + 300 / 2.48 + 200 / 2.46) atol = 5e-4
+
+    draw, away = lad.runners[2], lad.runners[3]
+    @test draw.wom ≈ round(100 * 175 / 775, digits = 1)   # laid into, i.e. drifting
+    @test away.wom == 50.0                                # balanced
+    @test draw.wom < 40 && home.wom > 60                  # the two ends of the colour scale
+
+    # the market is de-vigged within itself and the three runners sum to one
+    @test lad.complete
+    # `atol` because the payload rounds to four places; the de-vig itself is exact.
+    @test sum(r.p_market for r in lad.runners) ≈ 1.0 atol = 5e-4
+    # `book_sum` is the constant that normalisation divided by -- the sum of the RAW mid-implied
+    # probabilities, which on a mid-priced book sits near 1 from either side and is therefore
+    # not called an overround. The raw and the de-vigged number are different, which is the
+    # whole reason both are carried.
+    @test lad.book_sum ≈ round(2 / (2.50 + 2.54) + 2 / (3.60 + 3.70) + 2 / (3.80 + 3.90),
+                               digits = 4)
+    @test lad.runners[1].p_market_raw ≈ round(2 / (2.50 + 2.54), digits = 4)
+    @test lad.runners[1].p_market != lad.runners[1].p_market_raw
+    @test lad.runners[1].p_market ≈ (2 / (2.50 + 2.54)) / lad.book_sum atol = 5e-4
+
+    # NO model is loaded, so there is no model column. Not zero, not the market's own number:
+    # a fabricated fair price is exactly the number an operator would then trade against.
+    @test all(r -> r.p_model === nothing, lad.runners)
+    @test all(r -> r.fair_odds === nothing, lad.runners)
+    @test all(r -> r.ev_pct === nothing, lad.runners)
+    @test lad.model_status == "unloaded"
+
+    # and nothing rests on the ladder until a slate does
+    @test all(r -> r.order === nothing, lad.runners)
+    @test all(r -> r.kelly_stake === nothing, lad.runners)
+
+    # THE FILTRATION CONTRACT, on the desk this time. The ladder at T-0 is the CLOSING book
+    # and the one at T-16 does not exist yet -- the desk cannot show a level the card grid
+    # could not.
+    seek!(st, T_KICKOFF)
+    close_lad = fixture_ladder(st, 903, "MATCH_ODDS")
+    @test close_lad.runners[1].best_back ≈ 2.48          # one tick shorter at the close
+    @test close_lad.runners[1].matched == 8_000.0        # twice the volume
+    seek!(st, -16)
+    early = fixture_ladder(st, 903, "MATCH_ODDS")
+    @test all(r -> r.best_back === nothing, early.runners)
+    @test all(r -> r.book_ts === nothing, early.runners)
+    @test all(r -> r.spread_ticks === nothing, early.runners)
+
+    # a fixture that is not on the card is refused BY NAME rather than answered emptily
+    @test_throws ErrorException fixture_ladder(st, 999, "MATCH_ODDS")
+    @test_throws ErrorException fixture_ladder(st, 903, "CORRECT_SCORE")
+end
+
+@testset "R27b an incomplete market is reported RAW rather than normalised to one" begin
+    # Scaling two of three 1X2 runners to sum to one inflates both -- by up to 20% on a real
+    # book. The same refusal `closing_probabilities` makes, on the desk.
+    card = _deep_card()
+    delete!(card.book.ladders[903], _key("1X2", 0.0, :away))
+    delete!(card.book.stamps[903],  _key("1X2", 0.0, :away))
+    st = ReplayState(nothing, nothing, card; system = _system(), schema = REPLAY_SCHEMA)
+    seek!(st, T_EXEC)
+    lad = fixture_ladder(st, 903, "MATCH_ODDS")
+
+    @test !lad.complete
+    @test lad.book_sum === nothing
+    @test lad.runners[3].best_back === nothing            # the away column is empty, not gone
+    @test length(lad.runners) == 3
+    ps = [r.p_market for r in lad.runners if r.p_market !== nothing]
+    @test length(ps) == 2
+    @test sum(ps) < 1.0                                   # NOT normalised
+    @test lad.runners[1].p_market ≈ round(2 / (2.50 + 2.54), digits = 4)   # the raw mid
+end
+
+@testset "R28 the order marker lands on the runner it would actually touch" begin
+    st = _deep_state()
+    seek!(st, T_EXEC)
+    st.slate = _deep_slate(st.card)
+    st.slate_t = T_EXEC
+    lad = fixture_ladder(st, 903, "MATCH_ODDS")
+    home, draw, away = lad.runners
+
+    # £900 backed into a 500/300/200 bid ladder: the whole touch, the whole second level, and
+    # £100 of the third. The same best-first walk `sweep_ladder` performs, so the amber
+    # highlight and the fill simulation cannot disagree.
+    @test home.order !== nothing
+    @test home.order.side == "back"
+    @test home.order.venue_stake == 900.0
+    @test home.order.level_fills == [500.0, 300.0, 100.0]
+    @test home.order.levels_used == 3
+    @test home.order.fillable
+    @test home.order.unfilled == 0.0
+    @test home.kelly_stake == 900.0
+    @test home.order.selection == "home"
+
+    # £700 laid into a 300/200/100 ask ladder: £600 fills and £100 does not. A partial that the
+    # desk reports rather than rounds away -- it is the difference between the stake the
+    # portfolio solved and the position that would exist.
+    @test draw.order !== nothing
+    @test draw.order.side == "lay"
+    @test draw.order.level_fills == [300.0, 200.0, 100.0]
+    @test !draw.order.fillable
+    @test draw.order.unfilled ≈ 100.0
+    @test draw.order.risk == 1_890.0
+
+    # nothing was placed on away, and the marker does not bleed across columns
+    @test away.order === nothing
+    @test away.kelly_stake === nothing
+
+    # the overview cards carry the same two figures, so a WOM pill and a depth pill need no
+    # second API call -- and they are read off the VENUE runner's ladder
+    cards = enriched_cards(st, st.slate)
+    @test length(cards) == 1
+    legs = Dict(l.selection => l for l in cards[1].legs)
+    @test haskey(legs, "home") && haskey(legs, "draw")
+    @test legs["home"].wom ≈ round(100 * 1000 / 1500, digits = 1)
+    @test legs["home"].depth_3lvl == 1_000.0            # a back order eats the BID side
+    @test legs["draw"].depth_3lvl == 600.0              # a lay order eats the ASK side
+    @test legs["draw"].wom ≈ round(100 * 175 / 775, digits = 1)
+    # and nothing the live console renders was removed to make room for them
+    @test all(haskey(l, :p_model) && haskey(l, :ev_pct) && haskey(l, :depth_touch)
+              for l in cards[1].legs)
+end
+
+@testset "R29 one runner's history walks forward, and an absent model leaves a GAP" begin
+    st = _deep_state()
+    seek!(st, T_KICKOFF)
+    h = selection_history(st, 903, "home", "MATCH_ODDS")
+
+    @test h.ok && h.match_id == 903 && h.symbol == "home"
+    @test h.from_t == T_START && h.to_t == T_KICKOFF
+    @test h.n_points == T_KICKOFF - T_START + 1
+    @test h.minutes_to_ko == collect(T_START:T_KICKOFF)
+    @test issorted(h.minutes_to_ko)              # chronological, which is the whole axis
+    @test length(h.best_back) == h.n_points
+    @test length(h.best_lay) == length(h.wom) == length(h.market_matched) == h.n_points
+    @test length(h.fair_odds) == h.n_points
+
+    # before the first snapshot there is NO price -- not a stale one, and not a zero
+    @test all(x -> x === nothing, h.best_back[1:45])            # T-60 .. T-16
+    @test h.best_back[46] == 2.50                              # the T-15 snapshot, exactly
+    @test h.best_back[findfirst(==(T_EXEC), h.minutes_to_ko)] == 2.50
+    @test h.best_lay[findfirst(==(T_EXEC), h.minutes_to_ko)] == 2.54
+    @test h.wom[findfirst(==(T_EXEC), h.minutes_to_ko)] ≈ round(100 * 1000 / 1500, digits = 1)
+
+    # the liquidity curve only ever accumulates
+    matched = [m for m in h.market_matched if m !== nothing]
+    @test !isempty(matched) && issorted(matched)
+    @test last(matched) == 8_000.0
+
+    # NO model is loaded, so `fair_odds` is a gap for the whole window. A back-filled line here
+    # would be a model opinion at a minute at which the model had none.
+    @test all(x -> x === nothing, h.fair_odds)
+    @test all(x -> x === nothing, h.p_model)
+
+    # the chart's own coordinates: the drop is SIGNED against kick-off so it can be dropped
+    # straight onto the `minutes_to_ko` axis
+    @test h.lineup_drop_min == -30
+    @test h.exec_window == (from = T_WINDOW_OPEN, to = T_WINDOW_CLOSE)
+    @test h.markers.kickoff == T_KICKOFF
+
+    # `to` defaults to the clock: the chart cannot draw a price the console has not scrubbed to
+    seek!(st, -30)
+    @test selection_history(st, 903, "home").to_t == -30
+    @test selection_history(st, 903, "home").n_points == 31
+    # ... and the full horizon is asked for explicitly
+    @test selection_history(st, 903, "home"; to = T_END).to_t == T_END
+
+    # every runner of the market is addressable, and an unknown one is refused by name
+    @test selection_history(st, 903, "away").symbol == "away"
+    @test selection_history(st, 903, "epsilon").symbol == "home"
+    @test_throws ErrorException selection_history(st, 903, "btts_yes")
+    @test_throws ErrorException selection_history(st, 999, "home")
+
+    # the model-evaluation grid pins the drop minute and its neighbours, so a step lands on the
+    # minute it happened rather than on the nearest multiple of five
+    g = _history_grid(-60, 0, -29)
+    @test issorted(g) && allunique(g)
+    @test -30 in g && -29 in g && -28 in g
+    @test first(g) == -60 && last(g) == 0
+    @test _history_grid(-60, 0, nothing) == collect(-60:5:0)
+end
+
+# ===================================================================
 # 4. THE CONSOLE SURFACE
 # ===================================================================
 
@@ -560,6 +971,89 @@ end
         @test n[] >= 2
         @test got[].replay.day == string(Date(KO))
         @test haskey(got[], :settlement)
+    finally
+        stop_replay!(srv)
+    end
+end
+
+@testset "R30 the desk endpoints answer over HTTP, and refuse by name" begin
+    # Both are GETs. A ladder read changes nothing, and making it a GET is what lets an operator
+    # paste one fixture's URL into a second tab and watch its book while the console scrubs.
+    st = _deep_state()
+    seek!(st, T_EXEC)
+    st.slate = _deep_slate(st.card)
+    st.slate_t = T_EXEC
+    srv = ReplayServer(st)
+    port = 18_500 + (Int(rand(UInt16)) % 1_000)
+    serve_replay(srv; host = "127.0.0.1", port = port, push = false)
+    try
+        base = "http://127.0.0.1:$port"
+
+        # the page carries both views and the library the chart window needs
+        page = String(HTTP.get("$base/"; retry = false).body)
+        @test occursin("Multi-Ladder Desk", page)
+        @test occursin("Slate Cards", page)
+        @test occursin("chart.js", page)
+        @test occursin("WOM", page)
+
+        res = HTTP.get("$base/api/replay/ladder?match_id=903&market=MATCH_ODDS")
+        @test res.status == 200
+        @test occursin("application/json", Dict(res.headers)["Content-Type"])
+        lad = JSON3.read(String(res.body))
+        @test lad.ok == true
+        @test lad.match_id == 903
+        @test lad.market == "MATCH_ODDS"
+        @test length(lad.runners) == 3
+        @test all(r -> length(r.back) == 3 && length(r.lay) == 3, lad.runners)
+        @test lad.runners[1].best_back == 2.50
+        @test lad.runners[1].wom ≈ round(100 * 1000 / 1500, digits = 1)
+        @test lad.runners[1].spread_ticks == 2
+        @test lad.runners[1].order.level_fills == [500.0, 300.0, 100.0]
+        @test lad.t == T_EXEC
+
+        # naming no fixture means the first on the card, because the page asks for a ladder
+        # before the operator has chosen one -- on first paint
+        @test JSON3.read(String(HTTP.get("$base/api/replay/ladder").body)).match_id == 903
+
+        hist = HTTP.get("$base/api/replay/history?match_id=903&symbol=home&market=MATCH_ODDS")
+        @test hist.status == 200
+        h = JSON3.read(String(hist.body))
+        @test h.ok == true
+        @test h.symbol == "home"
+        @test h.n_points == length(h.minutes_to_ko) == length(h.best_back)
+        @test length(h.fair_odds) == h.n_points && length(h.wom) == h.n_points
+        @test h.minutes_to_ko[1] == T_START
+        @test h.to_t == T_EXEC                    # the clock, not the horizon
+        @test h.lineup_drop_min == -30
+        @test issorted(h.minutes_to_ko)
+        # the full horizon is reachable, explicitly
+        @test JSON3.read(String(HTTP.get(
+            "$base/api/replay/history?match_id=903&symbol=home&to=105").body)).to_t == T_END
+
+        # a refusal is a value with a reason, never a dropped connection or an empty ladder
+        bad = JSON3.read(String(HTTP.get("$base/api/replay/ladder?match_id=999";
+                                         status_exception = false).body))
+        @test bad.ok == false && occursin("999", bad.error)
+        badmkt = JSON3.read(String(HTTP.get("$base/api/replay/ladder?match_id=903&market=NOPE";
+                                            status_exception = false).body))
+        @test badmkt.ok == false && occursin("NOPE", badmkt.error)
+        badsel = JSON3.read(String(HTTP.get(
+            "$base/api/replay/history?match_id=903&symbol=nonsense";
+            status_exception = false).body))
+        @test badsel.ok == false && occursin("nonsense", badsel.error)
+
+        # both routes are advertised on a 404, like every other one
+        miss = String(HTTP.get("$base/api/nope"; status_exception = false).body)
+        @test occursin("/api/replay/ladder", miss)
+        @test occursin("/api/replay/history", miss)
+
+        # the snapshot's own cards now carry the two depth figures the pills read
+        snap = JSON3.read(String(HTTP.get("$base/api/snapshot").body))
+        @test length(snap.cards) == 1
+        @test all(l -> haskey(l, :wom) && haskey(l, :depth_3lvl), snap.cards[1].legs)
+        @test snap.replay.ladder_markets == collect(LADDER_MARKETS)
+        @test snap.replay.window_open == T_WINDOW_OPEN
+        @test snap.replay.window_close == T_WINDOW_CLOSE
     finally
         stop_replay!(srv)
     end
@@ -994,6 +1488,112 @@ end
     seek!(st, post)
     @test any(c -> c.lineup !== nothing && c.lineup.confirmed, st.slate.cards)
     @test any(c -> c.lineup !== nothing && c.lineup.source === :provisional, st.slate.cards)
+end
+
+@testset "R31 the fair-odds line steps at the XI drop, and only for a model that reads it" begin
+    # THE chart's reason to exist, as a measurement. The trajectory window puts `1/p_model` on
+    # the same axis as the market's two prices; the claim it makes is that the green line MOVES
+    # when the teamsheet lands and the blue and pink ones do not have to.
+    card = st.card
+    set_model!(st, "m12")
+    seek!(st, -10)                      # after every scrape on this card
+    @test st.slate !== nothing
+
+    withxi = intersect(Set(st.slate.sheet.match_id), Set(keys(card.lineup_drop)))
+    @test !isempty(withxi)
+    mid = first(sort(collect(withxi)))
+    fx = card.fixtures[findfirst(f -> f.m_id == mid, card.fixtures)]
+    drop_t = lineup_drop_minute(card, fx)
+    @test -60 < drop_t < 0
+
+    # The marker is the first REPLAY MINUTE the XI is visible at, not the rounded scrape time.
+    # These two assertions are what make the step and the vertical line the same instant: the
+    # teamsheet is unreadable one minute earlier and readable at the marker itself.
+    @test MD.lineup(card.lineups, fx, as_of_at(card, drop_t - 1)) === nothing
+    @test MD.lineup(card.lineups, fx, as_of_at(card, drop_t)) !== nothing
+
+    h12 = selection_history(st, mid, "home", "MATCH_ODDS"; to = -10)
+    @test h12.ok && h12.lineup_drop_min == drop_t
+    @test h12.model == "m12"
+    @test length(h12.fair_odds) == h12.n_points
+
+    priced = [(m, f) for (m, f) in zip(h12.minutes_to_ko, h12.fair_odds) if f !== nothing]
+    @test !isempty(priced)
+    vals = unique([f for (_, f) in priced])
+    @test length(vals) >= 2                       # it STEPS
+
+    # and the step is at the drop minute, not at the nearest multiple of the evaluation grid
+    changes = [m for i in 2:length(priced)
+                 for m in (priced[i][1],) if priced[i][2] != priced[i-1][2]]
+    @test drop_t in changes
+    @test length(changes) == 1                    # one XI, one step
+
+    # the whole 50-minute series cost TWO posterior extractions, not fifty: the memo is keyed on
+    # the lineup signature and the signature moves only when an XI lands.
+    m12 = find_slot(st, "m12")
+    @test length(m12.latents) >= 2
+    # ...and far fewer than one per minute. The bound is the number of GRID points rather than a
+    # constant: the signature also moves when the gate admits or refuses a fixture, so the memo
+    # can legitimately miss more than twice on a card whose book is still filling in.
+    @test count(k -> k[1] == "m12", keys(st.model_probs)) <=
+          length(_history_grid(T_START, -10, drop_t))
+    @test count(k -> k[1] == "m12", keys(st.model_probs)) < (-10 - T_START + 1)
+
+    # THE CONTROL. A team-level pillar reads no lineup, so its fair-odds line is FLAT across the
+    # same drop. Without it, a moving hybrid could be a moving book.
+    set_model!(st, "m00")
+    seek!(st, -10)
+    h00 = selection_history(st, mid, "home", "MATCH_ODDS"; to = -10)
+    @test h00.model == "m00"
+    p00 = [f for f in h00.fair_odds if f !== nothing]
+    @test !isempty(p00)
+    @test length(unique(p00)) == 1
+
+    # the market series moved underneath both of them, which is what makes the comparison a
+    # comparison rather than two readings of the same constant
+    bb = [b for b in h12.best_back if b !== nothing]
+    @test !isempty(bb)
+    @test length(unique(bb)) > 1
+    @test h12.best_back == h00.best_back           # the same book, priced by two models
+end
+
+@testset "R32 the ladder desk prices a real market with a real model" begin
+    seek!(st, T_EXEC)
+    set_model!(st, "m00")
+    mid = first(sort([f.m_id for f in st.card.fixtures
+                      if st.card.identities[f.m_id] isa MD.Resolved]))
+    lad = fixture_ladder(st, mid, "MATCH_ODDS")
+
+    @test lad.ok && lad.resolved
+    @test length(lad.runners) == 3
+    priced = [r for r in lad.runners if r.best_back !== nothing]
+    @test !isempty(priced)
+
+    # every runner with a book has a measurable spread and a WOM reading
+    @test all(r -> r.spread !== nothing && r.spread >= 0, priced)
+    @test all(r -> r.spread_ticks !== nothing && r.spread_ticks >= 0, priced)
+    @test all(r -> r.wom === nothing || (0 <= r.wom <= 100), priced)
+    @test all(r -> r.depth_back >= 0 && r.depth_lay >= 0, priced)
+    @test all(r -> length(r.back) == 3 && length(r.lay) == 3, lad.runners)
+
+    # the model column is present for a covered, gated-through fixture, and `fair_odds` is
+    # exactly `1/p_model` -- the same identity the card grid prints
+    modelled = [r for r in lad.runners if r.p_model !== nothing]
+    if isempty(modelled)
+        @info "R32: $(mid) is gated at T-15 under m00; the model column is correctly absent"
+    else
+        @test all(r -> 0 < r.p_model < 1, modelled)
+        @test all(r -> isapprox(r.fair_odds, 1 / r.p_model; atol = 5e-3), modelled)
+        @test all(r -> r.ev_pct === nothing ||
+                       isapprox(r.ev_pct, 100 * (r.p_model - r.p_market) / r.p_market;
+                                atol = 0.05), modelled)
+    end
+
+    # the other two markets key without error on the same fixture
+    for m in ("OVER_UNDER_25", "BOTH_TEAMS_TO_SCORE")
+        l = fixture_ladder(st, mid, m)
+        @test l.ok && length(l.runners) == 2
+    end
 end
 
 finally

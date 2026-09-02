@@ -57,6 +57,7 @@ const DD = BayesianFootball.Data
 const TT = BayesianFootball.Training
 const MO = BayesianFootball.Models
 const FE = BayesianFootball.Features
+const PRED = BayesianFootball.Predictions
 
 # ===================================================================
 # 1. Isolation constants -- the only defence that is not a convention
@@ -911,6 +912,13 @@ mutable struct ReplayState
     running::Bool
     reprice_seconds::Float64
     tick_seq::Int
+    # Model probabilities for EVERY canonical runner, memoised on `(model key, lineup
+    # signature)`. The ladder desk and the trajectory chart need `p_model` for runners the stake
+    # sheet never carried -- the sheet holds only legs with a positive stake -- and re-deriving
+    # them per request would cost an `extract_parameters` per poll. Keyed on the same signature
+    # as `ModelSlot.latents` and for the same reason: within a replay the posterior moves ONLY
+    # when the visible XI does, so a cache miss is a lineup event and nothing else.
+    model_probs::Dict{Tuple{String,UInt64},Dict{Int,Dict{MD.SelectionKey,Float64}}}
 end
 
 function ReplayState(ds, conn, card::ReplayCard; system::PF.PortfolioSystem,
@@ -922,7 +930,8 @@ function ReplayState(ds, conn, card::ReplayCard; system::PF.PortfolioSystem,
     return ReplayState(ds, conn, card, ReplayClock(), system, models, String(active),
                        Float64(bankroll), String(account_id), String(schema), nothing,
                        T_START, "", "", UUID[], nothing, Float64(bankroll),
-                       ReentrantLock(), nothing, false, 0.0, 0)
+                       ReentrantLock(), nothing, false, 0.0, 0,
+                       Dict{Tuple{String,UInt64},Dict{Int,Dict{MD.SelectionKey,Float64}}}())
 end
 
 active_slot(st::ReplayState) =
@@ -1212,6 +1221,10 @@ function set_matchday!(st::ReplayState, day::Date; tournament_ids::Vector{Int} =
         st.slate_t = T_START
         st.settlement = nothing
         empty!(st.executed)
+        # Same reason `rebind_slot!` empties `slot.latents`: the key is a lineup signature and
+        # two match days can produce the same one (notably the all-`nothing` pre-drop state)
+        # while meaning entirely different fixtures.
+        empty!(st.model_probs)
         for slot in st.models
             slot.status === :ready || continue
             try
@@ -1542,4 +1555,749 @@ function reset_replay_ledger!(st::ReplayState)
         return nothing
     end
     return MD.account_row(st.conn, st.account_id; schema = st.schema)
+end
+
+# ===================================================================
+# 11. The ladder desk -- depth, weight of money, and one runner's history
+# ===================================================================
+#
+# WHY THIS EXISTS AT ALL. The card grid answers "which legs, and how good are they?" and it
+# answers it for the legs the STAKE SHEET carried. A trading desk asks a different question --
+# "where would this order actually go, and who is leaning on the price?" -- and that question is
+# about runners the sheet never held: the two sides of a market we backed one of, the runner we
+# passed on, the depth behind the touch we only ever saw collapsed to one number.
+#
+# So everything below reads the ARCHIVED LADDER rather than the sheet. `PreloadedBook` already
+# holds all three levels of both sides for every runner of every market of the whole match day,
+# and `MD.quotes` already slices it at `as_of` with the same `searchsortedlast` the pipeline
+# uses. Nothing here can see a tick the console's own grid could not.
+#
+# THE THREE THINGS THIS FILE WILL NOT PRETEND TO KNOW.
+#
+# 1. TRADED VWAP. `betfair_live.order_book_1m` archives resting depth and a running
+#    `market_matched` total; it archives NO traded price series. A "traded VWAP" is therefore
+#    unavailable and is not invented. What is reported is `vwap_book` -- the probability-space
+#    volume-weighted average of the visible ladder, the same average `sweep_ladder` computes --
+#    and it is named for what it is.
+# 2. LEVELS BEYOND THE THIRD. The archive carries at most three, verified over 635,765 rows. WOM
+#    and depth are therefore three-level figures and are labelled `(3 lvls)` everywhere.
+# 3. A MODEL OPINION ON A GATED FIXTURE. `model_probs_at` prices exactly the card `reprice!`
+#    prices -- the gate-passed fixtures of the covered set. A ladder for a fixture the gate
+#    refuses shows its book and no model column, which is the true state of affairs rather than
+#    a number derived from inputs the pipeline declined to use.
+
+"How many ladder levels the archive carries, and therefore how deep every figure below is."
+const LADDER_DEPTH = 3
+
+"""
+The markets the desk offers, as `market_metadata.market_type` strings.
+
+The same three the console's market filter carries, in the same order. O/U 2.5 rather than the
+whole `canonical_markets` O/U family because the desk shows one market at a time and 2.5 is the
+central line -- the others are reachable by naming them in the query string.
+"""
+const LADDER_MARKETS = ("MATCH_ODDS", "OVER_UNDER_25", "BOTH_TEAMS_TO_SCORE")
+
+"""
+The execution window the trajectory chart shades, in minutes relative to kick-off.
+
+`T_EXEC` (-15) is the recommended entry INSTANT and sits inside it. The band is wider than the
+instant because an operator does not execute on a single minute: before T-25 the post-XI book is
+still thin, and after T-12 the last scrapes are in and the price has usually finished moving.
+"""
+const T_WINDOW_OPEN  = -25
+const T_WINDOW_CLOSE = -12
+
+# -------------------------------------------------------------------
+# 11.1 The Betfair price ladder
+# -------------------------------------------------------------------
+
+"""
+Betfair's decimal price increments, as `(from, to, step)` bands.
+
+A spread quoted in currency is not comparable between a 1.20 shot and a 12.0 one -- 0.05 is five
+ticks on the first and one on the second -- so the desk quotes both, and the tick count is the
+one that means the same thing in every column.
+"""
+const BETFAIR_TICK_BANDS = ((1.01, 2.0, 0.01), (2.0, 3.0, 0.02), (3.0, 4.0, 0.05),
+                            (4.0, 6.0, 0.1),   (6.0, 10.0, 0.2), (10.0, 20.0, 0.5),
+                            (20.0, 30.0, 1.0), (30.0, 50.0, 2.0), (50.0, 100.0, 5.0),
+                            (100.0, 1000.0, 10.0))
+
+"""
+    tick_index(price) -> Int | nothing
+
+Position of `price` on the Betfair ladder, counting from 1.01 = 0.
+
+`nothing` rather than an error for an off-ladder or absent price: an empty side of a book is an
+ordinary state at T-60m and a spread that cannot be measured must be reported as unmeasured, not
+as zero.
+"""
+function tick_index(price::Real)
+    p = Float64(price)
+    (isfinite(p) && p >= 1.01) || return nothing
+    idx = 0
+    for (lo, hi, step) in BETFAIR_TICK_BANDS
+        if p >= hi
+            idx += round(Int, (hi - lo) / step)
+            continue
+        end
+        return idx + floor(Int, (p - lo) / step + 1e-9)
+    end
+    return idx
+end
+
+"Spread between two prices in TICKS, or `nothing` if either side is absent."
+function spread_ticks(back::Real, lay::Real)
+    a, b = tick_index(back), tick_index(lay)
+    (a === nothing || b === nothing) && return nothing
+    return b - a
+end
+
+# -------------------------------------------------------------------
+# 11.2 Weight of money
+# -------------------------------------------------------------------
+
+"""
+    wom_pct(bid_sizes, ask_sizes; depth = LADDER_DEPTH) -> Float64 | nothing
+
+Share of the visible resting size that is on the BACK side, as a percentage.
+
+    WOM_back = Σ bid_volumes[1:3] / (Σ bid_volumes[1:3] + Σ ask_volumes[1:3]) × 100
+
+Above 50 means more money is queued to back this runner than to lay it, which on an exchange is
+pressure toward a SHORTER price -- the "steam" reading. It is a pressure gauge and not a
+forecast: resting size is size that has not traded, and the same £400 can be cancelled the
+instant it is approached. It is reported next to `market_matched` for that reason.
+
+`nothing` on a two-sided-empty book, so an absent gauge and a balanced one stay distinguishable.
+"""
+function wom_pct(bid_sizes::AbstractVector, ask_sizes::AbstractVector;
+                 depth::Int = LADDER_DEPTH)
+    b = sum(Float64, @view(bid_sizes[1:min(depth, length(bid_sizes))]); init = 0.0)
+    a = sum(Float64, @view(ask_sizes[1:min(depth, length(ask_sizes))]); init = 0.0)
+    total = b + a
+    total > 0 || return nothing
+    return 100 * b / total
+end
+
+wom_pct(lv::MD.BookLevels; depth::Int = LADDER_DEPTH) =
+    wom_pct(lv.back_size, lv.lay_size; depth = depth)
+
+"Σ of the first `depth` sizes on one side, in £. `0.0` on an empty side."
+top_depth(sizes::AbstractVector; depth::Int = LADDER_DEPTH) =
+    sum(Float64, @view(sizes[1:min(depth, length(sizes))]); init = 0.0)
+
+"""
+    vwap_book(prices, sizes; depth) -> Float64 | nothing
+
+Volume-weighted average of the visible ladder, in PROBABILITY space (`Σ size / Σ size/price`).
+
+This is a BOOK average, not a traded one: `order_book_1m` archives no traded price series, so
+what an exchange calls VWAP cannot be computed from it. The same probability-space convention
+`sweep_ladder` uses, because the arithmetic mean of two decimal prices is not the price at which
+the combined stake breaks even.
+"""
+function vwap_book(prices::AbstractVector, sizes::AbstractVector; depth::Int = LADDER_DEPTH)
+    n = min(depth, length(prices), length(sizes))
+    size_sum = 0.0; cost = 0.0
+    for i in 1:n
+        p, s = Float64(prices[i]), Float64(sizes[i])
+        (p > 1.0 && s > 0) || continue
+        size_sum += s
+        cost     += s / p
+    end
+    (size_sum > 0 && cost > 0) || return nothing
+    return size_sum / cost
+end
+
+# -------------------------------------------------------------------
+# 11.3 Which runners a market has
+# -------------------------------------------------------------------
+
+"""
+    market_runners(market_type, fixture) -> Vector{NamedTuple}
+
+The runners of one exchange market, in ladder order, each with the `SelectionKey` the model
+prices it under and the label a desk column carries.
+
+Keys come from `MD.betfair_to_key` rather than from a second table of symbols. The desk and the
+pipeline must agree about what `over_25` is or the ladder shown under a leg is a different
+runner's book; going through the one mapping makes that agreement structural.
+
+For MATCH_ODDS the labels are the TEAM NAMES, not "home"/"away". A column headed `Cove Rangers`
+is the one an operator can check against the exchange screen next to it.
+"""
+function market_runners(market_type::AbstractString, f::MD.Fixture)
+    mt = uppercase(strip(String(market_type)))
+    names = mt == "MATCH_ODDS"              ? ["home", "draw", "away"] :
+            startswith(mt, "OVER_UNDER_")   ? ["Over", "Under"] :
+            mt == "BOTH_TEAMS_TO_SCORE"     ? ["Yes", "No"] :
+            error("replay ladder: unknown market '$market_type'. Known: " *
+                  join(LADDER_MARKETS, ", ") * " (any OVER_UNDER_<line> is accepted).")
+    labels = mt == "MATCH_ODDS" ? [f.home, "Draw", f.away] : names
+
+    out = NamedTuple[]
+    for (nm, label) in zip(names, labels)
+        key = MD.betfair_to_key(mt, nm)
+        key === nothing && continue
+        lbl = startswith(mt, "OVER_UNDER_") ? nm * " " * string(key.line) : label
+        push!(out, (symbol = String(key.selection), runner = nm, label = String(lbl), key = key))
+    end
+    isempty(out) && error("replay ladder: market '$market_type' resolved no runners.")
+    return out
+end
+
+"""
+    runner_of(market_type, symbol, fixture) -> NamedTuple
+
+One runner of a market, addressed by anything an operator or a URL would plausibly write:
+the canonical selection symbol (`over_25`), the exchange runner name (`Over`, `home`), or the
+displayed label (a team name).
+"""
+function runner_of(market_type::AbstractString, symbol::AbstractString, f::MD.Fixture)
+    s = lowercase(strip(String(symbol)))
+    for r in market_runners(market_type, f)
+        s in (lowercase(r.symbol), lowercase(r.runner), lowercase(r.label)) && return r
+    end
+    error("replay ladder: '$symbol' is not a runner of '$market_type' for match $(f.m_id). " *
+          "Runners: " * join([r.symbol for r in market_runners(market_type, f)], ", "))
+end
+
+"""
+    lineup_drop_minute(card, fixture) -> Int | nothing
+
+The first REPLAY MINUTE at which this fixture's XI is visible, signed against kick-off.
+
+`ceil`, not `round`, and that is the whole point of the function. A scrape at 13:20:24 before a
+14:00 kick-off is 39.6 minutes out; rounding it puts the marker at T-40, but the clock only
+reaches `kickoff - 39min` before `scraped_at <= as_of` becomes true, so the model actually steps
+at T-39 and the chart would draw its "lineups confirmed" line one minute to the LEFT of the step
+it is there to explain. Taking the ceiling makes the marker the minute the step happens, by
+construction rather than by luck.
+
+Note that `replay.fixtures[].lineup_drop_min` in the console snapshot is a different number: the
+rounded POSITIVE lead time, which is a label ("the XI arrived about half an hour out") rather
+than an axis coordinate.
+"""
+function lineup_drop_minute(card::ReplayCard, f::MD.Fixture)
+    drop = get(card.lineup_drop, f.m_id, nothing)
+    drop === nothing && return nothing
+    return Int(ceil(Dates.value(drop - f.kickoff) / 60_000))
+end
+
+"The fixture on this card, by match id, with the error naming what IS on the card."
+function card_fixture(st::ReplayState, match_id::Integer)
+    i = findfirst(f -> f.m_id == Int(match_id), st.card.fixtures)
+    i === nothing && error("replay ladder: match $(match_id) is not on the $(st.card.day) " *
+                           "card. On it: " * join([string(f.m_id) for f in st.card.fixtures],
+                                                  ", "))
+    return st.card.fixtures[i]
+end
+
+# -------------------------------------------------------------------
+# 11.4 The market's own probabilities, de-vigged
+# -------------------------------------------------------------------
+
+"""
+    market_implied(book, runners) -> (probs, raw, book_sum, complete)
+
+The market's probability for each runner of one market, de-vigged where that is legitimate.
+
+The mid (`2/(back+lay)`) rather than the back price, and normalised within the market, for the
+two reasons `closing_probabilities` gives: the raw `1/best_back` sums above one so an
+un-normalised reading makes every runner look cheap, and the mid is a MEASUREMENT with nothing
+to execute at, so taking the bid would charge it half a spread it never paid.
+
+`book_sum` is what the de-vig divides by: the sum of the raw mid-implied probabilities. It is
+NOT the overround and is not asserted to exceed 1 -- the back-side sum always does, but a mid-
+priced book straddles fair value and its sum sits near 1 from either side. The distinction is
+worth the extra word: an "overround" below 1 reads as a bug and this number legitimately is one.
+
+`complete = false` when a runner is missing. Such a market is reported RAW rather than
+normalised: its remaining probabilities do not sum to a book, and scaling them to 1 would inflate
+the survivors -- up to 20% on a 1X2 market missing one way.
+"""
+function market_implied(book::Dict{MD.SelectionKey,MD.BookLevels}, runners::Vector{<:NamedTuple})
+    raw = Dict{MD.SelectionKey,Float64}()
+    for r in runners
+        lv = get(book, r.key, nothing)
+        lv === nothing && continue
+        bb, bl = MD.best_back(lv), MD.best_lay(lv)
+        if !isnan(bb) && !isnan(bl)
+            raw[r.key] = 2.0 / (bb + bl)
+        elseif !isnan(bb)
+            raw[r.key] = 1.0 / bb
+        elseif !isnan(bl)
+            raw[r.key] = 1.0 / bl
+        end
+    end
+    total = sum(values(raw); init = 0.0)
+    complete = length(raw) == length(runners) && total > 0
+    probs = complete ? Dict(k => v / total for (k, v) in raw) : copy(raw)
+    return (probs = probs, raw = raw, book_sum = total, complete = complete)
+end
+
+# -------------------------------------------------------------------
+# 11.5 The model's probability for every runner, not only the staked ones
+# -------------------------------------------------------------------
+
+"""
+    _priced_context(st, slot, as_of) -> NamedTuple | nothing
+
+The pipeline's own stages up to the gate, at an arbitrary instant, WITHOUT touching the clock or
+the visible slate.
+
+Deliberately a second call site of `build_cards`/`quote_slate`/`ready` rather than a
+generalisation of `reprice!`. `reprice!` owns `st.slate`, `st.slate_t`, `st.tick_note` and
+`st.tick_seq`; a version of it parameterised by instant would either mutate that state when the
+ladder asked a question about a different minute, or would need a flag saying not to -- and a
+flag on the one function that decides what the operator is looking at is how a console starts
+showing a minute it was not scrubbed to.
+"""
+function _priced_context(st::ReplayState, slot::ModelSlot, as_of::DateTime)
+    covered = Set(slot.covered)
+    fx = MD.Fixture[f for f in st.card.fixtures if f.m_id in covered]
+    isempty(fx) && return nothing
+    spec = replay_spec(st, fx)
+    cards = MD.build_cards(spec, DD.ScottishLower(), as_of)
+    q = MD.quote_slate(spec, cards, as_of)
+    for c in cards
+        c.readiness = MD.ready(spec.gate, c)
+    end
+    passed = MD.FixtureCard[c for c in cards if MD.is_ready(c.readiness)]
+    return (spec = spec, cards = cards, q = q, passed = passed)
+end
+
+"""
+    _probs_from_latents(slot, latents) -> Dict{Int,Dict{SelectionKey,Float64}}
+
+Posterior-mean probability of EVERY canonical selection, per fixture.
+
+The same two calls `Portfolio.build_book` makes -- `compute_score_matrix` then
+`compute_market_probs` -- and deliberately NOT `build_book` itself, which also runs the Kelly
+allocator and the shrinkage sampler per fixture. The desk needs `p_model`; paying for an
+allocation it then throws away would make a ladder poll cost what a tick costs.
+"""
+function _probs_from_latents(slot::ModelSlot, latents::DataFrame)
+    out = Dict{Int,Dict{MD.SelectionKey,Float64}}()
+    (latents === nothing || isempty(latents)) && return out
+    model = slot.fit.config.model
+    markets = MD.canonical_markets().markets
+    for row in eachrow(latents)
+        sm = try
+            PRED.compute_score_matrix(model, PRED.extract_params(model, row))
+        catch
+            continue
+        end
+        d = Dict{MD.SelectionKey,Float64}()
+        for m in markets
+            probs = try
+                PRED.compute_market_probs(sm, m)
+            catch
+                continue
+            end
+            g, l = DD.market_group(m), DD.market_line(m)
+            for sel in values(DD.outcomes(m))
+                haskey(probs, sel) || continue
+                d[(group = g, line = l, selection = sel)] = Statistics.mean(probs[sel])
+            end
+        end
+        out[Int(row.match_id)] = d
+    end
+    return out
+end
+
+"""
+    model_probs_at(st, as_of; slot) -> Dict{Int,Dict{SelectionKey,Float64}}
+
+`p_model` for every runner of every canonical market at one instant, memoised on the lineup.
+
+The memo is the whole reason this is affordable. Within a replay the posterior is a function of
+the visible XI and of nothing else that moves -- that is the claim `slot_latents` already rests
+on -- so the cache misses exactly twice for the hybrid pillar (before the drop and after it) and
+exactly once for the team-level ones. A 165-minute chart therefore costs two extractions, not
+165.
+
+Returns an empty map rather than throwing when the model is not loaded or the gate has refused
+the whole card. A desk column with no model row is a true statement about T-60m.
+"""
+function model_probs_at(st::ReplayState, as_of::DateTime; slot::ModelSlot = active_slot(st))
+    empty_map = Dict{Int,Dict{MD.SelectionKey,Float64}}()
+    slot.status === :ready || return empty_map
+    ctx = _priced_context(st, slot, as_of)
+    (ctx === nothing || isempty(ctx.passed)) && return empty_map
+    sig = lineup_signature(ctx.passed)
+    ckey = (slot.key, sig)
+    hit = get(st.model_probs, ckey, nothing)
+    hit === nothing || return hit
+    probs = try
+        _probs_from_latents(slot, slot_latents(slot, ctx.spec, st.ds, ctx.passed, ctx.q.odds,
+                                               as_of))
+    catch
+        # A latents extraction that throws is already reported by the tick that hit it; the desk
+        # answers with no model column rather than with a 500 and an empty ladder.
+        empty_map
+    end
+    st.model_probs[ckey] = probs
+    return probs
+end
+
+# -------------------------------------------------------------------
+# 11.6 The ladder
+# -------------------------------------------------------------------
+
+"""
+    _order_marker(st, match_id, runner_key) -> NamedTuple | nothing
+
+The simulated order resting on this runner's ladder, if the visible slate put one there.
+
+Keyed on the VENUE runner, not on the model selection, and that distinction is the whole
+function. Backing Over 2.5 by laying Under 2.5 places size on UNDER's ask side; drawing the
+marker on Over's ladder would mark a book the order never touches. `selection` is carried inside
+the marker so the Under column can say whose position it is.
+
+`level_fills` is the £ consumed at each archived level, computed by the same best-first walk
+`sweep_ladder` performs, so the amber highlight and the fill simulation cannot disagree.
+"""
+function _order_marker(st::ReplayState, match_id::Int, rkey::MD.SelectionKey)
+    slate = st.slate
+    slate === nothing && return nothing
+    sheet = slate.sheet
+    nrow(sheet) == 0 && return nothing
+    i = findfirst(k -> sheet.match_id[k] == match_id &&
+                       sheet.group[k] == rkey.group &&
+                       isapprox(sheet.line[k], rkey.line; atol = 1e-9) &&
+                       sheet.venue_selection[k] === rkey.selection, 1:nrow(sheet))
+    i === nothing && return nothing
+
+    side  = Symbol(sheet.side[i])
+    stake = Float64(sheet.venue_stake[i])
+    lv = get(slate.books, (match_id, rkey), nothing)
+    prices, sizes = lv === nothing ? (Float64[], Float64[]) :
+                    side === :back ? (lv.back, lv.back_size) : (lv.lay, lv.lay_size)
+
+    fills = zeros(Float64, min(LADDER_DEPTH, length(sizes), length(prices)))
+    remaining = stake
+    for j in eachindex(fills)
+        Float64(prices[j]) > 1.0 || continue
+        take = min(remaining, Float64(sizes[j]))
+        take > 0 || continue
+        fills[j] = take
+        remaining -= take
+        remaining <= 1e-9 && break
+    end
+
+    cap = lv === nothing ? nothing : MD.leg_capacity(lv, side, stake)
+    return (
+        selection       = String(sheet.selection[i]),
+        venue_selection = String(rkey.selection),
+        side            = String(side),
+        venue_odds      = round(Float64(sheet.venue_odds[i]), digits = 3),
+        effective_odds  = round(Float64(sheet.odds[i]), digits = 3),
+        venue_stake     = round(stake, digits = 2),
+        risk            = round(Float64(sheet.risk[i]), digits = 2),
+        frac            = round(Float64(sheet.frac[i]), digits = 5),
+        level_fills     = round.(fills, digits = 2),
+        levels_used     = cap === nothing ? 0 : cap.levels_used,
+        fill_vwap       = (cap === nothing || isnan(cap.vwap)) ? nothing :
+                          round(cap.vwap, digits = 3),
+        filled          = cap === nothing ? 0.0 : round(cap.filled, digits = 2),
+        fillable        = cap === nothing ? false : cap.fillable,
+        slippage_pct    = (cap === nothing || isnan(cap.slippage)) ? nothing :
+                          round(100 * cap.slippage, digits = 3),
+        confidence      = cap === nothing ? "low" : String(cap.confidence),
+        unfilled        = round(max(0.0, remaining), digits = 2),
+    )
+end
+
+"""
+    fixture_ladder(st, match_id, market_type = "MATCH_ODDS") -> NamedTuple
+
+One fixture's exchange market as a Bet Angel desk: three price ladders side by side, each with
+its depth, its spread, its weight of money, the model's view of it, and any order we would rest
+on it at this minute.
+
+Everything is read at the CURRENT clock instant through `MD.quotes`, so the desk cannot show a
+level the card grid could not. The model column comes from `model_probs_at`, i.e. from the
+posterior the same pipeline extracts, and is absent -- not zero, not the market's own number --
+for a fixture the gate refused or a model that is not loaded.
+
+`kelly_stake` on a runner is the stake the PORTFOLIO solved, `frac × bankroll`, and not a
+per-leg Kelly fraction computed here. Those are different numbers: `SlateDrawdown` solves one
+`k` for the whole settlement window, so the size actually taken on this runner depends on every
+other leg on the card. Recomputing an isolated Kelly for the desk would print a number no
+Execute would ever place.
+"""
+function fixture_ladder(st::ReplayState, match_id::Integer,
+                        market_type::AbstractString = "MATCH_ODDS")
+    return lock(st.lock) do
+        f = card_fixture(st, match_id)
+        mt = uppercase(strip(String(market_type)))
+        runners = market_runners(mt, f)
+        id = st.card.identities[f.m_id]
+        as_of = as_of_at(st.card, st.clock.t)
+        slot = active_slot(st)
+
+        book = id isa MD.Resolved ? MD.quotes(st.card.book, id, as_of) :
+               Dict{MD.SelectionKey,MD.BookLevels}()
+        implied = market_implied(book, runners)
+        probs = get(model_probs_at(st, as_of; slot = slot), f.m_id,
+                    Dict{MD.SelectionKey,Float64}())
+
+        rows = NamedTuple[]
+        for r in runners
+            lv = get(book, r.key, nothing)
+            back_p = lv === nothing ? Float64[] : lv.back
+            back_s = lv === nothing ? Float64[] : lv.back_size
+            lay_p  = lv === nothing ? Float64[] : lv.lay
+            lay_s  = lv === nothing ? Float64[] : lv.lay_size
+
+            bb = lv === nothing ? NaN : MD.best_back(lv)
+            bl = lv === nothing ? NaN : MD.best_lay(lv)
+            spread = (isnan(bb) || isnan(bl)) ? nothing : round(bl - bb, digits = 3)
+            mid = (isnan(bb) || isnan(bl)) ? nothing : round((bb + bl) / 2, digits = 3)
+
+            wom = lv === nothing ? nothing : wom_pct(lv)
+            d_back = top_depth(back_s)
+            d_lay  = top_depth(lay_s)
+
+            pm = get(implied.probs, r.key, nothing)
+            pmod = get(probs, r.key, nothing)
+            edge = (pm === nothing || pmod === nothing) ? nothing : pmod - pm
+            ev = (edge === nothing || pm === nothing || pm <= 0) ? nothing :
+                 round(100 * edge / pm, digits = 2)
+
+            push!(rows, (
+                symbol      = r.symbol,
+                runner      = r.runner,
+                label       = r.label,
+                selection   = String(r.key.selection),
+                group       = r.key.group,
+                line        = r.key.line,
+                # Both sides best-first, padded to nothing so three rows always render and an
+                # absent level is visibly absent rather than silently short.
+                back        = [(price = i <= length(back_p) ? round(back_p[i], digits = 3) : nothing,
+                                size  = i <= length(back_s) ? round(back_s[i], digits = 2) : nothing)
+                               for i in 1:LADDER_DEPTH],
+                lay         = [(price = i <= length(lay_p) ? round(lay_p[i], digits = 3) : nothing,
+                                size  = i <= length(lay_s) ? round(lay_s[i], digits = 2) : nothing)
+                               for i in 1:LADDER_DEPTH],
+                best_back   = isnan(bb) ? nothing : round(bb, digits = 3),
+                best_lay    = isnan(bl) ? nothing : round(bl, digits = 3),
+                mid         = mid,
+                spread      = spread,
+                spread_ticks = spread_ticks(bb, bl),
+                spread_pct  = (spread === nothing || mid === nothing || mid <= 0) ? nothing :
+                              round(100 * spread / mid, digits = 2),
+                wom         = wom === nothing ? nothing : round(wom, digits = 1),
+                wom_lay     = wom === nothing ? nothing : round(100 - wom, digits = 1),
+                depth_back  = round(d_back, digits = 2),
+                depth_lay   = round(d_lay, digits = 2),
+                # The scale the per-LEVEL depth bars are drawn against, so the biggest single
+                # resting level fills its row. Scaling by the three-level SUM instead would make
+                # every bar short on a runner whose depth is spread evenly, which is the runner
+                # a desk most wants to see.
+                depth_max   = round(maximum(Float64[back_s; lay_s]; init = 0.0), digits = 2),
+                depth_touch_back = isempty(back_s) ? 0.0 : round(Float64(back_s[1]), digits = 2),
+                depth_touch_lay  = isempty(lay_s)  ? 0.0 : round(Float64(lay_s[1]), digits = 2),
+                p_model     = pmod === nothing ? nothing : round(pmod, digits = 4),
+                p_market    = pm === nothing ? nothing : round(pm, digits = 4),
+                p_market_raw = haskey(implied.raw, r.key) ?
+                               round(implied.raw[r.key], digits = 4) : nothing,
+                fair_odds   = (pmod === nothing || pmod <= 0) ? nothing :
+                              round(1 / pmod, digits = 3),
+                edge_pp     = edge === nothing ? nothing : round(100 * edge, digits = 2),
+                ev_pct      = ev,
+                kelly_stake = nothing,   # filled from the order marker below
+                matched     = (lv === nothing || isnan(lv.matched)) ? nothing :
+                              round(lv.matched, digits = 2),
+                vwap_book   = lv === nothing ? nothing :
+                              let v = vwap_book(back_p, back_s)
+                                  v === nothing ? nothing : round(v, digits = 3)
+                              end,
+                book_ts     = lv === nothing ? nothing : string(lv.ts),
+                book_age_s  = lv === nothing ? nothing :
+                              round(Dates.value(as_of - lv.ts) / 1000, digits = 0),
+                order       = _order_marker(st, f.m_id, r.key),
+            ))
+        end
+        # `kelly_stake` is the order's venue stake, restated on the runner so a desk column can
+        # print it in its header without reaching into the marker.
+        rows = NamedTuple[merge(r, (kelly_stake = r.order === nothing ? nothing :
+                                                  r.order.venue_stake,)) for r in rows]
+
+        return (
+            ok = true,
+            match_id = f.m_id,
+            fixture = f.home * " v " * f.away,
+            home = f.home, away = f.away,
+            kickoff = string(f.kickoff),
+            market = mt,
+            market_label = mt == "MATCH_ODDS" ? "Match Odds" :
+                           mt == "BOTH_TEAMS_TO_SCORE" ? "BTTS" :
+                           startswith(mt, "OVER_UNDER_") ?
+                               "Over/Under " * string(first(runners).key.line) : mt,
+            markets = collect(LADDER_MARKETS),
+            t = st.clock.t,
+            as_of = string(as_of),
+            in_play = st.clock.t >= T_KICKOFF,
+            stale = st.slate !== nothing && st.slate_t != st.clock.t,
+            priced_t = st.slate_t,
+            model = slot.key, model_label = slot.label,
+            model_status = String(slot.status),
+            resolved = id isa MD.Resolved,
+            book_sum = implied.complete ? round(implied.book_sum, digits = 4) : nothing,
+            complete = implied.complete,
+            lineup_drop_min = lineup_drop_minute(st.card, f),
+            n_runners = length(rows),
+            runners = rows,
+        )
+    end
+end
+
+# -------------------------------------------------------------------
+# 11.7 One runner's history
+# -------------------------------------------------------------------
+
+"""
+    _history_grid(from_t, to_t, drop_t) -> Vector{Int}
+
+The minutes at which the MODEL is evaluated for a trajectory chart.
+
+Not every minute, and it does not need to be: `model_probs_at` is memoised on the lineup
+signature and the signature moves only when an XI lands, so a five-minute grid with the drop
+minute and its neighbours pinned resolves the step to the exact minute it happened while paying
+for two extractions rather than 165. The market series below IS computed every minute -- that
+one genuinely moves every minute, and it is read from memory.
+"""
+function _history_grid(from_t::Int, to_t::Int, drop_t::Union{Nothing,Int})
+    g = collect(from_t:5:to_t)
+    push!(g, to_t)
+    drop_t === nothing || append!(g, (drop_t - 1, drop_t, drop_t + 1))
+    return sort!(unique!(Int[t for t in g if from_t <= t <= to_t]))
+end
+
+"""
+    selection_history(st, match_id, symbol, market_type = "MATCH_ODDS"; from, to) -> NamedTuple
+
+One runner's minute-by-minute history from the start of the replay window to the current clock
+instant: the market's two prices, its weight of money, its cumulative matched volume, and the
+model's fair odds beside them.
+
+The point of putting them on one time axis is the one claim a replay can make that nothing else
+can: at T-30 the XI lands, `1/p_model` STEPS, and the market's price either follows it or does
+not. `fair_odds` is a step function for exactly that reason and is not smoothed; a `nothing`
+before the first point the pipeline could price is left as a gap rather than back-filled from a
+model state that did not exist yet.
+
+`to` defaults to the current clock reading, so the chart cannot draw a price the console has not
+scrubbed to. Passing `to = T_END` is how the full horizon is asked for, explicitly.
+
+`lineup_drop_min` is SIGNED against kick-off (-30 means half an hour before it), matching
+`minutes_to_ko` on the same payload so the chart can drop a vertical at it without converting.
+Note that `replay.fixtures[].lineup_drop_min` in the console snapshot is the same instant
+expressed as a POSITIVE lead time; they are different conventions in different blocks because
+one is an axis coordinate and the other is a label.
+"""
+function selection_history(st::ReplayState, match_id::Integer, symbol::AbstractString,
+                           market_type::AbstractString = "MATCH_ODDS";
+                           from::Integer = T_START, to::Union{Nothing,Integer} = nothing)
+    return lock(st.lock) do
+        f = card_fixture(st, match_id)
+        mt = uppercase(strip(String(market_type)))
+        r = runner_of(mt, symbol, f)
+        runners = market_runners(mt, f)
+        id = st.card.identities[f.m_id]
+        slot = active_slot(st)
+
+        from_t = clamp_t(from)
+        to_t = clamp_t(to === nothing ? st.clock.t : to)
+        to_t < from_t && (to_t = from_t)
+
+        drop_t = lineup_drop_minute(st.card, f)
+
+        # The model, on the coarse grid, forward-filled onto every minute.
+        fair_at = Dict{Int,Union{Nothing,Float64}}()
+        if slot.status === :ready
+            for t in _history_grid(from_t, to_t, drop_t)
+                p = get(get(model_probs_at(st, as_of_at(st.card, t); slot = slot), f.m_id,
+                            Dict{MD.SelectionKey,Float64}()), r.key, nothing)
+                fair_at[t] = (p === nothing || p <= 0) ? nothing : p
+            end
+        end
+
+        n = to_t - from_t + 1
+        minutes  = Vector{Int}(undef, n)
+        stamps   = Vector{String}(undef, n)
+        unix_s   = Vector{Float64}(undef, n)
+        best_bk  = Vector{Union{Nothing,Float64}}(undef, n)
+        best_ly  = Vector{Union{Nothing,Float64}}(undef, n)
+        mids     = Vector{Union{Nothing,Float64}}(undef, n)
+        woms     = Vector{Union{Nothing,Float64}}(undef, n)
+        matched  = Vector{Union{Nothing,Float64}}(undef, n)
+        p_model  = Vector{Union{Nothing,Float64}}(undef, n)
+        fair     = Vector{Union{Nothing,Float64}}(undef, n)
+        p_market = Vector{Union{Nothing,Float64}}(undef, n)
+
+        held = nothing                      # the last model probability seen on the grid
+        for (i, t) in enumerate(from_t:to_t)
+            as_of = as_of_at(st.card, t)
+            minutes[i] = t
+            stamps[i]  = string(as_of)
+            unix_s[i]  = datetime2unix(as_of)
+
+            haskey(fair_at, t) && (held = fair_at[t])
+            p_model[i] = held
+            fair[i] = held === nothing ? nothing : round(1 / held, digits = 3)
+
+            book = id isa MD.Resolved ? MD.quotes(st.card.book, id, as_of) :
+                   Dict{MD.SelectionKey,MD.BookLevels}()
+            imp = market_implied(book, runners)
+            p_market[i] = haskey(imp.probs, r.key) ? round(imp.probs[r.key], digits = 4) : nothing
+
+            lv = get(book, r.key, nothing)
+            if lv === nothing
+                best_bk[i] = nothing; best_ly[i] = nothing; mids[i] = nothing
+                woms[i] = nothing; matched[i] = nothing
+                continue
+            end
+            bb, bl = MD.best_back(lv), MD.best_lay(lv)
+            best_bk[i] = isnan(bb) ? nothing : round(bb, digits = 3)
+            best_ly[i] = isnan(bl) ? nothing : round(bl, digits = 3)
+            mids[i] = (isnan(bb) || isnan(bl)) ? nothing : round((bb + bl) / 2, digits = 3)
+            w = wom_pct(lv)
+            woms[i] = w === nothing ? nothing : round(w, digits = 1)
+            matched[i] = isnan(lv.matched) ? nothing : round(lv.matched, digits = 2)
+        end
+
+        return (
+            ok = true,
+            match_id = f.m_id,
+            fixture = f.home * " v " * f.away,
+            market = mt,
+            symbol = r.symbol,
+            runner = r.runner,
+            label = r.label,
+            selection = String(r.key.selection),
+            model = slot.key, model_label = slot.label,
+            model_status = String(slot.status),
+            from_t = from_t, to_t = to_t, t = st.clock.t,
+            n_points = n,
+            timestamps = stamps,
+            unix = unix_s,
+            minutes_to_ko = minutes,
+            best_back = best_bk,
+            best_lay = best_ly,
+            mid = mids,
+            wom = woms,
+            market_matched = matched,
+            p_market = p_market,
+            p_model = p_model,
+            fair_odds = fair,
+            lineup_drop_min = drop_t,
+            exec_window = (from = T_WINDOW_OPEN, to = T_WINDOW_CLOSE),
+            markers = (lineups = T_LINEUP, exec = T_EXEC, kickoff = T_KICKOFF),
+        )
+    end
 end
