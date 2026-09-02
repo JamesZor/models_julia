@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MatchDay — Replay Console (8086)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<style>
+  :root {
+    --bg:#0a0c10; --panel:#11151c; --line:#1d232e; --ink:#d7dee9; --dim:#7c8798;
+    --accent:#4ade80; --accent-dim:#14532d; --market:#3f4a5a; --warn:#fbbf24; --bad:#f87171;
+    --replay:#60a5fa; --replay-dim:#1e3a5f;
+  }
+  html,body{background:var(--bg);color:var(--ink);}
+  body{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+       font-variant-numeric:tabular-nums;font-size:12px;margin:0;}
+  /* tabular-nums is not cosmetic: at 60x the book updates once a second and without it every
+     card jitters horizontally on each tick. */
+  .panel{background:var(--panel);border:1px solid var(--line);}
+  .card{background:var(--panel);border:1px solid var(--line);transition:border-color .25s ease;}
+  .card.pos{border-color:#1f5133;}
+  .card.noxi{opacity:.55;}
+  .bar{height:6px;background:#161b24;border-radius:2px;overflow:hidden;}
+  .bar>span{display:block;height:100%;transition:width .25s ease;}
+  /* The transition is the point of a replay: a lineup shock that snapped would be a redraw,
+     an animated one is visibly a MOVE, and which direction it moved in is the finding. */
+  .bar-model>span{background:var(--accent);}
+  .bar-market>span{background:var(--market);}
+  .dots{letter-spacing:1px;}
+  .grid-cards{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));}
+  button:disabled{opacity:.35;cursor:not-allowed;}
+  select,input[type=range]{background:#161b24;color:var(--ink);border:1px solid var(--line);}
+  select{padding:2px 6px;border-radius:3px;}
+  .vcr{padding:4px 10px;border:1px solid var(--line);border-radius:3px;background:#161b24;}
+  .vcr:hover:not(:disabled){border-color:var(--replay);}
+  .vcr.on{border-color:var(--replay);color:var(--replay);background:var(--replay-dim);}
+  .tick{animation:tick .5s ease;}
+  @keyframes tick{from{background:#132033}to{background:transparent}}
+  .scrub{-webkit-appearance:none;appearance:none;height:22px;background:transparent;width:100%;}
+  .scrub::-webkit-slider-runnable-track{height:6px;background:#161b24;border-radius:3px;
+                                        border:1px solid var(--line);}
+  .scrub::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:18px;margin-top:-7px;
+                               background:var(--replay);border-radius:2px;cursor:pointer;}
+  .scrub::-moz-range-track{height:6px;background:#161b24;border-radius:3px;border:1px solid var(--line);}
+  .scrub::-moz-range-thumb{width:12px;height:18px;background:var(--replay);border:0;border-radius:2px;}
+  .marker{position:absolute;top:0;width:1px;height:22px;}
+  .modal{position:fixed;inset:0;background:rgba(4,6,10,.86);overflow:auto;z-index:40;}
+  table{border-collapse:collapse;width:100%;}
+  th,td{padding:3px 6px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap;}
+  th{color:var(--dim);font-weight:normal;position:sticky;top:0;background:var(--panel);}
+  .num{text-align:right;}
+  .scrollx{overflow-x:auto;}
+</style>
+</head>
+<body>
+<div x-data="replay_()" x-init="start()" class="p-3">
+
+  <!-- ── REPLAY CONTROL BAR ────────────────────────────────────────────────────────
+       The instrument the live console does not have and must not have. Everything here
+       moves `as_of`, which on 8085 is `now()` and is not a control at all. -->
+  <div class="panel p-3 mb-3">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <span class="text-base font-bold text-[var(--replay)]">REPLAY</span>
+
+      <label class="flex items-center gap-1">
+        <span class="text-[var(--dim)]">matchday</span>
+        <select @change="setMatchday($event.target.value)">
+          <template x-for="d in matchdays" :key="d.day">
+            <option :value="d.day" :selected="d.day===r.day" :disabled="!d.replayable"
+                    x-text="d.day + '  (' + d.n_fixtures + ' fx, ' + d.book_rows + ' book rows, '
+                                          + d.n_lineups + ' XI)'"></option>
+          </template>
+        </select>
+      </label>
+
+      <span class="text-[var(--dim)]">model</span>
+      <template x-for="m in r.models" :key="m.key">
+        <button class="vcr" :class="{'on': m.active}" @click="setModel(m.key)"
+                :title="m.run_name + ' · ' + m.experiment + ' · fold ' + m.fold_idx
+                        + ' · ' + m.n_covered + ' covered / ' + m.n_refused + ' refused'
+                        + (m.error ? ' · ' + m.error : '')">
+          <span x-text="m.label"></span>
+          <span class="text-[var(--dim)]" x-show="m.status!=='ready'" x-text="' ['+m.status+']'"></span>
+        </button>
+      </template>
+
+      <span class="ml-auto" :class="connected?'text-[var(--accent)]':'text-[var(--bad)]'"
+            x-text="connected ? '● live' : '○ disconnected'"></span>
+    </div>
+
+    <!-- VCR + speed -->
+    <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+      <button class="vcr" @click="step(-1)" title="back one simulated minute">⏮ −1m</button>
+      <button class="vcr" :class="{'on': r.playing}" @click="togglePlay()"
+              x-text="r.playing ? '⏸ Pause' : '▶ Play'"></button>
+      <button class="vcr" @click="step(1)" title="forward one simulated minute">+1m ⏭</button>
+
+      <span class="text-[var(--dim)] ml-2">speed</span>
+      <template x-for="s in r.speeds" :key="s">
+        <button class="vcr" :class="{'on': r.speed===s}" @click="setSpeed(s)"
+                x-text="s + 'x'" :title="s===60 ? '1 simulated minute per second' : ''"></button>
+      </template>
+
+      <span class="ml-4 text-lg font-bold text-[var(--replay)]" x-text="'T' + tsign(r.t) + 'm'"></span>
+      <span class="text-[var(--dim)]" x-text="fmtTime(r.as_of)"></span>
+      <span class="text-[var(--warn)]" x-show="r.stale"
+            x-text="'grid frozen at T' + tsign(r.priced_t) + 'm'"></span>
+      <span class="text-[var(--dim)]" x-text="r.reprice_ms + ' ms/tick'"></span>
+    </div>
+
+    <!-- Scrubber. The three markers are the only instants in a match day at which the
+         INPUTS change discontinuously: the XI lands, the entry window opens, the book
+         turns in-play. Drawing them on the track is what makes a drag a decision. -->
+    <div class="mt-3 relative">
+      <div class="relative">
+        <input type="range" class="scrub" :min="r.t_start" :max="r.t_end" step="1"
+               :value="r.t" @input="seek($event.target.value)">
+        <!-- Colour lives inside the binding rather than in a static `style` attribute so the
+             two never have to be merged: an Alpine `:style` string and a literal one are
+             combined by the framework, and relying on that is a silent way to lose one. -->
+        <div class="marker" :style="'left:'+pct(r.markers.lineups)+'%;background:var(--warn)'"></div>
+        <div class="marker" :style="'left:'+pct(r.markers.exec)+'%;background:var(--accent)'"></div>
+        <div class="marker" :style="'left:'+pct(r.markers.kickoff)+'%;background:var(--bad)'"></div>
+      </div>
+      <div class="flex justify-between text-[var(--dim)]">
+        <span x-text="'T' + r.t_start + 'm'"></span>
+        <span class="text-[var(--warn)]">XI T−30</span>
+        <span class="text-[var(--accent)]">exec T−15</span>
+        <span class="text-[var(--bad)]">KO</span>
+        <span x-text="'FT +' + r.t_end + 'm'"></span>
+      </div>
+    </div>
+
+    <div class="mt-2 flex flex-wrap items-center gap-2">
+      <button class="vcr" @click="jump('lineups')">[XI Drop T−30m]</button>
+      <button class="vcr" @click="jump('exec')">[Exec T−15m]</button>
+      <button class="vcr" @click="jump('kickoff')">[Kickoff T−0]</button>
+      <button class="vcr" @click="jump('settlement')">[Fast-Forward Settlement]</button>
+      <span class="text-[var(--dim)] ml-2"
+            x-text="r.n_fixtures + ' fixtures · ' + r.n_lineups + ' with a scraped XI · book '
+                    + fmtTime(r.book_from) + ' → ' + fmtTime(r.book_to)"></span>
+    </div>
+
+    <!-- The one thing a replay can show that a live console cannot, and the one thing that
+         will be misread if it is not labelled. After kick-off the model is pre-game and the
+         book is in-play: the book has seen goals the posterior has not, so the "edges" are a
+         measurement of that gap and not a signal. -->
+    <div x-show="r.in_play" class="mt-2 px-2 py-1 rounded bg-[#3a1d1d] text-[var(--bad)]">
+      IN-PLAY (T<span x-text="tsign(r.t)"></span>m) — the pre-game posterior is being compared
+      with an in-play book that has already seen the goals. Edges here are NOT tradeable signals;
+      the execution window closed at kick-off. Settlement below is unaffected.
+    </div>
+    <div x-show="r.note" class="mt-2 text-[var(--warn)]" x-text="r.note"></div>
+    <div x-show="r.error" class="mt-1 text-[var(--bad)]" x-text="'tick: ' + r.error"></div>
+  </div>
+
+  <!-- ── BATCH HEADER ─────────────────────────────────────────────────────────────
+       Unchanged from the live console: Portfolio solved ONE joint problem, so these are
+       the numbers that decide whether the vector is safe. Exposure before bets, always. -->
+  <div class="panel p-3 mb-3" :class="{'tick': flash}">
+    <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+      <span class="text-base font-bold">SLATE <span x-text="b.window"></span></span>
+      <span class="text-[var(--dim)]">as_of <span x-text="fmtTime(b.as_of)"></span></span>
+      <span class="text-[var(--dim)]">fold <span x-text="b.fold_idx"></span></span>
+      <span class="px-2 py-0.5 rounded"
+            :class="b.status==='RESERVED'||b.status==='EXECUTED'
+                    ?'bg-[var(--accent-dim)] text-[var(--accent)]':'bg-[#1d232e]'"
+            x-text="b.status"></span>
+      <span class="ml-auto text-[var(--replay)]"
+            x-text="'PAPER REPLAY · ' + r.schema + ' · ' + r.account_id"></span>
+    </div>
+
+    <div class="mt-2 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-x-6 gap-y-1">
+      <div><span class="text-[var(--dim)]">equity</span> <span x-text="money(a.equity)"></span></div>
+      <div><span class="text-[var(--dim)]">free</span> <span x-text="money(a.free)"></span></div>
+      <div><span class="text-[var(--dim)]">Σrisk</span> <span x-text="money(b.total_risk)"></span></div>
+      <div><span class="text-[var(--dim)]">k_risk</span> <span x-text="b.k_risk"></span></div>
+      <div><span class="text-[var(--dim)]">λ</span> <span x-text="b.risk_lambda"></span></div>
+      <div><span class="text-[var(--dim)]">capped</span>
+           <span :class="b.capped?'text-[var(--warn)]':''" x-text="b.capped?'YES':'no'"></span></div>
+      <div><span class="text-[var(--dim)]">legs</span>
+           <span x-text="b.n_legs + ' / ' + b.n_fixtures + ' fx'"></span></div>
+    </div>
+
+    <div class="mt-2 flex items-center gap-3">
+      <span class="text-[var(--dim)] w-20">exposure</span>
+      <div class="bar flex-1 max-w-md">
+        <span :style="'width:' + Math.min(100, (b.exposure_pct/(b.cap_pct||1))*100) + '%'"
+              :class="b.capped?'bg-[var(--warn)]':'bg-[var(--accent)]'"></span>
+      </div>
+      <span x-text="b.exposure_pct + '% / ' + b.cap_pct + '%'"></span>
+      <span class="text-[var(--dim)]" x-show="b.n_low_confidence>0"
+            x-text="b.n_low_confidence + ' low-confidence legs'"></span>
+    </div>
+
+    <div class="mt-2 flex flex-wrap items-center gap-3">
+      <!-- THE ATOM. Same intent as the live console: one button, one server-side transaction.
+           It reserves the whole vector at THIS simulated minute and fills it against the book
+           that minute actually had. -->
+      <button @click="execute()" :disabled="!canExecute()"
+              class="px-4 py-2 font-bold rounded bg-[var(--accent-dim)] text-[var(--accent)]
+                     border border-[var(--accent)] hover:brightness-125">
+        ⏎ EXECUTE AT T<span x-text="tsign(r.t)"></span>m
+      </button>
+      <span class="text-[var(--dim)]"
+            x-text="'reserves ' + money(b.total_risk) + ' across ' + b.n_legs
+                    + ' legs in ONE tx, fills with LadderSweep'"></span>
+      <button class="vcr" @click="settle()" :disabled="r.n_executed===0">⚑ Settle &amp; grade</button>
+      <button class="vcr" @click="showSettlement=true" :disabled="!settlement">Results</button>
+      <button class="vcr" @click="reset()" title="delete this replay account's rows and restore the bankroll">
+        ↺ Reset ledger
+      </button>
+      <span class="text-[var(--dim)]" x-text="r.n_executed + ' executed slate(s)'"></span>
+      <label class="ml-auto flex items-center gap-1 text-[var(--dim)]">
+        <input type="checkbox" x-model="autosort"> auto-sort by EV%
+      </label>
+    </div>
+
+    <div x-show="msg" class="mt-2 px-2 py-1 rounded"
+         :class="msgOk?'text-[var(--accent)]':'text-[var(--bad)]'" x-text="msg"></div>
+    <div x-show="b.warning" class="mt-1 text-[var(--warn)]" x-text="'select_split: ' + b.warning"></div>
+  </div>
+
+  <!-- ── FILTERS ───────────────────────────────────────────────────────────────── -->
+  <div class="panel p-2 mb-3 flex flex-wrap gap-4 items-center">
+    <span class="text-[var(--dim)]">sort</span>
+    <template x-for="k in ['ev_pct','risk','minutes_to_kickoff']" :key="k">
+      <label class="flex items-center gap-1">
+        <input type="radio" :value="k" x-model="sortKey"><span x-text="k"></span>
+      </label>
+    </template>
+    <span class="text-[var(--dim)] ml-4">markets</span>
+    <template x-for="m in ['1X2','OverUnder','BTTS']" :key="m">
+      <label class="flex items-center gap-1">
+        <input type="checkbox" :value="m" x-model="markets"><span x-text="m"></span>
+      </label>
+    </template>
+    <span class="ml-auto text-[var(--dim)]"
+          x-text="cards.length + ' cards · ' + blocked.length + ' blocked'"></span>
+  </div>
+
+  <!-- ── CARD GRID ─────────────────────────────────────────────────────────────────
+       Identical in shape to the live console, deliberately: a card must mean the same
+       thing on both, or a habit formed here misreads the real one. -->
+  <div class="grid-cards">
+    <template x-for="c in visible()" :key="c.match_id">
+      <div class="card p-2" :class="{'pos': c.ev_pct > 0, 'noxi': c.lineup_source==='none',
+                                     'tick': flash}">
+
+        <div class="flex justify-between items-baseline">
+          <span class="font-bold truncate" x-text="c.home + ' v ' + c.away"></span>
+          <span class="text-[var(--dim)] shrink-0 ml-2" x-text="'T' + tminus(c.minutes_to_kickoff)"></span>
+        </div>
+        <div class="text-[var(--dim)]" x-text="fmtTime(c.kickoff) + ' · tid ' + c.tournament_id"></div>
+
+        <div class="flex justify-between items-baseline mt-1 mb-1 border-t border-b border-[var(--line)] py-1">
+          <span class="text-lg font-bold"
+                :class="c.ev_pct>0?'text-[var(--accent)]':'text-[var(--dim)]'"
+                x-text="(c.ev_pct>0?'+':'') + c.ev_pct + '%'"></span>
+          <span x-text="money(c.risk) + ' · ' + c.n_legs + ' leg' + (c.n_legs===1?'':'s')"></span>
+        </div>
+
+        <template x-for="l in legsOf(c)" :key="l.market + l.line + l.selection">
+          <div class="mb-2">
+            <div class="flex justify-between">
+              <span x-text="l.selection + '  ' + l.side"></span>
+              <span>
+                <span x-text="money(l.venue_stake)"></span>
+                <span class="dots ml-1"
+                      :class="l.confidence==='high'?'text-[var(--accent)]':
+                              l.confidence==='medium'?'text-[var(--warn)]':'text-[var(--bad)]'"
+                      x-text="dots(l.confidence)"></span>
+              </span>
+            </div>
+            <!-- Model and market on ONE shared 0-1 scale: the visible overhang of the model
+                 bar past the market bar IS the edge. When the XI drops, the green bar moves
+                 and the slate bar does not - that difference is the lineup shock. -->
+            <div class="bar bar-model mt-1"><span :style="'width:'+(l.p_model*100)+'%'"></span></div>
+            <div class="bar bar-market mt-0.5"><span :style="'width:'+(l.p_market*100)+'%'"></span></div>
+            <div class="flex justify-between text-[var(--dim)] mt-0.5">
+              <span x-text="'model ' + l.p_model.toFixed(3) + ' · mkt ' + l.p_market.toFixed(3)"></span>
+              <span :class="l.edge_pp>0?'text-[var(--accent)]':''"
+                    x-text="(l.edge_pp>0?'+':'') + l.edge_pp + 'pp'"></span>
+            </div>
+            <div class="flex justify-between">
+              <span x-text="'fair ' + l.fair_odds.toFixed(2) + ' → ' + l.venue_odds.toFixed(2)"></span>
+              <span class="text-[var(--dim)]"
+                    x-text="'depth ' + money(l.depth_touch)
+                            + (l.slippage_pct!==null ? ' · slip ' + l.slippage_pct + '%' : '')"></span>
+            </div>
+          </div>
+        </template>
+
+        <div class="flex justify-between text-[var(--dim)] border-t border-[var(--line)] pt-1">
+          <span x-text="'XI ' + xiMark(c)"></span>
+          <span x-text="c.lineup_source"></span>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ── BLOCKED ───────────────────────────────────────────────────────────────────
+       Never optional. "No bets today" and "the pipeline is broken" must stay distinct. -->
+  <div class="panel p-2 mt-3" x-show="blocked.length">
+    <div class="font-bold mb-1 text-[var(--warn)]" x-text="'GATED (' + blocked.length + ')'"></div>
+    <template x-for="x in blocked" :key="x.match_id">
+      <div class="flex gap-3 border-t border-[var(--line)] py-0.5">
+        <span class="w-64 truncate" x-text="x.fixture"></span>
+        <span class="text-[var(--dim)]" x-text="x.reasons.join(' | ')"></span>
+      </div>
+    </template>
+  </div>
+
+  <!-- Fixtures this MODEL cannot represent. A different refusal from a gate, and it moves
+       when the model does, so it is reported against the model rather than the card. -->
+  <div class="panel p-2 mt-3" x-show="refusedOf().length">
+    <div class="font-bold mb-1 text-[var(--warn)]"
+         x-text="'NOT COVERED BY ' + activeModel().label + ' (' + refusedOf().length + ')'"></div>
+    <template x-for="x in refusedOf()" :key="x.match_id">
+      <div class="flex gap-3 border-t border-[var(--line)] py-0.5">
+        <span class="w-24" x-text="x.match_id"></span>
+        <span class="text-[var(--dim)]" x-text="x.reason"></span>
+      </div>
+    </template>
+  </div>
+
+  <!-- ── SETTLEMENT ────────────────────────────────────────────────────────────────
+       What actually happened. Leg by leg first, aggregate second: an ROI with no legs
+       behind it is a number nobody can check. -->
+  <!-- `x-if`, not `x-show`: `x-show` leaves the subtree in the DOM and Alpine still evaluates
+       every binding inside it, so `settlement.day` would throw on every tick before the first
+       settlement. `x-if` removes it entirely until there is something to render. -->
+  <template x-if="showSettlement && settlement">
+  <div class="modal p-4">
+    <div class="panel p-4 max-w-[1500px] mx-auto">
+      <div class="flex items-baseline gap-4 mb-3">
+        <span class="text-lg font-bold">SETTLEMENT — <span x-text="settlement.day"></span></span>
+        <span class="text-[var(--dim)]" x-text="settlement.model"></span>
+        <span class="text-[var(--dim)]"
+              x-text="settlement.n_slates + ' slate(s) · ' + settlement.n_settled + ' legs settled'"></span>
+        <span :class="settlement.reconciled?'text-[var(--accent)]':'text-[var(--bad)]'"
+              x-text="settlement.reconciled ? 'ledger reconciles' : 'LEDGER DOES NOT RECONCILE'"></span>
+        <button class="vcr ml-auto" @click="showSettlement=false">close</button>
+      </div>
+
+      <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-x-6 gap-y-1 mb-3">
+        <div><span class="text-[var(--dim)]">matched risk</span>
+             <div x-text="money(settlement.matched_risk)"></div></div>
+        <div><span class="text-[var(--dim)]">gross return</span>
+             <div x-text="money(settlement.gross_return)"></div></div>
+        <div><span class="text-[var(--dim)]">net PnL</span>
+             <div class="font-bold" :class="settlement.net_pnl>=0?'text-[var(--accent)]':'text-[var(--bad)]'"
+                  x-text="money(settlement.net_pnl)"></div></div>
+        <div><span class="text-[var(--dim)]">ROI</span>
+             <div :class="settlement.roi_pct>=0?'text-[var(--accent)]':'text-[var(--bad)]'"
+                  x-text="settlement.roi_pct + '%'"></div></div>
+        <div><span class="text-[var(--dim)]">beat close</span>
+             <div x-text="settlement.beat_close + '/' + settlement.n_clv
+                          + ' (' + settlement.beat_close_pct + '%)'"></div></div>
+        <div><span class="text-[var(--dim)]">equity before</span>
+             <div x-text="money(settlement.equity_before)"></div></div>
+        <div><span class="text-[var(--dim)]">equity after</span>
+             <div x-text="money(settlement.equity_after)"></div></div>
+        <div><span class="text-[var(--dim)]">Δ equity</span>
+             <div :class="(settlement.equity_after-settlement.equity_before)>=0
+                          ?'text-[var(--accent)]':'text-[var(--bad)]'"
+                  x-text="money(settlement.equity_after - settlement.equity_before)"></div></div>
+      </div>
+
+      <!-- Equity before/after as one bar pair on a shared scale, the same device the cards
+           use for model vs market: the overhang IS the P&L. -->
+      <div class="mb-3">
+        <div class="text-[var(--dim)]">account equity, before vs after</div>
+        <div class="bar bar-market mt-1" style="height:10px">
+          <span :style="'width:'+eqPct(settlement.equity_before)+'%'"></span></div>
+        <div class="bar bar-model mt-0.5" style="height:10px">
+          <span :style="'width:'+eqPct(settlement.equity_after)+'%'"
+                :class="settlement.equity_after>=settlement.equity_before
+                        ?'':'bg-[var(--bad)]'"></span></div>
+      </div>
+
+      <div class="mb-3 scrollx">
+        <div class="text-[var(--dim)] mb-1">full-time scores</div>
+        <div class="flex flex-wrap gap-x-6 gap-y-1">
+          <template x-for="s in settlement.scores" :key="s.match_id">
+            <span><span x-text="s.fixture"></span>
+                  <span class="font-bold ml-1"
+                        x-text="(s.home_goals===null?'?':s.home_goals) + '–'
+                                + (s.away_goals===null?'?':s.away_goals)"></span></span>
+          </template>
+        </div>
+      </div>
+
+      <div class="scrollx" style="max-height:52vh;overflow-y:auto">
+        <table>
+          <thead><tr>
+            <th>fixture</th><th>FT</th><th>market</th><th>selection</th><th>side</th>
+            <th class="num">entry</th><th class="num">vwap</th><th class="num">stake</th>
+            <th class="num">risk</th><th>outcome</th><th class="num">net PnL</th>
+            <th class="num">close p</th><th class="num">CLV pp</th>
+          </tr></thead>
+          <tbody>
+            <template x-for="(l, i) in settlement.legs" :key="i">
+              <tr>
+                <td x-text="l.fixture"></td>
+                <td x-text="(l.home_goals===null?'?':l.home_goals) + '–'
+                            + (l.away_goals===null?'?':l.away_goals)"></td>
+                <td x-text="l.market + (l.line ? ' ' + l.line : '')"></td>
+                <td x-text="l.selection + (l.venue_selection!==l.selection
+                                           ? ' (via ' + l.venue_selection + ')' : '')"></td>
+                <td x-text="l.side"></td>
+                <td class="num" x-text="l.venue_odds"></td>
+                <td class="num" x-text="l.fill_vwap===null ? '—' : l.fill_vwap"></td>
+                <td class="num" x-text="money(l.venue_stake)"></td>
+                <td class="num" x-text="money(l.risk_filled)"></td>
+                <td :class="l.outcome==='WIN'?'text-[var(--accent)]':
+                            l.outcome==='LOSE'?'text-[var(--bad)]':'text-[var(--dim)]'"
+                    x-text="l.outcome"></td>
+                <td class="num" :class="l.net_pnl>0?'text-[var(--accent)]':
+                                        l.net_pnl<0?'text-[var(--bad)]':''"
+                    x-text="money(l.net_pnl)"></td>
+                <td class="num" x-text="l.close_prob===null ? '—' : l.close_prob"></td>
+                <td class="num" :class="l.beat_close===true?'text-[var(--accent)]':
+                                        l.beat_close===false?'text-[var(--bad)]':''"
+                    x-text="l.clv_pp===null ? '—' : (l.clv_pp>0?'+':'') + l.clv_pp"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  </template>
+</div>
+
+<script>
+function replay_() { return {
+  a:{equity:0,free:0,is_live:false},
+  b:{window:'',status:'',n_legs:0,n_fixtures:0,exposure_pct:0,cap_pct:25,total_risk:0,
+     k_risk:0,risk_lambda:0,capped:false,n_low_confidence:0,fold_idx:0,warning:'',as_of:''},
+  r:{day:'',t:-60,t_start:-60,t_end:105,as_of:'',playing:false,speed:60,speeds:[1,5,30,60],
+     markers:{lineups:-30,exec:-15,kickoff:0},models:[],active_model:'',stale:false,
+     priced_t:-60,note:'',error:'',reprice_ms:0,tick_seq:0,schema:'',account_id:'',
+     n_executed:0,n_fixtures:0,n_lineups:0,book_from:null,book_to:null,fixtures:[],
+     in_play:false},
+  cards:[], blocked:[], settlement:null, matchdays:[],
+  connected:false, autosort:true, sortKey:'ev_pct',
+  markets:['1X2','OverUnder','BTTS'], msg:'', msgOk:true, ws:null,
+  showSettlement:false, flash:false, lastSeq:-1,
+
+  start(){
+    this.pull(); this.connect(); this.loadMatchdays();
+    // `?results=1` opens the results view on load. A deep link is how an operator sends a
+    // settled replay to someone else, and it is the only way to reach this view without a
+    // click - which is also what makes it screenshottable in CI.
+    if (new URLSearchParams(location.search).get('results')) this.showSettlement = true;
+    // The keyboard is the scrubber an operator actually uses: space to play, arrows to
+    // step, and the four jump targets on their initials.
+    window.addEventListener('keydown', e => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if (e.key === ' ')          { e.preventDefault(); this.togglePlay(); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); this.step(1); }
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); this.step(-1); }
+      if (e.key === 'x') this.jump('lineups');
+      if (e.key === 'e') this.jump('exec');
+      if (e.key === 'k') this.jump('kickoff');
+      if (e.key === 'f') this.jump('settlement');
+      if (e.key === 'Escape') this.showSettlement = false;
+    });
+  },
+
+  connect(){
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    try { this.ws = new WebSocket(`${proto}://${location.host}/ws`); } catch(e){ return; }
+    this.ws.onopen    = () => this.connected = true;
+    this.ws.onclose   = () => { this.connected = false; setTimeout(()=>this.connect(), 2000); };
+    this.ws.onmessage = ev => this.apply(JSON.parse(ev.data));
+  },
+
+  async pull(){ try { this.apply(await (await fetch('/api/snapshot')).json()); } catch(e){} },
+
+  async loadMatchdays(){
+    try { const j = await (await fetch('/api/replay/matchdays')).json();
+          if (j.ok) this.matchdays = j.matchdays; } catch(e){}
+  },
+
+  apply(s){
+    if (!s || s.error) return;
+    this.a = s.account; this.b = s.batch; this.r = s.replay;
+    this.cards = s.cards; this.blocked = s.blocked; this.settlement = s.settlement;
+    // Flash only when the SLATE was actually re-priced, not on every pushed frame. A grid
+    // that flashes at the push rate would read as motion where there was none.
+    if (s.replay.tick_seq !== this.lastSeq) {
+      this.lastSeq = s.replay.tick_seq;
+      this.flash = true; setTimeout(() => this.flash = false, 500);
+    }
+  },
+
+  // Disabled while a gate is failing. The reservation is all-or-nothing, so a half-valid
+  // slate has no partial commit to fall back on.
+  canExecute(){ return this.b.n_legs > 0 && this.b.total_risk <= this.a.free &&
+                       this.b.exposure_pct <= this.b.cap_pct && !this.r.stale &&
+                       !this.r.in_play; },
+
+  async post(path, body){
+    try { const r = await (await fetch(path, {method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body: JSON.stringify(body || {})})).json();
+          this.msgOk = !!r.ok;
+          this.msg = r.ok ? (r.note || 'ok') : (r.error || 'refused');
+          if (r.ok && path.endsWith('/settle')) this.showSettlement = true;
+          this.pull();
+          return r;
+    } catch(e){ this.msgOk = false; this.msg = String(e); }
+  },
+
+  togglePlay(){ this.post(this.r.playing ? '/api/replay/pause' : '/api/replay/play'); },
+  step(m){ this.post('/api/replay/step', {minutes:m}); },
+  seek(t){ this.post('/api/replay/seek', {t:Number(t)}); },
+  jump(x){ this.post('/api/replay/jump', {target:x}); },
+  setSpeed(s){ this.post('/api/replay/speed', {speed:s}); },
+  setModel(k){ this.msg = 'loading ' + k + '…'; this.msgOk = true;
+               this.post('/api/replay/set_model', {model:k}); },
+  setMatchday(d){ if (d === this.r.day) return;
+                  this.msg = 'loading ' + d + '…'; this.msgOk = true;
+                  this.post('/api/replay/set_matchday', {day:d}); },
+  execute(){ this.post('/api/replay/execute'); },
+  settle(){ this.post('/api/replay/settle'); },
+  reset(){ if (confirm('Delete every replay order and settlement for this account and restore the bankroll?'))
+             this.post('/api/replay/reset'); },
+
+  activeModel(){ return this.r.models.find(m => m.active) || {label:'—', refused:[]}; },
+  refusedOf(){ return this.activeModel().refused || []; },
+
+  legsOf(c){ return c.legs.filter(l => this.markets.includes(l.market)); },
+  visible(){
+    let v = this.cards.filter(c => this.legsOf(c).length > 0);
+    if (this.autosort) v = [...v].sort((x,y) =>
+      this.sortKey === 'minutes_to_kickoff' ? x[this.sortKey] - y[this.sortKey]
+                                            : y[this.sortKey] - x[this.sortKey]);
+    return v;
+  },
+
+  pct(t){ return 100 * (t - this.r.t_start) / (this.r.t_end - this.r.t_start); },
+  eqPct(v){ const m = Math.max(this.settlement.equity_before, this.settlement.equity_after, 1);
+            return 100 * v / m; },
+  xiMark(c){ return c.lineup_source === 'none' ? 'none'
+                  : (c.lineup_confirmed ? '✓' : '~')
+                    + (c.lineup_lead_min !== null ? ' T−' + c.lineup_lead_min + 'm' : ''); },
+  dots(c){ return c==='high' ? '●●●' : c==='medium' ? '●●○' : '●○○'; },
+  money(x){ return '£' + Number(x ?? 0).toFixed(2); },
+  tsign(t){ return t < 0 ? String(t).replace('-','−') : '+' + t; },
+  tminus(m){ return (m>=0?'−':'+') + Math.abs(m) + 'm'; },
+  fmtTime(s){ return s ? String(s).replace('T',' ').slice(0,16) : '—'; },
+}}
+</script>
+<style>[x-cloak]{display:none!important;}</style>
+</body>
+</html>
