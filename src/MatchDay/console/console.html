@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MatchDay — Slate Console</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<style>
+  :root {
+    --bg:#0a0c10; --panel:#11151c; --line:#1d232e; --ink:#d7dee9; --dim:#7c8798;
+    --accent:#4ade80; --accent-dim:#14532d; --market:#3f4a5a; --warn:#fbbf24; --bad:#f87171;
+  }
+  html,body{background:var(--bg);color:var(--ink);}
+  body{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+       font-variant-numeric:tabular-nums;font-size:12px;margin:0;}
+  /* tabular-nums is not cosmetic: without it a 1 Hz price update makes every card jitter
+     horizontally, which is the single most common way a dashboard like this feels cheap. */
+  .panel{background:var(--panel);border:1px solid var(--line);}
+  .card{background:var(--panel);border:1px solid var(--line);transition:border-color .2s ease;}
+  .card.pos{border-color:#1f5133;}
+  .card.stale{opacity:.45;}
+  .bar{height:6px;background:#161b24;border-radius:2px;overflow:hidden;}
+  .bar>span{display:block;height:100%;}
+  .bar-model>span{background:var(--accent);}
+  .bar-market>span{background:var(--market);}
+  .dots{letter-spacing:1px;}
+  .grid-cards{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));}
+  button:disabled{opacity:.35;cursor:not-allowed;}
+  .flash{animation:flash .6s ease;}
+  @keyframes flash{from{background:#1b2a1f}to{background:transparent}}
+</style>
+</head>
+<body>
+<div x-data="console_()" x-init="start()" class="p-3">
+
+  <!-- ── BATCH HEADER ─────────────────────────────────────────────────────────────
+       The header is not decoration: it is the BATCH. Portfolio solved one joint problem,
+       so these four numbers - k_risk, exposure vs cap, capped, leg count - decide whether
+       the vector is safe to commit. Exposure before bets, always. -->
+  <div class="panel p-3 mb-3">
+    <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+      <span class="text-base font-bold">SLATE <span x-text="b.window"></span></span>
+      <span class="text-[var(--dim)]">as_of <span x-text="fmtTime(b.as_of)"></span></span>
+      <span class="text-[var(--dim)]">fold <span x-text="b.fold_idx"></span></span>
+      <span class="px-2 py-0.5 rounded"
+            :class="b.status==='RESERVED'?'bg-[var(--accent-dim)] text-[var(--accent)]':'bg-[#1d232e]'"
+            x-text="b.status"></span>
+      <span class="ml-auto" :class="a.is_live?'text-[var(--bad)]':'text-[var(--dim)]'"
+            x-text="a.is_live ? 'LIVE MONEY' : 'PAPER'"></span>
+    </div>
+
+    <div class="mt-2 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-x-6 gap-y-1">
+      <div><span class="text-[var(--dim)]">equity</span> <span x-text="money(a.equity)"></span></div>
+      <div><span class="text-[var(--dim)]">free</span> <span x-text="money(a.free)"></span></div>
+      <div><span class="text-[var(--dim)]">Σrisk</span> <span x-text="money(b.total_risk)"></span></div>
+      <div><span class="text-[var(--dim)]">k_risk</span> <span x-text="b.k_risk"></span></div>
+      <div><span class="text-[var(--dim)]">λ</span> <span x-text="b.risk_lambda"></span></div>
+      <div><span class="text-[var(--dim)]">capped</span>
+           <span :class="b.capped?'text-[var(--warn)]':''" x-text="b.capped?'YES':'no'"></span></div>
+      <div><span class="text-[var(--dim)]">legs</span>
+           <span x-text="b.n_legs + ' / ' + b.n_fixtures + ' fx'"></span></div>
+    </div>
+
+    <!-- exposure against the cap, as one bar. FixedCap is mandatory by construction, so this
+         bar can never legitimately overflow; if it does, the assert was skipped. -->
+    <div class="mt-2 flex items-center gap-3">
+      <span class="text-[var(--dim)] w-20">exposure</span>
+      <div class="bar flex-1 max-w-md">
+        <span :style="'width:' + Math.min(100, (b.exposure_pct/b.cap_pct)*100) + '%'"
+              :class="b.capped?'bg-[var(--warn)]':'bg-[var(--accent)]'"></span>
+      </div>
+      <span x-text="b.exposure_pct + '% / ' + b.cap_pct + '%'"></span>
+      <span class="text-[var(--dim)]" x-show="b.n_low_confidence>0"
+            x-text="b.n_low_confidence + ' low-confidence legs'"></span>
+    </div>
+
+    <div class="mt-2 flex flex-wrap items-center gap-3">
+      <!-- THE ATOM. One button, one intent, one server-side transaction. Disabled while any
+           gate is failing, because those are the conditions that make the VECTOR invalid
+           rather than merely unattractive. -->
+      <button @click="execute()" :disabled="!canExecute()"
+              class="px-4 py-2 font-bold rounded bg-[var(--accent-dim)] text-[var(--accent)]
+                     border border-[var(--accent)] hover:brightness-125">
+        ⏎ EXECUTE SLATE BATCH
+      </button>
+      <span class="text-[var(--dim)]"
+            x-text="'reserves ' + money(b.total_risk) + ' across ' + b.n_legs + ' legs in ONE tx'"></span>
+      <button @click="kill()" class="px-3 py-2 rounded border border-[var(--line)] hover:border-[var(--bad)]">
+        [K]ill slate
+      </button>
+      <label class="ml-auto flex items-center gap-1 text-[var(--dim)]">
+        <input type="checkbox" x-model="autosort"> auto-sort by EV%
+      </label>
+      <span :class="connected?'text-[var(--accent)]':'text-[var(--bad)]'"
+            x-text="connected ? '● live' : '○ disconnected'"></span>
+    </div>
+
+    <div x-show="msg" class="mt-2 px-2 py-1 rounded"
+         :class="msgOk?'text-[var(--accent)]':'text-[var(--bad)]'" x-text="msg"></div>
+    <div x-show="b.warning" class="mt-1 text-[var(--warn)]"
+         x-text="'select_split: ' + b.warning"></div>
+  </div>
+
+  <!-- ── FILTERS ───────────────────────────────────────────────────────────────── -->
+  <div class="panel p-2 mb-3 flex flex-wrap gap-4 items-center">
+    <span class="text-[var(--dim)]">sort</span>
+    <template x-for="k in ['ev_pct','risk','minutes_to_kickoff']" :key="k">
+      <label class="flex items-center gap-1">
+        <input type="radio" :value="k" x-model="sortKey"><span x-text="k"></span>
+      </label>
+    </template>
+    <span class="text-[var(--dim)] ml-4">markets</span>
+    <template x-for="m in ['1X2','OverUnder','BTTS']" :key="m">
+      <label class="flex items-center gap-1">
+        <input type="checkbox" :value="m" x-model="markets"><span x-text="m"></span>
+      </label>
+    </template>
+    <span class="ml-auto text-[var(--dim)]"
+          x-text="cards.length + ' cards · ' + blocked.length + ' blocked'"></span>
+  </div>
+
+  <!-- ── CARD GRID ─────────────────────────────────────────────────────────────────
+       Five fixed zones per card - title, headline, legs, health, border - which is what
+       makes 21 of them read as one instrument rather than 21 unrelated widgets. -->
+  <div class="grid-cards">
+    <template x-for="c in visible()" :key="c.match_id">
+      <div class="card p-2" :class="{'pos': c.ev_pct > 0, 'stale': c.lineup_source==='none'}">
+
+        <div class="flex justify-between items-baseline">
+          <span class="font-bold truncate" x-text="c.home + ' v ' + c.away"></span>
+          <span class="text-[var(--dim)] shrink-0 ml-2" x-text="'T' + tminus(c.minutes_to_kickoff)"></span>
+        </div>
+        <div class="text-[var(--dim)]" x-text="fmtTime(c.kickoff) + ' · tid ' + c.tournament_id"></div>
+
+        <div class="flex justify-between items-baseline mt-1 mb-1 border-t border-b border-[var(--line)] py-1">
+          <span class="text-lg font-bold"
+                :class="c.ev_pct>0?'text-[var(--accent)]':'text-[var(--dim)]'"
+                x-text="(c.ev_pct>0?'+':'') + c.ev_pct + '%'"></span>
+          <span x-text="money(c.risk) + ' · ' + c.n_legs + ' leg' + (c.n_legs===1?'':'s')"></span>
+        </div>
+
+        <template x-for="l in legsOf(c)" :key="l.market + l.line + l.selection">
+          <div class="mb-2">
+            <div class="flex justify-between">
+              <span x-text="l.selection + '  ' + l.side"></span>
+              <span>
+                <span x-text="money(l.venue_stake)"></span>
+                <span class="dots ml-1"
+                      :class="l.confidence==='high'?'text-[var(--accent)]':
+                              l.confidence==='medium'?'text-[var(--warn)]':'text-[var(--bad)]'"
+                      x-text="dots(l.confidence)"></span>
+              </span>
+            </div>
+            <!-- Model and market on ONE shared 0-1 scale: the visible overhang of the model
+                 bar past the market bar IS the edge. No arithmetic, nothing to learn. -->
+            <div class="bar bar-model mt-1"><span :style="'width:'+(l.p_model*100)+'%'"></span></div>
+            <div class="bar bar-market mt-0.5"><span :style="'width:'+(l.p_market*100)+'%'"></span></div>
+            <div class="flex justify-between text-[var(--dim)] mt-0.5">
+              <span x-text="'model ' + l.p_model.toFixed(3) + ' · mkt ' + l.p_market.toFixed(3)"></span>
+              <span :class="l.edge_pp>0?'text-[var(--accent)]':''"
+                    x-text="(l.edge_pp>0?'+':'') + l.edge_pp + 'pp'"></span>
+            </div>
+            <div class="flex justify-between">
+              <span x-text="'fair ' + l.fair_odds.toFixed(2) + ' → ' + l.venue_odds.toFixed(2)"></span>
+              <span class="text-[var(--dim)]"
+                    x-text="'depth ' + money(l.depth_touch) + (l.slippage_pct!==null ? ' · slip ' + l.slippage_pct + '%' : '')"></span>
+            </div>
+          </div>
+        </template>
+
+        <div class="flex justify-between text-[var(--dim)] border-t border-[var(--line)] pt-1">
+          <span x-text="'XI ' + (c.lineup_confirmed ? '✓' : '~') +
+                        (c.lineup_lead_min!==null ? c.lineup_lead_min + 'm' : ' none')"></span>
+          <span x-text="c.lineup_source"></span>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ── BLOCKED ───────────────────────────────────────────────────────────────────
+       Never optional. `MatchDayResult.blocked` exists so "no bets today" and "the pipeline
+       is broken" are distinguishable; a console that dropped it would undo that. -->
+  <div class="panel p-2 mt-3" x-show="blocked.length">
+    <div class="font-bold mb-1 text-[var(--warn)]" x-text="'BLOCKED (' + blocked.length + ')'"></div>
+    <template x-for="x in blocked" :key="x.match_id">
+      <div class="flex gap-3 border-t border-[var(--line)] py-0.5">
+        <span class="w-64 truncate" x-text="x.fixture"></span>
+        <span class="text-[var(--dim)]" x-text="x.reasons.join(' | ')"></span>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+function console_() { return {
+  a:{equity:0,free:0,is_live:false}, b:{window:'',status:'',n_legs:0,n_fixtures:0,
+     exposure_pct:0,cap_pct:0,total_risk:0,k_risk:0,risk_lambda:0,capped:false,
+     n_low_confidence:0,fold_idx:0,warning:'',as_of:''},
+  cards:[], blocked:[], connected:false, autosort:true,
+  sortKey:'ev_pct', markets:['1X2','OverUnder','BTTS'], msg:'', msgOk:true, ws:null,
+
+  start(){ this.pull(); this.connect();
+           window.addEventListener('keydown', e => {
+             if (e.key === 'Enter' && this.canExecute()) this.execute();
+             if (e.key === 'k') this.kill();
+           }); },
+
+  connect(){
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    try { this.ws = new WebSocket(`${proto}://${location.host}/ws`); } catch(e){ return; }
+    this.ws.onopen    = () => this.connected = true;
+    this.ws.onclose   = () => { this.connected = false; setTimeout(()=>this.connect(), 2000); };
+    this.ws.onmessage = ev => this.apply(JSON.parse(ev.data));
+  },
+
+  async pull(){ try { this.apply(await (await fetch('/api/snapshot')).json()); } catch(e){} },
+
+  apply(s){ if (!s || s.error) return;
+            this.a = s.account; this.b = s.batch; this.cards = s.cards; this.blocked = s.blocked; },
+
+  // Disabled while a gate is failing. These are the conditions that make the VECTOR invalid,
+  // not merely unattractive - the reservation is all-or-nothing, so a half-valid slate has no
+  // partial commit to fall back on.
+  canExecute(){ return this.b.status === 'PRICED' && this.b.n_legs > 0 &&
+                       this.b.total_risk <= this.a.free &&
+                       this.b.exposure_pct <= this.b.cap_pct; },
+
+  async post(path){
+    try { const r = await (await fetch(path, {method:'POST'})).json();
+          this.msgOk = !!r.ok;
+          this.msg = r.ok ? (r.note || 'ok') : (r.error || 'refused');
+          this.pull();
+    } catch(e){ this.msgOk = false; this.msg = String(e); }
+  },
+  execute(){ this.post('/api/execute'); },
+  kill(){ if (confirm('Kill the slate? Every unfilled leg is cancelled and released.'))
+            this.post('/api/kill'); },
+
+  legsOf(c){ return c.legs.filter(l => this.markets.includes(l.market)); },
+  visible(){
+    let v = this.cards.filter(c => this.legsOf(c).length > 0);
+    if (this.autosort) v = [...v].sort((x,y) =>
+      this.sortKey === 'minutes_to_kickoff' ? x[this.sortKey] - y[this.sortKey]
+                                            : y[this.sortKey] - x[this.sortKey]);
+    return v;
+  },
+
+  dots(c){ return c==='high' ? '●●●' : c==='medium' ? '●●○' : '●○○'; },
+  money(x){ return '£' + Number(x ?? 0).toFixed(2); },
+  tminus(m){ return (m>=0?'−':'+') + Math.abs(m) + 'm'; },
+  fmtTime(s){ return s ? String(s).replace('T',' ').slice(0,16) : ''; },
+}}
+</script>
+</body>
+</html>

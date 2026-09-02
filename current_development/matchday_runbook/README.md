@@ -14,6 +14,11 @@ it work.
 | `r03_instruments.jl` | back vs lay, why they are the same bet, and why Portfolio never learned the difference. |
 | `r04_diagnostics.jl` | what to check before placing anything. Start here when you get no bets. |
 | `r05_extending.jl` | adding your own gate, quote rule and rounding rule without touching `src/`. |
+| `r06_slate_ledger_console.jl` | **the live loop** — canonical fit → slate → paper ledger → console, on a real Scottish card. |
+
+**New here? Read [`QUICKSTART_LIVE.md`](QUICKSTART_LIVE.md).** `r01`–`r05` document the
+single-call `match_day` path on Ireland; the live system is `price_slate` plus the `paper`
+ledger and the console, and the quickstart is task-shaped rather than tutorial-shaped.
 
 ## The one idea
 
@@ -72,27 +77,40 @@ Two reasons, not one, because `GateChain` is conjunctive. The second is usually 
 one: "unresolved" alone is a dead resolver; "unresolved" *and* "no quotes" is a dead collector
 too.
 
-## Health warnings
+## Health warnings, re-measured 2026-09-01
 
-**All three upstream jobs are currently dead**, and none of them raises anything when it stops:
+**All three upstream jobs are dead again**, and none of them raises anything when it stops:
 
 ```
-identity resolver      last output 2026-06-22   -> resolution 100% before, 0% after
-provisional lineups    last output 2026-06-26   -> `confirmed` has NEVER been true
-order-book drain       last output 2026-08-02   -> 99 markets opened after it
+order-book collector   last output 2026-08-28   -> supervisor is in DRY-RUN: 569 rows of
+                                                   `arm / not_armed / executed=false` on 08-29
+identity crosswalk     last output 2026-08-28   -> 0 of 159 fixture-days since
+provisional lineups    last output 2026-08-09   -> but see below: it now works when it runs
 ```
 
-`r04` prints all three. Restarting the resolver is what unlocks everything since June.
+`r04` prints them. Nothing can price a **live** card until the supervisor is flipped to
+`execute`; replay is unaffected.
 
-**The split index is a known unresolved defect.** The chain is chosen positionally
-(`training_results[29]`) while the boundary list is rebuilt at inference time (31 today), so the
-two most recent windows go unused and the pairing is only correct if the splitter appends rather
-than recomputes. `select_split` warns on every run. Worth fixing before this prices anything you
-actually bet — and it may affect `Experiments.extract_oos_predictions` too.
+**Two of this file's older warnings were wrong and are withdrawn.** `confirmed` *is* now true —
+1,071 of 1,533 rows in `sofascore.lineup_provisional` — and the XI lands at **T−13..T−42 min**,
+not 4.4–5.8 h out, so `ConfirmedXI(blocking = true)` and `MaxLineupAge` are both usable gates.
+And `last_price_traded` began populating on **2026-08-07** (56–88% of rows since), so replay
+*can* now be compared with a traded price — but pre- and post-August baselines are different
+quantities and must not be pooled.
+
+**The split-index defect is fixed.** `select_split` now identifies the fold positively via
+`Data.get_next_matches` (rule 1) and falls back to excluding any fold whose target window
+contains the card (rule 2). The positional rule survives only as rule 3.
 
 **£15 is below the operating threshold.** With `FloorOrDrop(£1)` a 5-fixture slate yields **zero**
 placeable bets at £15 and 17 at £1000. A 25% cap over 5 matches leaves ~£3.75 across 23
 positions. Not a tuning problem.
 
-**Replay is not the backtest.** `last_price_traded` is NULL in 100% of `order_book_1m`, so replay
-prices off the book while the Portfolio backtest settles at traded prices. Different quantities.
+**Replay is not the backtest.** Replay prices off the **book**; the Portfolio backtest settles at
+**traded** prices. Different quantities — say which one you used. (`last_price_traded` is no
+longer universally NULL, so both are now available; that makes it easier to conflate them, not
+harder.)
+
+**Volumes and prices are both scaled ×10000.** A top-of-book size of `20000` is **£2.00**, the
+Betfair minimum — not £200. Verified two ways: per-runner `total_matched` sums exactly to
+`market_matched`, and Kilmarnock v Celtic's MATCH_ODDS peaked at £249,989.

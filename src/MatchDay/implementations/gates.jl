@@ -7,7 +7,8 @@
 # are a dead identity resolver, a dead order-book drain and a stale XI, and NONE of them
 # currently produces a visible symptom. An empty stake sheet looks identical to "no bets today".
 
-export IdentityResolved, MaxBookAge, ConfirmedXI, MinMatched, MaxLineupAge, GateChain
+export IdentityResolved, MaxBookAge, ConfirmedXI, MinMatched, MaxLineupAge, MaxSpread,
+       GateChain
 
 """
     GateChain(gates...)
@@ -136,3 +137,41 @@ const _CARD_META = IdDict{FixtureCard,Dict{Symbol,Any}}()
 _card_meta(c::FixtureCard) = get(_CARD_META, c, Dict{Symbol,Any}())
 _set_card_meta!(c::FixtureCard, k::Symbol, v) =
     (get!(_CARD_META, c, Dict{Symbol,Any}())[k] = v)
+
+"""
+    MaxSpread(max_relative; blocking = false)
+
+Blocks a fixture whose book is too wide to be worth pricing at all.
+
+This is the missing half of [`MinMatched`](@ref). Depth and width are different failures and a
+depth-only floor passes the worse one: measured on `betfair_live.order_book_1m`, Scottish League
+Two's BOTH_TEAMS_TO_SCORE carries a **9-tick** book with ~£170 resting on the lay side and ~£25
+ever matched. There is size, it is simply parked nowhere near fair value, so a `MinMatched` gate
+reading available depth waves it through and a spread gate refuses it.
+
+Reads `card.spread_median` -- the MEDIAN relative spread `(lay-back)/mid` across every selection
+this fixture quoted -- stamped by [`quote_slate`](@ref). The median rather than the maximum
+because one wide runner in an otherwise tight book is a per-leg problem, and per-leg spread
+filtering belongs to `Portfolio.AbstractSelectionFilter` or to the capacity annotation, not to a
+gate that can only refuse a whole fixture.
+
+Non-blocking by default, matching `MinMatched`: on first deployment the number should be visible
+before it is load-bearing.
+"""
+Base.@kwdef struct MaxSpread <: AbstractReadinessGate
+    max_relative::Float64 = 0.06
+    blocking::Bool        = false
+end
+
+MaxSpread(max_relative::Real; blocking::Bool = false) =
+    MaxSpread(max_relative = Float64(max_relative), blocking = blocking)
+
+function ready(g::MaxSpread, c::FixtureCard)
+    s = get(_card_meta(c), :spread_median, nothing)
+    (s === nothing || isnan(s)) &&
+        return g.blocking ? Blocked([:spread => "spread unavailable (no two-sided book)"]) : Ready()
+    s <= g.max_relative && return Ready()
+    msg = "median spread $(round(100 * s, digits = 2))% exceeds " *
+          "$(round(100 * g.max_relative, digits = 2))%"
+    return g.blocking ? Blocked([:spread => msg]) : Ready()
+end
