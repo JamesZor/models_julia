@@ -2,8 +2,9 @@
 
 Five minutes from a cold REPL to a priced slate, a committed paper batch and a console.
 
-For the *older* single-fixture path (`match_day`, Ireland) read `README.md` and `r01`–`r05`.
-This file covers the **live loop** added in `feat/matchday-live-architecture`: `price_slate` →
+For the archived older single-fixture path (`match_day`, Ireland), see
+`current_development/archived/matchday/legacy_runbook/`. This file covers the **live loop**
+added in `feat/matchday-live-architecture`: `price_slate` →
 `paper` ledger → console. Design rationale is in
 `current_development/match_day_inference/RESEARCH_MATCHDAY_ARCHITECTURE.md`; you do not need it
 to use this.
@@ -49,7 +50,7 @@ MD.canonical_fit(TT.PostgresStorage("scottish_lower_joint_2426"), "m00_poisson_c
 ## 2. Run the worked example first
 
 ```bash
-julia --project -t 8 current_development/matchday_runbook/r06_slate_ledger_console.jl
+julia --project -t 8 current_development/match_day_inference/r06_slate_ledger_console.jl
 ```
 
 It replays the 2026-08-08 Scottish League One/Two card at T−25 and prints every stage. Expected
