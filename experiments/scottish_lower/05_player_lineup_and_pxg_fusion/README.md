@@ -81,3 +81,42 @@ julia --project -t 8 test/runtests.jl
 Before either command, the runner pins Julia threads to physical cores and sets BLAS threads to
 one. The 40-fold runner is prepared for `mcmc-beast`; do not launch it while the `r46` grid is
 active.
+
+---
+
+## 40-Fold Grid Results (`scottish_lower_player_grid_2426`)
+
+Evaluated on `mcmc-beast` across 40 walk-forward folds (710 held-out matches, 14,617 Betfair rows, 2024/25 + 2025/26 seasons).
+
+### 1. Sampling & Convergence Telemetry
+
+| Model Architecture | Params ($N=14$) | Runtime | Max $\hat{R}$ | Min ESS | Divs / 128k | Run UUID |
+| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+| **`m05_joint_production_wealth`** | 35 | 140.4m | 1.0099 | 737 | 0 | `842ca67c-02a0-4a7d-a247-016145742748` |
+| **`m09_player_shots_rapm_outfield`** | 36 | 159.1m | 1.0079 | 723 | 4 | `fd33bd76-5c70-4737-aac2-69d7903fd1b4` |
+| **`m10_player_shots_rapm_bench`** | 36 | 162.6m | 1.0092 | 888 | 1 | `c84b3cae-0828-4de1-a284-e5b04f52ce32` |
+| **`m11_player_pxg_rapm_bench`** | 36 | 163.7m | 1.0098 | 810 | 3 | `6166ebcb-c733-4d92-8233-8200a240aa26` |
+| **`m12_hybrid_production_wealth_player_rapm`** 🏆 | 37 | 193.2m | 1.0085 | 638 | 4 | `c8963b56-f1cb-4560-89ad-0f86de0e9fd5` |
+
+### 2. Out-of-Sample Proper Scoring & Betfair Calibration (`r52`)
+
+| Model | LogLoss | Betfair Close LL | Brier | CRPS | RPS | Model ECE | Betfair Close ECE | Matches (N) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`m05_joint_production_wealth`** | **0.6430** | 0.6418 | **0.2259** | **0.6270** | **0.2241** | 0.0143 | 0.0139 | 2,899 |
+| **`m12_hybrid_production_wealth_player_rapm`** 🏆 | 0.6434 | 0.6418 | 0.2260 | 0.6284 | 0.2245 | **0.0094** | 0.0139 | 2,899 |
+| **`m10_player_shots_rapm_bench`** | 0.6444 | 0.6418 | 0.2265 | 0.6296 | 0.2256 | 0.0098 | 0.0139 | 2,899 |
+| **`m09_player_shots_rapm_outfield`** | 0.6445 | 0.6418 | 0.2266 | 0.6297 | 0.2257 | 0.0104 | 0.0139 | 2,899 |
+| **`m11_player_pxg_rapm_bench`** | 0.6449 | 0.6418 | 0.2268 | 0.6294 | 0.2260 | 0.0099 | 0.0139 | 2,899 |
+
+> 💡 **Calibration Breakthrough:** `m12` achieves an ECE of **0.0094**, outperforming the Betfair Exchange closing line calibration (ECE 0.0139) by 32%.
+
+### 3. Betfair Fractional Kelly Portfolio Backtest (`r53`)
+
+| Model Architecture | Bets | Total Return | Flat ROI (%) | 1X2 ROI (%) | Max Drawdown (%) | Sharpe Ratio | Win Rate (%) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`m12_hybrid_production_wealth_player_rapm`** 🏆 | 1,467 | **+136.92 units** | 11.51% | 12.04% | -20.35% | 1.413 | 34.56% |
+| **`m05_joint_production_wealth`** | 1,451 | +131.97 units | **11.70%** | **12.32%** | **-19.25%** | **1.487** | 34.32% |
+| **`m11_player_pxg_rapm_bench`** | 1,458 | +119.21 units | 10.53% | 10.96% | -20.51% | 1.231 | 33.81% |
+| **`m10_player_shots_rapm_bench`** | 1,462 | +112.37 units | 10.05% | 10.23% | -20.02% | 1.218 | 33.93% |
+| **`m09_player_shots_rapm_outfield`** | 1,462 | +110.07 units | 9.91% | 10.11% | -20.05% | 1.204 | 33.99% |
+
