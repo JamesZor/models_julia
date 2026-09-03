@@ -206,13 +206,41 @@ end
 
 
 """
-The two scalars the joint observation owns. Declared in one submodel so the chain carries
+The two scalars the shared-κ joint observation owns. Declared in one submodel so the chain carries
 `obs.ν` and `obs.log_κ`, in this order — which is the θ layout `cb_varinfo_sites` reports.
 """
 @model function _joint_gamma_poisson_params(o::JointGammaPoissonObservation)
     ν ~ o.shape_prior
     log_κ ~ o.log_kappa_prior
     return (; ν, log_κ)
+end
+
+"""
+The hierarchical-κ parameter block: `obs.ν`, `obs.log_κ`, `obs.σ_κ`, `obs.κ_team_raw[1:n_teams]`,
+in that declaration order.
+
+    δ_κ        = σ_κ · (raw − mean(raw))
+    log κ_team = log κ_global + δ_κ
+
+Both transformations are pure broadcasts of tracked values against tracked scalars — the same
+shape `build_dynamics(::TimeDecayDynamics, …)` uses for α/β, and for the same two reasons. The
+non-centred `raw` keeps the funnel out of the geometry when σ_κ approaches its lower bound, and
+subtracting the mean removes the exact ridge along which `log κ_global` and a common shift of the
+deltas are the same model. `mean` over a tracked vector is a single tape node, not a loop.
+
+`ν` is declared FIRST so that the shared and hierarchical layouts agree on their common prefix:
+a chain from either mode reads `obs.ν` and `obs.log_κ` at the same names, which is what lets the
+two be compared without a special case in the extractor.
+"""
+@model function _joint_hierarchical_kappa_params(o::JointGammaPoissonObservation, n_teams::Int)
+    ν ~ o.shape_prior
+    log_κ ~ o.log_kappa_prior
+    σ_κ ~ o.kappa.σ_prior
+    κ_team_raw ~ filldist(Normal(0.0, 1.0), n_teams)
+
+    δ_κ = σ_κ .* (κ_team_raw .- mean(κ_team_raw))
+    log_κ_team = log_κ .+ δ_κ
+    return (; ν, log_κ, σ_κ, log_κ_team)
 end
 
 """
@@ -237,7 +265,7 @@ but it widens the elementwise kernel ReverseDiff differentiates across two densi
 masks. Kept separate for the same measured reason `_observe(::PoissonObservation, …)` keeps the
 decay weight in its own broadcast — see docs/tickets/T002.
 """
-@model function _observe(o::JointGammaPoissonObservation,
+@model function _observe(o::SharedKappaJoint,
                          η_h, η_a,
                          yh::Vector{Int}, ya::Vector{Int}, wts::Vector{Float64},
                          lfh::Vector{Float64}, lfa::Vector{Float64},
@@ -255,6 +283,52 @@ decay weight in its own broadcast — see docs/tickets/T002.
     # --- ARM 1: Gamma proxy xG on μ, over the covered matches only -------------
     # `log_norm` collects the two terms that depend on ν alone. Broadcasting it in as a tracked
     # scalar is one tape node; recomputing `loggamma(ν)` per match would be n.
+    log_norm = ν * log(ν) - SpecialFunctions.loggamma(ν)
+    inv_μ_h = exp.(.-η_h)
+    inv_μ_a = exp.(.-η_a)
+    g_h = (ν - 1.0) .* od.log_pxg_h .- (ν .* od.pxg_h) .* inv_μ_h .- ν .* η_h .+ log_norm
+    g_a = (ν - 1.0) .* od.log_pxg_a .- (ν .* od.pxg_a) .* inv_μ_a .- ν .* η_a .+ log_norm
+    proxy_ll = sum(g_h .* od.mask_weights) + sum(g_a .* od.mask_weights)
+
+    return goals_ll + proxy_ll
+end
+
+"""
+The same two arms, with the finishing factor read PER TEAM.
+
+    ARM 1   pxg ~ Gamma(ν, μ/ν)              unchanged — the Gamma arm never sees κ
+    ARM 2   y_h ~ Poisson(κ_{h(i)} · μ_h)    ζ_h = η_h + log κ_team[home_idx]
+            y_a ~ Poisson(κ_{a(i)} · μ_a)    ζ_a = η_a + log κ_team[away_idx]
+
+The home side's goals are converted by the HOME side's finishing factor, and the away side's by
+the away side's — κ is a property of who is shooting, not of the fixture.
+
+WHY ONLY THE POISSON ARM MOVES. `μ` is what the Gamma arm measures, and the whole identification
+argument for κ is that the proxy is unbiased for `μ`. Letting κ into the Gamma arm would make it a
+rescale of the latent again, and σ_κ would then be fitting the pxG measurement scale rather than
+finishing. The Gamma broadcast below is therefore byte-for-byte the shared-mode one.
+
+`log_κ_team[od.home_idx]` is `getindex`, NOT `view` — see the note in `composable_count_engine`
+§3. On this ReverseDiff version a `view` of a `TrackedArray` walks the tape element by element,
+while `getindex` with an integer vector stays a single vectorised node. That is the difference
+between a tape whose length is set by the model and one whose length is set by the fold size.
+"""
+@model function _observe(o::HierarchicalKappaJoint,
+                         η_h, η_a,
+                         yh::Vector{Int}, ya::Vector{Int}, wts::Vector{Float64},
+                         lfh::Vector{Float64}, lfa::Vector{Float64},
+                         n_teams::Int, n_months::Int, od::JointGammaPoissonDesign)
+    obs ~ to_submodel(_joint_hierarchical_kappa_params(o, n_teams))
+    ν = obs.ν
+
+    # --- ARM 2: Poisson goals on λ = κ_t·μ, over the whole fold ----------------
+    ζ_h = η_h .+ obs.log_κ_team[od.home_idx]
+    ζ_a = η_a .+ obs.log_κ_team[od.away_idx]
+    ll_h = yh .* ζ_h .- exp.(ζ_h) .- lfh
+    ll_a = ya .* ζ_a .- exp.(ζ_a) .- lfa
+    goals_ll = sum(ll_h .* wts) + sum(ll_a .* wts)
+
+    # --- ARM 1: Gamma proxy xG on μ, over the covered matches only -------------
     log_norm = ν * log(ν) - SpecialFunctions.loggamma(ν)
     inv_μ_h = exp.(.-η_h)
     inv_μ_a = exp.(.-η_a)
@@ -523,10 +597,113 @@ end
 
 _cb_extract_observation(::PoissonObservation, chain, n_teams) = nothing
 
-function _cb_extract_observation(::JointGammaPoissonObservation, chain, n_teams)
+function _cb_extract_observation(::SharedKappaJoint, chain, n_teams)
     ν = vec(Array(chain[Symbol("obs.ν")]))
     κ = exp.(vec(Array(chain[Symbol("obs.log_κ")])))
     return (; ν, κ)
+end
+
+"""
+The hierarchical block, reconstructed from the SAME two transformations the engine applied, in the
+same order. `κ` is kept as the league factor so every caller that only knows about the shared mode
+— `equations.jl`, a diagnostic that prints the finishing factor — still reads the number it means
+to; `κ_team` is the (draws × teams) matrix the rates path indexes.
+"""
+function _cb_extract_observation(::HierarchicalKappaJoint, chain, n_teams)
+    ν     = vec(Array(chain[Symbol("obs.ν")]))
+    log_κ = vec(Array(chain[Symbol("obs.log_κ")]))
+    σ_κ   = vec(Array(chain[Symbol("obs.σ_κ")]))
+
+    raw = Matrix{Float64}(undef, length(log_κ), n_teams)
+    for t in 1:n_teams
+        raw[:, t] = vec(Array(chain[Symbol("obs.κ_team_raw[$t]")]))
+    end
+
+    δ_κ = σ_κ .* (raw .- mean(raw, dims = 2))
+    log_κ_team = log_κ .+ δ_κ
+    return (; ν, κ = exp.(log_κ), log_κ, σ_κ, δ_κ, log_κ_team,
+              κ_team = exp.(log_κ_team))
+end
+
+"""
+    cb_hpdi(draws, prob = 0.90) -> (lo, hi)
+
+The narrowest interval containing `prob` of the draws. Reported instead of a symmetric quantile
+band because `σ_κ` is a half-open scale: when the posterior piles against zero the equal-tailed
+interval excludes the mode, which is exactly the case this component exists to detect.
+"""
+function cb_hpdi(draws::AbstractVector{<:Real}, prob::Real = 0.90)
+    0.0 < prob < 1.0 || error("prob must lie in (0, 1); got $prob")
+    x = sort(collect(Float64, draws))
+    n = length(x)
+    n >= 2 || return (first(x), last(x))
+    width = max(1, min(n - 1, round(Int, prob * n)))
+    best = 1
+    for i in 1:(n - width)
+        x[i + width] - x[i] < x[best + width] - x[best] && (best = i)
+    end
+    return (x[best], x[best + width])
+end
+
+"""
+    extract_kappa(chain, observation::JointGammaPoissonObservation, n_teams; team_map, prob) -> NamedTuple
+
+The finishing factor, read out of a fitted chain in one call.
+
+Returns
+
+  * `mode`      — `:shared` or `:hierarchical`
+  * `κ_global`  — posterior draws of the league finishing factor `exp(log κ)`
+  * `log_κ`     — the same on the log scale, which is where the prior lives
+  * `σ_κ`       — posterior draws of the team-finishing spread; `nothing` in shared mode
+  * `δ_κ`       — (draws × teams) zero-centred log deltas; `nothing` in shared mode
+  * `κ_team`    — (draws × teams) team factors; `nothing` in shared mode
+  * `summary`   — a `DataFrame` of per-team posterior summaries, sorted by `δ_mean` DESCENDING
+                  (over-converting teams first); empty in shared mode
+
+`team_map` is the `FeatureSet`'s `Dict{String,Int}`. Passing it names the rows; without it they
+are numbered, and a numbered row cannot be checked against anything a human knows about the league,
+so pass it.
+"""
+function CB_PG.extract_kappa(chain::Chains, o::JointGammaPoissonObservation, n_teams::Int;
+                             team_map = nothing, prob::Real = 0.90)
+    nt = _cb_extract_observation(o, chain, n_teams)
+    names_by_index = fill("", n_teams)
+    if team_map !== nothing
+        for (team, idx) in team_map
+            1 <= idx <= n_teams && (names_by_index[idx] = String(team))
+        end
+    end
+    for t in 1:n_teams
+        isempty(names_by_index[t]) && (names_by_index[t] = "team_$t")
+    end
+
+    if !(o.kappa isa HierarchicalKappa)
+        return (; mode = :shared, κ_global = nt.κ, log_κ = log.(nt.κ),
+                  σ_κ = nothing, δ_κ = nothing, κ_team = nothing,
+                  summary = DataFrame(team = String[], team_idx = Int[],
+                                      δ_mean = Float64[], δ_lo = Float64[], δ_hi = Float64[],
+                                      κ_mean = Float64[], κ_lo = Float64[], κ_hi = Float64[],
+                                      p_over = Float64[]))
+    end
+
+    summary = DataFrame(
+        team = names_by_index,
+        team_idx = collect(1:n_teams),
+        δ_mean = [mean(view(nt.δ_κ, :, t)) for t in 1:n_teams],
+        δ_lo = [cb_hpdi(view(nt.δ_κ, :, t), prob)[1] for t in 1:n_teams],
+        δ_hi = [cb_hpdi(view(nt.δ_κ, :, t), prob)[2] for t in 1:n_teams],
+        κ_mean = [mean(view(nt.κ_team, :, t)) for t in 1:n_teams],
+        κ_lo = [cb_hpdi(view(nt.κ_team, :, t), prob)[1] for t in 1:n_teams],
+        κ_hi = [cb_hpdi(view(nt.κ_team, :, t), prob)[2] for t in 1:n_teams],
+        # The posterior probability this team out-finishes the league. A δ whose HPDI straddles
+        # zero is not a finding, and this is the number that says so without a threshold.
+        p_over = [mean(>(0.0), view(nt.δ_κ, :, t)) for t in 1:n_teams],
+    )
+    sort!(summary, :δ_mean, rev = true)
+
+    return (; mode = :hierarchical, κ_global = nt.κ, log_κ = nt.log_κ,
+              σ_κ = nt.σ_κ, δ_κ = nt.δ_κ, κ_team = nt.κ_team, summary)
 end
 
 function _cb_extract_observation(o::NegativeBinomialObservation{<:CB_PG.GlobalDispersion},
@@ -554,10 +731,27 @@ _cb_rates(::PoissonObservation, λ_h, λ_a, _, h_idx, a_idx, m_idx) =
 # carries μ rather than mirroring λ: μ IS the quantity the Gamma arm measured, and κ is exactly the
 # league finishing factor separating the two. `extract_latents(::PoissonCountFamily, …)` reads
 # `λ_h/λ_a` and ignores the rest, so μ, κ and ν ride along as diagnostics without changing the grid.
-function _cb_rates(::JointGammaPoissonObservation, μ_h, μ_a, obs_nt, h_idx, a_idx, m_idx)
+function _cb_rates(::SharedKappaJoint, μ_h, μ_a, obs_nt, h_idx, a_idx, m_idx)
     λ_h = obs_nt.κ .* μ_h
     λ_a = obs_nt.κ .* μ_a
     return (; λ_h, λ_a, μ_h, μ_a, κ = obs_nt.κ, ν = obs_nt.ν,
+              true_xg_h = μ_h, true_xg_a = μ_a)
+end
+
+"""
+Per-team finishing on the goals side; `μ` and the Gamma-arm diagnostics are unchanged.
+
+A side whose team is not in this fold's `team_map` (`idx == 0`, a promoted or newly seen club)
+falls back to the LEAGUE factor rather than to 1.0. Zero is already how the dynamics path handles
+an unknown team — no attack or defence effect — and the analogue here is "we have no reason to
+think this club finishes unlike the league", which is `κ_global`, not "this club does not finish".
+"""
+function _cb_rates(::HierarchicalKappaJoint, μ_h, μ_a, obs_nt, h_idx, a_idx, m_idx)
+    κ_h = h_idx > 0 ? obs_nt.κ_team[:, h_idx] : obs_nt.κ
+    κ_a = a_idx > 0 ? obs_nt.κ_team[:, a_idx] : obs_nt.κ
+    λ_h = κ_h .* μ_h
+    λ_a = κ_a .* μ_a
+    return (; λ_h, λ_a, μ_h, μ_a, κ = obs_nt.κ, κ_h, κ_a, σ_κ = obs_nt.σ_κ, ν = obs_nt.ν,
               true_xg_h = μ_h, true_xg_a = μ_a)
 end
 

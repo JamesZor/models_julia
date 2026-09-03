@@ -34,6 +34,8 @@ using .PreGame: CountModelBuilder, PoissonCountModel, NegBinCountModel,
     NegBinObservation,
     DixonColesCorrelation, FrankCopulaCorrelation,
     JointGammaPoissonObservation, JointGammaPoissonDesign,
+    AbstractKappaMode, SharedKappa, HierarchicalKappa,
+    SharedKappaJoint, HierarchicalKappaJoint, kappa_mode_width, cb_hpdi,
     observation_features, observation_design,
     add!, add, replace!, validate, build, build_count_model,
     cb_predictor_terms, cb_predictor_names, cb_covariates, cb_covariate_names,
@@ -75,6 +77,8 @@ export AbstractObservationConfig, PoissonObservation, NegativeBinomialObservatio
        GlobalDispersion, HomeAwayDispersion,
        DixonColesCorrelation, FrankCopulaCorrelation,
        JointGammaPoissonObservation, JointGammaPoissonDesign,
+       AbstractKappaMode, SharedKappa, HierarchicalKappa,
+       SharedKappaJoint, HierarchicalKappaJoint, kappa_mode_width, cb_hpdi,
        observation_features, observation_design
 export add!, add, replace!, validate, build, build_count_model
 export cb_predictor_terms, cb_predictor_names, cb_covariates,

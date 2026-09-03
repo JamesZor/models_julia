@@ -1014,6 +1014,76 @@ Base.@kwdef struct DixonColesCorrelation{C<:CB_PG.AbstractDixonColesConfig} <: A
     correlation::C = CB_PG.GlobalDixonColesConfig()
 end
 
+# ==============================================================================
+# 1b. KAPPA MODES — how the finishing factor reaches a match
+# ==============================================================================
+#
+# `κ` converts the latent chance quality `μ` into goals. The two-arm joint model
+# identifies it because the Gamma arm measures `μ` directly, so κ is not a free
+# rescale of the intensity — it is the league's finishing factor, read off the gap
+# between measured chances and scored goals.
+#
+# The question this family answers is whether that factor is ONE number for the
+# league or one per team. It is a mode, not a covariate: a covariate moves `η` and
+# is therefore measured by BOTH arms, whereas κ sits between the arms and is seen
+# only by the goals arm. A team that reliably out-finishes its chances is a
+# statement about the Poisson arm alone, and nothing else in the model can express
+# it.
+#
+# Dispatch, not a branch. `_observe` resolves the mode from the observation's type
+# parameter at compile time, so the shared-κ tape is byte-for-byte the tape it was
+# before this family existed.
+#
+# NAMING. `CB_PG.GlobalKappa` / `CB_PG.HierarchicalTeamKappa` already exist as
+# `AbstractKappaConfig` components for the hand-written xG engines, where κ lives
+# in NATURAL space behind a softplus. These are a different parameterisation (log
+# space, zero-centred deltas) for a different likelihood, so they get different
+# names rather than silently shadowing those.
+
+abstract type AbstractKappaMode end
+
+"""
+    SharedKappa
+
+One `log κ` for the whole league — the original two-arm behaviour, and still the
+default. Chain sites: `obs.log_κ`.
+"""
+struct SharedKappa <: AbstractKappaMode end
+
+"""
+    HierarchicalKappa
+
+A team-specific finishing multiplier, partially pooled around the league factor:
+
+    log κ_t = log κ_global + δ_κ[t]
+    δ_κ     = σ_κ · (raw − mean(raw)),   raw[t] ~ Normal(0, 1)
+
+NON-CENTRED, AND ZERO-CENTRED. The non-centred draw is the usual funnel fix, and it
+is what `TimeDecayDynamics` already does for α/β. The zero-centring is the part that
+matters for THIS component: without it `log κ_global` and the mean of `δ_κ` are the
+same direction in parameter space, and the sampler is free to trade one against the
+other forever. Subtracting the mean makes the deltas a pure contrast set, so
+`log κ_global` keeps the meaning it has in the shared model — the league finishing
+factor — and every team delta is read against it.
+
+`σ_κ` is the whole finding. Its posterior answers "how much team finishing variance
+is actually there?", and a σ_κ that collapses onto its lower bound is a real result:
+the league finishes as one, and the shared model was right.
+
+The default `σ_κ ~ truncated(Normal(0, 0.10), 0, Inf)` is deliberately tight. On a
+two-division Scottish fold a team contributes ~40 matches, and a half-open prior with
+a wide scale would let a 30% finishing edge be fitted out of Poisson noise.
+
+Chain sites: `obs.log_κ`, `obs.σ_κ`, `obs.κ_team_raw[1:n_teams]`.
+"""
+Base.@kwdef struct HierarchicalKappa{S<:ContinuousUnivariateDistribution} <: AbstractKappaMode
+    σ_prior::S = truncated(Normal(0.0, 0.10), 0.0, Inf)
+end
+
+"How many scalar parameters the mode adds beyond `obs.log_κ`, given the team count."
+kappa_mode_width(::SharedKappa, n_teams::Int) = 0
+kappa_mode_width(::HierarchicalKappa, n_teams::Int) = 1 + n_teams
+
 """
     JointGammaPoissonObservation
 
@@ -1044,17 +1114,28 @@ FIELDS
   * `feature`         — the `MatchProxyXGFeature` supplying the arm-1 observation and its mask.
   * `shape_prior`     — the prior on ν. Truncated well above 0: a Gamma shape at 0 is a density
                         with no mode and an infinite spike at the origin.
-  * `log_kappa_prior` — the prior on `log κ`.
+  * `log_kappa_prior` — the prior on `log κ` (the league factor in both modes).
+  * `kappa`           — `SharedKappa()` (one factor for the league) or
+                        `HierarchicalKappa()` (a partially pooled factor per team).
 """
 Base.@kwdef struct JointGammaPoissonObservation{
     F<:CB_Features.AbstractFeatureConfig,
     S<:ContinuousUnivariateDistribution,
     K<:ContinuousUnivariateDistribution,
+    M<:AbstractKappaMode,
 } <: AbstractObservationConfig
     feature::F = CB_Features.MatchProxyXGFeature()
     shape_prior::S = truncated(Normal(4.0, 1.5), 0.5, Inf)
     log_kappa_prior::K = Normal(0.0, 0.2)
+    kappa::M = SharedKappa()
 end
+
+"The two-arm joint observation with one league-wide finishing factor."
+const SharedKappaJoint = JointGammaPoissonObservation{F,S,K,SharedKappa} where {F,S,K}
+
+"The two-arm joint observation with a partially pooled per-team finishing factor."
+const HierarchicalKappaJoint =
+    JointGammaPoissonObservation{F,S,K,<:HierarchicalKappa} where {F,S,K}
 
 """
     JointGammaPoissonDesign
@@ -1066,6 +1147,12 @@ shape.
 `log_pxg_*` is precomputed because `log(x)` of an observation is data, not a parameter, and
 `mask_weights` folds the availability mask into the time-decay weights in the same pass — one
 broadcast at fit time instead of two on every gradient evaluation.
+
+`home_idx` / `away_idx` are the same team indices the linear predictor uses, carried here as
+concrete `Vector{Int}` so a per-team κ is one vectorised `getindex` on the tape rather than a
+lookup the observation has to reconstruct. They are read from the `FeatureSet` — NOT passed down
+from `cb_design` — so the design object stays self-contained and one argument wide. `SharedKappa`
+never touches them; they cost two integer vectors and no tape instructions.
 """
 struct JointGammaPoissonDesign
     pxg_h::Vector{Float64}
@@ -1073,6 +1160,8 @@ struct JointGammaPoissonDesign
     log_pxg_h::Vector{Float64}
     log_pxg_a::Vector{Float64}
     mask_weights::Vector{Float64}
+    home_idx::Vector{Int}
+    away_idx::Vector{Int}
     n_observed::Int
 end
 
@@ -1183,12 +1272,25 @@ function observation_design(o::JointGammaPoissonObservation, feature_set, n_matc
     pxg_h = Vector{Float64}(d[:flat_pxg_home])
     pxg_a = Vector{Float64}(d[:flat_pxg_away])
     mask  = Vector{Float64}(d[:flat_pxg_obs_available])
+    home_idx = Vector{Int}(d[:flat_home_ids])
+    away_idx = Vector{Int}(d[:flat_away_ids])
 
     for (name, v) in (("flat_pxg_home", pxg_h), ("flat_pxg_away", pxg_a),
                       ("flat_pxg_obs_available", mask))
         length(v) == n_matches ||
             error("$(name) has length $(length(v)); expected $(n_matches)")
         all(isfinite, v) || error("$(name) has non-finite entries")
+    end
+
+    # A per-team κ indexes a length-`n_teams` tracked vector with these. An index outside
+    # `1:n_teams` is an out-of-bounds read on the tape, which is a segfault-class failure three
+    # hours into a grid rather than an error here.
+    n_teams = Int(d[:n_teams])
+    for (name, v) in (("flat_home_ids", home_idx), ("flat_away_ids", away_idx))
+        length(v) == n_matches ||
+            error("$(name) has length $(length(v)); expected $(n_matches)")
+        all(i -> 1 <= i <= n_teams, v) ||
+            error("$(name) carries a team index outside 1:$(n_teams)")
     end
     all(x -> x == 0.0 || x == 1.0, mask) ||
         error("flat_pxg_obs_available must be exactly 0.0 or 1.0; a partial mask would weight the " *
@@ -1203,5 +1305,5 @@ function observation_design(o::JointGammaPoissonObservation, feature_set, n_matc
         "MatchProxyXGFeature enforces this with its `floor` and `dummy` fields.")
 
     return JointGammaPoissonDesign(pxg_h, pxg_a, log.(pxg_h), log.(pxg_a),
-                                   mask .* match_weights, Int(sum(mask)))
+                                   mask .* match_weights, home_idx, away_idx, Int(sum(mask)))
 end

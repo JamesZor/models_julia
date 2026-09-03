@@ -1,7 +1,7 @@
 # AI Agent Infrastructure & Remote Execution Context Guide
 
 > **BayesianFootball.jl Infrastructure & AI Agent Context Reference**  
-> **Status:** Active Standard | **Target Systems:** Laptop (Development Host), `mcmc-beast` (Compute Node), `archpc` (PostgreSQL Database Host)
+> **Status:** Active Standard | **Target Systems:** `archpc` (development laptop, `betdb` on 5433, MatchDay consoles on 8085/8086) and `mcmc-beast` (compute node, `mcmc_experiments` on 5432)
 
 ---
 
@@ -18,25 +18,51 @@ The `BayesianFootball.jl` platform operates across a three-node Tailscale mesh n
 |   |  (AGY / Agent CLI Host)  |                             |  (High-Perf Compute)   |   |
 |   |  /home/james/bet_project/| <========================== |  /root/BayesianFootball|   |
 |   |      BayesianFootball    |                             |  AMD 16-Core (32 thr)  |   |
-|   +--------------------------+                             +------------------------+   |
+|   |  betdb  :5433 (Postgres) |                             |  mcmc_experiments :5432|   |
+|   |  console:8085 (live)     |                             |  (Postgres)            |   |
+|   |  console:8086 (replay)   |                             +------------------------+   |
+|   +--------------------------+                                         ^                |
 |                 |                                                      |                |
-|                 | tmux / ssh controller                                | Database SQL   |
-|                 v                                                      v                |
-|   +--------------------------+                             +------------------------+   |
-|   |  Tmux Session Controller |                             |         ARCHPC         |   |
-|   |  (e.g. features:1.1)     |                             |   (Postgres Server)    |   |
-|   |  (SSH to mcmc-beast)     |                             |   betdb on port 5433   |   |
-|   +--------------------------+                             +------------------------+   |
+|                 | tmux / ssh controller                                | PostgresStorage |
+|                 v                                                      |                |
+|   +--------------------------+                                         |                |
+|   |  Tmux Session Controller | ----------------------------------------+                |
+|   |  (e.g. features:1.1)     |    canonical fits, runs, latents, portfolio artefacts    |
+|   |  (SSH to mcmc-beast)     |                                                          |
+|   +--------------------------+                                                          |
 +-----------------------------------------------------------------------------------------+
 ```
+
+> **`archpc` is both the development laptop and the operational database host.** Older
+> diagrams drew it as a separate dedicated server; it is not. It runs the repository
+> checkout, PostgreSQL `betdb` on 5433, and both MatchDay consoles (8085 live, 8086 replay).
+> `mcmc-beast` is the compute node **and** the host of PostgreSQL `mcmc_experiments` on 5432.
 
 ### Machine Specifications & Endpoints
 
 | Node Name | Network Role | Hardware / Specs | Primary Path | Connection / Endpoint |
 | :--- | :--- | :--- | :--- | :--- |
-| **Local Laptop** | Development & Agent Orchestration | Multi-core Dev Laptop | `/home/james/bet_project/BayesianFootball` | Local interactive terminal / Antigravity CLI / Tmux |
-| **`mcmc-beast`** | Dedicated MCMC Sampling & Grids | AMD Ryzen (16 Physical Cores, 32 SMT threads, 64 GB RAM) | `/root/BayesianFootball` | `ssh root@mcmc-beast` (via Tailscale / LAN) |
-| **`archpc`** | PostgreSQL Database Server | Dedicated Database Server | `/var/lib/postgresql` | `postgresql://admin:...@archpc:5433/betdb` |
+| **`archpc`** (local laptop) | Development, agent orchestration, operational database, MatchDay consoles | 8 physical cores / 16 SMT | `/home/james/bet_project/BayesianFootball` | Local terminal / Antigravity CLI / tmux; PostgreSQL `betdb` on `5433`; consoles on `8085` and `8086` |
+| **`mcmc-beast`** | Dedicated MCMC sampling & grids, experiment database | AMD Ryzen (16 Physical Cores, 32 SMT threads, 64 GB RAM) | `/root/BayesianFootball` | `ssh root@mcmc-beast` (via Tailscale / LAN); PostgreSQL `mcmc_experiments` on `5432` |
+
+### The Two Databases
+
+| | **`betdb`** | **`mcmc_experiments`** |
+| :--- | :--- | :--- |
+| Question it answers | what happened, and what we did | what we fitted, and what it scored |
+| Host / port | `archpc:5433` (LAN `192.168.1.88`, Tailscale `100.124.38.117`) | `mcmc-beast:5432` |
+| Environment variable | `BF_DB_URL` — **required, no default** | `BF_EXPERIMENTS_DB_URL`, else `~/.pgpass` |
+| Julia entry point | `Data.load_datastore_sql`, `MatchDay.paper_connection` | `Training.PostgresStorage(experiment_name)` |
+| Contents | schemas `sofascore`, `bbc`, `betfair`, `betfair_live`, plus the paper ledgers `paper_runbook` (live console) and `paper_replay` (replay console) | `config_registry`, `configs`, `runs`, `fold_results`, `match_latents`, `fit_artifacts`, `portfolio_runs`, `portfolio_bets`, `portfolio_artifacts` |
+
+They are separate servers. The link across is
+`betdb.<paper_schema>.paper_slates.model_run_id → mcmc_experiments.runs.run_id`, carried as an
+opaque UUID with no foreign key; a reconciliation job asserts it resolves. Full treatment in
+[`../guides/experiment_database_and_config_truth_guide.md`](../guides/experiment_database_and_config_truth_guide.md) §2.
+
+**Credentials never appear in a document, a log, or a prompt.** `BF_DB_URL` is read from the
+git-ignored `.env`; `PostgresStorage` resolves its URL from the environment or lets libpq read
+`~/.pgpass`, and masks the connection string in its `show` method.
 
 ---
 
@@ -93,19 +119,28 @@ rsync -avz --exclude '.cache/' --exclude 'data/' /home/james/bet_project/Bayesia
   stamp_ok = (stamp === nothing) || (at === nothing) || (stamp < at)
   ```
 
-### 3. DistributionsAD Compatibility Patch (Julia 1.12 / ReverseDiff)
-On Julia 1.12 with `DistributionsAD 0.6.58`, a 1-line compatibility patch is required in `~/.julia/packages/DistributionsAD/.../DistributionsADReverseDiffExt.jl` at line 127:
+### 3. DistributionsAD / Distributions Version Pin (Julia 1.12 / ReverseDiff)
+`Manifest.toml` pins **`Distributions` at 0.25.126** against `DistributionsAD 0.6.58`. This is
+deliberate: `Distributions 0.25.127` changed the `Gamma` argument-check signature, which breaks
+`DistributionsADReverseDiffExt` and makes `ReverseDiff` AD tapes for Gamma distributions fail
+precompilation — the Gamma arm of the joint observation is exactly what that hits.
+
+Do not resolve past the pin casually. If a bump to `0.25.127+` becomes necessary, the extension
+needs the matching one-line signature fix in
+`~/.julia/packages/DistributionsAD/.../DistributionsADReverseDiffExt.jl`:
+
 ```julia
-# Patch signature to match Distributions 0.25.127:
 @check_args(Gamma, (α, α > zero(α)), (θ, θ > zero(θ)))
 ```
-Without this patch, `ReverseDiff` AD tapes for Gamma distributions will fail precompilation.
+
+Patching a file inside `~/.julia/packages` is not reproducible across hosts; prefer holding the
+pin.
 
 ---
 
 ## 4. Model Equations & Feature Architecture
 
-### Pure Poisson Model Framework (Scottish Lower Benchmark)
+### Pure Poisson Model Framework (Generation 1, Scottish Lower Benchmark)
 
 In the log-intensity Poisson regression framework ($\lambda = \exp(\eta)$):
 
@@ -123,6 +158,39 @@ $$\eta_{\text{away}} = \mu + \alpha_{\text{away}} + \beta_{\text{home}} - w_{\te
 * **Haversine Distance:** Distance in km / drive minutes calculated from stadium geocodes (`scottish_stadium_geocodes.csv`).
 * **Standardization:** $z_{\text{dist}} = \frac{\text{dist} - \mu_{\text{catalog}}}{\sigma_{\text{catalog}}}$.
 * **Prior:** $w_{\text{dist}} \sim \text{truncated}(\text{Normal}(0.04, 0.03), \text{lower}=0.0)$.
+
+### Two-Arm Joint Observation (Generations 3-4)
+
+The current production shape reads **one** log-intensity with **two** densities:
+
+$$\text{pxG}_s \sim \text{Gamma}(\nu,\ \mu_s/\nu) \quad\text{(masked)}, \qquad y_s \sim \text{Poisson}(\kappa\,\mu_s) \quad\text{(everywhere)}$$
+
+`Gamma(shape = ν, scale = μ/ν)` has mean $\mu$, so $\nu$ is a pure precision and the proxy
+measurement is unbiased for the latent by construction; $\kappa$ is the finishing factor. The
+proxy arm sharpens $\mu$ on the seasons carrying BBC live text; the goals arm carries that
+sharpened $\mu$ across the whole history. `MatchProxyXGFeature(fallback = :none)` emits an
+availability mask, so a match without commentary contributes a finite term multiplied by an
+exact zero rather than a fabricated observation.
+
+Identified, not assumed: $\kappa \approx 1.13$ (~76% prior shrinkage) and $\nu \approx 3.9$
+with posterior sd ~0.28 against a prior sd of 1.45.
+
+### Player-Lineup Pillar (Generation 4)
+
+$$L_{\text{home},i} = w_{\text{att}} R_{\text{home},i} - w_{\text{def}} R_{\text{away},i}$$
+
+$R_{s,i}$ is the aggregated RAPM rating of side $s$'s named teamsheet, either the starting
+outfield XI or starters plus named substitutes at a fixed $w_{\text{bench}} = 0.10$. RAPM is a
+ridge fit — **never sampled** — over each fold's frozen history block (`fit_on = :history`), so
+a target fixture never contributes to the ratings that price it. Priors on
+$w_{\text{att}}, w_{\text{def}}$ are `Normal(0, 0.3)`, symmetric about zero: the sign of a RAPM
+loading is an empirical result, not an assumption.
+
+Measured over 40 folds and 2,899 scored observations, the lineup arms do **not** beat the
+team-state control on LogLoss. What they buy is calibration — ECE 0.0088-0.0104 against the
+control's 0.0149 and the Betfair closing line's 0.0139 — and it is calibration, not sharpness,
+that converts into Kelly bankroll growth. See
+[`experiments/scottish_lower/06_joint_player_lineup_fusion/README.md`](../../experiments/scottish_lower/06_joint_player_lineup_fusion/README.md).
 
 ---
 
@@ -150,9 +218,9 @@ Across 720 fitted historical matches and 20 held-out season-opener fixtures:
 
 ---
 
-## 6. Unified V2 Pipeline (`05` -> `09` Production Standard)
+## 6. Unified V2 Pipeline (`05` -> `10` Production Standard)
 
-The production codebase is organized into five graduated, zero-allocation pipeline stages:
+The production codebase is organized into six graduated pipeline stages:
 
 1. **`05` Composable Count Builder (`src/models/pregame/builder/`)**:
    - Assemble models via generic `add!` calls on `CountModelBuilder`.
@@ -170,6 +238,17 @@ The production codebase is organized into five graduated, zero-allocation pipeli
    - O(1) indexed market lookups via `OddsIndex`.
    - `BookWorkspace` pre-allocates matrix and probability buffers once per fold.
    - `simulate_portfolio` simulates fractional Kelly bankroll growth with automated convergence gating.
+6. **`10` MatchDay Operational Execution (`src/MatchDay/`)**:
+   - Point-in-time slate pricing through named seams:
+     `fixtures → identity → lineups → book → features → inference → gate → stake_sheet`.
+   - **The slate is the execution atom.** `Portfolio` solves one joint problem for every fixture
+     that settles together, so reservation is one transaction for the whole stake vector.
+   - Nothing samples here: `MD.canonical_fit` loads a completed run out of `mcmc_experiments`;
+     everything the operator does is written into `betdb.<paper_schema>`.
+   - Two consoles: **live** on `:8085` writing `paper_runbook`, **replay** on `:8086` writing
+     `paper_replay`, isolated structurally (`assert_replay_schema`, `serve_replay`) rather than
+     by convention. See
+     [`current_development/match_day_inference/README.md`](../../current_development/match_day_inference/README.md).
 
 ---
 
@@ -187,6 +266,15 @@ The production codebase is organized into five graduated, zero-allocation pipeli
   ```bash
   julia --project -t 8 test/runtests.jl
   ```
+* **MatchDay Replay Console (1,015 assertions; NOT in the parallel runner):**
+  ```bash
+  julia --project -t 8 test/test_matchday_replay.jl
+  ```
+  Four tiers — pure (clock and filtration contract, no database), the ladder desk, the ledger
+  (`paper_replay` execution and settlement plus a direct `paper_runbook` isolation assertion),
+  and models (a real Saturday, real canonical fits). The ledger and model tiers skip **with a
+  message** when `betdb`, `mcmc_experiments` or the DataStore cache is out of reach — never
+  silently, so a "passed" line from a tier that skipped is not evidence.
 
 ---
 
@@ -198,7 +286,14 @@ When prompting a new AI agent in this workspace, provide this context block:
 You are working on BayesianFootball.jl across a 3-node topology:
 1. Local Laptop / archpc: Development workstation (/home/james/bet_project/BayesianFootball). 8 physical cores.
 2. Remote Compute (mcmc-beast): 16 physical cores (32 SMT). Always launch Julia with -t 16 and run `using ThreadPinning; pinthreads(:cores)`. BLAS threads = 1.
-3. Database (archpc:5433): PostgreSQL betdb.
+3. Databases — TWO of them, do not conflate:
+   - betdb (archpc:5433, BF_DB_URL): raw football data (sofascore, bbc, betfair, betfair_live)
+     plus the paper-trading ledgers paper_runbook (live console :8085) and paper_replay
+     (replay console :8086).
+   - mcmc_experiments (mcmc-beast:5432, BF_EXPERIMENTS_DB_URL or ~/.pgpass): runs, fold
+     results, match latents, fit and portfolio artefacts, config_registry. Reached only as
+     Training.PostgresStorage(experiment_name).
+   Never print or paste a credential-bearing URL.
 
 Rules for Execution:
 - Use the Unified V2 Pipeline: CountModelBuilder, fit_model, evaluate_predictions, run_portfolio_simulation.

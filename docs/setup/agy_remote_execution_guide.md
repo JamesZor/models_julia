@@ -25,6 +25,9 @@
 |   |  Outer Tmux Session      |                             |         ARCHPC         |   |
 |   |  `scottish_runner:1.1`   |                             |   (Postgres Server)    |   |
 |   |  (SSH to mcmc-beast)     |                             |   betdb on port 5433   |   |
+|   |                          |                             |   (mcmc_experiments    |   |
+|   |                          |                             |    lives on the beast, |   |
+|   |                          |                             |    port 5432)          |   |
 |   +--------------------------+                             +------------------------+   |
 +-----------------------------------------------------------------------------------------+
 ```
@@ -38,10 +41,19 @@
    - **Hardware:** AMD Ryzen 9 (32 physical/logical cores, 64 GB RAM).
    - **SSH Endpoint:** `root@mcmc-beast` (via Tailscale / LAN).
    - **Repo Path:** `/root/BayesianFootball`.
-3. **Database Server (`archpc`):**
-   - **Role:** PostgreSQL database host for `betdb`.
-   - **DB Endpoint:** `postgresql://admin:CpPhGzIZ2qHtAh6cJT%2FHHFovs0CqfTx6@archpc:5433/betdb`.
+3. **Operational Database (`archpc:5433`):**
+   - **Role:** PostgreSQL `betdb` — raw football data (`sofascore`, `bbc`, `betfair`,
+     `betfair_live`) and the paper-trading ledgers (`paper_runbook`, `paper_replay`).
+   - **DSN:** read from `ENV["BF_DB_URL"]`, which is loaded from the git-ignored `.env`.
+     **Never write the credential into a document, a log, or a prompt.**
    - **Port:** `5433` (accessible over Tailscale/LAN).
+4. **Experiment Database (`mcmc-beast:5432`):**
+   - **Role:** PostgreSQL `mcmc_experiments` — runs, fold results, match latents, fit and
+     portfolio artefacts, and the canonical `config_registry`.
+   - **DSN:** `BF_EXPERIMENTS_DB_URL`, or a passwordless default that lets libpq read
+     `~/.pgpass`. Reached from Julia only as `Training.PostgresStorage(experiment_name)`.
+   - See [`../guides/experiment_database_and_config_truth_guide.md`](../guides/experiment_database_and_config_truth_guide.md) §2
+     for the line between the two databases.
 
 ---
 

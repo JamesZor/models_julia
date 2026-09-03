@@ -1,7 +1,10 @@
 # Experiment Database and Config Truth Engine Guide
 
-> **Scope:** PostgreSQL-backed experiment tracking, canonical configuration discovery, and
-> lossless reconstruction of inference and portfolio results.
+> **Scope:** the `mcmc_experiments` database on `mcmc-beast:5432` — PostgreSQL-backed
+> experiment tracking, canonical configuration discovery, and lossless reconstruction of
+> inference and portfolio results. It is **not** `betdb`, the operational database on
+> `archpc:5433` that holds the raw football data and the paper-trading ledgers; section 2
+> draws the line between them.
 >
 > **Implementation:**
 > [`src/training/inference/db_storage.jl`](../../src/training/inference/db_storage.jl),
@@ -9,6 +12,9 @@
 > [`src/Portfolio/db_storage.jl`](../../src/Portfolio/db_storage.jl),
 > [`src/Portfolio/extension.jl`](../../src/Portfolio/extension.jl), and
 > [`src/training/inference/db/schema.sql`](../../src/training/inference/db/schema.sql).
+> The operational counterpart is
+> [`src/MatchDay/ledger/schema.jl`](../../src/MatchDay/ledger/schema.jl) and
+> [`src/MatchDay/db.jl`](../../src/MatchDay/db.jl).
 
 ---
 
@@ -41,7 +47,85 @@ SQL.
 
 ---
 
-## 2. Entity-relationship diagram
+## 2. The two databases
+
+This guide is about **one** of the two PostgreSQL services this project uses. Knowing which
+is which is the precondition for everything below.
+
+| | **`betdb`** — what happened, and what we did | **`mcmc_experiments`** — what we fitted, and what it scored |
+|---|---|---|
+| Environment variable | `BF_DB_URL` (**required**; there is no default) | `BF_EXPERIMENTS_DB_URL`, else libpq's `~/.pgpass` |
+| Endpoint | `archpc:5433` — LAN `192.168.1.88:5433`, Tailscale `100.124.38.117:5433` | `mcmc-beast:5432` — i.e. `localhost:5432` when you are on that host |
+| Default DSN in code | none; `Data.load_datastore_sql` and `MatchDay.paper_connection` raise if unset | `postgresql://postgres@mcmc-beast:5432/mcmc_experiments`, **passwordless**, so libpq resolves the credential |
+| Julia entry point | `Data.load_datastore_sql(segment)`, `MatchDay.paper_connection()` | `Training.PostgresStorage(experiment_name)` |
+| Organised by | one PostgreSQL **schema per domain** | one flat schema, namespaced by the `experiment_name` column |
+| Provisioned by | the collector stack, outside this repository | [`scripts/setup_experiments_db.sh`](../../scripts/setup_experiments_db.sh) — see the provisioning section |
+| Written during a match day | yes — the paper ledger, at T−12 on a Saturday | no — a live slate only **reads** a completed run |
+| Documented in | this section, and `AGENTS.md` §3 | the rest of this guide |
+
+Neither is a replica or a cache of the other. They are separate servers on separate hosts
+with separate credentials and separate failure modes.
+
+### 2.1 `betdb` — the operational database
+
+Raw football data plus the paper-trading ledgers, split by PostgreSQL schema:
+
+| Schema | Holds |
+|---|---|
+| `sofascore` | `events` / `matches`, `seasons`, `match_player_lineups`, `lineup_provisional` (the pre-match XI scrape, stamped `scraped_at`), `match_statistics`, `match_incidents`, `match_odds` |
+| `bbc` | `match_meta`, `match_stats`, `match_lineup`, `live_text` — the commentary stream the proxy-xG (Gamma) arm is built from |
+| `betfair` | `match_meta` (the identity crosswalk), `markets`, `odds_history` — the closing-line archive used for CLV and for the de-vigged market baseline |
+| `betfair_live` | `market_metadata`, `order_book_1m` — one-minute archived exchange ladders, at most three levels per side, with a running `market_matched` total and **no** traded price series |
+| `paper_runbook` | the **live** paper ledger (MatchDay console on port 8085) |
+| `paper_replay` | the **replay** paper ledger (replay console on port 8086) |
+
+Each paper schema is the same eight tables, emitted by `MatchDay.paper_ddl(schema)`:
+`paper_accounts`, `paper_slates`, `paper_orders`, `paper_fills`, `paper_snapshots`,
+`paper_settlements`, `clv_audit`, `account_ledger`. `MatchDay.PAPER_SCHEMA` defaults to
+`paper`; the test suite overrides it to `paper_test` and drops it afterwards.
+
+Three unique constraints make the loop re-runnable after a crash without double-staking:
+`paper_slates (account_id, slate_window, as_of)`, `paper_orders (slate_id, match_id,
+market_group, market_line, selection)`, and `account_ledger (slate_id) WHERE kind =
+'RESERVE'`. The last makes double-reserving a slate *unrepresentable* rather than guarded.
+
+### 2.2 `mcmc_experiments` — the experiment database
+
+Nine tables, described column by column in the schema reference below:
+
+| Table | Holds |
+|---|---|
+| `config_registry` | canonical named components — `model`, `splitter`, `sampler`, `fit`, `book_spec`, `policy_spec`, `portfolio` |
+| `configs` | the persisted inference recipe, one-to-one with a run; its `config_hash` is `save_fit`'s deduplication key |
+| `runs` | one row per inference run: status, Git provenance, timings |
+| `fold_results` | per-fold convergence audit and out-of-sample proper scores |
+| `match_latents` | point-in-time posterior predictions per fixture, with compressed draws |
+| `fit_artifacts` | the exact serialized `Fit` |
+| `portfolio_runs` | headline ROI / drawdown / Sharpe per portfolio simulation |
+| `portfolio_bets` | the **backtest** trade ledger — one row per simulated bet |
+| `portfolio_artifacts` | the exact serialized `PortfolioResult`, plus the `BookSpec`/`PolicySpec` used |
+
+### 2.3 Why the paper ledger is not in here
+
+`paper_slates.model_run_id` carries `mcmc_experiments.runs.run_id` as an **opaque UUID with
+no foreign key** — they are different servers, so a foreign key is not available. A
+reconciliation job asserts that it resolves.
+
+The ledger lives in `betdb` deliberately:
+
+1. **Availability.** It is written at T−12 on a Saturday, when `mcmc-beast` may be saturated
+   by a training grid. `betdb` is the operational database and is already required to be up
+   by the collector, the supervisor and the console.
+2. **Locality.** Mark-to-market and CLV both read `betfair_live.order_book_1m`. Putting the
+   ledger beside it makes settlement a join rather than a cross-database transfer.
+3. **Separation.** `portfolio_bets` here is the *backtest* ledger: one row per simulated bet,
+   no lifecycle, no fills, no time. Paper trading has a lifecycle. Overloading one table with
+   both would make "what did the backtest say" and "what did we actually do" the same query,
+   which is the one distinction the exercise exists to preserve.
+
+---
+
+## 3. Entity-relationship diagram
 
 ```text
                                       configuration truth (experiment-scoped)
@@ -91,13 +175,13 @@ lookups.
 
 ---
 
-## 3. Schema reference
+## 4. Schema reference
 
 PostgreSQL `DOUBLE PRECISION` is the schema's floating-point type. `TIMESTAMP` values are
 stored without a PostgreSQL time-zone annotation, so producers and consumers must use a
 consistent clock convention.
 
-### 3.1 `runs`
+### 4.1 `runs`
 
 One row per persisted inference run.
 
@@ -117,7 +201,7 @@ One row per persisted inference run.
 Indexes: unique `idx_runs_id`; `idx_runs_name`; `idx_runs_created_at`; and the unique
 constraint index on `run_id`.
 
-### 3.2 `configs`
+### 4.2 `configs`
 
 Queryable inference recipe attached one-to-one to a run.
 
@@ -132,7 +216,7 @@ Queryable inference recipe attached one-to-one to a run.
 Indexes: unique constraint index plus `idx_configs_config_hash`. The latter is explicit for
 migration compatibility even though the unique constraint also supports equality lookup.
 
-### 3.3 `fold_results`
+### 4.3 `fold_results`
 
 One diagnostics/evaluation row per inference fold.
 
@@ -158,7 +242,7 @@ current `save_fit` path writes convergence diagnostics and runtime, but initiall
 `logloss`, `brier`, and `rps` as `NULL`; those columns report scores only after a downstream
 evaluation persistence step populates them.
 
-### 3.4 `match_latents`
+### 4.4 `match_latents`
 
 Match-level posterior count summaries and exact draws. Current PostgreSQL persistence accepts
 `CountLatents`; unsupported latent families should use `FileStorage`.
@@ -180,7 +264,7 @@ source fold IDs, so `save_fit` attaches all persisted latent rows to the run's f
 foreign-key ownership. Match IDs and insertion order preserve the exact merged panel; do not
 interpret that ownership fold as the fold that generated each individual match.
 
-### 3.5 `portfolio_runs`
+### 4.5 `portfolio_runs`
 
 Headline output from one portfolio simulation.
 
@@ -204,7 +288,7 @@ Headline output from one portfolio simulation.
 Indexes: unique `idx_portfolio_runs_id`; `idx_portfolio_runs_created_at`;
 `idx_portfolio_runs_model_run_id`; and the unique constraint index on `portfolio_run_id`.
 
-### 3.6 `portfolio_bets`
+### 4.6 `portfolio_bets`
 
 One executed simulated trade per row.
 
@@ -223,7 +307,7 @@ One executed simulated trade per row.
 
 Indexes: `idx_portfolio_bets_match_id` and `idx_portfolio_bets_run_id`.
 
-### 3.7 `config_registry`
+### 4.7 `config_registry`
 
 Canonical, named configuration recipes. Names are unique within an experiment; saving the
 same name updates its payload and metadata without creating another row.
@@ -246,7 +330,7 @@ Indexes and constraints: unique `(experiment_name, name)`; unique `idx_config_re
 `idx_config_registry_name`; `idx_config_registry_hash`; `idx_config_registry_created_at`;
 `idx_config_registry_type`; and GIN `idx_config_registry_tags`.
 
-### 3.8 `fit_artifacts`
+### 4.8 `fit_artifacts`
 
 | Column | Type | Constraint / meaning |
 |---|---|---|
@@ -257,7 +341,7 @@ This exact artefact preserves chains, typed configuration, diagnostics, and meta
 `load_fit` replaces its latent panel with the copy reconstructed from `match_latents` when
 relational latent rows exist.
 
-### 3.9 `portfolio_artifacts`
+### 4.9 `portfolio_artifacts`
 
 | Column | Type | Constraint / meaning |
 |---|---|---|
@@ -275,7 +359,7 @@ other values not represented by the headline tables.
 
 ---
 
-## 4. Password-safe connection resolution
+## 5. Password-safe connection resolution
 
 The normal constructor takes only an experiment namespace:
 
@@ -306,6 +390,11 @@ Alternatively, inject `BF_EXPERIMENTS_DB_URL` through the shell, CI secret store
 manager. Never put a credential-bearing URL in source, Markdown, logs, command history, or a
 committed environment file.
 
+The same rule governs `BF_DB_URL`, the operational database's variable (section 2). It has no
+default — `Data.load_datastore_sql` and `MatchDay.paper_connection` raise a message telling
+you to export it rather than falling back to a guessed endpoint — and it is read from a
+git-ignored `.env` at module init. Redact it before pasting any shell output that contains it.
+
 `Base.show` intentionally renders endpoint metadata but never `conn_str`:
 
 ```julia-repl
@@ -332,13 +421,13 @@ db = PostgresStorage(
 
 ---
 
-## 5. Saving and loading through multiple dispatch
+## 6. Saving and loading through multiple dispatch
 
 All registry lookups are scoped to `db.experiment_name`. Component loaders accept an integer
 registry ID, a canonical name, a full config hash, or a `Symbol` name. Type-specific loaders
 refuse rows of the wrong `config_type`.
 
-### 5.1 Register canonical Lego components
+### 6.1 Register canonical Lego components
 
 ```julia
 model_id = save_model(
@@ -368,7 +457,7 @@ the integer `config_registry.id`. The legacy generic `save_config` returns the 6
 configuration hash. A `(BookSpec, PolicySpec)` tuple can also be registered with
 `save_config` and recovered with `load_portfolio_spec`.
 
-### 5.2 Load by integer ID
+### 6.2 Load by integer ID
 
 ```julia
 model = load_model(db, 1)
@@ -383,7 +472,7 @@ policy = load_policy_spec(db, 1)
 The component numbers address `config_registry.id`; the fit number addresses `runs.id`.
 They are separate ID sequences and need not be contiguous inside one experiment namespace.
 
-### 5.3 Load by name
+### 6.3 Load by name
 
 ```julia
 model = load_model(db, "m00_joint_baseline")
@@ -399,7 +488,7 @@ Config names resolve to one canonical row because `(experiment_name, name)` is u
 name resolves to the latest matching run ID. `load_fit(db, run_uuid)` is preferable when a
 workflow must identify one immutable run exactly.
 
-### 5.4 Persist and reconstruct results
+### 6.4 Persist and reconstruct results
 
 ```julia
 run_id = save_fit(fit, db)  # UUID; identical configs return the existing run UUID
@@ -428,7 +517,7 @@ addresses = save_fit(fit, storage; quiet = true)
 # addresses.run_id -> PostgreSQL UUID
 ```
 
-### 5.5 Incrementally extend live runs
+### 6.5 Incrementally extend live runs
 
 ```julia
 plan = preview_extension(db, run_uuid, latest_ds)
@@ -447,9 +536,9 @@ explicitly or register matching canonical specs.
 
 ---
 
-## 6. REPL discovery and explorer
+## 7. REPL discovery and explorer
 
-### 6.1 Summarise experiments
+### 7.1 Summarise experiments
 
 ```julia
 experiments = explore_experiments(db)
@@ -460,7 +549,7 @@ type count, best (minimum) populated LogLoss, best populated Brier score, and la
 It also returns a `DataFrame` for further filtering. Score cells remain `—` while the
 corresponding `fold_results` columns are `NULL`.
 
-### 6.2 Search canonical configurations
+### 7.2 Search canonical configurations
 
 ```julia
 all_configs = search_configs(db)
@@ -476,7 +565,7 @@ name, type, description, tags, and JSON summary. Structured `tag=...` and
 available through `search_configs(db, ""; tag = "production", config_type = "model")` or
 `list_configs`.
 
-### 6.3 Inspect the architecture
+### 7.3 Inspect the architecture
 
 ```julia
 model = show_config(db, 1)
@@ -489,12 +578,12 @@ same call supports both visual inspection and REPL reuse.
 
 ---
 
-## 7. Useful SQL recipes
+## 8. Useful SQL recipes
 
 Use parameter placeholders in application code. Literal values below are readable examples,
 not an invitation to interpolate untrusted input.
 
-### 7.1 Inspect fold diagnostics and match posterior predictions
+### 8.1 Inspect fold diagnostics and match posterior predictions
 
 ```sql
 SELECT
@@ -528,7 +617,7 @@ match rows join through the first fold used for foreign-key ownership; other fol
 still appear only when they have associated latent rows. Use `load_fit(db, 12)` when the full
 posterior draw panel or chain is required.
 
-### 7.2 Join portfolio PnL and trades to model metadata
+### 8.2 Join portfolio PnL and trades to model metadata
 
 ```sql
 SELECT
@@ -559,7 +648,7 @@ WHERE r.experiment_name = 'scottish_lower_2426'
 ORDER BY pr.id, pb.kickoff_date, pb.bet_id;
 ```
 
-### 7.3 Filter runs by a registered model name
+### 8.3 Filter runs by a registered model name
 
 `config_registry` is deliberately not a foreign-key parent of historical runs: registry names
 can be updated, while a run's JSON recipe remains immutable. For an exact current-summary
@@ -595,7 +684,7 @@ on a mutable canonical name.
 
 ---
 
-## 8. Avoiding redundant MCMC
+## 9. Avoiding redundant MCMC
 
 Before scheduling expensive sampling, search the run catalogue for the approved recipe's
 known `configs.config_hash`:
@@ -622,7 +711,7 @@ an experiment manifest, report, or scheduler record and use it for the preflight
 
 ---
 
-## 9. Infrastructure and provisioning
+## 10. Infrastructure and provisioning
 
 [`scripts/setup_experiments_db.sh`](../../scripts/setup_experiments_db.sh) provisions the
 persistent PostgreSQL 16 service. By default it:
@@ -672,13 +761,17 @@ bootstrap DDL and the additive migration runner. Consequently:
 
 ---
 
-## 10. Operational checklist
+## 11. Operational checklist
 
-1. Construct `PostgresStorage(experiment_name)`; never embed or print a raw password.
-2. Run `ensure_schema!(db)` at deployment/setup boundaries.
-3. Register canonical components with names, descriptions, and useful tags.
-4. Check `configs.config_hash` before scheduling MCMC.
-5. Persist the fit and retain its returned UUID.
-6. Persist portfolio output against that immutable model run UUID.
-7. Use SQL for discovery and summaries; use loaders for exact Julia reconstruction.
-8. Keep trusted code and schema versions aligned with serialized artefacts.
+1. Confirm which database the task needs. `PostgresStorage` is `mcmc_experiments`; anything
+   reading fixtures, the order book, lineups or a paper ledger is `betdb` (section 2).
+2. Construct `PostgresStorage(experiment_name)`; never embed or print a raw password.
+3. Run `ensure_schema!(db)` at deployment/setup boundaries.
+4. Register canonical components with names, descriptions, and useful tags.
+5. Check `configs.config_hash` before scheduling MCMC.
+6. Persist the fit and retain its returned UUID.
+7. Persist portfolio output against that immutable model run UUID.
+8. Use SQL for discovery and summaries; use loaders for exact Julia reconstruction.
+9. Keep trusted code and schema versions aligned with serialized artefacts.
+10. When a live or replay slate is involved, remember the direction of travel: it **reads** a
+    converged run out of `mcmc_experiments` and **writes** only into `betdb.<paper_schema>`.

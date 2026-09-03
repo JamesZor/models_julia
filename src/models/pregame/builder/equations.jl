@@ -51,6 +51,8 @@ Base.@kwdef struct CBParams
     log_r::Union{Nothing, Float64} = nothing   # disp.log_r (NegBin only)
     ν::Union{Nothing, Float64} = nothing       # obs.ν      (joint only)
     log_κ::Union{Nothing, Float64} = nothing   # obs.log_κ  (joint only)
+    σ_κ::Union{Nothing, Float64} = nothing            # obs.σ_κ          (hierarchical κ only)
+    κ_raw::Union{Nothing, Vector{Float64}} = nothing  # obs.κ_team_raw   (hierarchical κ only)
 end
 
 """
@@ -80,8 +82,19 @@ function cb_params_from_varinfo(model::ComposableCountModel, vi)
                 Float64(v["obs.ν"]) : nothing,
         log_κ = model.observation isa JointGammaPoissonObservation ?
                 Float64(v["obs.log_κ"]) : nothing,
+        σ_κ   = model.observation isa HierarchicalKappaJoint ?
+                Float64(v["obs.σ_κ"]) : nothing,
+        κ_raw = model.observation isa HierarchicalKappaJoint ?
+                Float64.(v["obs.κ_team_raw"]) : nothing,
     )
 end
+
+"""
+Per-team log finishing factors, reconstructed from the non-centred draw exactly as the model
+states them: centre the raw draw, scale by σ_κ, add the league factor.
+"""
+cb_team_log_kappa(p::CBParams) =
+    p.log_κ .+ p.σ_κ .* (p.κ_raw .- mean(p.κ_raw))
 
 "Zero-sum team attack and defence effects, reconstructed from the non-centred draw."
 function cb_team_effects(p::CBParams)
@@ -188,6 +201,10 @@ function cb_logjoint(model::ComposableCountModel, p::CBParams, data)
         lp += logpdf(model.observation.shape_prior, p.ν) +
               logpdf(model.observation.log_kappa_prior, p.log_κ)
     end
+    if model.observation isa HierarchicalKappaJoint
+        lp += logpdf(model.observation.kappa.σ_prior, p.σ_κ) +
+              sum(logpdf.(Normal(0.0, 1.0), p.κ_raw))
+    end
 
     return lp + cb_loglik(model.observation, p, data, η_h, η_a)
 end
@@ -220,13 +237,35 @@ hand-expanded form. This is the whole value of the file: `engine.jl` inlines
 for the tape's sake, and an algebra slip there would produce a perfectly smooth, perfectly
 differentiable, perfectly wrong posterior. `logpdf(Gamma(ν, μ/ν), x)` cannot make that slip.
 """
-function cb_loglik(::JointGammaPoissonObservation, p::CBParams, data, η_h, η_a)
+function cb_loglik(::SharedKappaJoint, p::CBParams, data, η_h, η_a)
     μ_h = exp.(η_h)
     μ_a = exp.(η_a)
     κ = exp(p.log_κ)
 
     goals = sum(data.weights .* logpdf.(Poisson.(κ .* μ_h), data.yh)) +
             sum(data.weights .* logpdf.(Poisson.(κ .* μ_a), data.ya))
+
+    proxy = sum(data.weights .* data.mask .* logpdf.(Gamma.(p.ν, μ_h ./ p.ν), data.pxg_h)) +
+            sum(data.weights .* data.mask .* logpdf.(Gamma.(p.ν, μ_a ./ p.ν), data.pxg_a))
+
+    return goals + proxy
+end
+
+"""
+The hierarchical-κ two-arm log-likelihood, again written from the DISTRIBUTIONS.
+
+The only difference from the shared form is that the Poisson mean carries the SHOOTING side's
+factor, `κ_h(i)` and `κ_a(i)`, while the Gamma arm is untouched — which is the claim the engine's
+hand-expanded version has to be checked against, because "did κ leak into the proxy arm?" is
+exactly the kind of algebra slip that still samples cleanly.
+"""
+function cb_loglik(::HierarchicalKappaJoint, p::CBParams, data, η_h, η_a)
+    μ_h = exp.(η_h)
+    μ_a = exp.(η_a)
+    κ_team = exp.(cb_team_log_kappa(p))
+
+    goals = sum(data.weights .* logpdf.(Poisson.(κ_team[data.home] .* μ_h), data.yh)) +
+            sum(data.weights .* logpdf.(Poisson.(κ_team[data.away] .* μ_a), data.ya))
 
     proxy = sum(data.weights .* data.mask .* logpdf.(Gamma.(p.ν, μ_h ./ p.ν), data.pxg_h)) +
             sum(data.weights .* data.mask .* logpdf.(Gamma.(p.ν, μ_a ./ p.ν), data.pxg_a))

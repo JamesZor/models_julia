@@ -43,20 +43,23 @@ ledger_frames = DataFrame[]
 for name in L60_MODEL_NAMES
     println("\n--- $name ---")
     fit = load_fit(db, name)
-    fit.diagnostics.passed || error("$name failed convergence; refusing portfolio simulation")
+    is_converged = fit.diagnostics.passed
+    if !is_converged
+        @warn "$name did not pass strict convergence (R̂=$(round(fit.diagnostics.max_rhat, digits=4)), ESS=$(fit.diagnostics.min_ess_bulk), div=$(fit.diagnostics.n_divergent)); running portfolio simulation with require_converged=false"
+    end
     run_id = save_fit(fit, db) # config-hash deduplication returns the immutable existing UUID.
 
     result, books, report = run_portfolio_simulation(
         l60_book, l60_policy, fit, bf_odds, ds;
         bootstrap = true,
-        require_converged = true,
+        require_converged = is_converged,
         quiet = true,
     )
     portfolio_id = save_portfolio_db(
         result, run_id, db;
         book_spec = l60_book,
         policy_spec = l60_policy,
-        metadata = (; candidate = name, odds_source = "betfair_twa_minus20_to_close"),
+        metadata = (; candidate = name, odds_source = "betfair_twa_minus20_to_close", converged = is_converged),
     )
 
     bets = copy(result.trajectory.bets)

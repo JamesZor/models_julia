@@ -431,6 +431,22 @@ function validate(b::CountModelBuilder)
             "feature must be a MatchProxyXGFeature; got $(nameof(typeof(obs.feature)))" :
             "shape_prior must have strictly positive support; got minimum $(minimum(obs.shape_prior))"))
 
+    # A half-open σ_κ prior is what makes the deltas shrink to zero when there is nothing to find.
+    # A prior with support below 0 would let σ_κ flip sign, which reflects the delta set through
+    # the origin and leaves the likelihood invariant — a label-switching mode, not a wider prior.
+    kappa_mode_valid = !(obs isa JointGammaPoissonObservation) ||
+        !(obs.kappa isa HierarchicalKappa) ||
+        (minimum(obs.kappa.σ_prior) >= 0.0 && isfinite(quantile(obs.kappa.σ_prior, 0.99)))
+    push!(out, cb_result("hierarchical kappa prior is well posed",
+        kappa_mode_valid,
+        !(obs isa JointGammaPoissonObservation) ? "not a joint observation" :
+        !(obs.kappa isa HierarchicalKappa) ? "SharedKappa — one finishing factor for the league" :
+        kappa_mode_valid ?
+            "σ_κ >= $(minimum(obs.kappa.σ_prior)), per-team δ_κ zero-centred over $(nameof(typeof(obs.kappa)))" :
+            "HierarchicalKappa needs a σ_prior with non-negative support and a finite upper " *
+            "tail; got minimum $(minimum(obs.kappa.σ_prior)) and 99th percentile " *
+            "$(quantile(obs.kappa.σ_prior, 0.99))"))
+
     # --- R6: covariate names are unique ---------------------------------------
     # Two covariates named `:wealth` would both sample the site `wealth.w`. Turing
     # does not stop you; the second silently overwrites the first's contribution in
@@ -596,7 +612,10 @@ _sites_dynamics(::CB_PG.StaticZeroDynamics) = Symbol[]
 
 _sites_observation(::PoissonObservation) = Symbol[]
 # Declaration order inside `_joint_gamma_poisson_params`, which is the θ layout.
-_sites_observation(::JointGammaPoissonObservation) = [Symbol("obs.ν"), Symbol("obs.log_κ")]
+_sites_observation(::SharedKappaJoint) = [Symbol("obs.ν"), Symbol("obs.log_κ")]
+# ... and inside `_joint_hierarchical_kappa_params`, which extends it rather than reordering it.
+_sites_observation(::HierarchicalKappaJoint) =
+    [Symbol("obs.ν"), Symbol("obs.log_κ"), Symbol("obs.σ_κ"), Symbol("obs.κ_team_raw")]
 _sites_observation(o::NegativeBinomialObservation) = _sites_dispersion(o.dispersion)
 _sites_dispersion(::CB_PG.GlobalDispersion)   = [Symbol("disp.log_r")]
 _sites_dispersion(::CB_PG.HomeAwayDispersion) = [Symbol("disp.log_r"), Symbol("disp.δ_r_home")]
@@ -625,8 +644,12 @@ function cb_chain_columns(m::ComposableCountModel, n_teams::Int; n_seasons::Int=
     return cols
 end
 
-_cb_site_width(m::ComposableCountModel, site::Symbol, n_teams::Int, n_seasons::Int) =
-    _cb_site_width(m.interception, m.home_advantage, site, n_teams, n_seasons)
+# The observation layer owns one vector site, so it is resolved before the structural delegation
+# rather than by widening `_cb_site_width`'s structural signature with an argument it never reads.
+function _cb_site_width(m::ComposableCountModel, site::Symbol, n_teams::Int, n_seasons::Int)
+    site === Symbol("obs.κ_team_raw") && return n_teams
+    return _cb_site_width(m.interception, m.home_advantage, site, n_teams, n_seasons)
+end
 
 function _cb_site_width(interception, home_advantage, site::Symbol,
                         n_teams::Int, n_seasons::Int)

@@ -214,3 +214,77 @@ julia --project -t 32 experiments/scottish_lower/06_joint_player_lineup_fusion/r
 
 Every runner pins Julia threads to physical cores and sets BLAS threads to one before doing any
 work.
+
+---
+
+## 40-Fold Grid Results (`scottish_lower_joint_player_2426`)
+
+Evaluated on `mcmc-beast` across 40 walk-forward folds — 710 held-out matches, 2,899 scored
+market observations, 628 daily books with 82 slates skipped, seasons 24/25 + 25/26. Sources:
+`results/r62_proper_scores.csv`, `results/r62_calibration_curves.csv`,
+`results/r63_portfolio_summary.csv`, `results/r63_trade_ledger.csv`.
+
+### 1. Out-of-sample proper scoring and Betfair calibration (`r62`)
+
+| Model | LogLoss | ΔLL vs close | Brier | CRPS | RPS | Model ECE | Model MCE |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `m05_joint_production_wealth` (control) | **0.64299** | +0.00117 | **0.22586** | **0.62705** | **0.22415** | 0.01493 | **0.0649** |
+| `m13_joint_composite` | 0.64324 | +0.00142 | 0.22599 | 0.62861 | 0.22423 | **0.00877** | 0.3916 |
+| `m12_joint_hybrid_synergy` | 0.64337 | +0.00155 | 0.22605 | 0.62832 | 0.22447 | 0.00996 | 0.1964 |
+| `m10_joint_player_shots_bench` | 0.64440 | +0.00259 | 0.22652 | 0.62960 | 0.22559 | 0.00901 | 0.1870 |
+| `m09_joint_player_shots_outfield` | 0.64448 | +0.00267 | 0.22655 | 0.62966 | 0.22565 | 0.00938 | 0.1896 |
+| `m11_joint_player_pxg_bench` | 0.64485 | +0.00303 | 0.22674 | 0.62929 | 0.22595 | 0.01040 | 0.2514 |
+| *Betfair closing line* | *0.64182* | — | *0.22529* | — | *0.21110* | *0.01391* | — |
+
+### 2. Betfair fractional-Kelly portfolio backtest (`r63`)
+
+30% fractional Kelly across 1X2, Over/Under 2.5 and BTTS, with a daily-slate drawdown budget
+and a 20% exposure cap, net of 2% commission.
+
+| Model | Bets | Total return | Flat ROI | 1X2 ROI | Max drawdown | Sharpe (ann.) | Win rate |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `m13_joint_composite` | 1,468 | **+140.15%** | 11.58% | 12.02% | −21.05% | 1.453 | 34.60% |
+| `m12_joint_hybrid_synergy` | 1,462 | +136.61% | 11.48% | 11.95% | −20.23% | 1.416 | 34.47% |
+| `m05_joint_production_wealth` | 1,455 | +131.17% | **11.64%** | **12.22%** | **−19.05%** | **1.481** | 34.43% |
+| `m11_joint_player_pxg_bench` | 1,455 | +120.55% | 10.62% | 11.01% | −20.73% | 1.239 | 33.95% |
+| `m10_joint_player_shots_bench` | 1,462 | +112.23% | 10.05% | 10.26% | −20.03% | 1.217 | 34.13% |
+| `m09_joint_player_shots_outfield` | 1,463 | +111.56% | 9.99% | 10.20% | −19.96% | 1.216 | 33.90% |
+
+### 3. Run addresses
+
+| Model | `runs.run_id` | `portfolio_runs.portfolio_run_id` |
+| :--- | :--- | :--- |
+| `m05_joint_production_wealth` | `ed541a7c-01e2-447e-a771-783517728d47` | `4e3f02a8-d145-4c7f-9060-9c49d4a4bf6a` |
+| `m09_joint_player_shots_outfield` | `6f09bb4a-2316-4986-a3ec-050398a59023` | `b2997270-262b-4810-a0c0-0c7678a8d782` |
+| `m10_joint_player_shots_bench` | `baa67986-b2a5-461a-b661-fd7b5052c6d7` | `b5addb56-8bfd-4350-b7ad-a3d6891af24c` |
+| `m11_joint_player_pxg_bench` | `8dc231f1-7f09-4046-8c65-835d65c7a507` | `27ed3428-3564-4f71-8d8d-10d2eb8f9ad7` |
+| `m12_joint_hybrid_synergy` | `132df5c2-c742-4e95-8693-3aeb2b2cbaef` | `d08b43b2-226a-4ecd-abd2-d9c80966ca08` |
+| `m13_joint_composite` | `5474e824-8c9d-4613-8e39-841426c3f80f` | `ad4029f0-e1ee-4bcf-b930-5ef566558061` |
+
+### 4. What the hypotheses actually did
+
+* **H1 (lineups improve team state) — refused.** `m09` and `m10` are *worse* than the `m05`
+  control on every proper score. A 180-day-decayed team latent has already absorbed most of
+  what a teamsheet carries.
+* **H2 (bench depth is a small positive) — supported, negligibly.** `m10` beats `m09` by
+  0.00008 LogLoss. That is inside noise, and is exactly why `w_bench = 0.10` is fixed rather
+  than fitted.
+* **H3 (shot volume beats shot quality) — supported.** `m10` (0.64440) beats `m11` (0.64485).
+  Scottish League One/Two commentary supports a volume count better than a quality model.
+* **H4 (wealth is complementary to RAPM) — supported strongly.** `m12` improves on `m10` by
+  0.00103 LogLoss, an order of magnitude larger than H2's margin. Squad value is a slow
+  structural prior on quality; RAPM is a fast point-in-time one, and they do not duplicate.
+* **H5 (travel is real but small) — supported, at H4's expense of nothing.** `m13` improves on
+  `m12` by 0.00013 LogLoss and gains 3.5 points of bankroll, but at a wider drawdown.
+
+**The headline is calibration, not sharpness.** Every lineup arm sits *behind* the control on
+LogLoss, Brier, CRPS and RPS, and *ahead* of it on ECE — 0.0088–0.0104 against 0.0149, and
+against the Betfair closing line's 0.0139. Kelly staking sizes on the probability, not on the
+rank, so a better-calibrated and slightly less sharp forecast is worth more money than the
+proper scores suggest: `m12` and `m13` both beat the control's bankroll while losing to it on
+every score. That is the whole result, and it is the reason `r63` exists separately from `r62`.
+
+**Caveat on MCE.** `m13`'s maximum calibration error is 0.392 against the control's 0.065. Its
+mean calibration is the best in the grid while its worst bin is by far the worst, which points
+at a thin extreme-probability bin rather than a systematic bias. `m12`'s 0.196 is the safer
+choice for deployment, and is the arm the MatchDay consoles load.

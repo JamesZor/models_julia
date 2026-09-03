@@ -515,3 +515,256 @@ end
     @test BayesianFootball.observation_family(latents) === :poisson
     @test vec(latents.λ_home) ≈ rates.λ_h
 end
+
+# ==============================================================================
+# 7. HIERARCHICAL TEAM KAPPA
+# ==============================================================================
+#
+# The finishing factor becomes per-team:
+#
+#     log κ_t = log κ_global + σ_κ · (raw_t − mean(raw))
+#
+# Four things have to hold, and only the first is about the new maths:
+#
+#   1. The GOALS arm — and ONLY the goals arm — moves. If κ reached the Gamma arm it would be a
+#      rescale of the latent again and σ_κ would be fitting the pxG measurement scale.
+#   2. `log κ_global` stays identified. The zero-centring is what removes the ridge along which
+#      a common shift of the deltas and a shift of the global factor are the same model.
+#   3. Setting σ_κ to zero must reproduce the shared-κ model EXACTLY. A hierarchical model that
+#      is not a strict generalisation of its own control cannot be compared with it.
+#   4. The tape stays flat in the observation count. n_teams extra parameters is a wider θ, not
+#      a longer tape.
+
+jgp_hier_observation(; σ_prior = truncated(Normal(0.0, 0.10), 0.0, Inf)) =
+    JointGammaPoissonObservation(kappa = HierarchicalKappa(σ_prior = σ_prior))
+
+"A chain over the hierarchical model's own column schema, with every site pinned."
+function jgp_hier_chain(model, n_teams; n_draws = 4, ν = 4.0, log_κ = log(0.8),
+                        σ_κ = 0.2, raw = [1.0, -1.0])
+    columns = cb_chain_columns(model, n_teams; n_seasons = 1)
+    values = zeros(Float64, n_draws, length(columns), 1)
+    for (j, name) in enumerate(columns)
+        values[:, j, 1] .=
+            name == "obs.ν" ? ν :
+            name == "obs.log_κ" ? log_κ :
+            name == "obs.σ_κ" ? σ_κ :
+            startswith(name, "obs.κ_team_raw[") ?
+                raw[parse(Int, name[findfirst('[', name)+1:findfirst(']', name)-1])] :
+            name == "dyn.σ_a" || name == "dyn.σ_d" ? 0.2 :
+            name == "inter.μ" ? 0.1 :
+            name == "ha.γ_global" ? 0.25 : 0.0
+    end
+    return MCMCChains.Chains(values, Symbol.(columns))
+end
+
+@testset "hierarchical kappa declares the sites it samples" begin
+    shared = jgp_joint_model()
+    hier   = jgp_joint_model(observation = jgp_hier_observation())
+
+    @test hier.observation isa HierarchicalKappaJoint
+    @test !(hier.observation isa SharedKappaJoint)
+    @test shared.observation isa SharedKappaJoint
+
+    # The hierarchical layout EXTENDS the shared one; it does not reorder it. That is what lets
+    # `obs.ν` and `obs.log_κ` be read out of either chain by the same extractor.
+    @test cb_varinfo_sites(hier) ==
+          vcat(cb_varinfo_sites(shared), [Symbol("obs.σ_κ"), Symbol("obs.κ_team_raw")])
+
+    for n_teams in (2, 14, 20)
+        @test cb_parameter_count(hier, n_teams) ==
+              cb_parameter_count(shared, n_teams) + 1 + n_teams
+        cols = cb_chain_columns(hier, n_teams)
+        @test count(c -> startswith(c, "obs.κ_team_raw["), cols) == n_teams
+    end
+
+    # The validator has to state the mode rather than inherit it silently.
+    report = validate(CountModelBuilder(:jgp_hier) |>
+                      add(GlobalInterception()) |>
+                      add(TimeDecayDynamics(days_half_life = 180.0)) |>
+                      add(GlobalHomeAdvantage()) |>
+                      add(jgp_hier_observation()))
+    @test all(r -> r.pass, report)
+    @test any(r -> r.name == "hierarchical kappa prior is well posed" && r.pass, report)
+
+    # A σ_prior that admits a negative scale is a label-switching mode, and is refused BY NAME.
+    bad = validate(CountModelBuilder(:jgp_hier_bad) |>
+                   add(GlobalInterception()) |>
+                   add(TimeDecayDynamics(days_half_life = 180.0)) |>
+                   add(GlobalHomeAdvantage()) |>
+                   add(jgp_hier_observation(σ_prior = Normal(0.0, 0.10))))
+    @test any(r -> r.name == "hierarchical kappa prior is well posed" && !r.pass, bad)
+end
+
+@testset "the hierarchical arm's algebra matches the distributions" begin
+    model = jgp_joint_model(observation = jgp_hier_observation())
+    fs = jgp_feature_set(8)
+    small = jgp_density(model, fs)
+
+    data = JGP_API.cb_equation_data(model, fs)
+    params = JGP_API.cb_params_from_varinfo(model, small.varinfo)
+    @test params.σ_κ !== nothing
+    @test length(params.κ_raw) == 2
+    @test isfinite(small.f(small.θ))
+    @test small.f(small.θ) ≈ JGP_API.cb_logjoint(model, params, data) atol = 1e-9
+
+    for δ in (0.01, -0.02, 0.05)
+        point = small.θ .+ δ .* cos.(collect(eachindex(small.θ)))
+        vi = DynamicPPL.unflatten(small.varinfo, point)
+        p = JGP_API.cb_params_from_varinfo(model, vi)
+        @test small.f(point) ≈ JGP_API.cb_logjoint(model, p, data) atol = 1e-8
+    end
+end
+
+@testset "kappa reaches the goals arm and nothing else" begin
+    model = jgp_joint_model(observation = jgp_hier_observation())
+    n = 8
+    mask = Float64[i > 4 ? 1.0 : 0.0 for i in 1:n]
+    base_fs = jgp_feature_set(n; mask = mask)
+    base = jgp_density(model, base_fs)
+
+    # A masked-out proxy observation still contributes exactly zero.
+    rewritten_h = copy(base_fs.data[:flat_pxg_home])
+    rewritten_h[1:4] .= 97.0
+    rewritten = jgp_density(model, jgp_feature_set(n; mask = mask, pxg_h = rewritten_h))
+    @test rewritten.f(base.θ) == base.f(base.θ)
+
+    # With σ_κ = 0 the deltas vanish and the model must equal its own shared-κ control at the
+    # LIKELIHOOD. (Not at the log-joint: the hierarchical model carries n_teams + 1 extra priors.)
+    shared = jgp_joint_model()
+    params = JGP_API.cb_params_from_varinfo(model, base.varinfo)
+    flat = JGP_API.CBParams(
+        μ = params.μ, γ = params.γ, σ_a = params.σ_a, σ_d = params.σ_d,
+        raw_a = params.raw_a, raw_d = params.raw_d, w = params.w,
+        ν = params.ν, log_κ = params.log_κ, σ_κ = 0.0, κ_raw = params.κ_raw)
+    data = JGP_API.cb_equation_data(model, base_fs)
+    η_h = fill(0.3, n)
+    η_a = fill(-0.1, n)
+    @test JGP_API.cb_loglik(model.observation, flat, data, η_h, η_a) ≈
+          JGP_API.cb_loglik(shared.observation, flat, data, η_h, η_a) atol = 1e-10
+
+    # And with a real σ_κ it must NOT — otherwise the component is decoration.
+    spread = JGP_API.CBParams(
+        μ = params.μ, γ = params.γ, σ_a = params.σ_a, σ_d = params.σ_d,
+        raw_a = params.raw_a, raw_d = params.raw_d, w = params.w,
+        ν = params.ν, log_κ = params.log_κ, σ_κ = 0.25, κ_raw = [1.0, -1.0])
+    @test JGP_API.cb_loglik(model.observation, spread, data, η_h, η_a) !=
+          JGP_API.cb_loglik(shared.observation, spread, data, η_h, η_a)
+
+    # The Gamma arm is untouched by the spread: turn the goals off by comparing only the proxy
+    # term, which the reference computes from `Gamma(ν, μ/ν)` and never from κ.
+    lit_data = JGP_API.cb_equation_data(model, jgp_feature_set(n; mask = ones(n)))
+    proxy_only(p) = sum(lit_data.weights .* lit_data.mask .*
+                        logpdf.(Gamma.(p.ν, exp.(η_h) ./ p.ν), lit_data.pxg_h))
+    @test proxy_only(flat) ≈ proxy_only(spread) atol = 1e-12
+end
+
+@testset "the hierarchical arm compiles to one stable ReverseDiff tape" begin
+    model = jgp_joint_model(observation = jgp_hier_observation(),
+                            covariates = (WealthCovariate(),))
+
+    function cov_fs(n)
+        d = Dict{Symbol,Any}(jgp_feature_set(n).data)
+        d[:flat_delta_wealth_logsum] = collect(range(-0.4, 0.4; length = n))
+        return BayesianFootball.FeatureSet(d)
+    end
+
+    small = jgp_density(model, cov_fs(6))
+    large = jgp_density(model, cov_fs(60))
+
+    raw_small = ReverseDiff.GradientTape(small.f, small.θ)
+    raw_large = ReverseDiff.GradientTape(large.f, large.θ)
+
+    # The per-team lookup is `getindex` with an integer vector — one vectorised node. If it had
+    # been written as a `view` or a comprehension the large tape would be ~10x the small one.
+    @test length(raw_small.tape) == length(raw_large.tape)
+
+    tape = ReverseDiff.compile(raw_small)
+    compiled = similar(small.θ)
+    ReverseDiff.gradient!(compiled, tape, small.θ)
+    relerr(a, b) = norm(a - b) / max(norm(a), norm(b), 1.0)
+    @test all(isfinite, compiled)
+    @test relerr(compiled, ForwardDiff.gradient(small.f, small.θ)) <= 1e-6
+
+    for δ in (0.002, -0.004, 0.01)
+        point = small.θ .+ δ .* sin.(collect(eachindex(small.θ)))
+        replayed = similar(point)
+        ReverseDiff.gradient!(replayed, tape, point)
+        @test all(isfinite, replayed)
+        @test relerr(replayed, ReverseDiff.gradient(small.f, point)) <= 1e-8
+    end
+end
+
+@testset "extract_kappa reads the global factor, the spread and the team deltas" begin
+    model = jgp_joint_model(observation = jgp_hier_observation())
+    fs = jgp_feature_set(6)
+    n_teams = Int(fs.data[:n_teams])
+    chain = jgp_hier_chain(model, n_teams; σ_κ = 0.2, raw = [1.0, -1.0])
+
+    k = JGP_PG.extract_kappa(chain, model.observation, n_teams;
+                             team_map = fs.data[:team_map])
+    @test k.mode === :hierarchical
+    @test all(≈(0.8), k.κ_global)
+    @test all(≈(0.2), k.σ_κ)
+
+    # δ = σ·(raw − mean(raw)) = 0.2·(±1) for a two-team league.
+    @test k.δ_κ[1, 1] ≈ 0.2
+    @test k.δ_κ[1, 2] ≈ -0.2
+    # IDENTIFICATION: the deltas are a contrast set, so they sum to zero in every single draw.
+    @test maximum(abs, sum(k.δ_κ, dims = 2)) < 1e-12
+    @test k.κ_team[1, 1] ≈ 0.8 * exp(0.2)
+
+    @test nrow(k.summary) == n_teams
+    @test Set(k.summary.team) == Set(keys(fs.data[:team_map]))
+    @test k.summary.team[1] == "home"            # sorted by δ_mean, over-converters first
+    @test k.summary.δ_mean[1] ≈ 0.2
+    @test sum(k.summary.δ_mean) ≈ 0.0 atol = 1e-12
+
+    # The shared mode answers the same call, and says so rather than fabricating a spread.
+    shared = jgp_joint_model()
+    ks = JGP_PG.extract_kappa(
+        jgp_hier_chain(shared, n_teams), shared.observation, n_teams;
+        team_map = fs.data[:team_map])
+    @test ks.mode === :shared
+    @test ks.σ_κ === nothing
+    @test nrow(ks.summary) == 0
+end
+
+@testset "the per-team factor reaches the rates the score grid prices" begin
+    model = jgp_joint_model(observation = jgp_hier_observation())
+    fs = jgp_feature_set(6)
+    chain = jgp_hier_chain(model, 2; σ_κ = 0.2, raw = [1.0, -1.0])
+
+    df = DataFrame(
+        match_id = Int[101],
+        home_team = ["home"],
+        away_team = ["away"],
+        match_date = [Date(2025, 3, 1)],
+        season_idx = Int[1],
+    )
+    rates = JGP_PG.extract_parameters(model, df, fs, chain)[101]
+
+    # The HOME side's goals are converted by the HOME side's factor, the away side's by its own.
+    @test rates.λ_h ≈ (0.8 * exp(0.2)) .* rates.μ_h
+    @test rates.λ_a ≈ (0.8 * exp(-0.2)) .* rates.μ_a
+    @test all(≈(0.8), rates.κ)                 # `κ` remains the LEAGUE factor
+    @test all(≈(0.2), rates.σ_κ)
+    # μ is still what the Gamma arm measured, and is still what `true_xg_*` reports.
+    @test rates.true_xg_h ≈ rates.μ_h
+    @test rates.true_xg_h != rates.λ_h
+
+    # An unseen club falls back to the league factor, not to 1.0 and not to an error.
+    unknown = DataFrame(
+        match_id = Int[102],
+        home_team = ["promoted"],
+        away_team = ["away"],
+        match_date = [Date(2025, 3, 1)],
+        season_idx = Int[1],
+    )
+    fallback = JGP_PG.extract_parameters(model, unknown, fs, chain)[102]
+    @test fallback.λ_h ≈ 0.8 .* fallback.μ_h
+
+    latents = BayesianFootball.extract_latents(model, chain, df, fs)
+    @test latents isa CountLatents
+    @test BayesianFootball.observation_family(latents) === :poisson
+    @test vec(latents.λ_home) ≈ rates.λ_h
+end

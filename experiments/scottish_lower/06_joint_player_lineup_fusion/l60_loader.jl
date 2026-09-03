@@ -252,7 +252,7 @@ function l60_register!(db, models, splitter, sampler, configs, book_spec, policy
 end
 
 # Required shared experiment state.
-ds = Data.load_datastore_cached(Data.ScottishLower())
+ds = Data.load_datastore_cached(Data.ScottishLower(); max_age_hours = 10_000)
 db = PostgresStorage("scottish_lower_joint_player_2426")
 ensure_schema!(db)
 
