@@ -1,0 +1,66 @@
+policy,family,market_key,selection,tier,tau1,tau2,tau3,trust,active,description
+P0_flat_benchmark,1X2_home,1X2,home,tier1,0.3,0.3,0.0,0.3,true,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P0_flat_benchmark,1X2_draw,1X2,draw,tier2,0.3,0.3,0.0,0.3,true,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P0_flat_benchmark,1X2_away,1X2,away,tier2,0.3,0.3,0.0,0.3,true,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P0_flat_benchmark,O/U 0.5_over_05,OU0.5,over_05,excluded,0.3,0.3,0.0,0.0,false,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P0_flat_benchmark,O/U 0.5_under_05,OU0.5,under_05,excluded,0.3,0.3,0.0,0.0,false,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P0_flat_benchmark,O/U 1.5_over_15,OU1.5,over_15,excluded,0.3,0.3,0.0,0.0,false,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P0_flat_benchmark,O/U 1.5_under_15,OU1.5,under_15,tier3,0.3,0.3,0.0,0.0,false,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P0_flat_benchmark,O/U 2.5_over_25,OU2.5,over_25,excluded,0.3,0.3,0.0,0.0,false,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P0_flat_benchmark,O/U 2.5_under_25,OU2.5,under_25,tier1,0.3,0.3,0.0,0.3,true,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P0_flat_benchmark,O/U 3.5_over_35,OU3.5,over_35,tier3,0.3,0.3,0.0,0.0,false,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P0_flat_benchmark,O/U 3.5_under_35,OU3.5,under_35,excluded,0.3,0.3,0.0,0.0,false,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P0_flat_benchmark,BTTS_btts_yes,BTTS,btts_yes,excluded,0.3,0.3,0.0,0.0,false,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P0_flat_benchmark,BTTS_btts_no,BTTS,btts_no,excluded,0.3,0.3,0.0,0.0,false,"Flat asymmetric core: Home, Draw, Away, Under 2.5 all at tau=0.30; every other direction at 0.00. Reproduces the standing champion (m12 +143.91%, Sharpe 1.516)."
+P1_conservative_tilt,1X2_home,1X2,home,tier1,0.35,0.25,0.0,0.35,true,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P1_conservative_tilt,1X2_draw,1X2,draw,tier2,0.35,0.25,0.0,0.25,true,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P1_conservative_tilt,1X2_away,1X2,away,tier2,0.35,0.25,0.0,0.25,true,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P1_conservative_tilt,O/U 0.5_over_05,OU0.5,over_05,excluded,0.35,0.25,0.0,0.0,false,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P1_conservative_tilt,O/U 0.5_under_05,OU0.5,under_05,excluded,0.35,0.25,0.0,0.0,false,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P1_conservative_tilt,O/U 1.5_over_15,OU1.5,over_15,excluded,0.35,0.25,0.0,0.0,false,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P1_conservative_tilt,O/U 1.5_under_15,OU1.5,under_15,tier3,0.35,0.25,0.0,0.0,false,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P1_conservative_tilt,O/U 2.5_over_25,OU2.5,over_25,excluded,0.35,0.25,0.0,0.0,false,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P1_conservative_tilt,O/U 2.5_under_25,OU2.5,under_25,tier1,0.35,0.25,0.0,0.35,true,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P1_conservative_tilt,O/U 3.5_over_35,OU3.5,over_35,tier3,0.35,0.25,0.0,0.0,false,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P1_conservative_tilt,O/U 3.5_under_35,OU3.5,under_35,excluded,0.35,0.25,0.0,0.0,false,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P1_conservative_tilt,BTTS_btts_yes,BTTS,btts_yes,excluded,0.35,0.25,0.0,0.0,false,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P1_conservative_tilt,BTTS_btts_no,BTTS,btts_no,excluded,0.35,0.25,0.0,0.0,false,"Tier 1 (Under 2.5, Home) at 0.35; Tier 2 (Draw, Away) at 0.25."
+P2_conviction_tilt,1X2_home,1X2,home,tier1,0.4,0.2,0.0,0.4,true,Tier 1 at 0.40; Tier 2 at 0.20.
+P2_conviction_tilt,1X2_draw,1X2,draw,tier2,0.4,0.2,0.0,0.2,true,Tier 1 at 0.40; Tier 2 at 0.20.
+P2_conviction_tilt,1X2_away,1X2,away,tier2,0.4,0.2,0.0,0.2,true,Tier 1 at 0.40; Tier 2 at 0.20.
+P2_conviction_tilt,O/U 0.5_over_05,OU0.5,over_05,excluded,0.4,0.2,0.0,0.0,false,Tier 1 at 0.40; Tier 2 at 0.20.
+P2_conviction_tilt,O/U 0.5_under_05,OU0.5,under_05,excluded,0.4,0.2,0.0,0.0,false,Tier 1 at 0.40; Tier 2 at 0.20.
+P2_conviction_tilt,O/U 1.5_over_15,OU1.5,over_15,excluded,0.4,0.2,0.0,0.0,false,Tier 1 at 0.40; Tier 2 at 0.20.
+P2_conviction_tilt,O/U 1.5_under_15,OU1.5,under_15,tier3,0.4,0.2,0.0,0.0,false,Tier 1 at 0.40; Tier 2 at 0.20.
+P2_conviction_tilt,O/U 2.5_over_25,OU2.5,over_25,excluded,0.4,0.2,0.0,0.0,false,Tier 1 at 0.40; Tier 2 at 0.20.
+P2_conviction_tilt,O/U 2.5_under_25,OU2.5,under_25,tier1,0.4,0.2,0.0,0.4,true,Tier 1 at 0.40; Tier 2 at 0.20.
+P2_conviction_tilt,O/U 3.5_over_35,OU3.5,over_35,tier3,0.4,0.2,0.0,0.0,false,Tier 1 at 0.40; Tier 2 at 0.20.
+P2_conviction_tilt,O/U 3.5_under_35,OU3.5,under_35,excluded,0.4,0.2,0.0,0.0,false,Tier 1 at 0.40; Tier 2 at 0.20.
+P2_conviction_tilt,BTTS_btts_yes,BTTS,btts_yes,excluded,0.4,0.2,0.0,0.0,false,Tier 1 at 0.40; Tier 2 at 0.20.
+P2_conviction_tilt,BTTS_btts_no,BTTS,btts_no,excluded,0.4,0.2,0.0,0.0,false,Tier 1 at 0.40; Tier 2 at 0.20.
+P3_aggressive_tilt,1X2_home,1X2,home,tier1,0.5,0.25,0.0,0.5,true,Tier 1 at 0.50; Tier 2 at 0.25.
+P3_aggressive_tilt,1X2_draw,1X2,draw,tier2,0.5,0.25,0.0,0.25,true,Tier 1 at 0.50; Tier 2 at 0.25.
+P3_aggressive_tilt,1X2_away,1X2,away,tier2,0.5,0.25,0.0,0.25,true,Tier 1 at 0.50; Tier 2 at 0.25.
+P3_aggressive_tilt,O/U 0.5_over_05,OU0.5,over_05,excluded,0.5,0.25,0.0,0.0,false,Tier 1 at 0.50; Tier 2 at 0.25.
+P3_aggressive_tilt,O/U 0.5_under_05,OU0.5,under_05,excluded,0.5,0.25,0.0,0.0,false,Tier 1 at 0.50; Tier 2 at 0.25.
+P3_aggressive_tilt,O/U 1.5_over_15,OU1.5,over_15,excluded,0.5,0.25,0.0,0.0,false,Tier 1 at 0.50; Tier 2 at 0.25.
+P3_aggressive_tilt,O/U 1.5_under_15,OU1.5,under_15,tier3,0.5,0.25,0.0,0.0,false,Tier 1 at 0.50; Tier 2 at 0.25.
+P3_aggressive_tilt,O/U 2.5_over_25,OU2.5,over_25,excluded,0.5,0.25,0.0,0.0,false,Tier 1 at 0.50; Tier 2 at 0.25.
+P3_aggressive_tilt,O/U 2.5_under_25,OU2.5,under_25,tier1,0.5,0.25,0.0,0.5,true,Tier 1 at 0.50; Tier 2 at 0.25.
+P3_aggressive_tilt,O/U 3.5_over_35,OU3.5,over_35,tier3,0.5,0.25,0.0,0.0,false,Tier 1 at 0.50; Tier 2 at 0.25.
+P3_aggressive_tilt,O/U 3.5_under_35,OU3.5,under_35,excluded,0.5,0.25,0.0,0.0,false,Tier 1 at 0.50; Tier 2 at 0.25.
+P3_aggressive_tilt,BTTS_btts_yes,BTTS,btts_yes,excluded,0.5,0.25,0.0,0.0,false,Tier 1 at 0.50; Tier 2 at 0.25.
+P3_aggressive_tilt,BTTS_btts_no,BTTS,btts_no,excluded,0.5,0.25,0.0,0.0,false,Tier 1 at 0.50; Tier 2 at 0.25.
+P4_four_tier_probe,1X2_home,1X2,home,tier1,0.4,0.25,0.05,0.4,true,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
+P4_four_tier_probe,1X2_draw,1X2,draw,tier2,0.4,0.25,0.05,0.25,true,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
+P4_four_tier_probe,1X2_away,1X2,away,tier2,0.4,0.25,0.05,0.25,true,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
+P4_four_tier_probe,O/U 0.5_over_05,OU0.5,over_05,excluded,0.4,0.25,0.05,0.0,false,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
+P4_four_tier_probe,O/U 0.5_under_05,OU0.5,under_05,excluded,0.4,0.25,0.05,0.0,false,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
+P4_four_tier_probe,O/U 1.5_over_15,OU1.5,over_15,excluded,0.4,0.25,0.05,0.0,false,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
+P4_four_tier_probe,O/U 1.5_under_15,OU1.5,under_15,tier3,0.4,0.25,0.05,0.05,true,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
+P4_four_tier_probe,O/U 2.5_over_25,OU2.5,over_25,excluded,0.4,0.25,0.05,0.0,false,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
+P4_four_tier_probe,O/U 2.5_under_25,OU2.5,under_25,tier1,0.4,0.25,0.05,0.4,true,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
+P4_four_tier_probe,O/U 3.5_over_35,OU3.5,over_35,tier3,0.4,0.25,0.05,0.05,true,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
+P4_four_tier_probe,O/U 3.5_under_35,OU3.5,under_35,excluded,0.4,0.25,0.05,0.0,false,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
+P4_four_tier_probe,BTTS_btts_yes,BTTS,btts_yes,excluded,0.4,0.25,0.05,0.0,false,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
+P4_four_tier_probe,BTTS_btts_no,BTTS,btts_no,excluded,0.4,0.25,0.05,0.0,false,"Tier 1 at 0.40; Tier 2 at 0.25; Tier 3 (Under 1.5, Over 3.5) at 0.05."
