@@ -1,0 +1,10 @@
+market_name,market_line,n_rows,n_matches
+1X2,0.0,4588,1530
+BTTS,0.0,1018,509
+CorrectScore,0.0,1693,101
+OverUnder,0.5,1390,982
+OverUnder,1.5,1265,634
+OverUnder,2.5,2282,1141
+OverUnder,3.5,1456,728
+OverUnder,4.5,494,255
+OverUnder,5.5,431,294

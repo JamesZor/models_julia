@@ -32,6 +32,7 @@
 #   experiments/scottish_lower/results/unified_paradigm_comparison.csv
 #   experiments/scottish_lower/results/unified_reliability_curves.csv
 #   experiments/scottish_lower/results/unified_rqr_residuals.csv
+#   experiments/scottish_lower/results/unified_market_coverage.csv
 #   experiments/scottish_lower/UNIFIED_PARADIGM_REPORT.md
 
 using BayesianFootball
@@ -133,10 +134,19 @@ function cmp_enrich_odds(odds::DataFrame, ds::Data.DataStore)
     return enriched
 end
 
+# The full totals ladder, not just the 2.5 line. Each Over/Under line is a separate view of
+# the SAME score grid, so widening the book does not add information — it adds places to
+# express what the model already believes, and the deep lines (0.5, 3.5) are where a count
+# model's tail shape shows up as a price. That makes this book the sharpest test of dimension
+# A there is: a model whose RQR variance is wrong is wrong in the tails specifically, and the
+# 0.5 and 3.5 lines are almost entirely tail mass.
 cmp_book_spec() = BookSpec(
     markets = Data.MarketConfig(Data.AbstractMarket[
         Data.Market1X2(),
+        Data.MarketOverUnder(0.5),
+        Data.MarketOverUnder(1.5),
         Data.MarketOverUnder(2.5),
+        Data.MarketOverUnder(3.5),
         Data.MarketBTTS(),
     ]),
     price = DeArb(),
@@ -155,6 +165,27 @@ cmp_policy_spec() = PolicySpec(
     cap = FixedCap(0.20),
     grouping = DailySlate(),
 )
+
+"The book's markets as prose, read off the spec so the report cannot drift from what ran."
+cmp_market_list(spec::BookSpec) = join(string.(spec.markets.markets), ", ")
+
+"""
+    cmp_market_coverage(odds, spec) -> DataFrame
+
+What the exchange actually quoted, per market line, against what the book asks for.
+
+A `BookSpec` naming six markets does not mean six markets were priced. An Over/Under line the
+Betfair feed never carried simply produces no selections, and the portfolio summary that comes
+back is a three-market result wearing a six-market label. Printing the join makes the
+difference visible instead of leaving it to be inferred from `n_books`.
+"""
+function cmp_market_coverage(odds::DataFrame, spec::BookSpec)
+    counts = combine(groupby(odds, [:market_name, :market_line]),
+                     nrow => :n_rows,
+                     :match_id => (m -> length(unique(m))) => :n_matches)
+    sort!(counts, [:market_name, :market_line])
+    return counts
+end
 
 # ==============================================================================
 # 3. Dimension A — Dunn-Smyth randomized quantile residuals
@@ -400,6 +431,16 @@ function cmp_compare_scottish_experiments()
     policy_spec = cmp_policy_spec()
     println("  Portfolio : FractionalKelly(0.30), SlateDrawdown(23), FixedCap(0.20), " *
             "2% commission, Betfair TWA close")
+    println("  Book      : ", cmp_market_list(book_spec))
+
+    coverage = cmp_market_coverage(bf_odds, book_spec)
+    println("\n  Betfair coverage by market line:")
+    @printf("    %-16s %8s | %9s | %9s\n", "Market", "Line", "Rows", "Matches")
+    for row in eachrow(coverage)
+        @printf("    %-16s %8.1f | %9d | %9d\n",
+                row.market_name, row.market_line, row.n_rows, row.n_matches)
+    end
+    CSV.write(joinpath(mkpath(CMP_OUTPUT_DIR), "unified_market_coverage.csv"), coverage)
 
     storages = Dict{String,PostgresStorage}()
     for candidate in CMP_CANDIDATES
@@ -661,7 +702,7 @@ function cmp_write_report(df::DataFrame, persisted::DataFrame, book_spec, policy
     println(io)
     println(io, "Every row below was therefore re-simulated under one recipe:")
     println(io)
-    println(io, "- **BookSpec** — 1X2, Over/Under 2.5, BTTS; `DeArb` pricing; ",
+    println(io, "- **BookSpec** — ", cmp_market_list(book_spec), "; `DeArb` pricing; ",
             "`KellyLogUtility`; `FractionalKelly(0.30)`; 2% per-bet commission; 0.99 budget.")
     println(io, "- **PolicySpec** — `FlatTrust(1.0)`, `SlateDrawdown(23.0)`, `FixedCap(0.20)`, ",
             "`DailySlate()`.")
@@ -672,6 +713,7 @@ function cmp_write_report(df::DataFrame, persisted::DataFrame, book_spec, policy
             "normality p-values reproduce exactly.")
     println(io)
     cmp_write_fold_caveat(io, df)
+    cmp_write_coverage(io, bf_odds, book_spec)
 
     println(io, "## 1. The bench")
     println(io)
@@ -785,6 +827,7 @@ function cmp_write_report(df::DataFrame, persisted::DataFrame, book_spec, policy
     println(io, "- `results/unified_paradigm_comparison.csv` — one row per model, all three axes")
     println(io, "- `results/unified_reliability_curves.csv` — ten-bin model and Betfair curves")
     println(io, "- `results/unified_rqr_residuals.csv` — every residual, for plotting")
+    println(io, "- `results/unified_market_coverage.csv` — exchange rows per market line")
     nrow(persisted) > 0 &&
         println(io, "- `results/unified_persisted_portfolios.csv` — the historical rows")
 
@@ -792,6 +835,28 @@ function cmp_write_report(df::DataFrame, persisted::DataFrame, book_spec, policy
         write(handle, String(take!(io)))
     end
     return CMP_REPORT_PATH
+end
+
+"""
+    cmp_write_coverage(io, bf_odds, book_spec)
+
+The book asks for six markets; the exchange decides how many it gets. This prints the join so
+a line the feed never carried cannot pass as one that was priced and found no edge.
+"""
+function cmp_write_coverage(io::IO, bf_odds::DataFrame, book_spec::BookSpec)
+    coverage = cmp_market_coverage(bf_odds, book_spec)
+    println(io, "### 0.1 What the exchange actually quoted")
+    println(io)
+    println(io, "The book names ", length(book_spec.markets.markets),
+            " markets. A line the Betfair feed never carried produces no selections and no ",
+            "bets, so the count below is the real width of dimension C.")
+    println(io)
+    print(io, cmp_md_table(
+        ["Market", "Line", "Closing rows", "Matches"],
+        [[String(r.market_name), @sprintf("%.1f", r.market_line),
+          string(r.n_rows), string(r.n_matches)] for r in eachrow(coverage)]))
+    println(io)
+    return nothing
 end
 
 """

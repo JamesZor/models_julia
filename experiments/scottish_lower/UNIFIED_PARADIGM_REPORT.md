@@ -1,6 +1,6 @@
 # Scottish Lower — Unified Cross-Paradigm Report
 
-Generated 2026-09-03 10:21 by `experiments/scottish_lower/compare_scottish_experiments.jl`.
+Generated 2026-09-03 10:39 by `experiments/scottish_lower/compare_scottish_experiments.jl`.
 
 Four model generations, champion and control each, on three axes: the randomized quantile residuals of the goals marginal, the GLM calibration shift against the Betfair close, and fractional-Kelly portfolio performance.
 
@@ -10,13 +10,29 @@ Dimension C is **recomputed**, not read from `portfolio_runs`. Experiments 01 an
 
 Every row below was therefore re-simulated under one recipe:
 
-- **BookSpec** — 1X2, Over/Under 2.5, BTTS; `DeArb` pricing; `KellyLogUtility`; `FractionalKelly(0.30)`; 2% per-bet commission; 0.99 budget.
+- **BookSpec** — Market[1X2], Market[O/U 0.5], Market[O/U 1.5], Market[O/U 2.5], Market[O/U 3.5], Market[BTTS]; `DeArb` pricing; `KellyLogUtility`; `FractionalKelly(0.30)`; 2% per-bet commission; 0.99 budget.
 - **PolicySpec** — `FlatTrust(1.0)`, `SlateDrawdown(23.0)`, `FixedCap(0.20)`, `DailySlate()`.
 - **Prices** — Betfair exchange close, time-weighted over [−20 min, kickoff]: 14617 rows across 1627 matches.
 
 The RQR draw is seeded (`CMP_SEED = 20260903`) so the moments and normality p-values reproduce exactly.
 
 > **The bench is not fold-uniform.** `m00_negbin_baseline` (42 folds, 749 OOS fixtures) has been extended into a later season, against 40 folds elsewhere. That row is therefore scored over a slightly wider window; the `N` column in §2 and `OOS` in §1 show it. The difference is small but it is not nothing, so the row is not exactly comparable with the rest.
+
+### 0.1 What the exchange actually quoted
+
+The book names 6 markets. A line the Betfair feed never carried produces no selections and no bets, so the count below is the real width of dimension C.
+
+| Market | Line | Closing rows | Matches |
+| :--- | :--- | :--- | :--- |
+| 1X2 | 0.0 | 4588 | 1530 |
+| BTTS | 0.0 | 1018 | 509 |
+| CorrectScore | 0.0 | 1693 | 101 |
+| OverUnder | 0.5 | 1390 | 982 |
+| OverUnder | 1.5 | 1265 | 634 |
+| OverUnder | 2.5 | 2282 | 1141 |
+| OverUnder | 3.5 | 1456 | 728 |
+| OverUnder | 4.5 | 494 | 255 |
+| OverUnder | 5.5 | 431 | 294 |
 
 ## 1. The bench
 
@@ -86,16 +102,16 @@ Ten-bin reliability curves for every model and for the closing line are in `resu
 
 | Gen | Model | Bets | Return % | Flat ROI % | 1X2 ROI % | Max DD % | Sharpe (ann) | Win rate % |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| 1 | `m00_baseline` | 1563 | 182.00 | 9.50 | 10.63 | -30.39 | 1.2295 | 36.02 |
-| 1 | `m05_production_wealth` | 1531 | 164.95 | 8.97 | 10.30 | -32.39 | 1.0943 | 36.05 |
-| 4 | `m13_joint_composite` | 1468 | 140.15 | 11.58 | 12.02 | -21.05 | 1.4531 | 34.60 |
-| 4 | `m12_joint_hybrid_synergy` | 1462 | 136.61 | 11.48 | 11.95 | -20.23 | 1.4159 | 34.47 |
-| 2 | `m05_negbin_production_wealth` | 1488 | 133.98 | 11.05 | 13.22 | -22.82 | 1.3121 | 33.87 |
-| 3 | `m05_joint_production_wealth` | 1461 | 132.15 | 11.70 | 12.28 | -19.12 | 1.4877 | 34.57 |
-| 3 | `m00_joint_baseline` | 1458 | 113.53 | 10.49 | 10.71 | -19.02 | 1.3253 | 34.16 |
-| 2 | `m00_negbin_baseline` | 1484 | 98.69 | 8.98 | 10.59 | -23.85 | 1.0485 | 33.29 |
+| 1 | `m00_baseline` | 2027 | 161.91 | 8.32 | 10.86 | -32.02 | 1.1964 | 36.85 |
+| 1 | `m05_production_wealth` | 1966 | 148.26 | 7.85 | 10.09 | -30.12 | 1.0788 | 38.96 |
+| 4 | `m13_joint_composite` | 1893 | 127.86 | 9.50 | 12.37 | -20.84 | 1.3753 | 36.56 |
+| 3 | `m05_joint_production_wealth` | 1903 | 124.07 | 9.68 | 12.43 | -20.46 | 1.4287 | 36.15 |
+| 4 | `m12_joint_hybrid_synergy` | 1894 | 123.94 | 9.37 | 12.28 | -20.97 | 1.3332 | 36.06 |
+| 2 | `m05_negbin_production_wealth` | 1975 | 106.41 | 8.63 | 13.28 | -25.79 | 1.1225 | 32.91 |
+| 3 | `m00_joint_baseline` | 1910 | 106.01 | 8.66 | 10.96 | -19.96 | 1.2704 | 36.07 |
+| 2 | `m00_negbin_baseline` | 1987 | 76.59 | 6.88 | 10.66 | -27.79 | 0.8752 | 32.46 |
 
-Best return: **`m00_baseline`** (Gen 1, 182.00%, Sharpe 1.2295).
+Best return: **`m00_baseline`** (Gen 1, 161.91%, Sharpe 1.1964).
 
 ### 4.1 Persisted `portfolio_runs`, for provenance only
 
@@ -121,15 +137,15 @@ These are the rows each experiment wrote at its own time, under its own price so
 | 1 | `m13_joint_composite` | `m05_joint_production_wealth` | `m00_baseline` |
 | 2 | `m05_joint_production_wealth` | `m13_joint_composite` | `m05_production_wealth` |
 | 3 | `m12_joint_hybrid_synergy` | `m12_joint_hybrid_synergy` | `m13_joint_composite` |
-| 4 | `m00_negbin_baseline` | `m00_joint_baseline` | `m12_joint_hybrid_synergy` |
-| 5 | `m00_joint_baseline` | `m05_negbin_production_wealth` | `m05_negbin_production_wealth` |
-| 6 | `m05_negbin_production_wealth` | `m00_negbin_baseline` | `m05_joint_production_wealth` |
+| 4 | `m00_negbin_baseline` | `m00_joint_baseline` | `m05_joint_production_wealth` |
+| 5 | `m00_joint_baseline` | `m05_negbin_production_wealth` | `m12_joint_hybrid_synergy` |
+| 6 | `m05_negbin_production_wealth` | `m00_negbin_baseline` | `m05_negbin_production_wealth` |
 | 7 | `m00_baseline` | `m00_baseline` | `m00_joint_baseline` |
 | 8 | `m05_production_wealth` | `m05_production_wealth` | `m00_negbin_baseline` |
 
 **The dispersion winner and the money winner are different models** — `m13_joint_composite` has the best-specified count distribution, `m00_baseline` makes the most money. A correctly specified likelihood is not the same claim as an exploitable edge at the closing line.
 
-Across these 8 models, log loss correlates with total return at 0.6794 and |RQR variance − 1| at 0.6433. With 8 points neither is an estimate to lean on; they are reported so the table is not read as if it established one.
+Across these 8 models, log loss correlates with total return at 0.5749 and |RQR variance − 1| at 0.4971. With 8 points neither is an estimate to lean on; they are reported so the table is not read as if it established one.
 
 ## 6. Reproducing this
 
@@ -142,4 +158,5 @@ No MCMC is launched; every fit is loaded from PostgreSQL. Artefacts:
 - `results/unified_paradigm_comparison.csv` — one row per model, all three axes
 - `results/unified_reliability_curves.csv` — ten-bin model and Betfair curves
 - `results/unified_rqr_residuals.csv` — every residual, for plotting
+- `results/unified_market_coverage.csv` — exchange rows per market line
 - `results/unified_persisted_portfolios.csv` — the historical rows
