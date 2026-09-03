@@ -1017,6 +1017,10 @@ mutable struct ReplayState
     # CLV half is read live, because executing changes it).
     form_cache::Dict{Int,Any}
     scorecard_cache::Dict{Tuple{String,String},Any}
+    # Proxy-xG observations for the whole store, memoised per match day. Keyed on the DAY and not
+    # on the store because the cell table is fitted on shots from matches strictly before it --
+    # move the scrubber to another Saturday and the fit boundary moves with it.
+    pxg_cache::Dict{Date,Any}
 end
 
 function ReplayState(ds, conn, card::ReplayCard; system::PF.PortfolioSystem,
@@ -1031,7 +1035,7 @@ function ReplayState(ds, conn, card::ReplayCard; system::PF.PortfolioSystem,
                        ReentrantLock(), nothing, false, 0.0, 0,
                        Dict{Tuple{String,UInt64},Dict{Int,Dict{MD.SelectionKey,Float64}}}(),
                        Dict{Tuple{Int,MD.SelectionKey},StakingOverride}(), nothing, T_START, "",
-                       Dict{Int,Any}(), Dict{Tuple{String,String},Any}())
+                       Dict{Int,Any}(), Dict{Tuple{String,String},Any}(), Dict{Date,Any}())
 end
 
 active_slot(st::ReplayState) =
@@ -2915,14 +2919,25 @@ end
 #                                            starts, so a missing regular is visible BEFORE the
 #                                            model's lineup pillar prices it rather than after.
 #
-# WHAT IS NOT HERE, AND WHY. There is no xG. `sofascore.match_statistics` holds ZERO rows for
-# tournaments 56 and 57 -- Scottish League One and Two are not statted by that provider, which is
-# the same fact that motivates `current_development/bbc_xg_proxy/` -- so `ds.statistics` for this
-# segment is an empty frame. A widget that showed an xG column here would be showing a number
-# nothing produced. What DOES exist for every match is the BBC shot count (`ds.bbc`: shots and
-# shots on target per side, 2,007 matches over 20/21-26/27), and that is what the form badge
-# carries instead, labelled as what it is. `xg_available` is reported per row so a segment that
-# DOES have xG -- the same code over a statted tournament -- lights it up with no edit here.
+# WHERE THE xG COMES FROM, BECAUSE IT IS NOT THE OBVIOUS PLACE. `sofascore.match_statistics` holds
+# ZERO rows for tournaments 56 and 57 -- Scottish League One and Two are not statted by that
+# provider -- so `ds.statistics` for this segment is an empty frame and there is no vendor xG to
+# read. What this repository has instead is `Features.pxg_match_observations` (src/features/pxg.jl):
+# a PROXY xG built from BBC live-text commentary through the zonal shot model in
+# `plus_minus/shot_parser.jl`, validated against SofaScore xG at r = 0.817 on the tiers that have
+# both. It is the same measurement the `PxGFeature` form covariate and the joint model's Gamma arm
+# consume, so the number on this panel is the number the models are fed rather than a second
+# quantity invented for display.
+#
+# THE LADDER STOPS AT RUNG TWO, DELIBERATELY. `fallback = :shots` accepts commentary (rung 1) and
+# BBC match-page shot counts times the league's own pxG-per-shot (rung 2). Rung 3 is GOALS, and it
+# is refused here for the same reason `MatchProxyXGFeature` refuses it: a column headed xG that
+# silently contains the goals already printed next to it is worse than an empty column. Each row
+# reports which rung produced it, so "commentary" and "shot_counts" are distinguishable on screen.
+#
+# Live text starts in 23/24; earlier matches fall to rung 2, and a match with neither is reported
+# with no xG rather than with a fabricated one. `xg_available` is per side and per window, so a
+# statted tournament -- where the vendor xG is preferred over the proxy -- lights up with no edit.
 #
 # THE FILTRATION CONTRACT APPLIES TO THIS PANEL TOO, and it is the reason `before` is an argument
 # rather than `today()`. Form is read from matches STRICTLY BEFORE the replayed match day, and
@@ -2951,15 +2966,31 @@ function _bbc_shots(ds, match_id::Integer)
 end
 
 """
-    _xg_for_match(ds, match_id) -> Union{Nothing,NamedTuple}
+    _xg_for_match(ds, match_id; pxg) -> Union{Nothing,NamedTuple}
 
-Sofascore expected goals for one match, or `nothing` where the provider has none.
+Expected goals for one match: the vendor's where it exists, the BBC-commentary PROXY otherwise.
 
-Returns `nothing` for every Scottish League One/Two fixture, and that is the correct answer
-rather than a gap to be filled: see the section note. The lookup is written generically so the
-same panel over a statted tournament reports real xG with no change here.
+The order is not arbitrary. `sofascore.match_statistics` is a measured xG from a shot-level model
+with the shot locations; `pxg_match_observations` is a zonal reconstruction from match commentary
+that correlates with it at r = 0.817. Where both exist the measured one wins; for Scottish League
+One and Two only the proxy exists, and it is reported WITH its rung (`commentary` or
+`shot_counts`) so the two are never mistaken for each other on screen.
 """
-function _xg_for_match(ds, match_id::Integer)
+function _xg_for_match(ds, match_id::Integer; pxg = nothing)
+    v = _sofascore_xg(ds, match_id)
+    v === nothing || return v
+    pxg === nothing && return nothing
+    o = get(pxg, Int(match_id), nothing)
+    o === nothing && return nothing
+    # Rung 3 is refused upstream (`fallback = :shots`), but a table built elsewhere could carry
+    # it, and a goals-derived "xG" printed beside the goals is the one reading this panel must
+    # never produce.
+    o.source === :goals && return nothing
+    return (home = Float64(o.h), away = Float64(o.a), source = String(o.source))
+end
+
+"Vendor expected goals for one match, or `nothing`. Empty for tournaments 56 and 57."
+function _sofascore_xg(ds, match_id::Integer)
     (ds === nothing || !hasproperty(ds, :statistics) || nrow(ds.statistics) == 0) && return nothing
     stats = ds.statistics
     hasproperty(stats, :stat_key) || return nothing
@@ -2967,9 +2998,46 @@ function _xg_for_match(ds, match_id::Integer)
         stats.match_id[i] == Int(match_id) || continue
         String(stats.stat_key[i]) == "expectedGoals" || continue
         (ismissing(stats.home_value[i]) || ismissing(stats.away_value[i])) && continue
-        return (home = Float64(stats.home_value[i]), away = Float64(stats.away_value[i]))
+        return (home = Float64(stats.home_value[i]), away = Float64(stats.away_value[i]),
+                source = "sofascore")
     end
     return nothing
+end
+
+"""
+    replay_pxg(st) -> Union{Nothing,Dict{Int,NamedTuple}}
+
+Proxy-xG observations for every match in the store, fitted only on shots from before the replayed
+day, memoised per day.
+
+`fit_ids` is not decoration. The shot-xG cell table carries no team or player identity -- it is
+`P(goal | zone, body part, context)` -- but it is still estimated from shots, and estimating it
+from shots taken on the match day being replayed is a small leak of exactly the kind this console
+closes structurally everywhere else. Restricting it costs one extra argument and measurably moves
+the numbers (0.615 vs 0.613 on a sampled fixture), so it is done rather than argued about.
+
+`nothing` when there is no store, or when the pxG extractor cannot run -- the form panel then
+reports no xG rather than failing.
+"""
+function replay_pxg(st::ReplayState)
+    ds = st.ds
+    ds === nothing && return nothing
+    return get!(st.pxg_cache, st.card.day) do
+        try
+            ids = Set{Int}()
+            if hasproperty(ds, :matches)
+                for i in 1:nrow(ds.matches)
+                    ds.matches.match_date[i] < st.card.day && push!(ids, Int(ds.matches.match_id[i]))
+                end
+            end
+            # `:shots` and never `:goals` -- see the section header. Rung 3 would put the goal
+            # count in the xG column, next to the goal count.
+            FE.pxg_match_observations(ds, FE.PxGFeature(fallback = :shots);
+                                      fit_ids = isempty(ids) ? nothing : ids)
+        catch
+            nothing
+        end
+    end
 end
 
 """
@@ -2982,12 +3050,13 @@ the leftmost as "most recent" -- and the aggregate is computed over exactly the 
 a team with three matches played reports a three-match form line rather than a five-match one
 padded with silence.
 """
-function team_form(ds, team::AbstractString, before::Date; n::Int = 5)
+function team_form(ds, team::AbstractString, before::Date; n::Int = 5, pxg = nothing)
     rows = NamedTuple[]
     (ds === nothing || !hasproperty(ds, :matches)) &&
         return (matches = rows, n = 0, points = 0, ppg = 0.0, w = 0, d = 0, l = 0,
                 gf = 0, ga = 0, gd = 0, sot_for = nothing, sot_against = nothing,
-                xg_for = nothing, xg_against = nothing, xg_available = false)
+                xg_for = nothing, xg_against = nothing, xg_available = false,
+                xg_source = nothing)
     m = ds.matches
     order = Int[]
     for i in 1:nrow(m)
@@ -3005,7 +3074,7 @@ function team_form(ds, team::AbstractString, before::Date; n::Int = 5)
         ga = Int(home ? m.away_score[i] : m.home_score[i])
         res = gf > ga ? "W" : gf == ga ? "D" : "L"
         sh = _bbc_shots(ds, m.match_id[i])
-        xg = _xg_for_match(ds, m.match_id[i])
+        xg = _xg_for_match(ds, m.match_id[i]; pxg = pxg)
         push!(rows, (
             match_id = Int(m.match_id[i]),
             date = string(m.match_date[i]),
@@ -3020,8 +3089,9 @@ function team_form(ds, team::AbstractString, before::Date; n::Int = 5)
             shots_against = sh === nothing ? nothing : (home ? sh.shots_a : sh.shots_h),
             sot_for = sh === nothing ? nothing : (home ? sh.sot_h : sh.sot_a),
             sot_against = sh === nothing ? nothing : (home ? sh.sot_a : sh.sot_h),
-            xg_for = xg === nothing ? nothing : (home ? xg.home : xg.away),
-            xg_against = xg === nothing ? nothing : (home ? xg.away : xg.home),
+            xg_for = xg === nothing ? nothing : round(home ? xg.home : xg.away, digits = 2),
+            xg_against = xg === nothing ? nothing : round(home ? xg.away : xg.home, digits = 2),
+            xg_source = xg === nothing ? nothing : xg.source,
         ))
     end
 
@@ -3043,6 +3113,12 @@ function team_form(ds, team::AbstractString, before::Date; n::Int = 5)
         sot_for = _sum(:sot_for), sot_against = _sum(:sot_against),
         xg_for = _sum(:xg_for), xg_against = _sum(:xg_against),
         xg_available = any(r -> r.xg_for !== nothing, rows),
+        # The window's rungs, joined: "commentary" on a modern window, "commentary+shot_counts"
+        # on one that reaches back past the live-text era. Printed rather than summarised away,
+        # because the two are not the same measurement.
+        xg_source = let srcs = unique(String[r.xg_source for r in rows if r.xg_source !== nothing])
+            isempty(srcs) ? nothing : join(sort(srcs), "+")
+        end,
     )
 end
 
@@ -3176,6 +3252,31 @@ function lineup_delta(announced::Union{Nothing,Vector{MD.Player}}, rates::NamedT
 end
 
 """
+    _xg_note(form) -> String
+
+What the xG column actually contains, in the words the panel prints.
+
+Three states, and they are genuinely different claims: the vendor measured it, this repository
+reconstructed it from commentary, or nothing produced it. The middle one is the usual answer for
+Scottish League One and Two and is the one most likely to be misread, so it names the model, the
+source and the correlation rather than just the word "proxy".
+"""
+function _xg_note(form)
+    srcs = String[s for s in (form.home.xg_source, form.away.xg_source) if s !== nothing]
+    isempty(srcs) && return "no expected-goals source covers these fixtures -- neither " *
+        "`sofascore.match_statistics` nor BBC commentary produced a measurement, so the form " *
+        "line carries goals and shots on target only."
+    all(s -> s == "sofascore", srcs) && return ""
+    return "xG here is the repository's PROXY (`Features.pxg_match_observations`), not a vendor " *
+        "figure: `sofascore.match_statistics` holds no rows for Scottish League One or Two. It " *
+        "is the zonal shot model in `plus_minus/shot_parser.jl` run over BBC live-text " *
+        "commentary, which correlates with SofaScore xG at r = 0.817 on the tiers that have " *
+        "both, and it is the same measurement the pxG form covariate and the joint model's " *
+        "Gamma arm consume. Rungs used: " * join(sort(unique(srcs)), ", ") *
+        " (`shot_counts` = shots x the league pxG-per-shot, for matches before live text)."
+end
+
+"""
     fixture_stats(st, match_id; n_recent, threshold) -> NamedTuple
 
 The Team Form & Lineup Delta widget's whole payload for one fixture, at the replay's current
@@ -3204,9 +3305,10 @@ function fixture_stats(st::ReplayState, match_id::Integer; n_recent::Int = 5,
             end
         end
 
+        pxg = replay_pxg(st)
         form = get!(st.form_cache, Int(f.m_id)) do
-            (home = team_form(ds, f.home, before; n = n_recent),
-             away = team_form(ds, f.away, before; n = n_recent))
+            (home = team_form(ds, f.home, before; n = n_recent, pxg = pxg),
+             away = team_form(ds, f.away, before; n = n_recent, pxg = pxg))
         end
 
         lu = MD.lineup(st.card.lineups, f, as_of)
@@ -3225,12 +3327,10 @@ function fixture_stats(st::ReplayState, match_id::Integer; n_recent::Int = 5,
             t = st.clock.t,
             as_of = string(as_of),
             n_recent = n_recent,
-            # Stated on the payload rather than only in a docstring: this segment has no xG and
-            # the panel must say why, not leave an empty column the reader fills in themselves.
-            xg_note = (form.home.xg_available || form.away.xg_available) ? "" :
-                "no expected-goals source covers this tournament -- `sofascore.match_statistics` " *
-                "holds no rows for Scottish League One or Two, so the form line carries BBC " *
-                "shots and shots on target instead of xG.",
+            # Which xG this is, stated on the payload rather than only in a docstring. A column
+            # headed xG that is really a commentary reconstruction must say so on screen; so must
+            # an empty one.
+            xg_note = _xg_note(form),
             form = (home = form.home, away = form.away),
             lineup = (
                 available = lu !== nothing,

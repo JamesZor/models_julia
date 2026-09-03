@@ -1201,10 +1201,11 @@ end
     @test late.lineup.home.basis_matches == 0
     @test late.form.home.n == 0
     @test isempty(late.form.home.matches)
-    # Scottish League One and Two are not statted for xG, and the panel says which number it is
-    # showing instead rather than leaving an empty column.
+    # No store behind this state, so neither the vendor nor the commentary proxy produced a
+    # measurement -- and the panel says that rather than leaving an empty column.
     @test !isempty(late.xg_note)
-    @test occursin("shots", late.xg_note)
+    @test occursin("no expected-goals source", late.xg_note)
+    @test late.form.home.xg_source === nothing
 
     bad = _pure_state()
     @test_throws ErrorException fixture_stats(bad, 999)
@@ -1244,7 +1245,35 @@ end
     @test [m.result for m in f.matches] == ["L", "D", "W"]
     @test f.w == 1 && f.d == 1 && f.l == 1 && f.points == 4
     @test f.gf == 3 && f.ga == 4                    # 1+0+2 for, 3+0+1 against
-    @test f.xg_available == false && f.xg_for === nothing
+    @test f.xg_available == false && f.xg_for === nothing && f.xg_source === nothing
+
+    # --- the proxy-xG route ------------------------------------------------------------------
+    # Scottish League One and Two carry no vendor xG at all, so the form panel's xG is
+    # `Features.pxg_match_observations` -- the BBC-commentary zonal shot model. It is handed in
+    # rather than looked up so the wiring is testable without a store, and so the panel and the
+    # models are demonstrably reading the same table.
+    pxg = Dict(1 => (h = 1.9, a = 0.4, source = :commentary),
+               2 => (h = 0.7, a = 1.1, source = :shot_counts),
+               3 => (h = 0.8, a = 2.6, source = :commentary),
+               4 => (h = 9.9, a = 9.9, source = :commentary))   # the replayed day: never read
+    p = team_form(ds, "alpha", Date(2026, 9, 5); n = 5, pxg = pxg)
+    @test p.xg_available == true
+    @test [m.xg_for for m in p.matches] == [0.8, 1.1, 1.9]       # newest first, alpha's side
+    @test [m.xg_against for m in p.matches] == [2.6, 0.7, 0.4]
+    @test [m.xg_source for m in p.matches] == ["commentary", "shot_counts", "commentary"]
+    @test p.xg_for ≈ 3.8 && p.xg_against ≈ 3.7
+    @test p.xg_source == "commentary+shot_counts"                # both rungs, named not merged
+    # Match 4 IS the fixture being replayed. Its proxy value is in the table and must not appear.
+    @test all(m -> m.match_id != 4, p.matches)
+    @test p.xg_for < 9.0
+
+    # The goals rung is refused: an xG column that silently contains the goals printed beside it
+    # is worse than an empty one, which is the same refusal `MatchProxyXGFeature` makes.
+    goalsy = Dict(1 => (h = 2.0, a = 1.0, source = :goals),
+                  2 => (h = 0.0, a = 0.0, source = :goals),
+                  3 => (h = 1.0, a = 3.0, source = :goals))
+    g = team_form(ds, "alpha", Date(2026, 9, 5); n = 5, pxg = goalsy)
+    @test g.xg_available == false && g.xg_source === nothing
 
     # ...and pulling the boundary back drops the matches after it, which is the whole property.
     @test team_form(ds, "alpha", Date(2026, 8, 8); n = 5).n == 1

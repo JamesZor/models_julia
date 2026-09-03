@@ -102,12 +102,15 @@
 
   /* ── FORM BADGES ───────────────────────────────────────────────────────────── */
   .badge{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;
-         width:34px;padding:2px 0;border-radius:3px;border:1px solid var(--line);}
+         width:50px;padding:2px 0;border-radius:3px;border:1px solid var(--line);line-height:1.15;}
   .badge.W{background:var(--accent-dim);border-color:#1f5133;color:var(--accent);}
   .badge.D{background:#1d232e;color:var(--dim);}
   .badge.L{background:#3a1d1d;border-color:#5b2626;color:var(--bad);}
   .badge b{font-size:12px;line-height:1.1;}
   .badge i{font-style:normal;font-size:9px;opacity:.8;}
+  /* The pxG line sits under the scoreline and must not widen the badge: two two-decimal
+     numbers and a dash at 8px fit 50px, which is why the badge is 50 and not 34. */
+  .badge i+i{font-size:8px;opacity:1;}
 
   /* ── SCORECARD TILES ───────────────────────────────────────────────────────── */
   .tile{background:#0e1219;border:1px solid var(--line);border-radius:3px;padding:6px 8px;}
@@ -808,8 +811,16 @@
                   <template x-for="(m, i) in stats.form[side].matches" :key="i">
                     <span class="badge" :class="m.result"
                           :title="m.date + '  ' + m.venue + ' v ' + m.opponent + '  ' + m.score
-                                  + (m.sot_for===null ? '' : '  · SoT ' + m.sot_for + '–' + m.sot_against)">
+                                  + (m.sot_for===null ? '' : '  · SoT ' + m.sot_for + '–' + m.sot_against)
+                                  + (m.xg_for===null ? ''
+                                     : '  · xG ' + m.xg_for + '–' + m.xg_against
+                                       + ' [' + m.xg_source + ']')">
                       <b x-text="m.result"></b><i x-text="m.score"></i>
+                      <!-- The pxG differential, which is the reading the scoreline hides: a 1-0
+                           off 0.4 xG against 1.9 is a different match from a 1-0 off 2.2. -->
+                      <i x-show="m.xg_for!==null"
+                         :class="m.xg_for>=m.xg_against?'text-[var(--accent)]':'text-[var(--bad)]'"
+                         x-text="m.xg_for + '–' + m.xg_against"></i>
                     </span>
                   </template>
                   <span class="text-[var(--dim)] self-center ml-1"
@@ -825,7 +836,11 @@
                   <span x-show="stats.form[side].sot_for!==null"
                         x-text="'SoT ' + stats.form[side].sot_for + '–' + stats.form[side].sot_against"></span>
                   <span x-show="stats.form[side].xg_for!==null"
-                        x-text="'xG ' + stats.form[side].xg_for + '–' + stats.form[side].xg_against"></span>
+                        :class="stats.form[side].xg_source==='sofascore' ? '' : 'text-[var(--warn)]'"
+                        :title="stats.form[side].xg_source==='sofascore' ? 'vendor xG'
+                                : 'BBC-commentary proxy xG (' + stats.form[side].xg_source + ')'"
+                        x-text="(stats.form[side].xg_source==='sofascore' ? 'xG ' : 'pxG ')
+                                + stats.form[side].xg_for + '–' + stats.form[side].xg_against"></span>
                 </div>
 
                 <!-- LINEUP REGULARITY -->
