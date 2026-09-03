@@ -1,0 +1,5 @@
+experiment,model,run_uuid,n_odds_rows,n_priced_fixtures,n_matched,n_scored,n_unpriced,n_no_market,n_no_outcome,duplicate_keys,mismatched_ids,passed
+scottish_lower_joint_2426,m00_joint_baseline,2c6e859c-29e7-4ae7-aa0a-e88343ba7672,14617,710,4409,4390,10208,0,19,0,0,true
+scottish_lower_joint_2426,m05_joint_production_wealth,5eff755c-3591-48d1-a2cc-5fc2744ddf88,14617,710,4409,4390,10208,0,19,0,0,true
+scottish_lower_joint_player_2426,m12_joint_hybrid_synergy,132df5c2-c742-4e95-8693-3aeb2b2cbaef,14617,710,4409,4390,10208,0,19,0,0,true
+scottish_lower_joint_player_2426,m13_joint_composite,5474e824-8c9d-4613-8e39-841426c3f80f,14617,710,4409,4390,10208,0,19,0,0,true

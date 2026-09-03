@@ -1,0 +1,5 @@
+policy,core_trust,fringe_trust,state_dependent,description
+P1_status_quo,0.3,0.3,false,FlatTrust(0.30) on every selection
+P2_hard_pruning,0.3,0.0,false,SelectionTrust: 0.30 on 1X2/O-U 2.5 and 0.00 on fringe lines
+P3_damped_tail,0.3,0.05,false,SelectionTrust: 0.30 on 1X2/O-U 2.5 and 0.05 on fringe lines
+P4_drawdown_adaptive,0.3,0.3,true,Flat 0.30 trust multiplied by 1.00/0.75/0.50/0.25 at 0/5/10/15% opening drawdown

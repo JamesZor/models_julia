@@ -20,6 +20,7 @@ evaluation, portfolio construction and match-day execution, in Julia.
 * **MatchDay live + replay consoles** — [`current_development/match_day_inference/README.md`](current_development/match_day_inference/README.md)
 * **Tmux subagent & REPL control** — [`docs/setup/agy_tmux_agent_and_repl_control_guide.md`](docs/setup/agy_tmux_agent_and_repl_control_guide.md)
 * **Remote execution & tmux protocol** — [`docs/setup/agy_remote_execution_guide.md`](docs/setup/agy_remote_execution_guide.md)
+* **Portfolio trust & market capacity findings** — [`eda/README.md`](eda/README.md) — Knapsack shadow price, Jensen tail distortion, directional Under 2.5 alpha, and multi-tier conviction ratio law.
 
 ---
 
