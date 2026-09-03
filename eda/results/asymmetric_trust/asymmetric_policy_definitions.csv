@@ -1,0 +1,66 @@
+policy,family,market_key,selection,trust,active,data_selected,description
+P_baseline,1X2_home,1X2,home,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_baseline,1X2_draw,1X2,draw,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_baseline,1X2_away,1X2,away,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_baseline,O/U 0.5_over_05,OU0.5,over_05,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_baseline,O/U 0.5_under_05,OU0.5,under_05,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_baseline,O/U 1.5_over_15,OU1.5,over_15,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_baseline,O/U 1.5_under_15,OU1.5,under_15,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_baseline,O/U 2.5_over_25,OU2.5,over_25,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_baseline,O/U 2.5_under_25,OU2.5,under_25,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_baseline,O/U 3.5_over_35,OU3.5,over_35,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_baseline,O/U 3.5_under_35,OU3.5,under_35,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_baseline,BTTS_btts_yes,BTTS,btts_yes,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_baseline,BTTS_btts_no,BTTS,btts_no,0.3,true,false,"all six markets, symmetric 0.30 trust"
+P_symmetric_core,1X2_home,1X2,home,0.3,true,false,1X2 and both O/U 2.5 directions
+P_symmetric_core,1X2_draw,1X2,draw,0.3,true,false,1X2 and both O/U 2.5 directions
+P_symmetric_core,1X2_away,1X2,away,0.3,true,false,1X2 and both O/U 2.5 directions
+P_symmetric_core,O/U 0.5_over_05,OU0.5,over_05,0.0,false,false,1X2 and both O/U 2.5 directions
+P_symmetric_core,O/U 0.5_under_05,OU0.5,under_05,0.0,false,false,1X2 and both O/U 2.5 directions
+P_symmetric_core,O/U 1.5_over_15,OU1.5,over_15,0.0,false,false,1X2 and both O/U 2.5 directions
+P_symmetric_core,O/U 1.5_under_15,OU1.5,under_15,0.0,false,false,1X2 and both O/U 2.5 directions
+P_symmetric_core,O/U 2.5_over_25,OU2.5,over_25,0.3,true,false,1X2 and both O/U 2.5 directions
+P_symmetric_core,O/U 2.5_under_25,OU2.5,under_25,0.3,true,false,1X2 and both O/U 2.5 directions
+P_symmetric_core,O/U 3.5_over_35,OU3.5,over_35,0.0,false,false,1X2 and both O/U 2.5 directions
+P_symmetric_core,O/U 3.5_under_35,OU3.5,under_35,0.0,false,false,1X2 and both O/U 2.5 directions
+P_symmetric_core,BTTS_btts_yes,BTTS,btts_yes,0.0,false,false,1X2 and both O/U 2.5 directions
+P_symmetric_core,BTTS_btts_no,BTTS,btts_no,0.0,false,false,1X2 and both O/U 2.5 directions
+P_asymmetric_core,1X2_home,1X2,home,0.3,true,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_asymmetric_core,1X2_draw,1X2,draw,0.3,true,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_asymmetric_core,1X2_away,1X2,away,0.3,true,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_asymmetric_core,O/U 0.5_over_05,OU0.5,over_05,0.0,false,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_asymmetric_core,O/U 0.5_under_05,OU0.5,under_05,0.0,false,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_asymmetric_core,O/U 1.5_over_15,OU1.5,over_15,0.0,false,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_asymmetric_core,O/U 1.5_under_15,OU1.5,under_15,0.0,false,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_asymmetric_core,O/U 2.5_over_25,OU2.5,over_25,0.0,false,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_asymmetric_core,O/U 2.5_under_25,OU2.5,under_25,0.3,true,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_asymmetric_core,O/U 3.5_over_35,OU3.5,over_35,0.0,false,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_asymmetric_core,O/U 3.5_under_35,OU3.5,under_35,0.0,false,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_asymmetric_core,BTTS_btts_yes,BTTS,btts_yes,0.0,false,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_asymmetric_core,BTTS_btts_no,BTTS,btts_no,0.0,false,false,1X2 plus Under 2.5; Over 2.5 pruned
+P_under_expansion,1X2_home,1X2,home,0.3,true,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_under_expansion,1X2_draw,1X2,draw,0.3,true,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_under_expansion,1X2_away,1X2,away,0.3,true,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_under_expansion,O/U 0.5_over_05,OU0.5,over_05,0.0,false,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_under_expansion,O/U 0.5_under_05,OU0.5,under_05,0.0,false,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_under_expansion,O/U 1.5_over_15,OU1.5,over_15,0.0,false,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_under_expansion,O/U 1.5_under_15,OU1.5,under_15,0.3,true,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_under_expansion,O/U 2.5_over_25,OU2.5,over_25,0.0,false,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_under_expansion,O/U 2.5_under_25,OU2.5,under_25,0.3,true,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_under_expansion,O/U 3.5_over_35,OU3.5,over_35,0.0,false,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_under_expansion,O/U 3.5_under_35,OU3.5,under_35,0.3,true,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_under_expansion,BTTS_btts_yes,BTTS,btts_yes,0.0,false,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_under_expansion,BTTS_btts_no,BTTS,btts_no,0.0,false,false,"1X2 plus Under 1.5, Under 2.5 and Under 3.5"
+P_pure_alpha,1X2_home,1X2,home,0.3,true,true,subset maximizing pooled information ratio across fold-held-out baseline returns
+P_pure_alpha,1X2_draw,1X2,draw,0.3,true,true,subset maximizing pooled information ratio across fold-held-out baseline returns
+P_pure_alpha,1X2_away,1X2,away,0.0,false,true,subset maximizing pooled information ratio across fold-held-out baseline returns
+P_pure_alpha,O/U 0.5_over_05,OU0.5,over_05,0.0,false,true,subset maximizing pooled information ratio across fold-held-out baseline returns
+P_pure_alpha,O/U 0.5_under_05,OU0.5,under_05,0.0,false,true,subset maximizing pooled information ratio across fold-held-out baseline returns
+P_pure_alpha,O/U 1.5_over_15,OU1.5,over_15,0.0,false,true,subset maximizing pooled information ratio across fold-held-out baseline returns
+P_pure_alpha,O/U 1.5_under_15,OU1.5,under_15,0.3,true,true,subset maximizing pooled information ratio across fold-held-out baseline returns
+P_pure_alpha,O/U 2.5_over_25,OU2.5,over_25,0.0,false,true,subset maximizing pooled information ratio across fold-held-out baseline returns
+P_pure_alpha,O/U 2.5_under_25,OU2.5,under_25,0.3,true,true,subset maximizing pooled information ratio across fold-held-out baseline returns
+P_pure_alpha,O/U 3.5_over_35,OU3.5,over_35,0.0,false,true,subset maximizing pooled information ratio across fold-held-out baseline returns
+P_pure_alpha,O/U 3.5_under_35,OU3.5,under_35,0.0,false,true,subset maximizing pooled information ratio across fold-held-out baseline returns
+P_pure_alpha,BTTS_btts_yes,BTTS,btts_yes,0.0,false,true,subset maximizing pooled information ratio across fold-held-out baseline returns
+P_pure_alpha,BTTS_btts_no,BTTS,btts_no,0.0,false,true,subset maximizing pooled information ratio across fold-held-out baseline returns
