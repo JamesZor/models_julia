@@ -69,8 +69,7 @@ spec = MD.MatchDaySpec(
 
 system = PF.PortfolioSystem(
     PF.BookSpec(markets = MD.canonical_markets(), price = PF.DeArb()),
-    PF.PolicySpec(risk = PF.SlateDrawdown(20.0), cap = PF.FixedCap(0.25),
-                  trust = PF.FlatTrust(1.0)))
+    MD.canonical_scottish_lower_policy())
 
 # ===================================================================
 # 5. Canonical fit, coverage, and slate pricing

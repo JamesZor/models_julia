@@ -19,7 +19,7 @@
 # these fields "why was this leg £26 and not £40?" has no answer.
 
 export PricedSlate, price_slate, slate_batch_summary, leg_capacity, annotate_capacity!,
-       sweep_ladder, fill_confidence, canonical_markets
+       sweep_ladder, fill_confidence, canonical_markets, canonical_scottish_lower_policy
 
 """
     PricedSlate
@@ -83,6 +83,20 @@ it is unmapped in `db.jl`.
 canonical_markets() = Data.MarketConfig(
     reduce(vcat, (Data.AbstractMarket[Data.Market1X2(), Data.MarketBTTS()],
                   [Data.MarketOverUnder(i + 0.5) for i in 0:3])))
+
+"""
+    canonical_scottish_lower_policy() -> Portfolio.PolicySpec
+
+The audited MatchDay staking policy for Scottish League One and League Two. Its tiered trust
+gates the canonical market set down to Home, Draw, Away and Under 2.5, and `SlateDrawdown(23.0)`
+is the risk setting under which `P1_conservative_tilt` was selected. The 25% cap remains the
+hard simultaneous-exposure ceiling used by the live ledger.
+"""
+canonical_scottish_lower_policy() = Portfolio.PolicySpec(
+    trust = Portfolio.CanonicalScottishLowerTrust(),
+    risk = Portfolio.SlateDrawdown(23.0),
+    cap = Portfolio.FixedCap(0.25),
+)
 
 # ===================================================================
 # Capacity -- how much of a leg the book will actually take

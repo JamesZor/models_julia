@@ -27,10 +27,10 @@
 #            `paper_runbook` rows either side of a full execute-and-settle.
 #
 #   R21-R23, MODELS. A real Saturday, real canonical fits from `mcmc_experiments`. Slow (the
-#   R31-R32  hybrid player pillar costs about a minute to build its features) and skipped with a
-#            message when the DataStore cache or the experiment database is out of reach. This is
-#            the tier that proves hot-swapping, the lineup shock, and that the fair-odds line on
-#            the trajectory chart steps exactly where the teamsheet landed.
+#   R31-R32, hybrid player pillar costs about a minute to build its features) and skipped with a
+#   R45-R46  message when the DataStore cache or the experiment database is out of reach. This is
+#            the tier that proves hot-swapping, the lineup shock, the canonical tiered policy,
+#            and that the fair-odds line steps exactly where the teamsheet landed.
 #
 # RUN:
 #   julia --project -t 8 test/test_matchday_replay.jl
@@ -137,6 +137,10 @@ _system() = PF.PortfolioSystem(
     PF.BookSpec(markets = MD.canonical_markets(), price = PF.DeArb()),
     PF.PolicySpec(risk = PF.SlateDrawdown(20.0), cap = PF.FixedCap(0.25),
                   trust = PF.FlatTrust(1.0)))
+
+_canonical_system() = PF.PortfolioSystem(
+    PF.BookSpec(markets = MD.canonical_markets(), price = PF.DeArb()),
+    MD.canonical_scottish_lower_policy())
 
 """
 A `ReplayState` over the synthetic card with NO connection and NO loaded model.
@@ -1965,7 +1969,7 @@ function _try_model_rig()
         ds = DD.load_datastore_cached(DD.ScottishLower())
         conn = MD.paper_connection()
         card = load_replay_card(conn, REPLAY_TEST_DAY)
-        st = ReplayState(ds, conn, card; system = _system(), bankroll = 2_400.0,
+        st = ReplayState(ds, conn, card; system = _canonical_system(), bankroll = 2_400.0,
                          account_id = "replay_model_test", schema = REPLAY_SCHEMA,
                          active = "m00")
         return st
@@ -2013,6 +2017,55 @@ try
     prices = [MD.best_back(MD.quotes(card.book, id, as_of_at(card, t))[key])
               for t in (-60, -30, -15, 0)]
     @test any(p -> p != prices[1], prices)
+end
+
+@testset "R46 the real replay slate obeys the canonical tiered policy" begin
+    set_model!(st, "m00")
+    seek!(st, T_EXEC)
+    slate = st.slate
+    @test slate !== nothing && MD.n_legs(slate) > 0
+
+    active = Set((String(row.group), Float64(row.line), Symbol(row.selection))
+                 for row in eachrow(slate.sheet))
+    @test all(key -> key[1] == "1X2" || key == ("OverUnder", 2.5, :under_25), active)
+    @test !any(key -> key[1] == "BTTS", active)
+    @test !any(key -> key[1] == "OverUnder" && key[2] in (0.5, 1.5, 3.5), active)
+    @test !(("OverUnder", 2.5, :over_25) in active)
+
+    trust = st.system.policy.trust
+    context = PF.SlateContext(1, slate.window, slate.bankroll)
+    function row_trust(row)
+        selection = PF.Selection(String(row.family), String(row.group), Float64(row.line),
+                                 Symbol(row.selection), Float64(row.odds_quoted),
+                                 Float64(row.odds), Float64(row.p_model),
+                                 Float64(row.p_market))
+        return PF.trust_for(trust, selection, context)
+    end
+    expected_trust(row) = row.selection === :home || row.selection === :under_25 ? 0.35 : 0.25
+    @test all(row -> row_trust(row) == expected_trust(row), eachrow(slate.sheet))
+
+    @test slate.slate_exposure <= st.system.policy.cap.cap + 1e-9
+    @test slate.total_risk <= slate.bankroll * st.system.policy.cap.cap + 1e-6
+
+    books = slate_books(st, slate)
+    allocation = PF.stake_slate(st.system.policy, PF.Slate(slate.window, books),
+                                PF.SlateContext(1, slate.window, slate.bankroll))
+    @test allocation.exposure <= st.system.policy.cap.cap + 1e-9
+    probs = [book.p_grid for book in books]
+    rets = [books[i].R * allocation.stakes[i] for i in eachindex(books)]
+    penalty = sum(log(sum(probs[i] .* (1 .+ rets[i]) .^
+                          (-st.system.policy.risk.lambda))) for i in eachindex(books))
+    @test penalty <= 1e-7
+
+    # The dynamic replay re-solver consumes the same payoff matrices and must reproduce an
+    # untouched priced vector without admitting a gated direction or breaking either constraint.
+    empty!(st.overrides)
+    resolved = resolve_slate_with_overrides(st; slate = slate, books = books)
+    resolved_active = Set((String(row.group), Float64(row.line), Symbol(row.selection))
+                          for row in eachrow(resolved.sheet))
+    @test resolved_active == active
+    @test resolved.slate_exposure <= st.system.policy.cap.cap + 1e-9
+    @test resolved.total_risk <= resolved.bankroll * st.system.policy.cap.cap + 1e-6
 end
 
 @testset "R22 switching the model re-prices the slate in memory" begin

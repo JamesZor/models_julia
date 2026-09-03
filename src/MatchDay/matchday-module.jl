@@ -156,6 +156,7 @@ export
 
     # the slate
     PricedSlate, price_slate, slate_batch_summary, canonical_markets,
+    canonical_scottish_lower_policy,
     leg_capacity, annotate_capacity!, sweep_ladder, fill_confidence,
     CanonicalFit, canonical_fit,
 

@@ -258,7 +258,8 @@ using .Portfolio: OddsIndex, MarketSlot, FallbackSlot, BookWorkspace, BuildRepor
                   DeArb, Normalise, RawPrice,
                   PerBetCommission, TurnoverCommission,
                   IndependentKelly, BakerMcHale, NoShrinkage,
-                  FlatTrust, StaticFamilyTrust, ShrinkToMarketTrust,
+                  FlatTrust, SelectionTrust, TieredTrust, CanonicalScottishLowerTrust,
+                  ScheduledTrust, StaticFamilyTrust, ShrinkToMarketTrust,
                   SlateDrawdown, MatchDrawdown, FixedFraction,
                   FixedCap, PerMatchCap,
                   DailySlate, WeeklySlate, MatchSlate,
@@ -287,7 +288,8 @@ export ExecutionConfig, BookSpec, PolicySpec, PortfolioSystem
 export DeArb, Normalise, RawPrice
 export PerBetCommission, TurnoverCommission
 export IndependentKelly, BakerMcHale, NoShrinkage
-export FlatTrust, StaticFamilyTrust, ShrinkToMarketTrust
+export FlatTrust, SelectionTrust, TieredTrust, CanonicalScottishLowerTrust, ScheduledTrust,
+       StaticFamilyTrust, ShrinkToMarketTrust
 export SlateDrawdown, MatchDrawdown, FixedFraction
 export FixedCap, PerMatchCap
 export DailySlate, WeeklySlate, MatchSlate

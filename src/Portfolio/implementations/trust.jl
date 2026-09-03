@@ -2,14 +2,11 @@
 #
 # How much we believe the model over the market.
 #
-# Standing result, and the reason FlatTrust is the default: on the only out-of-sample test we
-# have (ScottishLower, 628 matches, split at the season break), every attempt to *learn* a
-# per-selection trust weight lost money. A vector fitted in-sample to a path metric returned
-# 0.089x; the same fitted causally to decayed log-loss returned 0.718x. Flat quarter-trust
-# returned 1.256x. The value of this seam is being able to keep testing and rejecting such
-# ideas cheaply -- not an expectation that one of them works.
+# `FlatTrust` remains the league-agnostic default. Scottish Lower's directional tiers are an
+# audited production policy, exposed explicitly through `CanonicalScottishLowerTrust()` rather
+# than silently applied to every league that uses Portfolio.
 
-export FlatTrust, SelectionTrust, ScheduledTrust
+export FlatTrust, SelectionTrust, TieredTrust, CanonicalScottishLowerTrust, ScheduledTrust
 
 """
     FlatTrust(w)
@@ -52,6 +49,83 @@ function trust_for(t::SelectionTrust, s::Selection, ::SlateContext)
     t.strict && return t.table[k]        # KeyError on a miss, by design
     return get(t.table, k, t.default)
 end
+
+const TrustSelectionKey = Tuple{String,Float64,Symbol}
+
+function _tiered_group_key(group::AbstractString)
+    compact = replace(lowercase(strip(group)), r"[^a-z0-9]" => "")
+    compact == "1x2" && return "1x2"
+    compact == "overunder" && return "over_under"
+    compact == "btts" && return "btts"
+    return lowercase(strip(group))
+end
+
+function _tiered_selection_key(selection::Symbol)
+    name = String(selection)
+    startswith(name, "over_") && return :over
+    startswith(name, "under_") && return :under
+    return selection
+end
+
+_tiered_key(group::AbstractString, line::Real, selection::Symbol) =
+    (_tiered_group_key(group), Float64(line), _tiered_selection_key(selection))
+
+"""
+    TieredTrust(table; default = 0.0)
+
+Audited per-selection trust tiers keyed by `(market_group, market_line, selection)`. Unmatched
+selections receive `default`, which is zero by default so adding a new market cannot silently
+make it stakeable.
+
+Market-group spelling is normalised (`"1X2"` and `"1x2"`; `"OverUnder"` and
+`"over_under"`), and line-specific totals symbols such as `:under_25` are normalised to the
+readable directional key `:under`. This lets policy tables describe directions without leaking
+the odds-feed encoding into configuration.
+"""
+struct TieredTrust <: AbstractTrustModel
+    table::Dict{TrustSelectionKey,Float64}
+    default::Float64
+end
+
+function TieredTrust(table::AbstractDict; default::Real = 0.0)
+    0.0 <= default <= 1.0 ||
+        throw(ArgumentError("default trust weight must be in [0,1]: $default"))
+    normalised = Dict{TrustSelectionKey,Float64}()
+    for (key, weight) in table
+        key isa Tuple && length(key) == 3 || throw(ArgumentError(
+            "tiered trust keys must be (market_group, market_line, selection), got $key"))
+        group, line, selection = key
+        group isa AbstractString || throw(ArgumentError(
+            "tiered trust market_group must be a string, got $(typeof(group)) in $key"))
+        line isa Real || throw(ArgumentError(
+            "tiered trust market_line must be real, got $(typeof(line)) in $key"))
+        selection isa Symbol || throw(ArgumentError(
+            "tiered trust selection must be a Symbol, got $(typeof(selection)) in $key"))
+        weight isa Real || throw(ArgumentError(
+            "tiered trust weight must be real, got $(typeof(weight)) for $key"))
+        0.0 <= weight <= 1.0 ||
+            throw(ArgumentError("trust weight must be in [0,1] for $key: $weight"))
+        normalised[_tiered_key(group, line, selection)] = Float64(weight)
+    end
+    return TieredTrust(normalised, Float64(default))
+end
+
+trust_for(t::TieredTrust, s::Selection, ::SlateContext) =
+    get(t.table, _tiered_key(s.group, s.line, s.selection), t.default)
+
+"""
+    CanonicalScottishLowerTrust() -> TieredTrust
+
+The production `P1_conservative_tilt` policy audited over the Scottish Lower 40-fold
+walk-forward study: Home and Under 2.5 at 0.35, Draw and Away at 0.25, every other selection at
+zero.
+"""
+CanonicalScottishLowerTrust() = TieredTrust(Dict(
+    ("1x2", 0.0, :home)          => 0.35,
+    ("over_under", 2.5, :under) => 0.35,
+    ("1x2", 0.0, :draw)          => 0.25,
+    ("1x2", 0.0, :away)          => 0.25,
+); default = 0.0)
 
 """
     ScheduledTrust(per_slate)

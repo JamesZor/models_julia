@@ -130,13 +130,13 @@ card = load_replay_card(conn, R08_DAY; tournament_ids = R08_TIDS)
 # ===================================================================
 # 5. Portfolio policy
 # ===================================================================
-# Identical to `r07_serve_console.jl`. `SlateDrawdown` solves ONE `k` for the whole settlement
-# window and `FixedCap` bounds total simultaneous exposure, so the stake vector is only valid as
-# a vector -- which is why execution is one transaction and not one per leg.
+# Identical to `r07_serve_console.jl`. The canonical policy applies the audited Scottish Lower
+# trust tiers, while `SlateDrawdown` still solves ONE `k` for the whole settlement window and
+# `FixedCap` bounds total simultaneous exposure. The stake vector is only valid as a vector --
+# which is why execution is one transaction and not one per leg.
 system = PF.PortfolioSystem(
     PF.BookSpec(markets = MD.canonical_markets(), price = PF.DeArb()),
-    PF.PolicySpec(risk = PF.SlateDrawdown(20.0), cap = PF.FixedCap(0.25),
-                  trust = PF.FlatTrust(1.0)))
+    MD.canonical_scottish_lower_policy())
 
 # %%
 # ===================================================================

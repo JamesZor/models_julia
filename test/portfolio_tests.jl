@@ -250,6 +250,46 @@ end
 end
 
 # -------------------------------------------------------------------
+@testset "TieredTrust implements the audited Scottish Lower policy" begin
+    trust = PF.CanonicalScottishLowerTrust()
+    sel(group, line, selection) = PF.Selection(
+        "test", group, line, selection, 2.0, 2.0, 0.55, 0.50)
+
+    # Production selections use feed-facing groups and line-specific totals symbols. TieredTrust
+    # normalises those onto the readable policy keys ("1x2", 0.0, :home) and
+    # ("over_under", 2.5, :under).
+    @test PF.trust_for(trust, sel("1X2", 0.0, :home), ctx0()) == 0.35
+    @test PF.trust_for(trust, sel("OverUnder", 2.5, :under_25), ctx0()) == 0.35
+    @test PF.trust_for(trust, sel("1X2", 0.0, :draw), ctx0()) == 0.25
+    @test PF.trust_for(trust, sel("1X2", 0.0, :away), ctx0()) == 0.25
+
+    @test PF.trust_for(trust, sel("OverUnder", 2.5, :over_25), ctx0()) == 0.0
+    @test PF.trust_for(trust, sel("OverUnder", 0.5, :under_05), ctx0()) == 0.0
+    @test PF.trust_for(trust, sel("BTTS", 0.0, :btts_yes), ctx0()) == 0.0
+    @test PF.trust_for(trust, sel("Unknown", 7.0, :mystery), ctx0()) == 0.0
+
+    # The public constructor accepts the policy-facing spelling directly and dispatches through
+    # the generic trust_for(AbstractTrustModel, Selection, SlateContext) seam.
+    custom::PF.AbstractTrustModel = PF.TieredTrust(
+        Dict(("over_under", 2.5, :under) => 0.4); default = 0.1)
+    @test PF.trust_for(custom, sel("OverUnder", 2.5, :under_25), ctx0()) == 0.4
+    @test PF.trust_for(custom, sel("1X2", 0.0, :home), ctx0()) == 0.1
+
+    @test_throws ArgumentError PF.TieredTrust(Dict(("1x2", 0.0, :home) => -0.01))
+    @test_throws ArgumentError PF.TieredTrust(Dict(("1x2", 0.0, :home) => 1.01))
+    @test_throws ArgumentError PF.TieredTrust(Dict(("1x2", 0.0, :home) => 0.25);
+                                              default = -0.01)
+    @test_throws ArgumentError PF.TieredTrust(Dict(("1x2", 0.0, :home) => 0.25);
+                                              default = 1.01)
+
+    policy = BayesianFootball.MatchDay.canonical_scottish_lower_policy()
+    @test policy.trust isa PF.TieredTrust
+    @test policy.risk isa PF.SlateDrawdown
+    @test policy.risk.lambda == 23.0
+    @test policy.cap.cap == 0.25
+end
+
+# -------------------------------------------------------------------
 @testset "P7 unsorted slates are rejected" begin
     b1 = fixture_book(match_id = 1, date = Date(2025, 1, 1)).book
     b2 = fixture_book(match_id = 2, date = Date(2025, 2, 1)).book

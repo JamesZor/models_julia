@@ -33,10 +33,10 @@ existing file changes.
 
 # Health warning
 
-On the only out-of-sample evaluation available (ScottishLower, 628 matches), the default policy
-returns a flat ROI whose match-clustered 95% bootstrap interval **includes zero**. `FlatTrust`
-is the default because every attempt to *learn* per-selection trust lost money out of sample.
-Treat the non-default components as slots for testing and rejecting ideas cheaply.
+The generic `PolicySpec` remains league-agnostic and conservative. Scottish Lower production
+uses the separately audited `CanonicalScottishLowerTrust()` through MatchDay's canonical policy
+factory; league-specific directional findings must not become an implicit default for every
+portfolio simulation.
 """
 module Portfolio
 
@@ -134,7 +134,8 @@ export
     PerBetCommission, TurnoverCommission,
     KellyLogUtility, IndependentKelly,
     BakerMcHale, NoShrinkage,
-    FlatTrust, StaticFamilyTrust, ShrinkToMarketTrust,
+    FlatTrust, SelectionTrust, TieredTrust, CanonicalScottishLowerTrust, ScheduledTrust,
+    StaticFamilyTrust, ShrinkToMarketTrust,
     SlateDrawdown, MatchDrawdown, FixedFraction,
     FixedCap, PerMatchCap,
     DailySlate, WeeklySlate, MatchSlate,
