@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MatchDay — Replay Console (8086)</title>
+<title>MatchDay — Replay Workspace (8086)</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <!-- Chart.js is loaded WITHOUT `defer` and BEFORE Alpine on purpose: the trailing script block
      registers a plugin against the global `Chart`, and a deferred library would not exist yet. -->
@@ -19,12 +19,14 @@
        formed here transfers rather than inverts. */
     --back:#2563eb; --back-dim:#12244a; --lay:#db2777; --lay-dim:#3d0f28;
     --fill:#f59e0b; --fill-dim:#3a2a08;
+    --hd:#0e1219;
   }
-  html,body{background:var(--bg);color:var(--ink);}
+  html,body{background:var(--bg);color:var(--ink);height:100%;}
   body{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
-       font-variant-numeric:tabular-nums;font-size:12px;margin:0;}
+       font-variant-numeric:tabular-nums;font-size:12px;margin:0;overflow:hidden;}
   /* tabular-nums is not cosmetic: at 60x the book updates once a second and without it every
      card jitters horizontally on each tick. */
+  .app{display:flex;flex-direction:column;height:100vh;}
   .panel{background:var(--panel);border:1px solid var(--line);}
   .card{background:var(--panel);border:1px solid var(--line);transition:border-color .25s ease;}
   .card.pos{border-color:#1f5133;}
@@ -36,32 +38,81 @@
   .bar-model>span{background:var(--accent);}
   .bar-market>span{background:var(--market);}
   .dots{letter-spacing:1px;}
-  .grid-cards{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));}
+  .grid-cards{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));}
   button:disabled{opacity:.35;cursor:not-allowed;}
-  select,input[type=range]{background:#161b24;color:var(--ink);border:1px solid var(--line);}
+  select,input[type=range],input[type=text],input[type=number]{background:#161b24;color:var(--ink);
+       border:1px solid var(--line);}
   select{padding:2px 6px;border-radius:3px;}
-  .vcr{padding:4px 10px;border:1px solid var(--line);border-radius:3px;background:#161b24;}
+  .vcr{padding:3px 9px;border:1px solid var(--line);border-radius:3px;background:#161b24;}
   .vcr:hover:not(:disabled){border-color:var(--replay);}
   .vcr.on{border-color:var(--replay);color:var(--replay);background:var(--replay-dim);}
-  .tab{padding:6px 16px;border:1px solid var(--line);border-bottom:none;border-radius:4px 4px 0 0;
-       background:#0e1219;color:var(--dim);}
-  .tab.on{background:var(--panel);color:var(--replay);border-color:var(--replay);}
   .tick{animation:tick .5s ease;}
   @keyframes tick{from{background:#132033}to{background:transparent}}
-  .scrub{-webkit-appearance:none;appearance:none;height:22px;background:transparent;width:100%;}
+  .scrub{-webkit-appearance:none;appearance:none;height:20px;background:transparent;width:100%;}
   .scrub::-webkit-slider-runnable-track{height:6px;background:#161b24;border-radius:3px;
                                         border:1px solid var(--line);}
   .scrub::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:18px;margin-top:-7px;
                                background:var(--replay);border-radius:2px;cursor:pointer;}
   .scrub::-moz-range-track{height:6px;background:#161b24;border-radius:3px;border:1px solid var(--line);}
   .scrub::-moz-range-thumb{width:12px;height:18px;background:var(--replay);border:0;border-radius:2px;}
-  .marker{position:absolute;top:0;width:1px;height:22px;}
-  .modal{position:fixed;inset:0;background:rgba(4,6,10,.86);overflow:auto;z-index:40;}
+  .marker{position:absolute;top:0;width:1px;height:20px;}
+  .modal{position:fixed;inset:0;background:rgba(4,6,10,.86);overflow:auto;z-index:400;}
   table{border-collapse:collapse;width:100%;}
   th,td{padding:3px 6px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap;}
-  th{color:var(--dim);font-weight:normal;position:sticky;top:0;background:var(--panel);}
+  th{color:var(--dim);font-weight:normal;position:sticky;top:0;background:var(--panel);z-index:1;}
   .num{text-align:right;}
   .scrollx{overflow-x:auto;}
+
+  /* ── THE WORKSPACE ─────────────────────────────────────────────────────────────
+     A desktop, not a page. Every panel is an absolutely-positioned window inside
+     this one clipped region, so dragging one never reflows another and the layout
+     an operator arranged survives every 2 Hz push. */
+  .ws{position:relative;flex:1;overflow:hidden;background:
+      radial-gradient(circle at 1px 1px, #161b24 1px, transparent 0) 0 0/22px 22px;}
+  .win{position:absolute;display:flex;flex-direction:column;background:var(--panel);
+       border:1px solid var(--line);border-radius:4px;overflow:hidden;
+       box-shadow:0 8px 30px rgba(0,0,0,.55);}
+  .win.on{border-color:var(--replay);}
+  .win>.hd{display:flex;align-items:center;gap:6px;padding:3px 6px;background:var(--hd);
+           border-bottom:1px solid var(--line);cursor:move;user-select:none;flex:0 0 auto;}
+  .win>.bd{flex:1 1 auto;overflow:auto;padding:6px 8px;}
+  .wbtn{width:19px;height:17px;line-height:15px;text-align:center;border:1px solid var(--line);
+        border-radius:2px;background:#161b24;cursor:pointer;font-size:11px;}
+  .wbtn:hover{border-color:var(--replay);}
+  .grip{position:absolute;right:0;bottom:0;width:15px;height:15px;cursor:nwse-resize;
+        background:linear-gradient(135deg,transparent 50%,var(--line) 50%);}
+  .dock{display:flex;align-items:center;gap:6px;padding:3px 8px;background:var(--hd);
+        border-top:1px solid var(--line);flex:0 0 auto;overflow-x:auto;}
+  .chip{padding:2px 8px;border:1px solid var(--line);border-radius:3px;background:#161b24;
+        cursor:pointer;white-space:nowrap;}
+  .chip:hover{border-color:var(--replay);}
+  .chip.on{border-color:var(--replay);color:var(--replay);}
+
+  /* ── THE STAKING TICKET ────────────────────────────────────────────────────── */
+  .tk td,.tk th{padding:2px 5px;}
+  .tk tr.placed{background:#0e1c12;}
+  .tk tr.skipped{opacity:.42;}
+  .tk tr.skipped td:nth-child(-n+4){text-decoration:line-through;}
+  .tk input{width:64px;padding:1px 4px;border-radius:2px;text-align:right;}
+  .tk .sbtn{padding:0 5px;border:1px solid var(--line);border-radius:2px;background:#161b24;cursor:pointer;}
+  .tk .sbtn.on{border-color:var(--accent);color:var(--accent);background:var(--accent-dim);}
+  .tk .sbtn.skip.on{border-color:var(--bad);color:var(--bad);background:#3a1d1d;}
+  .moved{animation:moved 1.1s ease;}
+  @keyframes moved{0%{background:#3a2a08;color:var(--fill)}100%{background:transparent}}
+
+  /* ── FORM BADGES ───────────────────────────────────────────────────────────── */
+  .badge{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;
+         width:34px;padding:2px 0;border-radius:3px;border:1px solid var(--line);}
+  .badge.W{background:var(--accent-dim);border-color:#1f5133;color:var(--accent);}
+  .badge.D{background:#1d232e;color:var(--dim);}
+  .badge.L{background:#3a1d1d;border-color:#5b2626;color:var(--bad);}
+  .badge b{font-size:12px;line-height:1.1;}
+  .badge i{font-style:normal;font-size:9px;opacity:.8;}
+
+  /* ── SCORECARD TILES ───────────────────────────────────────────────────────── */
+  .tile{background:#0e1219;border:1px solid var(--line);border-radius:3px;padding:6px 8px;}
+  .tile .v{font-size:17px;font-weight:bold;}
+  .tile .k{color:var(--dim);}
 
   /* ── THE LADDER ────────────────────────────────────────────────────────────────
      One row is a price and the size resting at it, with the size drawn as a bar
@@ -91,27 +142,19 @@
   .womb>.l{background:var(--lay);}
   .pill{display:inline-flex;align-items:center;gap:4px;padding:0 5px;border-radius:3px;
         background:#161b24;border:1px solid var(--line);}
-  .grid-lad{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));}
-
-  /* ── THE FLOATING CHART WINDOW ─────────────────────────────────────────────── */
-  .float{position:fixed;z-index:50;background:var(--panel);border:1px solid var(--replay);
-         box-shadow:0 10px 40px rgba(0,0,0,.6);border-radius:4px;display:flex;flex-direction:column;}
-  .float .hd{display:flex;align-items:center;gap:8px;padding:4px 8px;background:#0e1219;
-             border-bottom:1px solid var(--line);cursor:move;user-select:none;}
-  .float .wbtn{width:20px;height:18px;line-height:16px;text-align:center;border:1px solid var(--line);
-               border-radius:2px;background:#161b24;cursor:pointer;}
-  .float .wbtn:hover{border-color:var(--replay);}
-  .float .bd{padding:6px 8px;overflow:auto;}
+  .grid-lad{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));}
+  [x-cloak]{display:none!important;}
 </style>
 </head>
 <body>
-<div x-data="replay_()" x-init="start()" class="p-3">
+<div class="app" x-data="replay_()" x-init="start()">
 
-  <!-- ── REPLAY CONTROL BAR ────────────────────────────────────────────────────────
-       The instrument the live console does not have and must not have. Everything here
-       moves `as_of`, which on 8085 is `now()` and is not a control at all. -->
-  <div class="panel p-3 mb-3">
-    <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       CHROME — the controls that belong to the whole workspace rather than to any
+       one window: the clock, the model, the account, and the atom.
+       ══════════════════════════════════════════════════════════════════════════ -->
+  <div class="panel px-2 py-1" style="flex:0 0 auto;border-left:0;border-right:0;border-top:0">
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
       <span class="text-base font-bold text-[var(--replay)]">REPLAY</span>
 
       <label class="flex items-center gap-1">
@@ -136,35 +179,31 @@
         </button>
       </template>
 
-      <span class="ml-auto" :class="connected?'text-[var(--accent)]':'text-[var(--bad)]'"
-            x-text="connected ? '● live' : '○ disconnected'"></span>
-    </div>
-
-    <!-- VCR + speed -->
-    <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
       <button class="vcr" @click="step(-1)" title="back one simulated minute">⏮ −1m</button>
       <button class="vcr" :class="{'on': r.playing}" @click="togglePlay()"
-              x-text="r.playing ? '⏸ Pause' : '▶ Play'"></button>
+              x-text="r.playing ? '⏸' : '▶'"></button>
       <button class="vcr" @click="step(1)" title="forward one simulated minute">+1m ⏭</button>
-
-      <span class="text-[var(--dim)] ml-2">speed</span>
       <template x-for="s in r.speeds" :key="s">
         <button class="vcr" :class="{'on': r.speed===s}" @click="setSpeed(s)"
                 x-text="s + 'x'" :title="s===60 ? '1 simulated minute per second' : ''"></button>
       </template>
 
-      <span class="ml-4 text-lg font-bold text-[var(--replay)]" x-text="'T' + tsign(r.t) + 'm'"></span>
+      <span class="text-base font-bold text-[var(--replay)]" x-text="'T' + tsign(r.t) + 'm'"></span>
       <span class="text-[var(--dim)]" x-text="fmtTime(r.as_of)"></span>
       <span class="text-[var(--warn)]" x-show="r.stale"
-            x-text="'grid frozen at T' + tsign(r.priced_t) + 'm'"></span>
+            x-text="'frozen at T' + tsign(r.priced_t) + 'm'"></span>
       <span class="text-[var(--dim)]" x-text="r.reprice_ms + ' ms/tick'"></span>
+
+      <span class="ml-auto" :class="connected?'text-[var(--accent)]':'text-[var(--bad)]'"
+            x-text="connected ? '● live' : '○ disconnected'"></span>
+      <span class="text-[var(--replay)]" x-text="r.schema + ' · ' + r.account_id"></span>
     </div>
 
     <!-- Scrubber. The three markers are the only instants in a match day at which the
          INPUTS change discontinuously: the XI lands, the entry window opens, the book
          turns in-play. Drawing them on the track is what makes a drag a decision. -->
-    <div class="mt-3 relative">
-      <div class="relative">
+    <div class="mt-1 flex items-center gap-3">
+      <div class="relative flex-1">
         <input type="range" class="scrub" :min="r.t_start" :max="r.t_end" step="1"
                :value="r.t" @input="seek($event.target.value)">
         <!-- Colour lives inside the binding rather than in a static `style` attribute so the
@@ -174,423 +213,886 @@
         <div class="marker" :style="'left:'+pct(r.markers.exec)+'%;background:var(--accent)'"></div>
         <div class="marker" :style="'left:'+pct(r.markers.kickoff)+'%;background:var(--bad)'"></div>
       </div>
-      <div class="flex justify-between text-[var(--dim)]">
-        <span x-text="'T' + r.t_start + 'm'"></span>
-        <span class="text-[var(--warn)]">XI T−30</span>
-        <span class="text-[var(--accent)]">exec T−15</span>
-        <span class="text-[var(--bad)]">KO</span>
-        <span x-text="'FT +' + r.t_end + 'm'"></span>
-      </div>
+      <button class="vcr" @click="jump('lineups')">XI T−30</button>
+      <button class="vcr" @click="jump('exec')">Exec T−15</button>
+      <button class="vcr" @click="jump('kickoff')">KO</button>
+      <button class="vcr" @click="jump('settlement')">FT ⏩</button>
     </div>
 
-    <div class="mt-2 flex flex-wrap items-center gap-2">
-      <button class="vcr" @click="jump('lineups')">[XI Drop T−30m]</button>
-      <button class="vcr" @click="jump('exec')">[Exec T−15m]</button>
-      <button class="vcr" @click="jump('kickoff')">[Kickoff T−0]</button>
-      <button class="vcr" @click="jump('settlement')">[Fast-Forward Settlement]</button>
-      <span class="text-[var(--dim)] ml-2"
-            x-text="r.n_fixtures + ' fixtures · ' + r.n_lineups + ' with a scraped XI · book '
-                    + fmtTime(r.book_from) + ' → ' + fmtTime(r.book_to)"></span>
+    <!-- Batch header. Portfolio solved ONE joint problem, so these are the numbers that
+         decide whether the vector is safe. Exposure before bets, always. -->
+    <div class="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1" :class="{'tick': flash}">
+      <span class="px-2 rounded"
+            :class="b.status==='RESERVED'||b.status==='EXECUTED'
+                    ?'bg-[var(--accent-dim)] text-[var(--accent)]':'bg-[#1d232e]'"
+            x-text="b.status"></span>
+      <span><span class="text-[var(--dim)]">equity</span> <span x-text="money(a.equity)"></span></span>
+      <span><span class="text-[var(--dim)]">free</span> <span x-text="money(a.free)"></span></span>
+      <span><span class="text-[var(--dim)]">Σrisk</span> <span x-text="money(b.total_risk)"></span></span>
+      <span><span class="text-[var(--dim)]">k</span> <span x-text="b.k_risk"></span></span>
+      <span><span class="text-[var(--dim)]">λ</span> <span x-text="b.risk_lambda"></span></span>
+      <span><span class="text-[var(--dim)]">exposure</span>
+            <span x-text="b.exposure_pct + '% / ' + b.cap_pct + '%'"
+                  :class="b.capped?'text-[var(--warn)]':''"></span></span>
+      <span><span class="text-[var(--dim)]">legs</span>
+            <span x-text="b.n_legs + ' / ' + b.n_fixtures + ' fx'"></span></span>
+      <span class="text-[var(--dim)]" x-text="'fold ' + b.fold_idx"></span>
+      <button class="vcr" @click="settle()" :disabled="r.n_executed===0">⚑ Settle</button>
+      <button class="vcr" @click="showSettlement=true" :disabled="!settlement">Results</button>
+      <button class="vcr" @click="reset()"
+              title="delete this replay account's rows and restore the bankroll">↺ Ledger</button>
+      <span class="text-[var(--dim)]" x-text="r.n_executed + ' executed'"></span>
+      <span x-show="msg" :class="msgOk?'text-[var(--accent)]':'text-[var(--bad)]'"
+            class="ml-auto truncate max-w-[46vw]" x-text="msg"></span>
     </div>
 
     <!-- The one thing a replay can show that a live console cannot, and the one thing that
          will be misread if it is not labelled. After kick-off the model is pre-game and the
          book is in-play: the book has seen goals the posterior has not, so the "edges" are a
          measurement of that gap and not a signal. -->
-    <div x-show="r.in_play" class="mt-2 px-2 py-1 rounded bg-[#3a1d1d] text-[var(--bad)]">
+    <div x-show="r.in_play" class="mt-1 px-2 rounded bg-[#3a1d1d] text-[var(--bad)]">
       IN-PLAY (T<span x-text="tsign(r.t)"></span>m) — the pre-game posterior is being compared
       with an in-play book that has already seen the goals. Edges here are NOT tradeable signals;
-      the execution window closed at kick-off. Settlement below is unaffected.
+      the execution window closed at kick-off. Settlement is unaffected.
     </div>
-    <div x-show="r.note" class="mt-2 text-[var(--warn)]" x-text="r.note"></div>
-    <div x-show="r.error" class="mt-1 text-[var(--bad)]" x-text="'tick: ' + r.error"></div>
+    <div x-show="r.note" class="text-[var(--warn)]" x-text="r.note"></div>
+    <div x-show="r.error" class="text-[var(--bad)]" x-text="'tick: ' + r.error"></div>
   </div>
 
-  <!-- ── BATCH HEADER ─────────────────────────────────────────────────────────────
-       Unchanged from the live console: Portfolio solved ONE joint problem, so these are
-       the numbers that decide whether the vector is safe. Exposure before bets, always. -->
-  <div class="panel p-3 mb-3" :class="{'tick': flash}">
-    <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1">
-      <span class="text-base font-bold">SLATE <span x-text="b.window"></span></span>
-      <span class="text-[var(--dim)]">as_of <span x-text="fmtTime(b.as_of)"></span></span>
-      <span class="text-[var(--dim)]">fold <span x-text="b.fold_idx"></span></span>
-      <span class="px-2 py-0.5 rounded"
-            :class="b.status==='RESERVED'||b.status==='EXECUTED'
-                    ?'bg-[var(--accent-dim)] text-[var(--accent)]':'bg-[#1d232e]'"
-            x-text="b.status"></span>
-      <span class="ml-auto text-[var(--replay)]"
-            x-text="'PAPER REPLAY · ' + r.schema + ' · ' + r.account_id"></span>
-    </div>
-
-    <div class="mt-2 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-x-6 gap-y-1">
-      <div><span class="text-[var(--dim)]">equity</span> <span x-text="money(a.equity)"></span></div>
-      <div><span class="text-[var(--dim)]">free</span> <span x-text="money(a.free)"></span></div>
-      <div><span class="text-[var(--dim)]">Σrisk</span> <span x-text="money(b.total_risk)"></span></div>
-      <div><span class="text-[var(--dim)]">k_risk</span> <span x-text="b.k_risk"></span></div>
-      <div><span class="text-[var(--dim)]">λ</span> <span x-text="b.risk_lambda"></span></div>
-      <div><span class="text-[var(--dim)]">capped</span>
-           <span :class="b.capped?'text-[var(--warn)]':''" x-text="b.capped?'YES':'no'"></span></div>
-      <div><span class="text-[var(--dim)]">legs</span>
-           <span x-text="b.n_legs + ' / ' + b.n_fixtures + ' fx'"></span></div>
-    </div>
-
-    <div class="mt-2 flex items-center gap-3">
-      <span class="text-[var(--dim)] w-20">exposure</span>
-      <div class="bar flex-1 max-w-md">
-        <span :style="'width:' + Math.min(100, (b.exposure_pct/(b.cap_pct||1))*100) + '%'"
-              :class="b.capped?'bg-[var(--warn)]':'bg-[var(--accent)]'"></span>
-      </div>
-      <span x-text="b.exposure_pct + '% / ' + b.cap_pct + '%'"></span>
-      <span class="text-[var(--dim)]" x-show="b.n_low_confidence>0"
-            x-text="b.n_low_confidence + ' low-confidence legs'"></span>
-    </div>
-
-    <div class="mt-2 flex flex-wrap items-center gap-3">
-      <!-- THE ATOM. Same intent as the live console: one button, one server-side transaction.
-           It reserves the whole vector at THIS simulated minute and fills it against the book
-           that minute actually had. -->
-      <button @click="execute()" :disabled="!canExecute()"
-              class="px-4 py-2 font-bold rounded bg-[var(--accent-dim)] text-[var(--accent)]
-                     border border-[var(--accent)] hover:brightness-125">
-        ⏎ EXECUTE AT T<span x-text="tsign(r.t)"></span>m
-      </button>
-      <span class="text-[var(--dim)]"
-            x-text="'reserves ' + money(b.total_risk) + ' across ' + b.n_legs
-                    + ' legs in ONE tx, fills with LadderSweep'"></span>
-      <button class="vcr" @click="settle()" :disabled="r.n_executed===0">⚑ Settle &amp; grade</button>
-      <button class="vcr" @click="showSettlement=true" :disabled="!settlement">Results</button>
-      <button class="vcr" @click="reset()" title="delete this replay account's rows and restore the bankroll">
-        ↺ Reset ledger
-      </button>
-      <span class="text-[var(--dim)]" x-text="r.n_executed + ' executed slate(s)'"></span>
-      <label class="ml-auto flex items-center gap-1 text-[var(--dim)]">
-        <input type="checkbox" x-model="autosort"> auto-sort by EV%
-      </label>
-    </div>
-
-    <div x-show="msg" class="mt-2 px-2 py-1 rounded"
-         :class="msgOk?'text-[var(--accent)]':'text-[var(--bad)]'" x-text="msg"></div>
-    <div x-show="b.warning" class="mt-1 text-[var(--warn)]" x-text="'select_split: ' + b.warning"></div>
-  </div>
-
-  <!-- ── VIEW TABS ────────────────────────────────────────────────────────────────
-       Two views over the SAME state. Switching is a client-side toggle and posts
-       nothing, which is what keeps playback, the scrubber, the model and the match day
-       exactly where they were: the tab is a lens, not a mode. -->
-  <div class="flex items-end gap-1 border-b border-[var(--line)] mb-3">
-    <button class="tab" :class="{'on': tab==='cards'}" @click="setTab('cards')">
-      ▦ Slate Cards (Radar)
-    </button>
-    <button class="tab" :class="{'on': tab==='ladder'}" @click="setTab('ladder')">
-      ☱ Multi-Ladder Desk
-    </button>
-    <span class="ml-auto pb-1 text-[var(--dim)]"
-          x-text="tab==='cards' ? cards.length + ' cards · ' + blocked.length + ' blocked'
-                                : (ladder ? ladder.fixture + ' · ' + ladder.market_label : '—')"></span>
-  </div>
-
-  <!-- ════════════════════════════════════════════════════════════════════════════
-       TAB 1 — SLATE CARDS
-       ════════════════════════════════════════════════════════════════════════════ -->
-  <div x-show="tab==='cards'">
-
-  <!-- ── FILTERS ───────────────────────────────────────────────────────────────── -->
-  <div class="panel p-2 mb-3 flex flex-wrap gap-4 items-center">
-    <span class="text-[var(--dim)]">sort</span>
-    <template x-for="k in ['ev_pct','risk','minutes_to_kickoff']" :key="k">
-      <label class="flex items-center gap-1">
-        <input type="radio" :value="k" x-model="sortKey"><span x-text="k"></span>
-      </label>
+  <!-- ── TOP DOCK: the window toggles ───────────────────────────────────────────
+       One chip per panel. The chip is the ONLY way a closed window comes back, so it
+       reports open/closed state rather than merely offering an action. -->
+  <div class="dock" style="border-top:0;border-bottom:1px solid var(--line)">
+    <span class="text-[var(--dim)]">workspace</span>
+    <template x-for="w in WINDOWS" :key="w.id">
+      <button class="chip" :class="{'on': win[w.id].open}" @click="toggleWin(w.id)"
+              x-text="w.icon + ' ' + w.title"></button>
     </template>
-    <span class="text-[var(--dim)] ml-4">markets</span>
-    <template x-for="m in ['1X2','OverUnder','BTTS']" :key="m">
-      <label class="flex items-center gap-1">
-        <input type="checkbox" :value="m" x-model="markets"><span x-text="m"></span>
-      </label>
-    </template>
+    <span class="ml-4 text-[var(--dim)]">layout</span>
+    <button class="chip" @click="tile()" title="tile every open window into a grid">⊞ Tile</button>
+    <button class="chip" @click="cascade()" title="stack every open window from the top left">❐ Cascade</button>
+    <button class="chip" @click="resetLayout()" title="back to the default arrangement">↺ Reset</button>
     <span class="ml-auto text-[var(--dim)]"
-          x-text="cards.length + ' cards · ' + blocked.length + ' blocked'"></span>
+          x-text="r.n_fixtures + ' fx · ' + r.n_lineups + ' XI · book '
+                  + fmtTime(r.book_from) + ' → ' + fmtTime(r.book_to)"></span>
   </div>
 
-  <!-- ── CARD GRID ─────────────────────────────────────────────────────────────────
-       Identical in shape to the live console, deliberately: a card must mean the same
-       thing on both, or a habit formed here misreads the real one. The two things it
-       adds -- the WOM pill and the depth preview -- are DEPTH facts, not pricing ones,
-       and they are what tell an operator whether the edge above them is reachable. -->
-  <div class="grid-cards">
-    <template x-for="c in visible()" :key="c.match_id">
-      <div class="card p-2" :class="{'pos': c.ev_pct > 0, 'noxi': c.lineup_source==='none',
-                                     'tick': flash}">
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       THE DESKTOP
+       ══════════════════════════════════════════════════════════════════════════ -->
+  <div class="ws" x-ref="ws">
 
-        <div class="flex justify-between items-baseline">
-          <span class="font-bold truncate" x-text="c.home + ' v ' + c.away"></span>
-          <span class="text-[var(--dim)] shrink-0 ml-2" x-text="'T' + tminus(c.minutes_to_kickoff)"></span>
-        </div>
-        <div class="flex justify-between items-baseline">
-          <span class="text-[var(--dim)]" x-text="fmtTime(c.kickoff) + ' · tid ' + c.tournament_id"></span>
-          <button class="vcr py-0 px-2 text-[var(--replay)]" @click="openDesk(c.match_id)"
-                  title="open this fixture on the Multi-Ladder Desk">↗ Ladder Desk</button>
-        </div>
+  <!-- ────────────────────────────────────────────────────────────────────────────
+       WINDOW 1 — STAKING EXECUTION TICKET
+       The panel that exists because a HUMAN places these bets. Every row is a
+       recommendation; the three buttons on it are the three things that can happen
+       to a recommendation on a real exchange screen.
+       ──────────────────────────────────────────────────────────────────────────── -->
+  <div class="win" x-show="win.ticket.open && !win.ticket.min" x-cloak
+       :class="{'on': focused==='ticket'}" :style="winStyle('ticket')"
+       @mousedown="focus('ticket')">
+    <div class="hd" @mousedown="dragStart('ticket', $event)">
+      <span class="font-bold text-[var(--replay)]">📋 Staking Ticket</span>
+      <span class="text-[var(--dim)]"
+            x-text="tk.available ? (tk.n_legs + ' legs · ' + tk.n_placed + ' placed · '
+                                   + tk.n_skipped + ' skipped · ' + tk.n_auto + ' auto')
+                                 : 'nothing priced'"></span>
+      <span class="text-[var(--warn)]" x-show="tk.stale">re-solve is stale — re-run it</span>
+      <span class="ml-auto flex gap-1">
+        <span class="wbtn" @click.stop="minimise('ticket')" title="minimise">—</span>
+        <span class="wbtn" @click.stop="maximise('ticket')" title="maximise">□</span>
+        <span class="wbtn" @click.stop="closeWin('ticket')" title="close">✕</span>
+      </span>
+    </div>
+    <div class="bd">
 
-        <div class="flex justify-between items-baseline mt-1 mb-1 border-t border-b border-[var(--line)] py-1">
-          <span class="text-lg font-bold"
-                :class="c.ev_pct>0?'text-[var(--accent)]':'text-[var(--dim)]'"
-                x-text="(c.ev_pct>0?'+':'') + c.ev_pct + '%'"></span>
-          <span x-text="money(c.risk) + ' · ' + c.n_legs + ' leg' + (c.n_legs===1?'':'s')"></span>
-        </div>
+      <!-- ACTION BAR. Budget arithmetic first: the three numbers that decide what the
+           re-solver has left to work with, and then the three things it can be told. -->
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mb-2 pb-2 border-b border-[var(--line)]">
+        <span><span class="text-[var(--dim)]">committed</span>
+              <span class="text-[var(--fill)]" x-text="money(tk.committed_risk)"></span></span>
+        <span><span class="text-[var(--dim)]">residual</span>
+              <span x-text="tk.residual_risk===null ? '—' : money(tk.residual_risk)"></span></span>
+        <span><span class="text-[var(--dim)]">re-solved auto</span>
+              <span x-text="money(tk.auto_risk)"></span></span>
+        <span><span class="text-[var(--dim)]">Σrisk</span>
+              <span class="font-bold" x-text="money(tk.total_risk)"></span></span>
+        <span><span class="text-[var(--dim)]">k</span> <span x-text="tk.k_risk"></span></span>
+        <span><span class="text-[var(--dim)]">exposure</span>
+              <span :class="tk.capped?'text-[var(--warn)]':''"
+                    x-text="tk.exposure_pct + '% / ' + (tk.exposure_cap_pct||0) + '%'"></span></span>
+      </div>
 
-        <template x-for="l in legsOf(c)" :key="l.market + l.line + l.selection">
-          <div class="mb-2">
-            <div class="flex justify-between">
-              <span x-text="l.selection + '  ' + l.side"></span>
-              <span>
-                <span x-text="money(l.venue_stake)"></span>
-                <span class="dots ml-1"
+      <div class="flex flex-wrap items-center gap-2 mb-2">
+        <button class="px-3 py-1 rounded font-bold border"
+                style="background:var(--replay-dim);color:var(--replay);border-color:var(--replay)"
+                @click="resolveStakes()" :disabled="!tk.available">
+          🔄 RE-SOLVE REMAINING STAKES
+        </button>
+        <button class="vcr" @click="resetOverrides()" :disabled="!tk.available"
+                title="every leg back to :auto — the untouched Kelly vector">Reset Overrides</button>
+        <button class="px-3 py-1 rounded font-bold border"
+                style="background:var(--accent-dim);color:var(--accent);border-color:var(--accent)"
+                @click="execute()" :disabled="!canExecute()">
+          ⏎ EXECUTE SLATE BATCH
+        </button>
+        <span class="text-[var(--dim)]"
+              x-text="'reserves ' + money(tk.total_risk) + ' in ONE tx, fills with LadderSweep'"></span>
+      </div>
+      <div class="mb-2" :class="tk.resolved?'text-[var(--replay)]':'text-[var(--dim)]'"
+           x-show="tk.note" x-text="(tk.resolved ? '↻ ' : '') + tk.note"></div>
+
+      <div class="scrollx">
+      <table class="tk">
+        <thead><tr>
+          <th>fixture</th><th>market</th><th>selection</th><th>side</th>
+          <th class="num">fair</th><th class="num">venue</th><th class="num">EV%</th>
+          <th class="num">rec £</th><th class="num">placed £</th><th class="num">@ odds</th>
+          <th>status</th><th class="num">→ stake</th><th class="num">risk</th><th>fill</th>
+        </tr></thead>
+        <tbody>
+          <template x-for="l in tk.legs" :key="legKey(l)">
+            <tr :class="l.status">
+              <td class="truncate max-w-[190px]" x-text="l.fixture"></td>
+              <td x-text="l.market + (l.line ? ' ' + l.line : '')"></td>
+              <td x-text="l.selection + (l.venue_selection!==l.selection
+                                         ? ' (via ' + l.venue_selection + ')' : '')"></td>
+              <td :class="l.side==='lay'?'text-[#f9a8d4]':'text-[#93c5fd]'" x-text="l.side"></td>
+              <td class="num text-[var(--accent)]" x-text="l.fair_odds.toFixed(2)"></td>
+              <td class="num" x-text="l.venue_odds.toFixed(2)"></td>
+              <td class="num" :class="l.ev_pct>0?'text-[var(--accent)]':'text-[var(--dim)]'"
+                  x-text="(l.ev_pct>0?'+':'') + l.ev_pct"></td>
+              <td class="num text-[var(--dim)]" x-text="l.recommended_stake.toFixed(2)"></td>
+              <td class="num">
+                <input type="number" step="0.01" min="0" :id="'stk-'+legKey(l)"
+                       :value="l.placed_stake===null ? l.recommended_stake.toFixed(2)
+                                                     : l.placed_stake.toFixed(2)"
+                       @keydown.enter="mark(l,'placed')">
+              </td>
+              <td class="num">
+                <input type="number" step="0.01" min="1.01" :id="'odd-'+legKey(l)"
+                       :value="l.placed_odds===null ? l.venue_odds.toFixed(2)
+                                                    : l.placed_odds.toFixed(2)"
+                       @keydown.enter="mark(l,'placed')">
+              </td>
+              <td class="whitespace-nowrap">
+                <span class="sbtn" :class="{'on': l.status==='placed'}"
+                      @click="mark(l,'placed')" title="matched at the stake and price shown">✓</span>
+                <span class="sbtn skip" :class="{'on': l.status==='skipped'}"
+                      @click="mark(l,'skipped')" title="exclude this leg — stake 0">✕</span>
+                <span class="sbtn" :class="{'on': l.status==='auto'}"
+                      @click="mark(l,'auto')" title="let the re-solver size it">A</span>
+              </td>
+              <td class="num font-bold" :class="stakeClass(l)"
+                  x-text="l.status==='skipped' ? '—' : money(l.resolved_stake)"></td>
+              <td class="num" x-text="l.status==='skipped' ? '—' : money(l.resolved_risk)"></td>
+              <td>
+                <span class="dots"
                       :class="l.confidence==='high'?'text-[var(--accent)]':
                               l.confidence==='medium'?'text-[var(--warn)]':'text-[var(--bad)]'"
+                      :title="'depth ' + money(l.depth_touch)
+                              + (l.wom===null ? '' : ' · WOM ' + l.wom + '%')"
                       x-text="dots(l.confidence)"></span>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      </div>
+      <div class="text-[var(--dim)] mt-2" x-show="!tk.available">
+        Nothing is priced at this minute. Scrub into the execution window and the ticket fills.
+      </div>
+      <div class="text-[var(--dim)] mt-2 leading-relaxed" x-show="tk.available">
+        A <span class="text-[var(--accent)]">✓ placed</span> leg is frozen at the stake and price
+        you actually got and is never re-sized — the money is at the venue. A
+        <span class="text-[var(--bad)]">✕ skipped</span> leg releases both its exposure and its
+        column of the return matrix, which is why skipping one can make the others
+        <em>bigger</em>. Re-solving obeys the same SlateDrawdown(λ) budget and exposure cap the
+        pricing run did; it is a constrained version of that solve, not a rescale.
+      </div>
+    </div>
+    <div class="grip" @mousedown.stop="resizeStart('ticket', $event)"></div>
+  </div>
+
+  <!-- ────────────────────────────────────────────────────────────────────────────
+       WINDOW 2 — SLATE CARDS (RADAR)
+       Identical in shape to the live console, deliberately: a card must mean the same
+       thing on both, or a habit formed here misreads the real one.
+       ──────────────────────────────────────────────────────────────────────────── -->
+  <div class="win" x-show="win.radar.open && !win.radar.min" x-cloak
+       :class="{'on': focused==='radar'}" :style="winStyle('radar')" @mousedown="focus('radar')">
+    <div class="hd" @mousedown="dragStart('radar', $event)">
+      <span class="font-bold text-[var(--replay)]">▦ Slate Radar</span>
+      <span class="text-[var(--dim)]"
+            x-text="cards.length + ' cards · ' + blocked.length + ' blocked'"></span>
+      <span class="ml-auto flex gap-1">
+        <span class="wbtn" @click.stop="minimise('radar')">—</span>
+        <span class="wbtn" @click.stop="maximise('radar')">□</span>
+        <span class="wbtn" @click.stop="closeWin('radar')">✕</span>
+      </span>
+    </div>
+    <div class="bd">
+      <div class="flex flex-wrap gap-3 items-center mb-2 pb-2 border-b border-[var(--line)]">
+        <span class="text-[var(--dim)]">sort</span>
+        <template x-for="k in ['ev_pct','risk','minutes_to_kickoff']" :key="k">
+          <label class="flex items-center gap-1">
+            <input type="radio" :value="k" x-model="sortKey"><span x-text="k"></span>
+          </label>
+        </template>
+        <span class="text-[var(--dim)] ml-2">markets</span>
+        <template x-for="m in ['1X2','OverUnder','BTTS']" :key="m">
+          <label class="flex items-center gap-1">
+            <input type="checkbox" :value="m" x-model="markets"><span x-text="m"></span>
+          </label>
+        </template>
+        <label class="flex items-center gap-1 ml-auto text-[var(--dim)]">
+          <input type="checkbox" x-model="autosort"> auto-sort
+        </label>
+      </div>
+
+      <div class="grid-cards">
+        <template x-for="c in visible()" :key="c.match_id">
+          <div class="card p-2" :class="{'pos': c.ev_pct > 0, 'noxi': c.lineup_source==='none',
+                                         'tick': flash}">
+            <div class="flex justify-between items-baseline">
+              <span class="font-bold truncate" x-text="c.home + ' v ' + c.away"></span>
+              <span class="text-[var(--dim)] shrink-0 ml-2"
+                    x-text="'T' + tminus(c.minutes_to_kickoff)"></span>
+            </div>
+            <div class="flex justify-between items-baseline">
+              <span class="text-[var(--dim)]"
+                    x-text="fmtTime(c.kickoff) + ' · tid ' + c.tournament_id"></span>
+              <span class="flex gap-1">
+                <button class="vcr py-0 px-1 text-[var(--replay)]" @click="openDesk(c.match_id)"
+                        title="open this fixture on the Multi-Ladder Desk">☱</button>
+                <button class="vcr py-0 px-1 text-[var(--replay)]" @click="openForm(c.match_id)"
+                        title="team form and lineup delta for this fixture">📊</button>
               </span>
             </div>
-            <!-- Model and market on ONE shared 0-1 scale: the visible overhang of the model
-                 bar past the market bar IS the edge. When the XI drops, the green bar moves
-                 and the slate bar does not - that difference is the lineup shock. -->
-            <div class="bar bar-model mt-1"><span :style="'width:'+(l.p_model*100)+'%'"></span></div>
-            <div class="bar bar-market mt-0.5"><span :style="'width:'+(l.p_market*100)+'%'"></span></div>
-            <div class="flex justify-between text-[var(--dim)] mt-0.5">
-              <span x-text="'model ' + l.p_model.toFixed(3) + ' · mkt ' + l.p_market.toFixed(3)"></span>
-              <span :class="l.edge_pp>0?'text-[var(--accent)]':''"
-                    x-text="(l.edge_pp>0?'+':'') + l.edge_pp + 'pp'"></span>
+
+            <div class="flex justify-between items-baseline mt-1 mb-1 border-t border-b border-[var(--line)] py-1">
+              <span class="text-lg font-bold"
+                    :class="c.ev_pct>0?'text-[var(--accent)]':'text-[var(--dim)]'"
+                    x-text="(c.ev_pct>0?'+':'') + c.ev_pct + '%'"></span>
+              <span x-text="money(c.risk) + ' · ' + c.n_legs + ' leg' + (c.n_legs===1?'':'s')"></span>
             </div>
-            <div class="flex justify-between">
-              <span x-text="'fair ' + l.fair_odds.toFixed(2) + ' → ' + l.venue_odds.toFixed(2)"></span>
-              <span class="text-[var(--dim)]"
-                    x-text="'depth ' + money(l.depth_touch)
-                            + (l.slippage_pct!==null ? ' · slip ' + l.slippage_pct + '%' : '')"></span>
-            </div>
-            <!-- Weight of money, three levels deep. Above 60% is money queued to BACK this
-                 runner (steam, price shortening); below 40% is money queued to lay it (drift).
-                 It is resting size and not traded size, which is why it sits next to the
-                 depth figure rather than next to the edge. -->
-            <div class="flex justify-between items-center mt-0.5">
-              <span class="pill" :class="womClass(l.wom)"
-                    :title="'weight of money, 3 levels: ' + (l.wom===null ? 'no two-sided book'
-                            : l.wom + '% of resting size is on the back side')">
-                <span class="dots" x-text="womBlocks(l.wom)"></span>
-                <span x-text="(l.wom===null ? '—' : l.wom + '%') + ' WOM'"></span>
-              </span>
-              <span class="text-[var(--dim)]"
-                    x-text="'depth ' + money(l.depth_3lvl) + ' (3 lvls)'"></span>
+
+            <template x-for="l in legsOf(c)" :key="l.market + l.line + l.selection">
+              <div class="mb-2">
+                <div class="flex justify-between">
+                  <span x-text="l.selection + '  ' + l.side"></span>
+                  <span>
+                    <span x-text="money(l.venue_stake)"></span>
+                    <span class="dots ml-1"
+                          :class="l.confidence==='high'?'text-[var(--accent)]':
+                                  l.confidence==='medium'?'text-[var(--warn)]':'text-[var(--bad)]'"
+                          x-text="dots(l.confidence)"></span>
+                  </span>
+                </div>
+                <!-- Model and market on ONE shared 0-1 scale: the visible overhang of the model
+                     bar past the market bar IS the edge. When the XI drops, the green bar moves
+                     and the slate bar does not - that difference is the lineup shock. -->
+                <div class="bar bar-model mt-1"><span :style="'width:'+(l.p_model*100)+'%'"></span></div>
+                <div class="bar bar-market mt-0.5"><span :style="'width:'+(l.p_market*100)+'%'"></span></div>
+                <div class="flex justify-between text-[var(--dim)] mt-0.5">
+                  <span x-text="'model ' + l.p_model.toFixed(3) + ' · mkt ' + l.p_market.toFixed(3)"></span>
+                  <span :class="l.edge_pp>0?'text-[var(--accent)]':''"
+                        x-text="(l.edge_pp>0?'+':'') + l.edge_pp + 'pp'"></span>
+                </div>
+                <div class="flex justify-between">
+                  <span x-text="'fair ' + l.fair_odds.toFixed(2) + ' → ' + l.venue_odds.toFixed(2)"></span>
+                  <span class="text-[var(--dim)]"
+                        x-text="'depth ' + money(l.depth_touch)
+                                + (l.slippage_pct!==null ? ' · slip ' + l.slippage_pct + '%' : '')"></span>
+                </div>
+                <!-- Weight of money, three levels deep. Above 60% is money queued to BACK this
+                     runner (steam, price shortening); below 40% is money queued to lay it. It is
+                     resting size and not traded size, which is why it sits next to the depth
+                     figure rather than next to the edge. -->
+                <div class="flex justify-between items-center mt-0.5">
+                  <span class="pill" :class="womClass(l.wom)"
+                        :title="'weight of money, 3 levels: ' + (l.wom===null ? 'no two-sided book'
+                                : l.wom + '% of resting size is on the back side')">
+                    <span class="dots" x-text="womBlocks(l.wom)"></span>
+                    <span x-text="(l.wom===null ? '—' : l.wom + '%') + ' WOM'"></span>
+                  </span>
+                  <span class="text-[var(--dim)]"
+                        x-text="'depth ' + money(l.depth_3lvl) + ' (3 lvls)'"></span>
+                </div>
+              </div>
+            </template>
+
+            <div class="flex justify-between text-[var(--dim)] border-t border-[var(--line)] pt-1">
+              <span x-text="'XI ' + xiMark(c)"></span>
+              <span x-text="c.lineup_source"></span>
             </div>
           </div>
         </template>
-
-        <div class="flex justify-between text-[var(--dim)] border-t border-[var(--line)] pt-1">
-          <span x-text="'XI ' + xiMark(c)"></span>
-          <span x-text="c.lineup_source"></span>
-        </div>
       </div>
-    </template>
+
+      <!-- Never optional. "No bets today" and "the pipeline is broken" must stay distinct. -->
+      <div class="panel p-2 mt-3" x-show="blocked.length">
+        <div class="font-bold mb-1 text-[var(--warn)]" x-text="'GATED (' + blocked.length + ')'"></div>
+        <template x-for="x in blocked" :key="x.match_id">
+          <div class="flex gap-3 border-t border-[var(--line)] py-0.5">
+            <span class="w-64 truncate" x-text="x.fixture"></span>
+            <span class="text-[var(--dim)]" x-text="x.reasons.join(' | ')"></span>
+          </div>
+        </template>
+      </div>
+
+      <!-- Fixtures this MODEL cannot represent. A different refusal from a gate, and it moves
+           when the model does, so it is reported against the model rather than the card. -->
+      <div class="panel p-2 mt-3" x-show="refusedOf().length">
+        <div class="font-bold mb-1 text-[var(--warn)]"
+             x-text="'NOT COVERED BY ' + activeModel().label + ' (' + refusedOf().length + ')'"></div>
+        <template x-for="x in refusedOf()" :key="x.match_id">
+          <div class="flex gap-3 border-t border-[var(--line)] py-0.5">
+            <span class="w-24" x-text="x.match_id"></span>
+            <span class="text-[var(--dim)]" x-text="x.reason"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+    <div class="grip" @mousedown.stop="resizeStart('radar', $event)"></div>
   </div>
 
-  <!-- ── BLOCKED ───────────────────────────────────────────────────────────────────
-       Never optional. "No bets today" and "the pipeline is broken" must stay distinct. -->
-  <div class="panel p-2 mt-3" x-show="blocked.length">
-    <div class="font-bold mb-1 text-[var(--warn)]" x-text="'GATED (' + blocked.length + ')'"></div>
-    <template x-for="x in blocked" :key="x.match_id">
-      <div class="flex gap-3 border-t border-[var(--line)] py-0.5">
-        <span class="w-64 truncate" x-text="x.fixture"></span>
-        <span class="text-[var(--dim)]" x-text="x.reasons.join(' | ')"></span>
-      </div>
-    </template>
-  </div>
-
-  <!-- Fixtures this MODEL cannot represent. A different refusal from a gate, and it moves
-       when the model does, so it is reported against the model rather than the card. -->
-  <div class="panel p-2 mt-3" x-show="refusedOf().length">
-    <div class="font-bold mb-1 text-[var(--warn)]"
-         x-text="'NOT COVERED BY ' + activeModel().label + ' (' + refusedOf().length + ')'"></div>
-    <template x-for="x in refusedOf()" :key="x.match_id">
-      <div class="flex gap-3 border-t border-[var(--line)] py-0.5">
-        <span class="w-24" x-text="x.match_id"></span>
-        <span class="text-[var(--dim)]" x-text="x.reason"></span>
-      </div>
-    </template>
-  </div>
-
-  </div><!-- /tab cards -->
-
-  <!-- ════════════════════════════════════════════════════════════════════════════
-       TAB 2 — MULTI-LADDER DESK
+  <!-- ────────────────────────────────────────────────────────────────────────────
+       WINDOW 3 — MULTI-LADDER DESK
        The exchange screen. One fixture, one market, every runner's full archived
        ladder side by side, with the model's view above it and our own order marked
        where it would land.
-       ════════════════════════════════════════════════════════════════════════════ -->
-  <div x-show="tab==='ladder'">
-
-    <div class="panel p-2 mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-      <label class="flex items-center gap-1">
-        <span class="text-[var(--dim)]">fixture</span>
+       ──────────────────────────────────────────────────────────────────────────── -->
+  <div class="win" x-show="win.ladder.open && !win.ladder.min" x-cloak
+       :class="{'on': focused==='ladder'}" :style="winStyle('ladder')" @mousedown="focus('ladder')">
+    <div class="hd" @mousedown="dragStart('ladder', $event)">
+      <span class="font-bold text-[var(--replay)]">☱ Multi-Ladder Desk</span>
+      <span class="text-[var(--dim)]"
+            x-text="ladder ? ladder.fixture + ' · ' + ladder.market_label : '—'"></span>
+      <span class="ml-auto flex gap-1">
+        <span class="wbtn" @click.stop="minimise('ladder')">—</span>
+        <span class="wbtn" @click.stop="maximise('ladder')">□</span>
+        <span class="wbtn" @click.stop="closeWin('ladder')">✕</span>
+      </span>
+    </div>
+    <div class="bd">
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2 pb-2 border-b border-[var(--line)]">
         <select @change="setDeskMatch($event.target.value)">
           <template x-for="f in r.fixtures" :key="f.match_id">
             <option :value="f.match_id" :selected="f.match_id===desk.match_id"
                     x-text="f.fixture + (f.lineup_drop_min!==null ? '  (XI T−'+f.lineup_drop_min+'m)' : '  (no XI)')"></option>
           </template>
         </select>
-      </label>
+        <template x-for="m in (r.ladder_markets||['MATCH_ODDS'])" :key="m">
+          <button class="vcr" :class="{'on': desk.market===m}" @click="setDeskMarket(m)"
+                  x-text="marketLabel(m)"></button>
+        </template>
+        <template x-if="ladder">
+          <span class="text-[var(--dim)]"
+                x-text="'book sum ' + (ladder.book_sum===null ? 'incomplete'
+                         : (100*ladder.book_sum).toFixed(1) + '%')
+                         + ' · model ' + ladder.model + ' [' + ladder.model_status + ']'"></span>
+        </template>
+        <span class="text-[var(--warn)]" x-show="ladder && ladder.stale"
+              x-text="'order marks are from T' + tsign(ladder.priced_t) + 'm'"></span>
+      </div>
 
-      <span class="text-[var(--dim)]">market</span>
-      <template x-for="m in (r.ladder_markets||['MATCH_ODDS'])" :key="m">
-        <button class="vcr" :class="{'on': desk.market===m}" @click="setDeskMarket(m)"
-                x-text="marketLabel(m)"></button>
-      </template>
+      <div x-show="ladder && !ladder.resolved" class="panel p-2 mb-3 text-[var(--bad)]">
+        This fixture has no resolved Betfair identity on this match day, so there is no archived
+        ladder to show. The radar reports it under GATED.
+      </div>
 
-      <template x-if="ladder">
-        <span class="text-[var(--dim)]"
-              x-text="'book sum ' + (ladder.book_sum===null ? 'incomplete'
-                       : (100*ladder.book_sum).toFixed(1) + '%')
-                       + ' · model ' + ladder.model + ' [' + ladder.model_status + ']'
-                       + (ladder.lineup_drop_min!==null ? ' · XI T'+ladder.lineup_drop_min+'m' : ' · no XI')"></span>
-      </template>
-      <span class="text-[var(--warn)]" x-show="ladder && ladder.stale"
-            x-text="'order marks are from T' + tsign(ladder.priced_t) + 'm'"></span>
-      <span class="ml-auto text-[var(--dim)]"
-            x-text="'book at T' + tsign(r.t) + 'm · ' + fmtTime(r.as_of)"></span>
-    </div>
-
-    <div x-show="ladder && !ladder.resolved" class="panel p-2 mb-3 text-[var(--bad)]">
-      This fixture has no resolved Betfair identity on this match day, so there is no archived
-      ladder to show. The card grid reports it under GATED.
-    </div>
-
-    <div class="grid-lad" x-show="ladder">
-      <template x-for="rn in (ladder ? ladder.runners : [])" :key="rn.symbol">
-        <div class="panel p-2">
-
-          <!-- RUNNER HEADER: what the model thinks, what the market thinks, and what the
-               portfolio would therefore place. Same two-bar device as the cards. -->
-          <div class="flex justify-between items-baseline">
-            <span class="font-bold truncate" x-text="rn.label"></span>
-            <button class="vcr py-0 px-2" @click="openChart(rn)"
-                    title="odds trajectory and liquidity for this runner">📈 chart</button>
-          </div>
-
-          <div class="flex justify-between items-baseline mt-1">
-            <span class="text-[var(--dim)]">fair</span>
-            <span class="text-[var(--accent)]"
-                  x-text="rn.fair_odds===null ? '—' : rn.fair_odds.toFixed(2)"></span>
-            <span class="text-[var(--dim)]">mkt</span>
-            <span x-text="rn.mid===null ? '—' : rn.mid.toFixed(2)"></span>
-            <span class="text-[var(--dim)]">EV</span>
-            <span :class="rn.ev_pct>0?'text-[var(--accent)]':'text-[var(--dim)]'"
-                  x-text="rn.ev_pct===null ? '—' : (rn.ev_pct>0?'+':'') + rn.ev_pct + '%'"></span>
-          </div>
-
-          <div class="bar bar-model mt-1"><span :style="'width:'+(100*(rn.p_model||0))+'%'"></span></div>
-          <div class="bar bar-market mt-0.5"><span :style="'width:'+(100*(rn.p_market||0))+'%'"></span></div>
-          <div class="flex justify-between text-[var(--dim)] mt-0.5">
-            <span x-text="'model ' + (rn.p_model===null?'—':rn.p_model.toFixed(3))
-                          + ' · mkt ' + (rn.p_market===null?'—':rn.p_market.toFixed(3))"></span>
-            <span :class="rn.edge_pp>0?'text-[var(--accent)]':''"
-                  x-text="rn.edge_pp===null ? '' : (rn.edge_pp>0?'+':'') + rn.edge_pp + 'pp'"></span>
-          </div>
-
-          <!-- WEIGHT OF MONEY: one split bar, back against lay, three levels deep. -->
-          <div class="mt-2">
-            <div class="flex justify-between text-[var(--dim)]">
-              <span x-text="'back ' + (rn.wom===null?'—':rn.wom+'%')"></span>
-              <span>WOM (3 lvls)</span>
-              <span x-text="(rn.wom_lay===null?'—':rn.wom_lay+'%') + ' lay'"></span>
+      <div class="grid-lad" x-show="ladder">
+        <template x-for="rn in (ladder ? ladder.runners : [])" :key="rn.symbol">
+          <div class="panel p-2">
+            <!-- RUNNER HEADER: what the model thinks, what the market thinks, and what the
+                 portfolio would therefore place. Same two-bar device as the cards. -->
+            <div class="flex justify-between items-baseline">
+              <span class="font-bold truncate" x-text="rn.label"></span>
+              <button class="vcr py-0 px-2" @click="openChart(rn)"
+                      title="odds trajectory and liquidity for this runner">📈</button>
             </div>
-            <div class="womb mt-0.5">
-              <span class="b" :style="'width:'+(rn.wom===null?50:rn.wom)+'%'"></span>
-              <span class="l" :style="'width:'+(rn.wom_lay===null?50:rn.wom_lay)+'%'"></span>
+            <div class="flex justify-between items-baseline mt-1">
+              <span class="text-[var(--dim)]">fair</span>
+              <span class="text-[var(--accent)]"
+                    x-text="rn.fair_odds===null ? '—' : rn.fair_odds.toFixed(2)"></span>
+              <span class="text-[var(--dim)]">mkt</span>
+              <span x-text="rn.mid===null ? '—' : rn.mid.toFixed(2)"></span>
+              <span class="text-[var(--dim)]">EV</span>
+              <span :class="rn.ev_pct>0?'text-[var(--accent)]':'text-[var(--dim)]'"
+                    x-text="rn.ev_pct===null ? '—' : (rn.ev_pct>0?'+':'') + rn.ev_pct + '%'"></span>
             </div>
-          </div>
+            <div class="bar bar-model mt-1"><span :style="'width:'+(100*(rn.p_model||0))+'%'"></span></div>
+            <div class="bar bar-market mt-0.5"><span :style="'width:'+(100*(rn.p_market||0))+'%'"></span></div>
+            <div class="flex justify-between text-[var(--dim)] mt-0.5">
+              <span x-text="'model ' + (rn.p_model===null?'—':rn.p_model.toFixed(3))
+                            + ' · mkt ' + (rn.p_market===null?'—':rn.p_market.toFixed(3))"></span>
+              <span :class="rn.edge_pp>0?'text-[var(--accent)]':''"
+                    x-text="rn.edge_pp===null ? '' : (rn.edge_pp>0?'+':'') + rn.edge_pp + 'pp'"></span>
+            </div>
 
-          <!-- THE LADDER. Asks descend to the touch, then the spread, then the bids.
-               That ordering is not a preference: it puts the two prices that actually
-               trade adjacent to each other, with the gap between them drawn to scale. -->
-          <div class="mt-2">
-            <template x-for="(lv, i) in askRows(rn)" :key="'a'+i">
-              <div class="lad ask" :class="{'touch': lv.touch, 'empty': lv.price===null,
-                                            'hit': lv.hit>0}">
-                <span class="px" x-text="lv.price===null ? '—' : lv.price.toFixed(2)"></span>
-                <span class="vol">
-                  <i :style="'width:'+barPct(lv.size, rn.depth_max)+'%'"></i>
-                  <b x-text="lv.size===null ? '' : money(lv.size)"></b>
-                </span>
+            <!-- WEIGHT OF MONEY: one split bar, back against lay, three levels deep. -->
+            <div class="mt-2">
+              <div class="flex justify-between text-[var(--dim)]">
+                <span x-text="'back ' + (rn.wom===null?'—':rn.wom+'%')"></span>
+                <span>WOM (3 lvls)</span>
+                <span x-text="(rn.wom_lay===null?'—':rn.wom_lay+'%') + ' lay'"></span>
               </div>
-            </template>
-
-            <div class="spread">
-              <span x-text="'SPREAD ' + (rn.spread===null ? '—' : rn.spread.toFixed(2))"></span>
-              <span x-text="rn.spread_ticks===null ? '' : '(' + rn.spread_ticks + ' tick'
-                            + (rn.spread_ticks===1?'':'s') + ')'"></span>
-              <span x-text="rn.spread_pct===null ? '' : rn.spread_pct + '%'"></span>
+              <div class="womb mt-0.5">
+                <span class="b" :style="'width:'+(rn.wom===null?50:rn.wom)+'%'"></span>
+                <span class="l" :style="'width:'+(rn.wom_lay===null?50:rn.wom_lay)+'%'"></span>
+              </div>
             </div>
 
-            <template x-for="(lv, i) in bidRows(rn)" :key="'b'+i">
-              <div class="lad bid" :class="{'touch': lv.touch, 'empty': lv.price===null,
-                                            'hit': lv.hit>0}">
-                <span class="px" x-text="lv.price===null ? '—' : lv.price.toFixed(2)"></span>
-                <span class="vol">
-                  <i :style="'width:'+barPct(lv.size, rn.depth_max)+'%'"></i>
-                  <b x-text="lv.size===null ? '' : money(lv.size)"></b>
-                </span>
-              </div>
-            </template>
-          </div>
-
-          <!-- OUR ORDER. Amber wherever it rests, and it names the runner it actually
-               touches: on a synthetic the model selection and the venue runner differ, and
-               a marker that hid that would put the order on the wrong book. -->
-          <div class="mt-2 px-1 py-1 rounded" style="background:var(--fill-dim)"
-               x-show="rn.order">
-            <template x-if="rn.order">
-              <div>
-                <div class="flex justify-between" style="color:var(--fill)">
-                  <span x-text="'▸ ' + rn.order.side.toUpperCase() + ' ' + money(rn.order.venue_stake)
-                                + ' @ ' + rn.order.venue_odds.toFixed(2)"></span>
-                  <span x-text="rn.order.levels_used + ' lvl'
-                                + (rn.order.levels_used===1?'':'s')
-                                + (rn.order.fillable ? '' : ' · PARTIAL')"></span>
+            <!-- THE LADDER. Asks descend to the touch, then the spread, then the bids.
+                 That ordering is not a preference: it puts the two prices that actually
+                 trade adjacent to each other, with the gap between them drawn to scale. -->
+            <div class="mt-2">
+              <template x-for="(lv, i) in askRows(rn)" :key="'a'+i">
+                <div class="lad ask" :class="{'touch': lv.touch, 'empty': lv.price===null,
+                                              'hit': lv.hit>0}">
+                  <span class="px" x-text="lv.price===null ? '—' : lv.price.toFixed(2)"></span>
+                  <span class="vol">
+                    <i :style="'width:'+barPct(lv.size, rn.depth_max)+'%'"></i>
+                    <b x-text="lv.size===null ? '' : money(lv.size)"></b>
+                  </span>
                 </div>
-                <div class="flex justify-between text-[var(--dim)]">
-                  <span x-text="'for ' + rn.order.selection + ' · risk ' + money(rn.order.risk)"></span>
-                  <span x-text="(rn.order.fill_vwap===null ? '' : 'vwap ' + rn.order.fill_vwap.toFixed(3))
-                                + (rn.order.slippage_pct===null ? '' : ' · slip ' + rn.order.slippage_pct + '%')"></span>
+              </template>
+              <div class="spread">
+                <span x-text="'SPREAD ' + (rn.spread===null ? '—' : rn.spread.toFixed(2))"></span>
+                <span x-text="rn.spread_ticks===null ? '' : '(' + rn.spread_ticks + ' tick'
+                              + (rn.spread_ticks===1?'':'s') + ')'"></span>
+                <span x-text="rn.spread_pct===null ? '' : rn.spread_pct + '%'"></span>
+              </div>
+              <template x-for="(lv, i) in bidRows(rn)" :key="'b'+i">
+                <div class="lad bid" :class="{'touch': lv.touch, 'empty': lv.price===null,
+                                              'hit': lv.hit>0}">
+                  <span class="px" x-text="lv.price===null ? '—' : lv.price.toFixed(2)"></span>
+                  <span class="vol">
+                    <i :style="'width:'+barPct(lv.size, rn.depth_max)+'%'"></i>
+                    <b x-text="lv.size===null ? '' : money(lv.size)"></b>
+                  </span>
                 </div>
-                <div class="text-[var(--bad)]" x-show="rn.order.unfilled>0"
-                     x-text="money(rn.order.unfilled) + ' would not fill in the archived 3 levels'"></div>
+              </template>
+            </div>
+
+            <!-- OUR ORDER. Amber wherever it rests, and it names the runner it actually
+                 touches: on a synthetic the model selection and the venue runner differ, and
+                 a marker that hid that would put the order on the wrong book. -->
+            <div class="mt-2 px-1 py-1 rounded" style="background:var(--fill-dim)" x-show="rn.order">
+              <template x-if="rn.order">
+                <div>
+                  <div class="flex justify-between" style="color:var(--fill)">
+                    <span x-text="'▸ ' + rn.order.side.toUpperCase() + ' ' + money(rn.order.venue_stake)
+                                  + ' @ ' + rn.order.venue_odds.toFixed(2)"></span>
+                    <span x-text="rn.order.levels_used + ' lvl'
+                                  + (rn.order.levels_used===1?'':'s')
+                                  + (rn.order.fillable ? '' : ' · PARTIAL')"></span>
+                  </div>
+                  <div class="flex justify-between text-[var(--dim)]">
+                    <span x-text="'for ' + rn.order.selection + ' · risk ' + money(rn.order.risk)"></span>
+                    <span x-text="(rn.order.fill_vwap===null ? '' : 'vwap ' + rn.order.fill_vwap.toFixed(3))
+                                  + (rn.order.slippage_pct===null ? '' : ' · slip ' + rn.order.slippage_pct + '%')"></span>
+                  </div>
+                  <div class="text-[var(--bad)]" x-show="rn.order.unfilled>0"
+                       x-text="money(rn.order.unfilled) + ' would not fill in the archived 3 levels'"></div>
+                </div>
+              </template>
+            </div>
+
+            <!-- FOOTER: what has actually traded, and the average of what is resting. -->
+            <div class="flex justify-between text-[var(--dim)] border-t border-[var(--line)] mt-2 pt-1">
+              <span x-text="'matched ' + (rn.matched===null ? '—' : money(rn.matched))"></span>
+              <!-- A BOOK vwap: `order_book_1m` archives resting depth and a running matched
+                   total, never a traded price series, so a traded vwap cannot be computed from
+                   it and is not invented here. -->
+              <span title="volume-weighted average of the visible bid ladder (book, not traded)"
+                    x-text="'book vwap ' + (rn.vwap_book===null ? '—' : rn.vwap_book.toFixed(3))"></span>
+            </div>
+            <div class="text-[var(--dim)]"
+                 x-text="rn.book_ts===null ? 'no book at this minute'
+                         : 'book ' + fmtTime(rn.book_ts) + ' (' + rn.book_age_s + 's old)'"></div>
+          </div>
+        </template>
+      </div>
+      <div class="text-[var(--dim)]" x-show="!ladder">no ladder loaded — pick a fixture above.</div>
+    </div>
+    <div class="grip" @mousedown.stop="resizeStart('ladder', $event)"></div>
+  </div>
+
+  <!-- ────────────────────────────────────────────────────────────────────────────
+       WINDOW 4 — TRAJECTORY CHART
+       TOP PANE   market best back / best lay against the model's fair odds. The green
+                  line STEPS at the XI drop for a lineup-reading model and is flat for a
+                  team-level one -- that difference, on one axis with the price, is the
+                  whole reason this window exists.
+       BOTTOM     matched volume, which is the liquidity S-curve into kick-off.
+       The canvases stay in the DOM and are hidden rather than created on demand: a
+       canvas that does not exist cannot be handed to Chart.js.
+       ──────────────────────────────────────────────────────────────────────────── -->
+  <div class="win" x-show="win.chart.open && !win.chart.min" x-cloak
+       :class="{'on': focused==='chart'}" :style="winStyle('chart')" @mousedown="focus('chart')">
+    <div class="hd" @mousedown="dragStart('chart', $event)">
+      <span class="font-bold text-[var(--replay)]">📈 <span x-text="chart.title || 'Trajectory'"></span></span>
+      <span class="text-[var(--dim)]" x-text="chart.sub"></span>
+      <span class="ml-auto flex gap-1">
+        <span class="wbtn" @click.stop="minimise('chart')">—</span>
+        <span class="wbtn" @click.stop="maximise('chart'); resizeCharts()">□</span>
+        <span class="wbtn" @click.stop="closeWin('chart')">✕</span>
+      </span>
+    </div>
+    <div class="bd">
+      <div class="flex flex-wrap gap-x-4 text-[var(--dim)] mb-1">
+        <span><span style="color:#60a5fa">──</span> best back</span>
+        <span><span style="color:#f472b6">──</span> best lay</span>
+        <span><span style="color:#4ade80">╌╌</span> model fair odds 1/p</span>
+        <span><span style="color:#4ade80">▓</span> exec window T−25…T−12</span>
+        <span><span style="color:#fbbf24">┊</span> lineups confirmed</span>
+        <span><span style="color:#60a5fa">┃</span> replay clock</span>
+      </div>
+      <div :style="'height:'+chartH()+'px'"><canvas id="pxChart"></canvas></div>
+      <div class="text-[var(--dim)] mt-2">matched volume (£) — liquidity into kick-off</div>
+      <div :style="'height:'+Math.round(chartH()*0.55)+'px'"><canvas id="lqChart"></canvas></div>
+      <div class="text-[var(--dim)] mt-1" x-show="chart.note" x-text="chart.note"></div>
+      <div class="text-[var(--dim)] mt-1" x-show="!chart.symbol">
+        Pick a runner's 📈 button on the Multi-Ladder Desk to load a trajectory.
+      </div>
+    </div>
+    <div class="grip" @mousedown.stop="resizeStart('chart', $event); resizeCharts()"></div>
+  </div>
+
+  <!-- ────────────────────────────────────────────────────────────────────────────
+       WINDOW 5 — TEAM FORM & LINEUP DELTA
+       Two questions the model does not answer for the operator: is this team any good
+       right now, and is this their team.
+       ──────────────────────────────────────────────────────────────────────────── -->
+  <div class="win" x-show="win.form.open && !win.form.min" x-cloak
+       :class="{'on': focused==='form'}" :style="winStyle('form')" @mousedown="focus('form')">
+    <div class="hd" @mousedown="dragStart('form', $event)">
+      <span class="font-bold text-[var(--replay)]">📊 Team Form &amp; XI Delta</span>
+      <span class="text-[var(--dim)]" x-text="stats ? stats.fixture : '—'"></span>
+      <span class="ml-auto flex gap-1">
+        <span class="wbtn" @click.stop="minimise('form')">—</span>
+        <span class="wbtn" @click.stop="maximise('form')">□</span>
+        <span class="wbtn" @click.stop="closeWin('form')">✕</span>
+      </span>
+    </div>
+    <div class="bd">
+      <div class="flex flex-wrap items-center gap-3 mb-2 pb-2 border-b border-[var(--line)]">
+        <span class="text-[var(--dim)]">fixture</span>
+        <select @change="setStatsMatch($event.target.value)">
+          <template x-for="f in r.fixtures" :key="f.match_id">
+            <option :value="f.match_id" :selected="f.match_id===statsMatch"
+                    x-text="f.fixture"></option>
+          </template>
+        </select>
+        <span class="text-[var(--dim)]" x-show="stats"
+              x-text="stats ? ('XI ' + (stats.lineup.available
+                        ? stats.lineup.source + (stats.lineup.drop_min!==null
+                            ? ' · dropped T−' + stats.lineup.drop_min + 'm' : '')
+                        : 'not published at T' + tsign(r.t) + 'm')) : ''"></span>
+      </div>
+
+      <template x-if="stats">
+        <div>
+          <div class="grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(330px,1fr))">
+            <template x-for="side in ['home','away']" :key="side">
+              <div class="panel p-2">
+                <div class="flex justify-between items-baseline mb-1">
+                  <span class="font-bold" x-text="stats[side==='home'?'home':'away']"></span>
+                  <span class="text-[var(--dim)]" x-text="side==='home' ? 'HOME' : 'AWAY'"></span>
+                </div>
+
+                <!-- LAST N: newest first, which is how the row is read. -->
+                <div class="flex gap-1 mb-1">
+                  <template x-for="(m, i) in stats.form[side].matches" :key="i">
+                    <span class="badge" :class="m.result"
+                          :title="m.date + '  ' + m.venue + ' v ' + m.opponent + '  ' + m.score
+                                  + (m.sot_for===null ? '' : '  · SoT ' + m.sot_for + '–' + m.sot_against)">
+                      <b x-text="m.result"></b><i x-text="m.score"></i>
+                    </span>
+                  </template>
+                  <span class="text-[var(--dim)] self-center ml-1"
+                        x-show="!stats.form[side].matches.length">no completed matches before this day</span>
+                </div>
+
+                <div class="flex flex-wrap gap-x-4 text-[var(--dim)]">
+                  <span x-text="stats.form[side].w + 'W ' + stats.form[side].d + 'D '
+                                + stats.form[side].l + 'L'"></span>
+                  <span x-text="'pts ' + stats.form[side].points + ' (' + stats.form[side].ppg + '/g)'"></span>
+                  <span x-text="'GF ' + stats.form[side].gf + ' · GA ' + stats.form[side].ga
+                                + ' · GD ' + (stats.form[side].gd>0?'+':'') + stats.form[side].gd"></span>
+                  <span x-show="stats.form[side].sot_for!==null"
+                        x-text="'SoT ' + stats.form[side].sot_for + '–' + stats.form[side].sot_against"></span>
+                  <span x-show="stats.form[side].xg_for!==null"
+                        x-text="'xG ' + stats.form[side].xg_for + '–' + stats.form[side].xg_against"></span>
+                </div>
+
+                <!-- LINEUP REGULARITY -->
+                <div class="mt-2 pt-2 border-t border-[var(--line)]">
+                  <div class="px-2 py-1 rounded mb-1"
+                       :class="deltaClass(stats.lineup[side].status)"
+                       x-text="deltaLabel(stats.lineup[side])"></div>
+                  <template x-for="p in stats.lineup[side].missing_starters" :key="p.player_id">
+                    <div class="flex justify-between border-b border-[var(--line)] py-0.5">
+                      <span><span class="text-[var(--bad)]">✕</span>
+                            <span x-text="p.name"></span>
+                            <span class="text-[var(--dim)]" x-text="' (' + p.position + ')'"></span></span>
+                      <span class="text-[var(--dim)]"
+                            x-text="p.starts + '/' + stats.lineup[side].basis_matches
+                                    + ' starts · ' + p.start_rate_pct + '%'"></span>
+                    </div>
+                  </template>
+                  <template x-for="p in stats.lineup[side].unexpected" :key="'u'+p.player_id">
+                    <div class="flex justify-between border-b border-[var(--line)] py-0.5">
+                      <span><span class="text-[var(--warn)]">▲</span>
+                            <span x-text="p.name"></span>
+                            <span class="text-[var(--dim)]" x-text="' (' + p.position + ')'"></span></span>
+                      <span class="text-[var(--dim)]"
+                            x-text="'rare starter · ' + p.start_rate_pct + '%'"></span>
+                    </div>
+                  </template>
+                  <div class="text-[var(--dim)] mt-1"
+                       x-text="'regularity basis: ' + stats.lineup[side].basis + ' · '
+                               + stats.lineup[side].basis_matches + ' matches · threshold '
+                               + Math.round(100*stats.lineup[side].threshold) + '% start rate'"></div>
+                </div>
+
+                <!-- THE ANNOUNCED XI -->
+                <div class="mt-2 pt-2 border-t border-[var(--line)]" x-show="stats.lineup.available">
+                  <div class="text-[var(--dim)] mb-0.5">announced XI</div>
+                  <div class="flex flex-wrap gap-x-3">
+                    <template x-for="p in xiOf(side).filter(p => !p.substitute)" :key="p.player_id">
+                      <span x-text="p.name"
+                            :title="p.position"></span>
+                    </template>
+                  </div>
+                </div>
               </div>
             </template>
           </div>
 
-          <!-- FOOTER: what has actually traded, and the average of what is resting. -->
-          <div class="flex justify-between text-[var(--dim)] border-t border-[var(--line)] mt-2 pt-1">
-            <span x-text="'matched ' + (rn.matched===null ? '—' : money(rn.matched))"></span>
-            <!-- A BOOK vwap: `order_book_1m` archives resting depth and a running matched
-                 total, never a traded price series, so a traded vwap cannot be computed from
-                 it and is not invented here. -->
-            <span title="volume-weighted average of the visible bid ladder (book, not traded)"
-                  x-text="'book vwap ' + (rn.vwap_book===null ? '—' : rn.vwap_book.toFixed(3))"></span>
+          <div class="text-[var(--dim)] mt-2 leading-relaxed" x-show="stats.xg_note"
+               x-text="stats.xg_note"></div>
+          <div class="text-[var(--dim)] mt-1 leading-relaxed">
+            Form is read from matches strictly BEFORE <span x-text="stats.day"></span>, and the
+            announced XI through the same point-in-time source the pricing pipeline reads — so
+            this panel can never show a teamsheet the model could not see at T<span
+            x-text="tsign(r.t)"></span>m.
           </div>
-          <div class="text-[var(--dim)]"
-               x-text="rn.book_ts===null ? 'no book at this minute'
-                       : 'book ' + fmtTime(rn.book_ts) + ' (' + rn.book_age_s + 's old)'"></div>
         </div>
       </template>
+      <div class="text-[var(--dim)]" x-show="!stats" x-text="statsNote || 'loading…'"></div>
     </div>
+    <div class="grip" @mousedown.stop="resizeStart('form', $event)"></div>
+  </div>
 
-    <div class="panel p-3" x-show="!ladder">
-      <span class="text-[var(--dim)]">no ladder loaded — pick a fixture above.</span>
+  <!-- ────────────────────────────────────────────────────────────────────────────
+       WINDOW 6 — MODEL DIAGNOSTIC SCORECARD
+       Three sources, three different claims: what the training run scored, what the
+       stored posterior scores against the closing market, and what this account's
+       bets did against the close.
+       ──────────────────────────────────────────────────────────────────────────── -->
+  <div class="win" x-show="win.score.open && !win.score.min" x-cloak
+       :class="{'on': focused==='score'}" :style="winStyle('score')" @mousedown="focus('score')">
+    <div class="hd" @mousedown="dragStart('score', $event)">
+      <span class="font-bold text-[var(--replay)]">🎯 Model Scorecard</span>
+      <span class="text-[var(--dim)]" x-text="sc ? sc.model.label : '—'"></span>
+      <span class="ml-auto flex gap-1">
+        <span class="wbtn" @click.stop="minimise('score')">—</span>
+        <span class="wbtn" @click.stop="maximise('score')">□</span>
+        <span class="wbtn" @click.stop="closeWin('score')">✕</span>
+      </span>
     </div>
-  </div><!-- /tab ladder -->
+    <div class="bd">
+      <div class="flex flex-wrap items-center gap-2 mb-2 pb-2 border-b border-[var(--line)]">
+        <span class="text-[var(--dim)]">model</span>
+        <template x-for="m in r.models" :key="'sc'+m.key">
+          <button class="vcr" :class="{'on': scModel===m.key}" @click="setScModel(m.key)"
+                  x-text="m.key"></button>
+        </template>
+        <button class="vcr" @click="loadScorecard(true)">↻ refresh</button>
+        <span class="text-[var(--dim)]" x-show="sc"
+              x-text="sc ? sc.model.run_name + ' · ' + sc.model.experiment
+                           + ' · fold ' + sc.model.fold_idx : ''"></span>
+      </div>
+
+      <template x-if="sc">
+        <div>
+          <!-- THE FIVE TILES -->
+          <div class="grid gap-2 mb-3" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+            <div class="tile">
+              <div class="k">LogLoss vs market</div>
+              <div class="v" :class="sc.paired.logloss_vs_market===null ? 'text-[var(--dim)]'
+                                     : sc.paired.logloss_vs_market<0 ? 'text-[var(--accent)]'
+                                                                     : 'text-[var(--bad)]'"
+                   x-text="sc.paired.logloss_vs_market===null ? '—'
+                           : (sc.paired.logloss_vs_market>0?'+':'') + sc.paired.logloss_vs_market"></div>
+              <div class="k" x-text="sc.paired.logloss===null ? 'no paired evaluation'
+                                     : 'model ' + sc.paired.logloss + ' · market '
+                                       + sc.paired.market_logloss"></div>
+            </div>
+            <div class="tile">
+              <div class="k">Brier (paired)</div>
+              <div class="v" :class="sc.paired.brier===null ? 'text-[var(--dim)]' : ''"
+                   x-text="sc.paired.brier===null ? '—' : sc.paired.brier"></div>
+              <!-- Deliberately NOT falling back to `oos.brier`. The training runner's fold Brier
+                   is a per-SELECTION mean and this one is a per-MATCH sum over three outcomes,
+                   so the two differ by roughly a factor of three; showing whichever exists under
+                   one label would invite a comparison neither number supports. The fold figure
+                   has its own row in the table below. -->
+              <div class="k" x-text="sc.paired.brier===null ? 'no paired evaluation'
+                                     : 'market ' + (sc.paired.market_brier===null?'—':sc.paired.market_brier)"></div>
+            </div>
+            <div class="tile">
+              <div class="k">CRPS</div>
+              <div class="v" x-text="sc.paired.crps===null ? '—' : sc.paired.crps"></div>
+              <div class="k">goals, both sides</div>
+            </div>
+            <div class="tile">
+              <div class="k">CLV beat rate</div>
+              <div class="v" :class="sc.clv.beat_pct===null ? 'text-[var(--dim)]'
+                                     : sc.clv.beat_pct>=50 ? 'text-[var(--accent)]' : 'text-[var(--bad)]'"
+                   x-text="sc.clv.beat_pct===null ? '—' : sc.clv.beat_pct + '%'"></div>
+              <div class="k" x-text="sc.clv.n_bets + ' bets · ' + sc.clv.n_beat + ' beat the close'"></div>
+            </div>
+            <div class="tile">
+              <div class="k">fixtures evaluated</div>
+              <div class="v" x-text="(sc.paired.n || 0) + (sc.oos.n_matches ? ' / ' + sc.oos.n_matches : '')"></div>
+              <div class="k" x-text="sc.oos.n_folds + ' folds · ' + sc.oos.n_scored + ' scored'"></div>
+            </div>
+          </div>
+
+          <!-- OUT OF SAMPLE, FROM THE TRAINING RUN -->
+          <div class="mb-3">
+            <div class="text-[var(--dim)] mb-1">out of sample, from <code>mcmc_experiments.fold_results</code></div>
+            <table>
+              <thead><tr><th>metric</th><th class="num">value</th><th>basis</th></tr></thead>
+              <tbody>
+                <tr><td>LogLoss (fold mean)</td>
+                    <td class="num" x-text="sc.oos.logloss===null?'—':sc.oos.logloss"></td>
+                    <td class="text-[var(--dim)]" x-text="sc.oos.n_scored + ' folds'"></td></tr>
+                <tr><td>LogLoss (match-weighted)</td>
+                    <td class="num" x-text="sc.oos.logloss_weighted===null?'—':sc.oos.logloss_weighted"></td>
+                    <td class="text-[var(--dim)]"
+                        x-text="sc.oos.n_matches===null ? 'no fold carries n_matches'
+                                                        : sc.oos.n_matches + ' matches'"></td></tr>
+                <tr><td>Brier (per selection)</td>
+                    <td class="num" x-text="sc.oos.brier===null?'—':sc.oos.brier"></td>
+                    <td class="text-[var(--dim)]" x-text="sc.oos.n_scored + ' folds'"></td></tr>
+                <tr><td>RPS</td>
+                    <td class="num" x-text="sc.oos.rps===null?'—':sc.oos.rps"></td>
+                    <td class="text-[var(--dim)]" x-text="sc.oos.n_scored + ' folds'"></td></tr>
+                <tr><td>converged folds</td>
+                    <td class="num" x-text="sc.oos.n_converged + ' / ' + sc.oos.n_folds"></td>
+                    <td class="text-[var(--dim)]"
+                        x-text="'max R̂ ' + (sc.oos.r_hat_max===null?'—':sc.oos.r_hat_max)
+                                + ' · ' + sc.oos.divergences + ' divergences'"></td></tr>
+                <tr><td>target window</td>
+                    <td class="num" x-text="sc.oos.first_match_date===null ? '—'
+                                            : sc.oos.first_match_date"></td>
+                    <td class="text-[var(--dim)]" x-text="sc.oos.last_match_date===null ? ''
+                                                          : '→ ' + sc.oos.last_match_date"></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- AGAINST THE m00 CONTROL -->
+          <div class="mb-3" x-show="sc.control">
+            <div class="text-[var(--dim)] mb-1">
+              versus the <span x-text="sc.control ? sc.control.label : ''"></span> control —
+              a richer pillar that does not beat it has bought structure that did not pay
+            </div>
+            <table x-show="sc.control">
+              <thead><tr><th>metric</th><th class="num">this model</th><th class="num">m00</th>
+                         <th class="num">Δ</th></tr></thead>
+              <tbody>
+                <tr><td>LogLoss (fold mean)</td>
+                    <td class="num" x-text="fmt(sc.oos.logloss)"></td>
+                    <td class="num" x-text="fmt(sc.control.logloss)"></td>
+                    <td class="num" :class="dClass(sc.control.d_logloss)"
+                        x-text="fmtD(sc.control.d_logloss)"></td></tr>
+                <tr><td title="per-selection mean, as the training runner wrote it">Brier (fold)</td>
+                    <td class="num" x-text="fmt(sc.oos.brier)"></td>
+                    <td class="num" x-text="fmt(sc.control.brier)"></td>
+                    <td class="num" :class="dClass(sc.control.d_brier)"
+                        x-text="fmtD(sc.control.d_brier)"></td></tr>
+                <tr><td>RPS</td>
+                    <td class="num" x-text="fmt(sc.oos.rps)"></td>
+                    <td class="num" x-text="fmt(sc.control.rps)"></td>
+                    <td class="num" :class="dClass(sc.control.d_rps)"
+                        x-text="fmtD(sc.control.d_rps)"></td></tr>
+                <tr><td>LogLoss (paired, vs market)</td>
+                    <td class="num" x-text="fmt(sc.paired.logloss)"></td>
+                    <td class="num" x-text="fmt(sc.control.paired_logloss)"></td>
+                    <td class="num" :class="dClass(sc.control.d_paired_logloss)"
+                        x-text="fmtD(sc.control.d_paired_logloss)"></td></tr>
+                <tr><td>CRPS (paired)</td>
+                    <td class="num" x-text="fmt(sc.paired.crps)"></td>
+                    <td class="num" x-text="fmt(sc.control.paired_crps)"></td>
+                    <td class="num" :class="dClass(sc.control.d_paired_crps)"
+                        x-text="fmtD(sc.control.d_paired_crps)"></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- WHAT THE BETS DID -->
+          <div class="mb-2">
+            <div class="text-[var(--dim)] mb-1">
+              this account's replayed bets, from <code x-text="sc.clv.schema + '.clv_audit'"></code>
+            </div>
+            <div class="flex flex-wrap gap-x-6 gap-y-1">
+              <span><span class="text-[var(--dim)]">bets</span> <span x-text="sc.clv.n_bets"></span></span>
+              <span><span class="text-[var(--dim)]">beat close</span>
+                    <span x-text="sc.clv.n_beat + (sc.clv.beat_pct===null?'':' ('+sc.clv.beat_pct+'%)')"></span></span>
+              <span><span class="text-[var(--dim)]">mean CLV</span>
+                    <span x-text="sc.clv.clv===null?'—':sc.clv.clv"></span></span>
+              <span><span class="text-[var(--dim)]">entry lead</span>
+                    <span x-text="sc.clv.entry_lead_min===null?'—':(sc.clv.entry_lead_min+'m')"></span></span>
+              <span><span class="text-[var(--dim)]">settled</span> <span x-text="sc.clv.n_settled"></span></span>
+              <span><span class="text-[var(--dim)]">matched risk</span>
+                    <span x-text="money(sc.clv.matched_risk)"></span></span>
+              <span><span class="text-[var(--dim)]">net PnL</span>
+                    <span :class="sc.clv.net_pnl>=0?'text-[var(--accent)]':'text-[var(--bad)]'"
+                          x-text="money(sc.clv.net_pnl)"></span></span>
+              <span><span class="text-[var(--dim)]">ROI</span>
+                    <span x-text="sc.clv.roi_pct===null?'—':(sc.clv.roi_pct+'%')"></span></span>
+            </div>
+          </div>
+
+          <div class="text-[var(--dim)] leading-relaxed" x-show="sc.paired.method"
+               x-text="'paired method: ' + sc.paired.method"></div>
+          <template x-for="(n, i) in sc.notes" :key="i">
+            <div class="text-[var(--warn)] mt-1 leading-relaxed" x-text="'⚠ ' + n"></div>
+          </template>
+        </div>
+      </template>
+      <div class="text-[var(--dim)]" x-show="!sc" x-text="scNote || 'loading…'"></div>
+    </div>
+    <div class="grip" @mousedown.stop="resizeStart('score', $event)"></div>
+  </div>
+
+  </div><!-- /.ws -->
+
+  <!-- ── BOTTOM DOCK: minimised windows ───────────────────────────────────────── -->
+  <div class="dock">
+    <span class="text-[var(--dim)]">dock</span>
+    <template x-for="w in WINDOWS" :key="'d'+w.id">
+      <button class="chip" x-show="win[w.id].open && win[w.id].min" @click="restore(w.id)"
+              x-text="w.icon + ' ' + w.title"></button>
+    </template>
+    <span class="text-[var(--dim)]" x-show="!WINDOWS.some(w => win[w.id].open && win[w.id].min)">
+      empty — minimise a window with [—] and it parks here
+    </span>
+    <span class="ml-auto text-[var(--dim)]">
+      space play/pause · ← → step · x XI · e exec · k KO · f settle · 1–6 windows · t tile
+    </span>
+  </div>
 
   <!-- ── SETTLEMENT ────────────────────────────────────────────────────────────────
        What actually happened. Leg by leg first, aggregate second: an ROI with no legs
-       behind it is a number nobody can check. -->
-  <!-- `x-if`, not `x-show`: `x-show` leaves the subtree in the DOM and Alpine still evaluates
+       behind it is a number nobody can check.
+       `x-if`, not `x-show`: `x-show` leaves the subtree in the DOM and Alpine still evaluates
        every binding inside it, so `settlement.day` would throw on every tick before the first
        settlement. `x-if` removes it entirely until there is something to render. -->
   <template x-if="showSettlement && settlement">
@@ -694,43 +1196,6 @@
     </div>
   </div>
   </template>
-
-  <!-- ── FLOATING TRAJECTORY CHART ────────────────────────────────────────────────
-       Kept in the DOM and hidden rather than created on demand: a canvas that does not
-       exist cannot be handed to Chart.js, and re-creating the two charts on every open
-       would leak a context per open.
-
-       TOP PANE   market best back / best lay against the model's fair odds. The green
-                  line STEPS at the XI drop for a lineup-reading model and is flat for a
-                  team-level one -- that difference, on one axis with the price, is the
-                  whole reason this window exists.
-       BOTTOM     matched volume, which is the liquidity S-curve into kick-off. -->
-  <div class="float" x-show="chart.open" x-cloak
-       :style="floatStyle()">
-    <div class="hd" @mousedown="dragStart($event)">
-      <span class="font-bold text-[var(--replay)]" x-text="chart.title"></span>
-      <span class="text-[var(--dim)]" x-text="chart.sub"></span>
-      <span class="ml-auto flex gap-1">
-        <span class="wbtn" @click.stop="chart.min = !chart.min; resizeCharts()" title="minimise">—</span>
-        <span class="wbtn" @click.stop="chart.max = !chart.max; resizeCharts()" title="maximise">□</span>
-        <span class="wbtn" @click.stop="closeChart()" title="close">✕</span>
-      </span>
-    </div>
-    <div class="bd" x-show="!chart.min">
-      <div class="flex flex-wrap gap-x-4 text-[var(--dim)] mb-1">
-        <span><span style="color:#60a5fa">──</span> best back</span>
-        <span><span style="color:#f472b6">──</span> best lay</span>
-        <span><span style="color:#4ade80">╌╌</span> model fair odds 1/p</span>
-        <span><span style="color:#4ade80">▓</span> exec window T−25…T−12</span>
-        <span><span style="color:#fbbf24">┊</span> lineups confirmed</span>
-        <span><span style="color:#60a5fa">┃</span> replay clock</span>
-      </div>
-      <div :style="'height:'+(chart.max?300:180)+'px'"><canvas id="pxChart"></canvas></div>
-      <div class="text-[var(--dim)] mt-2">matched volume (£) — liquidity into kick-off</div>
-      <div :style="'height:'+(chart.max?160:100)+'px'"><canvas id="lqChart"></canvas></div>
-      <div class="text-[var(--dim)] mt-1" x-show="chart.note" x-text="chart.note"></div>
-    </div>
-  </div>
 </div>
 
 <script>
@@ -780,7 +1245,28 @@ if (window.Chart) {
 // reactive, because the canvas is redrawn by `chart.update()` and never by a binding.
 const CHARTS = { px: null, lq: null };
 
+// The workspace roster. One place, so the top dock, the bottom dock, the keyboard shortcuts and
+// the tiler cannot disagree about which windows exist.
+const WINDOWS = [
+  {id:'ticket', icon:'📋', title:'Staking Ticket'},
+  {id:'radar',  icon:'▦',  title:'Slate Radar'},
+  {id:'ladder', icon:'☱',  title:'Multi-Ladder Desk'},
+  {id:'chart',  icon:'📈', title:'Trajectory Chart'},
+  {id:'form',   icon:'📊', title:'Team Form'},
+  {id:'score',  icon:'🎯', title:'Model Scorecard'},
+];
+const LAYOUT_KEY = 'md.replay.layout.v1';
+const DEFAULT_LAYOUT = {
+  ticket: {open:true,  min:false, max:false, x:8,   y:8,   w:1000, h:430, z:6},
+  radar:  {open:true,  min:false, max:false, x:1016,y:8,   w:620,  h:860, z:5},
+  ladder: {open:false, min:false, max:false, x:60,  y:450, w:940,  h:520, z:4},
+  chart:  {open:false, min:false, max:false, x:140, y:120, w:720,  h:460, z:3},
+  form:   {open:false, min:false, max:false, x:8,   y:446, w:1000, h:430, z:2},
+  score:  {open:false, min:false, max:false, x:200, y:90,  w:900,  h:620, z:1},
+};
+
 function replay_() { return {
+  WINDOWS,
   a:{equity:0,free:0,is_live:false},
   b:{window:'',status:'',n_legs:0,n_fixtures:0,exposure_pct:0,cap_pct:25,total_risk:0,
      k_risk:0,risk_lambda:0,capped:false,n_low_confidence:0,fold_idx:0,warning:'',as_of:''},
@@ -790,38 +1276,51 @@ function replay_() { return {
      n_executed:0,n_fixtures:0,n_lineups:0,book_from:null,book_to:null,fixtures:[],
      in_play:false,ladder_markets:['MATCH_ODDS','OVER_UNDER_25','BOTH_TEAMS_TO_SCORE'],
      window_open:-25,window_close:-12},
+  tk:{available:false,n_legs:0,legs:[],resolved:false,stale:false,note:'',n_placed:0,n_skipped:0,
+      n_auto:0,bankroll:0,exposure_cap_pct:0,committed_risk:0,residual_risk:0,auto_risk:0,
+      total_risk:0,k_risk:0,exposure_pct:0,capped:false},
   cards:[], blocked:[], settlement:null, matchdays:[],
   connected:false, autosort:true, sortKey:'ev_pct',
   markets:['1X2','OverUnder','BTTS'], msg:'', msgOk:true, ws:null,
   showSettlement:false, flash:false, lastSeq:-1,
 
-  // ── the desk ──────────────────────────────────────────────────────────────────
-  tab:'cards',
+  // ── the workspace ─────────────────────────────────────────────────────────────
+  win: JSON.parse(JSON.stringify(DEFAULT_LAYOUT)),
+  focused:'ticket', zTop:10, drag:null, resize:null,
+
+  // ── panel state ───────────────────────────────────────────────────────────────
   desk:{match_id:null, market:'MATCH_ODDS'},
   ladder:null, ladderBusy:false, ladderAt:0,
-  chart:{open:false, min:false, max:false, title:'', sub:'', note:'', drop:null,
-         match_id:null, symbol:null, market:null, x:null, y:null, busy:false, at:0},
-  drag:null, pendingChart:null,
+  chart:{title:'', sub:'', note:'', drop:null, match_id:null, symbol:null, market:null,
+         busy:false, at:0},
+  stats:null, statsMatch:null, statsNote:'', statsBusy:false, statsAt:0, statsSeq:-1,
+  sc:null, scModel:null, scNote:'', scBusy:false,
+  pendingChart:null, prevStake:{},
 
   start(){
+    this.loadLayout();
     this.pull(); this.connect(); this.loadMatchdays();
     // `?results=1` opens the results view on load. A deep link is how an operator sends a
     // settled replay to someone else, and it is the only way to reach this view without a
     // click - which is also what makes it screenshottable in CI.
     const qs = new URLSearchParams(location.search);
     if (qs.get('results')) this.showSettlement = true;
-    // `?desk=<match_id>` opens the ladder desk on one fixture, and `?chart=<symbol>` opens
-    // that runner's trajectory window on top of it, for the same reason: it is how one view of
-    // one runner is sent to someone else, and it is the only way to reach either without a
-    // click -- which is also what makes them screenshottable in CI.
-    if (qs.get('desk')) { this.desk.match_id = Number(qs.get('desk')); this.tab = 'ladder'; }
-    else if (qs.get('tab') === 'ladder') this.tab = 'ladder';
+    // `?desk=<match_id>` opens the ladder desk on one fixture, `?chart=<symbol>` opens that
+    // runner's trajectory on top of it, `?stats=<match_id>` the form panel and `?score=<model>`
+    // the scorecard -- the same reason in every case: it is how one view is sent to someone
+    // else, and it is the only way to reach it without a click.
+    if (qs.get('desk')) { this.desk.match_id = Number(qs.get('desk')); this.openWin('ladder'); }
     if (qs.get('market')) this.desk.market = qs.get('market');
+    if (qs.get('stats')) { this.statsMatch = Number(qs.get('stats')); this.openWin('form'); }
+    if (qs.get('score')) { this.scModel = qs.get('score'); this.openWin('score'); }
+    if (qs.get('tile')) this.tile();
     this.pendingChart = qs.get('chart');
+    if (this.pendingChart) this.openWin('chart');
     // The keyboard is the scrubber an operator actually uses: space to play, arrows to
-    // step, and the four jump targets on their initials.
+    // step, the four jump targets on their initials, and the six windows on 1-6.
     window.addEventListener('keydown', e => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      const tag = e.target.tagName;
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
       if (e.key === ' ')          { e.preventDefault(); this.togglePlay(); }
       if (e.key === 'ArrowRight') { e.preventDefault(); this.step(1); }
       if (e.key === 'ArrowLeft')  { e.preventDefault(); this.step(-1); }
@@ -829,13 +1328,122 @@ function replay_() { return {
       if (e.key === 'e') this.jump('exec');
       if (e.key === 'k') this.jump('kickoff');
       if (e.key === 'f') this.jump('settlement');
-      if (e.key === 'l') this.setTab(this.tab === 'ladder' ? 'cards' : 'ladder');
-      if (e.key === 'Escape') { this.showSettlement = false; this.closeChart(); }
+      if (e.key === 't') this.tile();
+      if (e.key >= '1' && e.key <= '6') this.toggleWin(WINDOWS[Number(e.key)-1].id);
+      if (e.key === 'Escape') { this.showSettlement = false; }
     });
     window.addEventListener('mousemove', e => this.dragMove(e));
-    window.addEventListener('mouseup',   () => this.drag = null);
+    window.addEventListener('mouseup',   () => { this.drag = null; this.resize = null;
+                                                 this.saveLayout(); });
   },
 
+  // ── WINDOW MANAGER ────────────────────────────────────────────────────────────
+  // Every window is one absolutely-positioned box with an (x, y, w, h, z). Nothing here
+  // touches the payload, so an arrangement survives every push, every reprice and every
+  // model swap -- which is the difference between a workspace and a set of tabs.
+  // An OBJECT and not a style string, and the difference is load-bearing. Alpine's `x-show`
+  // hides a window by writing `el.style.display`; a string `:style` binding calls
+  // `setAttribute('style', ...)`, which would wipe that display back off on the next
+  // re-evaluation and flash a closed window back onto the desktop. An object binding sets the
+  // named properties only and never touches `display`.
+  winStyle(id){
+    const w = this.win[id];
+    return {left: w.x+'px', top: w.y+'px', width: w.w+'px', height: w.h+'px', zIndex: w.z};
+  },
+  focus(id){ if (this.focused === id) return;
+             this.focused = id; this.win[id].z = ++this.zTop; },
+  openWin(id){ this.win[id].open = true; this.win[id].min = false; this.focus(id);
+               this.onOpen(id); this.saveLayout(); },
+  closeWin(id){ this.win[id].open = false; this.saveLayout(); },
+  toggleWin(id){ this.win[id].open ? this.closeWin(id) : this.openWin(id); },
+  minimise(id){ this.win[id].min = true; this.saveLayout(); },
+  restore(id){ this.win[id].min = false; this.focus(id); this.onOpen(id); this.saveLayout(); },
+  maximise(id){
+    const w = this.win[id], ws = this.$refs.ws;
+    if (w.max) { Object.assign(w, w.prev || {}); w.max = false; }
+    else {
+      w.prev = {x:w.x, y:w.y, w:w.w, h:w.h};
+      Object.assign(w, {x:0, y:0, w:ws.clientWidth - 2, h:ws.clientHeight - 2, max:true});
+      this.focus(id);
+    }
+    this.saveLayout();
+    if (id === 'chart') this.resizeCharts();
+  },
+  // Opening a window is what triggers its first fetch. The push loop then keeps it current;
+  // nothing polls a window that is not on screen.
+  onOpen(id){
+    if (id === 'ladder') this.loadLadder(true);
+    if (id === 'chart')  this.$nextTick(() => { this.ensureCharts(); this.resizeCharts();
+                                               this.loadHistory(true); });
+    if (id === 'form')   this.loadStats(true);
+    if (id === 'score')  this.loadScorecard(true);
+  },
+  openDesk(mid){ this.desk.match_id = mid; this.openWin('ladder'); this.loadLadder(true); },
+  openForm(mid){ this.statsMatch = mid; this.stats = null; this.openWin('form');
+                 this.loadStats(true); },
+
+  dragStart(id, e){
+    this.focus(id);
+    this.drag = {id, dx: e.clientX - this.win[id].x, dy: e.clientY - this.win[id].y};
+  },
+  resizeStart(id, e){
+    this.focus(id);
+    this.resize = {id, x0:e.clientX, y0:e.clientY, w0:this.win[id].w, h0:this.win[id].h};
+  },
+  dragMove(e){
+    const ws = this.$refs.ws;
+    if (this.drag) {
+      const w = this.win[this.drag.id];
+      // Clamped so a window can never be dragged fully off the desktop: the title bar is the
+      // only handle it has, and a window whose title bar is off-screen cannot be brought back.
+      w.x = Math.max(-w.w + 90, Math.min(ws.clientWidth - 60, e.clientX - this.drag.dx));
+      w.y = Math.max(0, Math.min(ws.clientHeight - 24, e.clientY - this.drag.dy));
+      w.max = false;
+    } else if (this.resize) {
+      const w = this.win[this.resize.id];
+      w.w = Math.max(320, this.resize.w0 + (e.clientX - this.resize.x0));
+      w.h = Math.max(120, this.resize.h0 + (e.clientY - this.resize.y0));
+      w.max = false;
+      if (this.resize.id === 'chart') this.resizeCharts();
+    }
+  },
+
+  tile(){
+    const ws = this.$refs.ws;
+    const open = WINDOWS.filter(w => this.win[w.id].open && !this.win[w.id].min);
+    if (!open.length) return;
+    const cols = Math.ceil(Math.sqrt(open.length));
+    const rows = Math.ceil(open.length / cols);
+    const cw = Math.floor((ws.clientWidth - 4) / cols);
+    const ch = Math.floor((ws.clientHeight - 4) / rows);
+    open.forEach((w, i) => Object.assign(this.win[w.id], {
+      x: 2 + (i % cols) * cw, y: 2 + Math.floor(i / cols) * ch,
+      w: cw - 4, h: ch - 4, max:false}));
+    this.saveLayout(); this.resizeCharts();
+  },
+  cascade(){
+    const open = WINDOWS.filter(w => this.win[w.id].open && !this.win[w.id].min);
+    open.forEach((w, i) => Object.assign(this.win[w.id], {
+      x: 20 + i*30, y: 14 + i*26, w: 940, h: 520, max:false, z: i+1}));
+    this.zTop = open.length + 1;
+    this.saveLayout(); this.resizeCharts();
+  },
+  resetLayout(){ this.win = JSON.parse(JSON.stringify(DEFAULT_LAYOUT)); this.zTop = 10;
+                 this.saveLayout(); this.resizeCharts(); },
+  saveLayout(){ try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(this.win)); } catch(e){} },
+  loadLayout(){
+    try {
+      const raw = localStorage.getItem(LAYOUT_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      // Merged onto the default rather than replacing it, so a layout saved before a window
+      // existed does not leave the new window undefined and every binding on it throwing.
+      WINDOWS.forEach(w => { if (saved[w.id]) Object.assign(this.win[w.id], saved[w.id]); });
+      this.zTop = Math.max(10, ...WINDOWS.map(w => this.win[w.id].z || 1));
+    } catch(e){}
+  },
+
+  // ── TRANSPORT ─────────────────────────────────────────────────────────────────
   connect(){
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     try { this.ws = new WebSocket(`${proto}://${location.host}/ws`); } catch(e){ return; }
@@ -843,9 +1451,7 @@ function replay_() { return {
     this.ws.onclose   = () => { this.connected = false; setTimeout(()=>this.connect(), 2000); };
     this.ws.onmessage = ev => this.apply(JSON.parse(ev.data));
   },
-
   async pull(){ try { this.apply(await (await fetch('/api/snapshot')).json()); } catch(e){} },
-
   async loadMatchdays(){
     try { const j = await (await fetch('/api/replay/matchdays')).json();
           if (j.ok) this.matchdays = j.matchdays; } catch(e){}
@@ -855,18 +1461,43 @@ function replay_() { return {
     if (!s || s.error) return;
     this.a = s.account; this.b = s.batch; this.r = s.replay;
     this.cards = s.cards; this.blocked = s.blocked; this.settlement = s.settlement;
+    if (s.ticket) this.applyTicket(s.ticket);
     if (this.desk.match_id === null && this.r.fixtures.length)
       this.desk.match_id = this.r.fixtures[0].match_id;
+    if (this.statsMatch === null && this.r.fixtures.length)
+      this.statsMatch = this.r.fixtures[0].match_id;
+    if (this.scModel === null) this.scModel = this.r.active_model || 'm00';
     // Flash only when the SLATE was actually re-priced, not on every pushed frame. A grid
     // that flashes at the push rate would read as motion where there was none.
     if (s.replay.tick_seq !== this.lastSeq) {
       this.lastSeq = s.replay.tick_seq;
       this.flash = true; setTimeout(() => this.flash = false, 500);
+      // The lineup delta is the one panel whose ANSWER changes at the XI drop, so it is
+      // refetched on a reprice rather than on a timer.
+      if (this.win.form.open && !this.win.form.min) this.loadStats(false);
     }
     // The desk and the chart follow the clock, throttled: the push is 2 Hz and neither view
     // carries new information faster than the 1-minute book underneath it does.
-    if (this.tab === 'ladder') this.loadLadder();
-    if (this.chart.open) { this.needle(); this.loadHistory(); }
+    if (this.win.ladder.open && !this.win.ladder.min) this.loadLadder();
+    if (this.win.chart.open && !this.win.chart.min) { this.needle(); this.loadHistory(); }
+  },
+
+  // The ticket animates: a stake that MOVED is the output of the re-solve, and a number that
+  // silently replaced another one is not an answer anybody can check.
+  applyTicket(t){
+    const prev = this.prevStake;
+    const next = {};
+    (t.legs || []).forEach(l => {
+      const k = this.legKey(l);
+      next[k] = l.resolved_stake;
+      if (prev[k] !== undefined && Math.abs(prev[k] - l.resolved_stake) > 0.005) {
+        l._moved = true;
+        setTimeout(() => { const cur = (this.tk.legs || []).find(x => this.legKey(x) === k);
+                           if (cur) cur._moved = false; }, 1200);
+      }
+    });
+    this.prevStake = next;
+    this.tk = t;
   },
 
   // Disabled while a gate is failing. The reservation is all-or-nothing, so a half-valid
@@ -894,19 +1525,41 @@ function replay_() { return {
   setSpeed(s){ this.post('/api/replay/speed', {speed:s}); },
   setModel(k){ this.msg = 'loading ' + k + '…'; this.msgOk = true;
                this.post('/api/replay/set_model', {model:k})
-                   .then(()=>{ this.loadLadder(true); this.loadHistory(true); }); },
+                   .then(()=>{ this.loadLadder(true); this.loadHistory(true);
+                               this.scModel = k; this.loadScorecard(true); }); },
   setMatchday(d){ if (d === this.r.day) return;
                   this.msg = 'loading ' + d + '…'; this.msgOk = true;
-                  this.ladder = null; this.closeChart(); this.desk.match_id = null;
+                  this.ladder = null; this.stats = null;
+                  this.desk.match_id = null; this.statsMatch = null;
                   this.post('/api/replay/set_matchday', {day:d}); },
-  execute(){ this.post('/api/replay/execute'); },
-  settle(){ this.post('/api/replay/settle'); },
+  execute(){ this.post('/api/replay/execute').then(()=>this.loadScorecard(true)); },
+  settle(){ this.post('/api/replay/settle').then(()=>this.loadScorecard(true)); },
   reset(){ if (confirm('Delete every replay order and settlement for this account and restore the bankroll?'))
-             this.post('/api/replay/reset'); },
+             this.post('/api/replay/reset').then(()=>this.loadScorecard(true)); },
+
+  // ── THE TICKET ────────────────────────────────────────────────────────────────
+  legKey(l){ return l.match_id + '|' + l.market + '|' + l.line + '|' + l.selection; },
+  stakeClass(l){
+    if (l._moved) return 'moved';
+    return l.status === 'placed' ? 'text-[var(--fill)]'
+         : l.status === 'skipped' ? 'text-[var(--dim)]' : 'text-[var(--accent)]';
+  },
+  mark(l, status){
+    const body = {match_id:l.match_id, market:l.market, line:l.line, selection:l.selection,
+                  status:status};
+    if (status === 'placed') {
+      const s = document.getElementById('stk-' + this.legKey(l));
+      const o = document.getElementById('odd-' + this.legKey(l));
+      body.stake = s ? Number(s.value) : l.recommended_stake;
+      body.odds  = o ? Number(o.value) : l.venue_odds;
+    }
+    this.post('/api/replay/stake/override', body);
+  },
+  resolveStakes(){ this.post('/api/replay/stake/resolve'); },
+  resetOverrides(){ this.post('/api/replay/stake/reset'); },
 
   activeModel(){ return this.r.models.find(m => m.active) || {label:'—', refused:[]}; },
   refusedOf(){ return this.activeModel().refused || []; },
-
   legsOf(c){ return c.legs.filter(l => this.markets.includes(l.market)); },
   visible(){
     let v = this.cards.filter(c => this.legsOf(c).length > 0);
@@ -916,16 +1569,9 @@ function replay_() { return {
     return v;
   },
 
-  // ── TABS AND THE DESK ─────────────────────────────────────────────────────────
-  setTab(t){
-    this.tab = t;
-    if (t === 'ladder') this.loadLadder(true);
-  },
-  openDesk(mid){ this.desk.match_id = mid; this.tab = 'ladder'; this.loadLadder(true); },
-  setDeskMatch(mid){ this.desk.match_id = Number(mid); this.ladder = null;
-                     this.closeChart(); this.loadLadder(true); },
-  setDeskMarket(m){ this.desk.market = m; this.ladder = null;
-                    this.closeChart(); this.loadLadder(true); },
+  // ── THE DESK ──────────────────────────────────────────────────────────────────
+  setDeskMatch(mid){ this.desk.match_id = Number(mid); this.ladder = null; this.loadLadder(true); },
+  setDeskMarket(m){ this.desk.market = m; this.ladder = null; this.loadLadder(true); },
   marketLabel(m){ return m === 'MATCH_ODDS' ? 'Match Odds'
                        : m === 'BOTH_TEAMS_TO_SCORE' ? 'BTTS'
                        : m.startsWith('OVER_UNDER_')
@@ -966,8 +1612,6 @@ function replay_() { return {
                               touch: i === 0, hit: f && f[i] ? f[i] : 0}));
   },
   barPct(size, max){ return (!size || !max) ? 0 : Math.max(2, Math.min(100, 100*size/max)); },
-
-  // ── WEIGHT OF MONEY ───────────────────────────────────────────────────────────
   womBlocks(w){
     if (w === null || w === undefined) return '░░░░░░░░░░';
     const n = Math.max(0, Math.min(10, Math.round(w/10)));
@@ -978,33 +1622,21 @@ function replay_() { return {
     return w > 60 ? 'text-[var(--accent)]' : w < 40 ? 'text-[var(--bad)]' : 'text-[var(--dim)]';
   },
 
-  // ── THE FLOATING CHART ────────────────────────────────────────────────────────
+  // ── THE CHART ─────────────────────────────────────────────────────────────────
   openChart(rn){
-    this.chart.open = true; this.chart.min = false;
     this.chart.match_id = this.desk.match_id;
     this.chart.symbol = rn.symbol; this.chart.market = this.desk.market;
     this.chart.title = rn.label;
-    this.chart.sub = (this.ladder ? this.ladder.fixture + ' · ' : '') + this.marketLabel(this.desk.market);
-    if (this.chart.x === null) { this.chart.x = 60; this.chart.y = 90; }
+    this.chart.sub = (this.ladder ? this.ladder.fixture + ' · ' : '')
+                     + this.marketLabel(this.desk.market);
+    this.openWin('chart');
     this.$nextTick(() => { this.ensureCharts(); this.loadHistory(true); });
   },
-  closeChart(){ this.chart.open = false; },
-  floatStyle(){
-    const w = this.chart.max ? 900 : 560;
-    return 'left:' + (this.chart.x||60) + 'px;top:' + (this.chart.y||90) + 'px;width:' + w + 'px;';
-  },
-  dragStart(e){ this.drag = {dx: e.clientX - (this.chart.x||60),
-                             dy: e.clientY - (this.chart.y||90)}; },
-  dragMove(e){
-    if (!this.drag) return;
-    this.chart.x = Math.max(0, e.clientX - this.drag.dx);
-    this.chart.y = Math.max(0, e.clientY - this.drag.dy);
-  },
+  chartH(){ return Math.max(90, Math.round((this.win.chart.h - 130) / 1.55)); },
   resizeCharts(){ this.$nextTick(() => {
     if (CHARTS.px) CHARTS.px.resize();
     if (CHARTS.lq) CHARTS.lq.resize();
   }); },
-
   chartOpts(yTitle){
     return {
       responsive:true, maintainAspectRatio:false, animation:false,
@@ -1023,7 +1655,6 @@ function replay_() { return {
       }
     };
   },
-
   ensureCharts(){
     if (!window.Chart) { this.chart.note = 'Chart.js did not load — the CDN is unreachable.'; return; }
     const px = document.getElementById('pxChart'), lq = document.getElementById('lqChart');
@@ -1045,9 +1676,8 @@ function replay_() { return {
       ]}, options:this.chartOpts('£ matched')});
     }
   },
-
   async loadHistory(force){
-    if (!this.chart.open || this.chart.match_id === null) return;
+    if (!this.win.chart.open || this.chart.match_id === null) return;
     const now = Date.now();
     if (!force && (this.chart.busy || now - this.chart.at < 1500)) return;
     this.chart.busy = true; this.chart.at = now;
@@ -1071,7 +1701,6 @@ function replay_() { return {
     } catch(e){ this.chart.note = String(e); }
     finally { this.chart.busy = false; }
   },
-
   // The needle is redrawn on every frame and the series are not: the clock moves at 60x and
   // the 1-minute book does not, so refetching the series at the push rate would be 120 reads
   // a minute of a series that changed in one place.
@@ -1090,6 +1719,56 @@ function replay_() { return {
     });
   },
 
+  // ── TEAM FORM ─────────────────────────────────────────────────────────────────
+  setStatsMatch(mid){ this.statsMatch = Number(mid); this.stats = null; this.loadStats(true); },
+  xiOf(side){ return side === 'home' ? this.stats.lineup.xi_home : this.stats.lineup.xi_away; },
+  deltaClass(s){
+    return s === 'full_strength' ? 'bg-[var(--accent-dim)] text-[var(--accent)]'
+         : s === 'missing_starters' ? 'bg-[#3a1d1d] text-[var(--bad)]'
+         : 'bg-[#1d232e] text-[var(--dim)]';
+  },
+  deltaLabel(d){
+    if (d.status === 'no_xi') return 'no XI published at this minute';
+    if (d.status === 'no_history') return 'no completed matches to measure a regular XI against';
+    if (d.status === 'full_strength')
+      return 'FULL STRENGTH — every regular starter (≥' + Math.round(100*d.threshold)
+             + '%) is in the XI';
+    return 'MISSING STARTERS — ' + d.missing_starters.length + ' regular'
+           + (d.missing_starters.length===1?'':'s') + ' out of the XI';
+  },
+  async loadStats(force){
+    if (this.statsMatch === null) return;
+    const now = Date.now();
+    if (!force && (this.statsBusy || now - this.statsAt < 900)) return;
+    this.statsBusy = true; this.statsAt = now;
+    try {
+      const j = await (await fetch('/api/replay/stats?match_id=' + this.statsMatch)).json();
+      if (j.ok) { this.stats = j; this.statsNote = ''; }
+      else { this.statsNote = j.error || 'stats refused'; }
+    } catch(e){ this.statsNote = String(e); }
+    finally { this.statsBusy = false; }
+  },
+
+  // ── MODEL SCORECARD ───────────────────────────────────────────────────────────
+  setScModel(k){ this.scModel = k; this.sc = null; this.loadScorecard(true); },
+  fmt(v){ return (v === null || v === undefined) ? '—' : v; },
+  fmtD(v){ return (v === null || v === undefined) ? '—' : (v > 0 ? '+' : '') + v; },
+  // A LOWER proper score is better, so a NEGATIVE delta against the control is the good one.
+  dClass(v){ return (v === null || v === undefined) ? 'text-[var(--dim)]'
+                   : v < 0 ? 'text-[var(--accent)]' : 'text-[var(--bad)]'; },
+  async loadScorecard(force){
+    if (!this.win.score.open && !force) return;
+    if (this.scBusy) return;
+    this.scBusy = true;
+    try {
+      const j = await (await fetch('/api/replay/model_scorecard?model='
+                                   + (this.scModel || this.r.active_model || 'm00'))).json();
+      if (j.ok) { this.sc = j; this.scNote = ''; }
+      else { this.scNote = j.error || 'scorecard refused'; }
+    } catch(e){ this.scNote = String(e); }
+    finally { this.scBusy = false; }
+  },
+
   pct(t){ return 100 * (t - this.r.t_start) / (this.r.t_end - this.r.t_start); },
   eqPct(v){ const m = Math.max(this.settlement.equity_before, this.settlement.equity_after, 1);
             return 100 * v / m; },
@@ -1103,6 +1782,5 @@ function replay_() { return {
   fmtTime(s){ return s ? String(s).replace('T',' ').slice(0,16) : '—'; },
 }}
 </script>
-<style>[x-cloak]{display:none!important;}</style>
 </body>
 </html>

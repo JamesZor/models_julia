@@ -886,6 +886,456 @@ end
 end
 
 # ===================================================================
+# 3b. THE EXECUTION TICKET -- overrides and the constrained re-solve
+# ===================================================================
+#
+# The re-solver is the one piece of NEW mathematics in this console, so it is tested against a
+# hand-built portfolio problem whose Kelly answer is produced by `Portfolio.stake_slate` itself.
+# That is what makes R33 meaningful: the re-solve of an untouched slate must reproduce the
+# allocator's own vector, and it can only be shown to do so if the vector it is compared with
+# came from the allocator rather than from a literal in this file.
+
+"""
+Two one-selection books whose payoff columns are exact, plus the `PricedSlate` the allocator
+sizes them into.
+
+Fixture 901 backs `1X2 home` at 2.50 (win pays 1.50 per unit risk); fixture 902 expresses
+`OverUnder 2.5 over_25` by LAYING `under_25` at 1.80, i.e. effective odds 2.25, leverage 1.25 and
+a win paying 1.25 per unit risk. Two outcomes per book is all the drawdown solve reads -- it
+consumes `p_grid` and `R` and nothing else -- so a two-row grid is a complete book for it and not
+a simplification of one.
+"""
+function _resolver_rig(; bankroll::Float64 = 1_000.0, sys = _system(),
+                       a_kelly = [0.0833, 0.1000])
+    s901 = PF.Selection("1X2_home", "1X2", 0.0, :home, 2.50, 2.50, 0.45, 0.40)
+    s902 = PF.Selection("OverUnder_over_25", "OverUnder", 2.5, :over_25, 2.25, 2.25, 0.50, 0.4444)
+    b901 = PF.MatchBook(901, Date(KO), [s901], [0.45, 0.55], reshape([1.5, -1.0], 2, 1),
+                        nothing, [a_kelly[1]], 1.0, 0.0, true)
+    b902 = PF.MatchBook(902, Date(KO), [s902], [0.50, 0.50], reshape([1.25, -1.0], 2, 1),
+                        nothing, [a_kelly[2]], 1.0, 0.0, true)
+    books = PF.MatchBook[b901, b902]
+
+    alloc = PF.stake_slate(sys.policy, PF.Slate(Date(KO), books),
+                           PF.SlateContext(1, Date(KO), bankroll))
+    f = [alloc.stakes[1][1], alloc.stakes[2][1]]
+
+    sheet = DataFrame(
+        slate = fill(Date(KO), 2), match_id = [901, 902], family = ["1X2", "OverUnder"],
+        group = ["1X2", "OverUnder"], line = [0.0, 2.5], selection = [:home, :over_25],
+        venue_selection = [:home, :under_25], side = [:back, :lay],
+        odds_quoted = [2.50, 2.25], odds = [2.50, 2.25],
+        p_model = [0.45, 0.50], p_market = [0.40, 0.4444],
+        edge = [0.05, 0.0556], frac = f, stake = f .* bankroll,
+        k_risk = fill(alloc.k_risk, 2), slate_exposure = fill(alloc.exposure, 2),
+        capped = fill(alloc.capped, 2), settled = fill(false, 2),
+        venue_odds = [2.50, 1.80], risk = f .* bankroll,
+        venue_stake = [f[1] * bankroll, f[2] * bankroll * 1.25],
+        depth_touch = [500.0, 400.0], depth_book = [500.0, 400.0],
+        expected_fill = [500.0, 400.0], expected_vwap = [2.50, 1.80],
+        expected_slippage = [0.0, 0.0], fillable = [true, true],
+        fill_confidence = [:high, :high])
+
+    card = _synthetic_card()
+    as_of = KO - Minute(15)
+    cards = MD.FixtureCard[MD.FixtureCard(fx, card.identities[fx.m_id], as_of)
+                           for fx in card.fixtures]
+    for c in cards
+        c.readiness = MD.Ready()
+    end
+    k_home  = _key("1X2", 0.0, :home)
+    k_over  = _key("OverUnder", 2.5, :over_25)
+    k_under = _key("OverUnder", 2.5, :under_25)
+    insts = Dict{Tuple{Int,MD.SelectionKey},MD.Instrument}(
+        (901, k_home) => MD.Instrument(k_home, 2.50, :back, 2.50, 1.0, k_home),
+        (902, k_over) => MD.Instrument(k_over, 1.80 / 0.80, :lay, 1.80, 1 / 0.80, k_under))
+    bookl = Dict{Tuple{Int,MD.SelectionKey},MD.BookLevels}(
+        (901, k_home)  => _levels([2.50], [500.0], [2.55], [500.0]; ts = as_of),
+        (902, k_under) => _levels([1.75], [400.0], [1.80], [400.0]; ts = as_of))
+
+    slate = MD.PricedSlate(uuid4(), "replay_unit", Date(KO), as_of, bankroll, sheet, DataFrame(),
+                           cards, MD.FixtureCard[], insts, bookl, alloc.k_risk, alloc.exposure,
+                           alloc.capped, 20.0, 0.25, sum(sheet.risk), 7, "")
+
+    st = ReplayState(nothing, nothing, card; system = sys, bankroll = bankroll,
+                     account_id = "replay_unit", schema = REPLAY_SCHEMA)
+    st.clock.t = T_EXEC
+    st.slate = slate
+    st.slate_t = T_EXEC
+    return (st = st, books = books, slate = slate, base = Dict(901 => sheet.risk[1],
+                                                               902 => sheet.risk[2]))
+end
+
+"The sequential drawdown penalty at a set of risk fractions, exactly as `SlateDrawdown` writes it."
+function _penalty(books, fracs::Dict{Int,Float64}; lambda::Float64 = 20.0)
+    tot = 0.0
+    for b in books
+        a = [get(fracs, b.m_id, 0.0)]
+        rets = b.R * a
+        tot += log(sum(b.p_grid[i] * (1 + rets[i])^(-lambda) for i in eachindex(b.p_grid)))
+    end
+    return tot
+end
+
+_risk_of(slate, mid::Int) =
+    let i = findfirst(==(mid), slate.sheet.match_id)
+        i === nothing ? 0.0 : Float64(slate.sheet.risk[i])
+    end
+
+@testset "R33 an untouched slate re-solves to the allocator's own vector" begin
+    # The property that makes every other assertion in this section readable: with nothing
+    # overridden, the constrained solve must return k = 1 and reproduce the priced stakes. It
+    # can only do so because the priced vector sits exactly on one of the two binding
+    # constraints -- `SlateDrawdown` with equality, or `FixedCap` -- which is what
+    # `Portfolio.stake_slate` guarantees and what a re-solver that merely rescaled could not use.
+    rig = _resolver_rig()
+    out = resolve_slate_with_overrides(rig.st; books = rig.books)
+
+    @test nrow(out.sheet) == 2
+    @test out.k_risk ≈ 1.0
+    @test _risk_of(out, 901) ≈ rig.base[901]
+    @test _risk_of(out, 902) ≈ rig.base[902]
+    @test out.total_risk ≈ rig.slate.total_risk
+    @test occursin("no overrides", rig.st.resolve_note)
+end
+
+@testset "R34 a placed leg is frozen at the stake and price it actually got" begin
+    rig = _resolver_rig()
+    st = rig.st
+    # £120 of BACKER stake at 2.40 -- a worse price than the 2.50 the sheet quoted, which is the
+    # ordinary outcome of pressing the button a few seconds late.
+    @test set_override!(st, 901, "1X2", "home", :placed; line = 0.0, stake = 120.0,
+                        odds = 2.40).ok
+    out = resolve_slate_with_overrides(st; books = rig.books)
+
+    i = findfirst(==(901), out.sheet.match_id)
+    @test i !== nothing
+    @test out.sheet.risk[i] ≈ 120.0             # a back's risk IS its stake
+    @test out.sheet.venue_odds[i] ≈ 2.40
+    @test out.sheet.venue_stake[i] ≈ 120.0
+    @test out.sheet.odds[i] ≈ 2.40              # risk-denominated odds, unchanged for a back
+
+    # The frozen leg is far larger than the allocator wanted, so the free one must shrink.
+    @test 120.0 > rig.base[901]
+    @test _risk_of(out, 902) < rig.base[902]
+
+    # And the budget claim, stated so that it is true in BOTH regimes. A placed bet cannot be
+    # un-placed, so a commitment that already breaches the drawdown constraint leaves the vector
+    # in breach whatever the re-solver does; what it must never do is make things worse by
+    # adding uncommitted risk on top. The exact property is therefore: the re-solved vector's
+    # penalty is no greater than the penalty of the frozen commitment ALONE, once that is
+    # floored at the feasible zero.
+    frozen_only = Dict(901 => 120.0 / 1_000.0)
+    fr = Dict(901 => 120.0 / 1_000.0, 902 => _risk_of(out, 902) / 1_000.0)
+    @test _penalty(rig.books, fr) <= max(0.0, _penalty(rig.books, frozen_only)) + 1e-8
+    @test occursin("froze 1", st.resolve_note)
+end
+
+@testset "R35 a skipped leg receives zero stake and leaves the executable vector" begin
+    rig = _resolver_rig()
+    st = rig.st
+    @test set_override!(st, 902, "OverUnder", "over_25", :skipped; line = 2.5).ok
+    out = resolve_slate_with_overrides(st; books = rig.books)
+
+    @test nrow(out.sheet) == 1                       # a zero-stake leg is not an order
+    @test _risk_of(out, 902) == 0.0
+    @test first(out.sheet.match_id) == 901
+    # It is still on the TICKET, though -- otherwise there is no row to press [Auto] on.
+    tk = ticket_payload(st)
+    @test tk.n_legs == 2
+    skipped = only(filter(l -> l.match_id == 902, tk.legs))
+    @test skipped.status == "skipped"
+    @test skipped.resolved_stake == 0.0
+    @test skipped.in_resolved == false
+end
+
+@testset "R36 skipping re-derives the budget for the surviving legs, in both regimes" begin
+    # THE CLAIM A RESCALE COULD NOT MAKE, and the one place a plausible intuition about it is
+    # wrong. Dropping a leg removes its column from the return matrix AND its exposure, so the
+    # survivors are re-budgeted rather than merely left alone. Which DIRECTION they move in
+    # depends on which constraint was binding, and the two cases are asserted separately because
+    # a test that only knew one of them would encode a superstition.
+
+    # --- (a) the drawdown budget binds ------------------------------------------------------
+    # `SlateDrawdown` solves ONE joint log-utility constraint, `Σ_t log E[(1 + kR_t)^-λ] <= 0`.
+    # At the joint optimum the terms sum to zero with some POSITIVE and some negative, so a leg
+    # whose term is negative is subsidising the rest -- and removing it makes the constraint
+    # TIGHTER for the survivor, not looser. Here 902's term is the negative one, so skipping it
+    # moves 901 down to its own solo boundary. That is the correct answer and a rescale-based
+    # re-solver would have got it wrong in the other direction.
+    rig = _resolver_rig()
+    st = rig.st
+    set_override!(st, 902, "OverUnder", "over_25", :skipped; line = 2.5)
+    out = resolve_slate_with_overrides(st; books = rig.books)
+
+    solo = _risk_of(out, 901)
+    @test out.k_risk != 1.0                              # the budget was genuinely re-derived
+    @test _penalty(rig.books, Dict(901 => solo / 1_000.0)) <= 1e-8
+    # ...and it sits ON the boundary rather than anywhere below it: a hair more breaches it.
+    @test _penalty(rig.books, Dict(901 => solo / 1_000.0 * 1.01)) > 0
+    @test out.slate_exposure <= 0.25 + 1e-12
+    @test out.total_risk <= 0.25 * 1_000.0 + 1e-9
+
+    # Putting it back restores the priced vector exactly, so the panel's [Auto] is a real undo.
+    set_override!(st, 902, "OverUnder", "over_25", :auto; line = 2.5)
+    back = resolve_slate_with_overrides(st; books = rig.books)
+    @test _risk_of(back, 901) ≈ rig.base[901]
+    @test _risk_of(back, 902) ≈ rig.base[902]
+
+    # --- (b) the exposure cap binds ---------------------------------------------------------
+    # The regime the console's batch header flags as `capped`, and the one where releasing a leg
+    # unambiguously frees room. With no drawdown budget the only bound is `FixedCap(0.25)`, so
+    # the priced vector sits exactly on it and skipping one leg hands the whole 25% to the other.
+    capped_sys = PF.PortfolioSystem(
+        PF.BookSpec(markets = MD.canonical_markets(), price = PF.DeArb()),
+        PF.PolicySpec(risk = PF.NoRisk(), cap = PF.FixedCap(0.25), trust = PF.FlatTrust(1.0)))
+    rig2 = _resolver_rig(; sys = capped_sys, a_kelly = [0.20, 0.15])
+    @test rig2.slate.capped == true
+    @test rig2.slate.total_risk ≈ 250.0                  # the cap, exactly
+
+    set_override!(rig2.st, 902, "OverUnder", "over_25", :skipped; line = 2.5)
+    grown = resolve_slate_with_overrides(rig2.st; books = rig2.books)
+    @test nrow(grown.sheet) == 1
+    @test _risk_of(grown, 901) > rig2.base[901]          # it grew into the released room
+    @test _risk_of(grown, 901) ≈ 250.0                   # ...up to the cap and not past it
+    @test grown.k_risk ≈ 250.0 / rig2.base[901]
+    @test grown.capped == true
+
+    # A commitment spends that same room: £100 placed leaves £150 for the rest.
+    clear_overrides!(rig2.st)
+    set_override!(rig2.st, 901, "1X2", "home", :placed; line = 0.0, stake = 100.0, odds = 2.50)
+    split = resolve_slate_with_overrides(rig2.st; books = rig2.books)
+    @test _risk_of(split, 901) ≈ 100.0
+    @test _risk_of(split, 902) ≈ 150.0
+    @test split.total_risk ≈ 250.0
+end
+
+@testset "R37 commitments that fill the cap leave the uncommitted legs at zero" begin
+    # The refusal that matters: an allocator which treated a negative residual as room would
+    # keep staking after the bankroll's simultaneous exposure was already committed.
+    rig = _resolver_rig()
+    st = rig.st
+    set_override!(st, 901, "1X2", "home", :placed; line = 0.0, stake = 250.0, odds = 2.50)
+    out = resolve_slate_with_overrides(st; books = rig.books)
+
+    @test nrow(out.sheet) == 1
+    @test _risk_of(out, 901) ≈ 250.0            # 25% of a £1,000 bankroll: the whole cap
+    @test _risk_of(out, 902) == 0.0
+    @test occursin("already fills", st.resolve_note)
+
+    # A lay's committed risk is its LIABILITY, not its backer stake -- laying £100 at 1.80 risks
+    # £80 -- and the ticket must spend the budget in the same denomination the cap is written in.
+    clear_overrides!(st)
+    set_override!(st, 902, "OverUnder", "over_25", :placed; line = 2.5, stake = 100.0,
+                  odds = 1.80)
+    out2 = resolve_slate_with_overrides(st; books = rig.books)
+    j = findfirst(==(902), out2.sheet.match_id)
+    @test out2.sheet.risk[j] ≈ 80.0
+    @test out2.sheet.venue_stake[j] ≈ 100.0
+    @test ticket_payload(st).committed_risk ≈ 80.0
+end
+
+@testset "R38 an override addresses a leg the model recommended, and says so when it cannot" begin
+    rig = _resolver_rig()
+    st = rig.st
+    bad = set_override!(st, 901, "BTTS", "yes", :skipped)
+    @test bad.ok == false && occursin("BTTS", bad.error)
+
+    @test_throws ErrorException StakingOverride(:placed; placed_stake = 0.0, placed_odds = 2.0)
+    @test_throws ErrorException StakingOverride(:placed; placed_stake = 10.0, placed_odds = 1.0)
+    @test_throws ErrorException StakingOverride(:nonsense)
+
+    back = StakingOverride(:placed; placed_stake = 100.0, placed_odds = 2.50)
+    lay  = StakingOverride(:placed; placed_stake = 100.0, placed_odds = 1.80)
+    @test committed_risk(back, :back) ≈ 100.0
+    @test committed_risk(lay, :lay) ≈ 80.0
+    @test effective_odds(back, :back) ≈ 2.50
+    @test effective_odds(lay, :lay) ≈ 2.25
+    @test committed_risk(StakingOverride(:skipped), :back) == 0.0
+
+    # A `[✓ Placed]` press with no numbers means "I took the recommendation".
+    clear_overrides!(st)
+    r = set_override!(st, 901, "1X2", "home", :placed; line = 0.0)
+    @test r.ok && r.stake ≈ round(rig.slate.sheet.venue_stake[1], digits = 2)
+    @test r.odds ≈ 2.50
+
+    # The re-solve is retired by a reprice; the OVERRIDE is not. A bet on the exchange stays on
+    # it when the clock moves, and a stake vector solved against one book does not.
+    resolve!(st)
+    @test st.resolved !== nothing && active_slate(st) === st.resolved
+    st.slate_t = T_EXEC + 1
+    @test active_slate(st) === st.slate
+    @test length(st.overrides) == 1
+    @test clear_overrides!(st).n_cleared == 1
+    @test isempty(st.overrides)
+end
+
+# ===================================================================
+# 3c. THE INTELLIGENCE WIDGETS
+# ===================================================================
+
+@testset "R39 the form panel cannot see a teamsheet the model could not see" begin
+    # The filtration contract, applied to the panel a human reads rather than to the pillar the
+    # model prices with. Before the scrape lands there is no XI and the delta says so; it does
+    # NOT say "full strength", which would be an assertion no source supports.
+    st = _pure_state()
+    seek!(st, T_START)
+    early = fixture_stats(st, 901)
+    @test early.ok && early.match_id == 901
+    @test early.lineup.available == false
+    @test early.lineup.home.status == "no_xi"
+    @test early.lineup.away.status == "no_xi"
+    @test isempty(early.lineup.xi_home)
+
+    seek!(st, T_EXEC)
+    late = fixture_stats(st, 901)
+    @test late.lineup.available == true
+    @test late.lineup.drop_min == 30                   # the synthetic card scrapes at T-30
+    @test late.lineup.home.n_announced == 13
+    @test late.lineup.home.n_starters == 11
+    @test length(late.lineup.xi_home) == 13
+    @test count(p -> !p.substitute, late.lineup.xi_home) == 11
+
+    # No `DataStore` in the pure tier, so there is no history to measure a regular XI against --
+    # and the panel reports that rather than declaring a full-strength side off no evidence.
+    @test late.lineup.home.status == "no_history"
+    @test late.lineup.home.basis_matches == 0
+    @test late.form.home.n == 0
+    @test isempty(late.form.home.matches)
+    # Scottish League One and Two are not statted for xG, and the panel says which number it is
+    # showing instead rather than leaving an empty column.
+    @test !isempty(late.xg_note)
+    @test occursin("shots", late.xg_note)
+
+    bad = _pure_state()
+    @test_throws ErrorException fixture_stats(bad, 999)
+end
+
+@testset "R40 form is computed from matches strictly before the replayed day" begin
+    # `team_form` and `start_rates` both take the boundary as an argument, so the no-lookahead
+    # property is testable without a database: a store containing the match day itself must
+    # produce a form line that does not include it.
+    ds = (matches = DataFrame(
+              match_id = [1, 2, 3, 4],
+              tournament_id = [56, 56, 56, 56],
+              season_id = [77, 77, 77, 77],
+              home_team = ["alpha", "beta", "alpha", "alpha"],
+              away_team = ["gamma", "alpha", "delta", "beta"],
+              home_score = [2, 0, 1, 3],
+              away_score = [1, 0, 3, 0],
+              match_date = [Date(2026, 8, 1), Date(2026, 8, 8), Date(2026, 8, 15),
+                            Date(2026, 9, 5)]),
+          # alpha was home in 1, 3 and 4 and away in 2. Match 4 IS the fixture being replayed,
+          # and its teamsheet is in the store -- which is exactly why the date filter has to be
+          # the thing that excludes it.
+          lineups = DataFrame(
+              match_id  = [1,1,1, 2,2,2, 3,3,3, 4,4,4],
+              team_side = ["home","home","home", "away","away","away",
+                           "home","home","home", "home","home","home"],
+              player_id = [10,11,12, 10,11,12, 10,11,12, 10,11,12],
+              player_name = repeat(["ever-present", "rotated", "benchwarmer"], 4),
+              position  = repeat(["G","M","F"], 4),
+              is_substitute = [false,false,true, false,false,true,
+                               false,true,true,  false,true,true]),
+          bbc = DataFrame(), statistics = DataFrame(), odds = DataFrame())
+
+    f = team_form(ds, "alpha", Date(2026, 9, 5); n = 5)
+    @test f.n == 3                                  # the 09-05 fixture is the one being replayed
+    @test [m.match_id for m in f.matches] == [3, 2, 1]      # newest first, as the badges read
+    @test [m.result for m in f.matches] == ["L", "D", "W"]
+    @test f.w == 1 && f.d == 1 && f.l == 1 && f.points == 4
+    @test f.gf == 3 && f.ga == 4                    # 1+0+2 for, 3+0+1 against
+    @test f.xg_available == false && f.xg_for === nothing
+
+    # ...and pulling the boundary back drops the matches after it, which is the whole property.
+    @test team_form(ds, "alpha", Date(2026, 8, 8); n = 5).n == 1
+    @test start_rates(ds, "alpha", Date(2026, 8, 8)).n_matches == 1
+
+    # The start rate is measured over the three matches BEFORE the replayed day, never over the
+    # four the store holds -- the fourth is the fixture being priced, and its teamsheet is the
+    # single most tempting piece of lookahead in this panel.
+    sr = start_rates(ds, "alpha", Date(2026, 9, 5))
+    @test sr.n_matches == 3
+    @test sr.match_ids == [1, 2, 3]
+    @test sr.players[10].start_rate == 1.0                # started all three
+    @test sr.players[11].start_rate ≈ round(2 / 3, digits = 3)
+    @test !haskey(sr.players, 12)                         # never started: not a regular at all
+    # One season with three matches is below `min_season_matches`, so the trailing basis is used
+    # and the payload says so rather than quietly reporting a one-match season as a season.
+    @test sr.basis == "trailing"
+
+    # An empty lineup table is "no history", not "everyone is a regular": the denominator is
+    # matches that actually carry a teamsheet.
+    bare = (matches = ds.matches, lineups = DataFrame(match_id = Int[], team_side = String[],
+                player_id = Int[], player_name = String[], position = String[],
+                is_substitute = Bool[]), bbc = DataFrame(), statistics = DataFrame(),
+            odds = DataFrame())
+    @test start_rates(bare, "alpha", Date(2026, 9, 5)).n_matches == 0
+    @test start_rates(bare, "alpha", Date(2026, 9, 5)).basis == "none"
+end
+
+@testset "R41 the lineup delta names the regulars who are not in the XI" begin
+    starters = Dict(:keeper => 1, :captain => 2, :fringe => 3)
+    rates = (players = Dict{Int,NamedTuple}(
+                 1 => (player_id = 1, name = "regular keeper", position = "G", starts = 9,
+                       appearances = 9, start_rate = 0.9),
+                 2 => (player_id = 2, name = "regular captain", position = "M", starts = 8,
+                       appearances = 10, start_rate = 0.8),
+                 3 => (player_id = 3, name = "fringe", position = "F", starts = 2,
+                       appearances = 8, start_rate = 0.2)),
+             n_matches = 10, basis = "season", match_ids = Int[])
+
+    full = MD.Player[MD.Player(1, "regular keeper", :G, false),
+                     MD.Player(2, "regular captain", :M, false),
+                     MD.Player(9, "squad", :D, true)]
+    d = lineup_delta(full, rates)
+    @test d.status == "full_strength"
+    @test isempty(d.missing_starters)
+    @test d.n_starters == 2 && d.n_announced == 3
+
+    # The captain drops out and the fringe player takes the shirt: BOTH ends of the same event
+    # are reported, because on a lower-division card seeing only one of them is ambiguous.
+    rotated = MD.Player[MD.Player(1, "regular keeper", :G, false),
+                        MD.Player(3, "fringe", :F, false)]
+    d2 = lineup_delta(rotated, rates)
+    @test d2.status == "missing_starters"
+    @test only(d2.missing_starters).player_id == 2
+    @test only(d2.missing_starters).start_rate_pct == 80.0
+    @test only(d2.unexpected).player_id == 3
+
+    # A substitute is not a starter: naming a regular on the bench is an absence from the XI.
+    benched = MD.Player[MD.Player(1, "regular keeper", :G, false),
+                        MD.Player(2, "regular captain", :M, true)]
+    @test only(lineup_delta(benched, rates).missing_starters).player_id == 2
+
+    @test lineup_delta(nothing, rates).status == "no_xi"
+    # The threshold is a parameter and it moves the finding, so it is on the payload.
+    @test isempty(lineup_delta(rotated, rates; threshold = 0.95).missing_starters)
+end
+
+@testset "R42 the scorecard's proper-score kernels are the ones they claim to be" begin
+    # `_poisson_1x2` and `_score_1x2` are the only arithmetic the scorecard does itself; every
+    # other number on it is read from a database. They are pinned here so a change to either
+    # shows up as a named failure rather than as a tile that moved.
+    p = _poisson_1x2(1.5, 1.1)
+    @test sum(p) ≈ 1.0
+    @test p[1] > p[3]                                    # the stronger side wins more often
+    @test all(x -> 0 < x < 1, p)
+    @test _poisson_1x2(1.3, 1.3)[1] ≈ _poisson_1x2(1.3, 1.3)[3]   # symmetric λ, symmetric 1X2
+
+    # A perfect forecast scores zero on all three; a confident wrong one is punished by LogLoss
+    # far harder than by Brier, which is the reason both are shown.
+    perfect = _score_1x2((1.0, 0.0, 0.0), 1)
+    @test perfect.logloss ≈ 0.0 && perfect.brier ≈ 0.0 && perfect.rps ≈ 0.0
+    flat = _score_1x2((1/3, 1/3, 1/3), 2)
+    @test flat.logloss ≈ -log(1/3)
+    wrong = _score_1x2((0.98, 0.01, 0.01), 3)
+    @test wrong.logloss > flat.logloss && wrong.brier > flat.brier
+    # RPS is ordinal: a home forecast that misses to a draw is penalised less than one that
+    # misses to an away win, which Brier alone cannot express.
+    @test _score_1x2((0.8, 0.15, 0.05), 2).rps < _score_1x2((0.8, 0.15, 0.05), 3).rps
+end
+
+# ===================================================================
 # 4. THE CONSOLE SURFACE
 # ===================================================================
 
@@ -898,10 +1348,10 @@ end
         base = "http://127.0.0.1:$port"
 
         page = String(HTTP.get("$base/"; retry = false).body)
-        @test occursin("EXECUTE AT T", page)
+        @test occursin("EXECUTE SLATE BATCH", page)
         @test occursin("tabular-nums", page)          # or every card jitters on each tick
         @test occursin("alpinejs", page)
-        @test occursin("Fast-Forward Settlement", page)
+        @test occursin("jump('settlement')", page)
 
         health = JSON3.read(String(HTTP.get("$base/api/health").body))
         @test health.ok == true && health.port == 8086
@@ -992,7 +1442,7 @@ end
         # the page carries both views and the library the chart window needs
         page = String(HTTP.get("$base/"; retry = false).body)
         @test occursin("Multi-Ladder Desk", page)
-        @test occursin("Slate Cards", page)
+        @test occursin("Slate Radar", page)
         @test occursin("chart.js", page)
         @test occursin("WOM", page)
 
@@ -1054,6 +1504,108 @@ end
         @test snap.replay.ladder_markets == collect(LADDER_MARKETS)
         @test snap.replay.window_open == T_WINDOW_OPEN
         @test snap.replay.window_close == T_WINDOW_CLOSE
+    finally
+        stop_replay!(srv)
+    end
+end
+
+@testset "R43 the ticket and intelligence endpoints answer over HTTP, and refuse by name" begin
+    rig = _resolver_rig()
+    st = rig.st
+    srv = ReplayServer(st)
+    port = 18_500 + (Int(rand(UInt16)) % 1_000)
+    serve_replay(srv; host = "127.0.0.1", port = port, push = false)
+    try
+        base = "http://127.0.0.1:$port"
+
+        # the page carries all six workspace panels and the window manager that arranges them
+        page = String(HTTP.get("$base/"; retry = false).body)
+        @test occursin("Staking Ticket", page)
+        @test occursin("RE-SOLVE REMAINING STAKES", page)
+        @test occursin("Team Form", page)
+        @test occursin("Model Scorecard", page)
+        @test occursin("Multi-Ladder Desk", page)
+        @test occursin("Trajectory Chart", page)
+        @test occursin("winStyle", page)                # the window manager, not a tab strip
+
+        # the snapshot now carries the ticket alongside the cards it is built from
+        snap = JSON3.read(String(HTTP.get("$base/api/snapshot").body))
+        @test snap.ticket.available == true
+        @test snap.ticket.n_legs == 2
+        @test snap.ticket.n_auto == 2 && snap.ticket.n_placed == 0
+        @test snap.ticket.resolved == false
+        @test all(l -> haskey(l, :recommended_stake) && haskey(l, :resolved_stake) &&
+                       haskey(l, :status), snap.ticket.legs)
+
+        # ONE override, then a re-solve, and the header follows the vector the button commits
+        ov = JSON3.read(String(HTTP.post("$base/api/replay/stake/override";
+                 body = JSON3.write((match_id = 902, market = "OverUnder", line = 2.5,
+                                     selection = "over_25", status = "skipped"))).body))
+        @test ov.ok == true && ov.status == "skipped"
+
+        # No model is loaded behind this socket, so the payoff matrices cannot be rebuilt and
+        # the re-solve takes its documented degraded path: the skipped leg still goes, and the
+        # survivor is bounded by residual capacity but never levered above its priced size. The
+        # reason is on the note, which is the difference between a degradation and a bug.
+        res = JSON3.read(String(HTTP.post("$base/api/replay/stake/resolve").body))
+        @test res.ok == true
+        @test res.n_legs == 1                            # the skipped leg is not an order
+        @test res.k_risk ≈ 1.0
+        @test occursin("drawdown budget was NOT re-solved", res.note)
+
+        after = JSON3.read(String(HTTP.get("$base/api/snapshot").body))
+        @test after.ticket.resolved == true
+        @test after.ticket.n_skipped == 1
+        @test after.ticket.n_legs == 2                   # still on the ticket, at zero
+        @test after.batch.n_legs == 1                    # but not in the batch
+        @test after.batch.total_risk ≈ res.total_risk
+
+        rst = JSON3.read(String(HTTP.post("$base/api/replay/stake/reset").body))
+        @test rst.ok == true && rst.n_cleared == 1
+        @test JSON3.read(String(HTTP.get("$base/api/snapshot").body)).ticket.n_auto == 2
+
+        # the query string works too, so the whole ticket is reachable from curl
+        q = JSON3.read(String(HTTP.post(
+            "$base/api/replay/stake/override?match_id=901&market=1X2&selection=home" *
+            "&status=placed&stake=120&odds=2.4").body))
+        @test q.ok == true && q.stake ≈ 120.0
+
+        # a refusal is a value with a reason, never a dropped connection
+        bad = JSON3.read(String(HTTP.post("$base/api/replay/stake/override";
+                 body = JSON3.write((match_id = 901, market = "BTTS", selection = "yes",
+                                     status = "skipped")), status_exception = false).body))
+        @test bad.ok == false && occursin("BTTS", bad.error)
+
+        # the form panel is a GET, like the ladder, and refuses an unknown fixture by number
+        stats = JSON3.read(String(HTTP.get("$base/api/replay/stats?match_id=901").body))
+        @test stats.ok == true && stats.match_id == 901
+        @test haskey(stats, :form) && haskey(stats, :lineup)
+        @test stats.lineup.home.status in ("no_xi", "no_history", "full_strength",
+                                           "missing_starters")
+        nofx = JSON3.read(String(HTTP.get("$base/api/replay/stats?match_id=999";
+                                          status_exception = false).body))
+        @test nofx.ok == false && occursin("999", nofx.error)
+
+        # the scorecard answers for a registered model and refuses an unregistered one by name.
+        # Its `oos` / `paired` blocks may be unavailable here -- there is no experiment database
+        # behind this socket -- and that is the point: it degrades to a reported reason.
+        card = JSON3.read(String(HTTP.get("$base/api/replay/model_scorecard?model=m00").body))
+        @test card.ok == true
+        @test card.model.key == "m00"
+        @test card.model.run_name == "m00_poisson_control"
+        @test haskey(card, :oos) && haskey(card, :paired) && haskey(card, :clv)
+        @test card.clv.ok == false                       # no ledger connection in this process
+        nomodel = JSON3.read(String(HTTP.get("$base/api/replay/model_scorecard?model=m99";
+                                             status_exception = false).body))
+        @test nomodel.ok == false && occursin("m99", nomodel.error)
+
+        # all five are advertised on a 404, like every other route
+        miss = String(HTTP.get("$base/api/nope"; status_exception = false).body)
+        for route in ("/api/replay/stake/override", "/api/replay/stake/resolve",
+                      "/api/replay/stake/reset", "/api/replay/stats",
+                      "/api/replay/model_scorecard")
+            @test occursin(route, miss)
+        end
     finally
         stop_replay!(srv)
     end
@@ -1301,6 +1853,46 @@ end
     balance_before = MD.account_row(conn, acct; schema = REPLAY_SCHEMA).balance
     settle!(st)
     @test MD.account_row(conn, acct; schema = REPLAY_SCHEMA).balance ≈ balance_before
+end
+
+@testset "R44 the scorecard's CLV half reads the rows settlement just wrote" begin
+    # The one number on the scorecard that is about BETTING rather than about forecasting, and
+    # the only one that moves when the operator presses Execute. It is read live for exactly that
+    # reason, so it is asserted against the settlement this account just booked.
+    card = model_scorecard(st, "m00")
+    @test card.ok == true
+    @test card.model.run_name == "m00_poisson_control"
+    @test card.clv.ok == true
+    @test card.clv.schema == "paper_replay"
+    @test card.clv.account_id == acct
+
+    # `n_settled` on the payload counts what the LAST `settle_slate!` call graded, and R19
+    # deliberately settles twice to prove idempotency -- so the durable per-leg facts are what
+    # this is checked against, not that transient counter.
+    settled = st.settlement
+    @test card.clv.n_bets == settled.n_clv
+    @test card.clv.n_beat == settled.beat_close
+    @test card.clv.beat_pct == settled.beat_close_pct
+    @test card.clv.n_settled == settled.n_legs           # two rows in paper_settlements
+    @test card.clv.net_pnl ≈ settled.net_pnl
+    @test card.clv.matched_risk ≈ settled.matched_risk
+    @test card.clv.roi_pct ≈ settled.roi_pct
+
+    # The account and the run name are BOTH in the filter: a scorecard keyed on the model alone
+    # would pool this replay account's bets with every other replay account's.
+    @test _clv_scorecard(st, "some_other_run").n_bets == 0
+
+    # Whatever the experiment database says, the payload is well-formed and every unavailable
+    # figure carries a reason rather than a zero.
+    @test haskey(card.oos, :ok) && haskey(card.paired, :ok)
+    if card.oos.ok
+        @test card.oos.n_folds > 0
+        if card.oos.n_scored == 0
+            @test !isempty(card.oos.note)
+        end
+    else
+        @test !isempty(card.oos.error)
+    end
 end
 
 @testset "R20 the ledger can be reset without dropping anything" begin
@@ -1594,6 +2186,58 @@ end
         l = fixture_ladder(st, mid, m)
         @test l.ok && length(l.runners) == 2
     end
+end
+
+@testset "R45 the scorecard reports what each run actually persisted, and nothing else" begin
+    # Three registered models, three different states of the same table. `m00_poisson_control`
+    # wrote proper scores fold by fold; `m12_hybrid_production_wealth_player_rapm`'s runner wrote
+    # chains and convergence diagnostics but no evaluation. A scorecard that averaged the folds
+    # which DO carry a number would be describing a different model, so the second case must come
+    # back as `nothing` with a reason rather than as a figure.
+    for key in ("m00", "m05", "m12")
+        card = model_scorecard(st, key)
+        @test card.ok == true
+        @test card.model.key == key
+        @test card.oos.ok == true                       # the run exists in `mcmc_experiments`
+        @test card.oos.n_folds > 0
+        @test card.oos.n_converged <= card.oos.n_folds
+        if card.oos.n_scored == 0
+            @test card.oos.logloss === nothing
+            @test card.oos.brier === nothing
+            @test !isempty(card.oos.note)
+        else
+            @test card.oos.logloss > 0
+            @test 0 < card.oos.brier < 2
+        end
+        # A weighted figure only exists where `n_matches` was migrated in; where it was not, the
+        # payload says so rather than silently reporting the plain mean twice.
+        if card.oos.n_matches === nothing
+            @test card.oos.logloss_weighted === nothing
+        end
+        # The paired vs-market block is scored on ONE match set or it is refused with a reason.
+        if card.paired.ok
+            @test card.paired.n > 0
+            @test card.paired.crps > 0
+            @test card.paired.logloss > 0
+            if card.paired.market_logloss !== nothing
+                @test card.paired.logloss_vs_market ≈
+                      round(card.paired.logloss - card.paired.market_logloss, digits = 4) atol = 1e-4
+            end
+        else
+            @test !isempty(card.paired.error)
+        end
+    end
+
+    # The control comparison is a DELTA against m00 and is absent on m00 itself.
+    @test model_scorecard(st, "m00").control === nothing
+    c = model_scorecard(st, "m05").control
+    @test c !== nothing && c.key == "m00"
+    if c.comparable
+        @test c.d_logloss ≈ round(model_scorecard(st, "m05").oos.logloss - c.logloss,
+                                  digits = 4) atol = 1e-4
+    end
+
+    @test_throws ErrorException model_scorecard(st, "m99")
 end
 
 finally

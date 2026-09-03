@@ -50,7 +50,10 @@ be indistinguishable from a live one.
 """
 function replay_payload(st::ReplayState)
     return lock(st.lock) do
-        slate = st.slate
+        # `active_slate`, not `st.slate`: once the operator has re-solved around what they placed,
+        # the header, the cards and the Execute button must all describe THAT vector, because it
+        # is the one the button commits. With no overrides the two are the same object.
+        slate = active_slate(st)
         account = _account_or_placeholder(st)
         base = slate === nothing ?
             (batch = _empty_batch(st), cards = NamedTuple[], blocked = NamedTuple[]) :
@@ -70,8 +73,144 @@ function replay_payload(st::ReplayState)
             cards = base.cards,
             blocked = base.blocked,
             settlement = st.settlement,
+            ticket = ticket_payload(st),
         )
     end
+end
+
+"""
+    ticket_payload(st) -> NamedTuple
+
+The Staking Execution Ticket: every recommended leg, what the operator did with it, and what the
+re-solver would now stake.
+
+Built from the PRICED slate and not from the re-solved one, and that is the whole point of the
+panel. A `:skipped` leg is absent from the re-solved sheet -- it has no stake, so it is not an
+order -- but it must still appear on the ticket, greyed and struck through, or the operator loses
+the row they need to press `[Auto]` on to put it back. So the row set is the recommendation and
+the numbers are the outcome.
+
+`recommended_*` is the untouched Kelly figure, `resolved_*` is what the constrained re-solve
+arrived at, and both are carried per leg so the animation between them is a difference the page
+can draw rather than a number that silently replaced another one.
+"""
+function ticket_payload(st::ReplayState)
+    base = st.slate
+    base === nothing && return (
+        available = false, n_legs = 0, legs = NamedTuple[], resolved = false,
+        note = "nothing is priced yet", n_placed = 0, n_skipped = 0, n_auto = 0,
+        bankroll = round(st.bankroll, digits = 2), exposure_cap_pct = 0.0,
+        committed_risk = 0.0, residual_risk = 0.0, auto_risk = 0.0, total_risk = 0.0,
+        k_risk = 0.0, exposure_pct = 0.0, capped = false, resolved_t = st.resolved_t,
+        stale = false)
+
+    res = (st.resolved !== nothing && st.resolved_t == st.slate_t) ? st.resolved : nothing
+    resolved_by_key = Dict{Tuple{Int,MD.SelectionKey},Int}()
+    if res !== nothing
+        for i in 1:nrow(res.sheet)
+            resolved_by_key[override_key(res.sheet.match_id[i], res.sheet.group[i],
+                                         res.sheet.line[i], res.sheet.selection[i])] = i
+        end
+    end
+    fixture_of = Dict(c.fixture.m_id => c.fixture for c in base.cards)
+
+    sheet = base.sheet
+    legs = NamedTuple[]
+    committed = 0.0; auto_risk = 0.0
+    n_placed = 0; n_skipped = 0; n_auto = 0
+    for i in 1:nrow(sheet)
+        key = override_key(sheet.match_id[i], sheet.group[i], sheet.line[i], sheet.selection[i])
+        ov = get(st.overrides, key, nothing)
+        status = ov === nothing ? :auto : ov.status
+        status === :placed ? (n_placed += 1) :
+            status === :skipped ? (n_skipped += 1) : (n_auto += 1)
+        c_risk = ov === nothing ? 0.0 : committed_risk(ov, sheet.side[i])
+        committed += c_risk
+
+        # BEFORE a re-solve there IS no re-solved number, and the column must show what would
+        # be staked -- the priced Kelly figure -- rather than a zero that reads as "this leg is
+        # off". AFTER one, an `:auto` leg absent from the resolved sheet was genuinely dropped
+        # (below the exchange minimum, or out of budget) and its zero is the answer.
+        ri = get(resolved_by_key, key, nothing)
+        r_risk, r_stake = if res === nothing
+            status === :placed ? (c_risk, ov.placed_stake) :
+            status === :auto   ? (Float64(sheet.risk[i]), Float64(sheet.venue_stake[i])) :
+                                 (0.0, 0.0)
+        elseif ri === nothing
+            (0.0, 0.0)
+        else
+            (Float64(res.sheet.risk[ri]), Float64(res.sheet.venue_stake[ri]))
+        end
+        status === :auto && (auto_risk += r_risk)
+
+        f = get(fixture_of, sheet.match_id[i], nothing)
+        push!(legs, (
+            match_id = sheet.match_id[i],
+            fixture = f === nothing ? string(sheet.match_id[i]) : f.home * " v " * f.away,
+            kickoff = f === nothing ? "" : string(f.kickoff),
+            market = sheet.group[i],
+            line = sheet.line[i],
+            selection = String(sheet.selection[i]),
+            venue_selection = String(sheet.venue_selection[i]),
+            side = String(sheet.side[i]),
+            fair_odds = sheet.p_model[i] > 0 ? round(1 / sheet.p_model[i], digits = 3) : 0.0,
+            venue_odds = round(sheet.venue_odds[i], digits = 3),
+            effective_odds = round(sheet.odds[i], digits = 3),
+            p_model = round(sheet.p_model[i], digits = 4),
+            p_market = round(sheet.p_market[i], digits = 4),
+            edge_pp = round(100 * sheet.edge[i], digits = 2),
+            ev_pct = sheet.p_market[i] > 0 ?
+                     round(100 * sheet.edge[i] / sheet.p_market[i], digits = 2) : 0.0,
+            recommended_risk = round(sheet.risk[i], digits = 2),
+            recommended_stake = round(sheet.venue_stake[i], digits = 2),
+            resolved_risk = round(r_risk, digits = 2),
+            resolved_stake = round(r_stake, digits = 2),
+            status = String(status),
+            placed_stake = ov === nothing ? nothing : round(ov.placed_stake, digits = 2),
+            placed_odds = ov === nothing ? nothing : ov.placed_odds,
+            committed_risk = round(c_risk, digits = 2),
+            in_resolved = ri !== nothing,
+            depth_touch = round(sheet.depth_touch[i], digits = 2),
+            fillable = sheet.fillable[i],
+            confidence = String(sheet.fill_confidence[i]),
+            wom = _leg_wom(base, sheet, i),
+        ))
+    end
+
+    cap = isnan(base.exposure_cap) ? _policy_cap(st.system) : base.exposure_cap
+    bankroll = base.bankroll
+    return (
+        available = true,
+        n_legs = length(legs),
+        legs = legs,
+        resolved = res !== nothing,
+        resolved_t = st.resolved_t,
+        stale = st.resolved !== nothing && st.resolved_t != st.slate_t,
+        note = st.resolve_note,
+        n_placed = n_placed, n_skipped = n_skipped, n_auto = n_auto,
+        bankroll = round(bankroll, digits = 2),
+        exposure_cap_pct = isnan(cap) ? nothing : round(100 * cap, digits = 2),
+        committed_risk = round(committed, digits = 2),
+        residual_risk = isnan(cap) ? nothing : round(max(0.0, cap * bankroll - committed),
+                                                     digits = 2),
+        auto_risk = round(auto_risk, digits = 2),
+        total_risk = res === nothing ? round(base.total_risk, digits = 2) :
+                     round(res.total_risk, digits = 2),
+        k_risk = res === nothing ? round(base.k_risk, digits = 4) :
+                 round(res.k_risk, digits = 4),
+        exposure_pct = res === nothing ? round(100 * base.slate_exposure, digits = 2) :
+                       round(100 * res.slate_exposure, digits = 2),
+        capped = res === nothing ? base.capped : res.capped,
+    )
+end
+
+"Weight of money on the runner the order would touch, or `nothing` where there is no two-sided book."
+function _leg_wom(slate::MD.PricedSlate, sheet, i::Int)
+    vkey = (group = sheet.group[i], line = sheet.line[i], selection = sheet.venue_selection[i])
+    lv = get(slate.books, (sheet.match_id[i], vkey), nothing)
+    lv === nothing && return nothing
+    w = wom_pct(lv)
+    return w === nothing ? nothing : round(w, digits = 1)
 end
 
 """
@@ -255,9 +394,12 @@ _json(x; status::Int = 200) =
 const REPLAY_ROUTES = [
     "GET  /", "GET  /api/snapshot", "GET  /api/health", "GET  /api/replay/matchdays",
     "GET  /api/replay/ladder", "GET  /api/replay/history",
+    "GET  /api/replay/stats", "GET  /api/replay/model_scorecard",
     "POST /api/replay/play", "POST /api/replay/pause", "POST /api/replay/speed",
     "POST /api/replay/step", "POST /api/replay/jump", "POST /api/replay/seek",
     "POST /api/replay/set_model", "POST /api/replay/set_matchday",
+    "POST /api/replay/stake/override", "POST /api/replay/stake/resolve",
+    "POST /api/replay/stake/reset",
     "POST /api/replay/execute", "POST /api/replay/settle", "POST /api/replay/reset",
 ]
 
@@ -306,6 +448,18 @@ function route_replay(srv::ReplayServer, req::HTTP.Request)
             _str(q, "market", "MATCH_ODDS");
             from = Int(round(_num(q, "from", Float64(T_START)))),
             to = haskey(q, "to") ? Int(round(_num(q, "to", Float64(st.clock.t)))) : nothing)))
+    elseif method == "GET" && target == "/api/replay/stats"
+        # GET for the same reason the ladder is: a form read changes nothing, and a pasteable URL
+        # is how one fixture's team-news panel gets sent to someone else.
+        q = _query_args(uri)
+        return _json(_intent(() -> fixture_stats(st,
+            Int(round(_num(q, "match_id", Float64(_default_match(st)))));
+            n_recent = Int(round(_num(q, "n", 5.0))),
+            threshold = _num(q, "threshold", 0.7))))
+    elseif method == "GET" && target == "/api/replay/model_scorecard"
+        q = _query_args(uri)
+        return _json(_intent(() -> model_scorecard(st, _str(q, "model", st.active);
+                                                   baseline = _str(q, "baseline", "m00"))))
     end
 
     args = _body_args(req, uri)
@@ -352,6 +506,21 @@ function route_replay(srv::ReplayServer, req::HTTP.Request)
                                "$(length(card.lineup_drop)) with a scraped XI",
              day = string(day))
         end))
+    elseif method == "POST" && target == "/api/replay/stake/override"
+        # `line` is optional: the console always sends it, `curl` usually cannot, and
+        # `find_leg` refuses an ambiguous market by name rather than guessing a line.
+        return _json(_intent(() -> set_override!(st,
+            Int(round(_num(args, "match_id", Float64(_default_match(st))))),
+            _str(args, "market", "1X2"),
+            _str(args, "selection", "home"),
+            Symbol(_str(args, "status", "auto"));
+            line = haskey(args, "line") ? _num(args, "line", 0.0) : nothing,
+            stake = _num(args, "stake", 0.0),
+            odds = _num(args, "odds", 0.0))))
+    elseif method == "POST" && target == "/api/replay/stake/resolve"
+        return _json(_intent(() -> resolve!(st)))
+    elseif method == "POST" && target == "/api/replay/stake/reset"
+        return _json(_intent(() -> clear_overrides!(st)))
     elseif method == "POST" && target == "/api/replay/execute"
         return _json(_intent(() ->
             execute!(st; allow_in_play = _num(args, "allow_in_play", 0.0) != 0.0 ||

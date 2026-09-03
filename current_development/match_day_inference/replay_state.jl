@@ -876,6 +876,85 @@ function slot_latents(slot::ModelSlot, spec::MD.MatchDaySpec, ds,
 end
 
 # ===================================================================
+# 6b. What the operator actually placed
+# ===================================================================
+
+"""
+    StakingOverride(status; placed_stake, placed_odds, at)
+
+One leg of the slate, as the OPERATOR left it rather than as the model sized it.
+
+A trader does not execute this stake sheet; they execute on Betfair or in Bet Angel, and what
+comes back is three facts the console cannot derive: which legs got filled, at what price, and
+which ones they decided not to take. Those three are the whole content of this type.
+
+* `:auto`    -- untouched. The Kelly stake stands and the re-solver may move it.
+* `:placed`  -- **committed**. `placed_stake` went on at `placed_odds` and neither the re-solver
+                nor the exposure cap may reduce it: the money is already at the venue. It enters
+                the re-solve as a CONSTANT in the wealth relative, which is exactly what it is.
+* `:skipped` -- excluded. Stake zero, and the risk it was holding is released to the rest.
+
+`placed_stake` is the VENUE stake (what was typed into the exchange), not the risk. For a back
+those coincide; for a lay the venue stake is the backer's stake and the risk is the liability
+`stake * (odds - 1)`. Storing the venue figure is what makes the input box match the ticket the
+operator is reading off their exchange screen -- and `committed_risk` does the conversion once,
+in one place, rather than at every reader.
+"""
+struct StakingOverride
+    status::Symbol
+    placed_stake::Float64
+    placed_odds::Float64
+    at::DateTime
+end
+
+const OVERRIDE_STATES = (:auto, :placed, :skipped)
+
+function StakingOverride(status::Symbol; placed_stake::Real = 0.0, placed_odds::Real = 0.0,
+                         at::DateTime = Dates.now())
+    status in OVERRIDE_STATES || error(
+        "StakingOverride: unknown status :$status. One of " *
+        join(string.(OVERRIDE_STATES), ", ") * ".")
+    if status === :placed
+        placed_stake > 0 || error(
+            "StakingOverride: a :placed leg needs a positive stake; got $placed_stake. A leg " *
+            "that went on for nothing is :skipped, and the distinction matters because :skipped " *
+            "releases its risk to the rest of the slate while :placed freezes it.")
+        placed_odds > 1 || error(
+            "StakingOverride: a :placed leg needs decimal odds above 1.0; got $placed_odds. " *
+            "The price is not decoration -- the re-solver reprices the frozen leg's payoff " *
+            "column with it, so a wrong one misstates the wealth the remaining legs are solved " *
+            "against.")
+    end
+    return StakingOverride(status, Float64(placed_stake), Float64(placed_odds), at)
+end
+
+"""
+    committed_risk(ov, side) -> Float64
+
+The currency a `:placed` leg has actually put at risk, which is the number the budget is spent in.
+
+For a back that is the stake. For a LAY it is the liability `stake * (odds - 1)` -- laying £100
+at 1.80 risks £80, not £100 -- and the whole system denominates in risk from
+`Portfolio.stake_sheet` onwards, so converting here keeps the one denomination the cap, the
+drawdown budget and the account reservation all speak.
+"""
+committed_risk(ov::StakingOverride, side::Symbol) =
+    ov.status === :placed ?
+        (side === :lay ? ov.placed_stake * (ov.placed_odds - 1.0) : ov.placed_stake) : 0.0
+
+"""
+    effective_odds(ov, side) -> Float64
+
+The RISK-denominated odds of a placed leg: `q` for a back, `q / (q - 1)` for a lay.
+
+The same morphism `Instrument` applies to a quoted price, applied to the price that was actually
+got. Used to reprice the frozen leg's payoff column, so that a fill two ticks away from the quote
+changes the wealth the remaining legs are solved against by the amount it really changed it.
+"""
+effective_odds(ov::StakingOverride, side::Symbol) =
+    side === :lay ? ov.placed_odds / (ov.placed_odds - 1.0) : ov.placed_odds
+
+# ===================================================================
 # 7. The replay state
 # ===================================================================
 
@@ -919,6 +998,25 @@ mutable struct ReplayState
     # as `ModelSlot.latents` and for the same reason: within a replay the posterior moves ONLY
     # when the visible XI does, so a cache miss is a lineup event and nothing else.
     model_probs::Dict{Tuple{String,UInt64},Dict{Int,Dict{MD.SelectionKey,Float64}}}
+    # ---- the execution ticket ------------------------------------------------------------
+    # What the OPERATOR did, as opposed to what the model recommended. Keyed on the MODEL
+    # selection -- `(match_id, SelectionKey)` -- and not on the venue runner, because that is the
+    # key the sheet, the ledger and the settlement all grade on; keying on the venue runner would
+    # put a synthetic's override on the complement of the leg it belongs to.
+    #
+    # Overrides SURVIVE a tick and the re-solved slate does not, and the asymmetry is the whole
+    # semantics: a bet that has been placed on the exchange stays placed when the clock moves,
+    # while a stake vector solved against the book at T-15 is not a stake vector for T-14.
+    overrides::Dict{Tuple{Int,MD.SelectionKey},StakingOverride}
+    resolved::Union{Nothing,MD.PricedSlate}
+    resolved_t::Int
+    resolve_note::String
+    # Immutable halves of the two intelligence widgets, memoised. `form_cache` is per fixture and
+    # holds only the history half (the lineup delta moves with `as_of` and is recomputed);
+    # `scorecard_cache` is per `(experiment, run_name)` and holds the `mcmc_experiments` half (the
+    # CLV half is read live, because executing changes it).
+    form_cache::Dict{Int,Any}
+    scorecard_cache::Dict{Tuple{String,String},Any}
 end
 
 function ReplayState(ds, conn, card::ReplayCard; system::PF.PortfolioSystem,
@@ -931,7 +1029,9 @@ function ReplayState(ds, conn, card::ReplayCard; system::PF.PortfolioSystem,
                        Float64(bankroll), String(account_id), String(schema), nothing,
                        T_START, "", "", UUID[], nothing, Float64(bankroll),
                        ReentrantLock(), nothing, false, 0.0, 0,
-                       Dict{Tuple{String,UInt64},Dict{Int,Dict{MD.SelectionKey,Float64}}}())
+                       Dict{Tuple{String,UInt64},Dict{Int,Dict{MD.SelectionKey,Float64}}}(),
+                       Dict{Tuple{Int,MD.SelectionKey},StakingOverride}(), nothing, T_START, "",
+                       Dict{Int,Any}(), Dict{Tuple{String,String},Any}())
 end
 
 active_slot(st::ReplayState) =
@@ -945,6 +1045,16 @@ function find_slot(st::ReplayState, key::AbstractString)
                            join([m.key for m in st.models], ", "))
     return st.models[i]
 end
+
+"""
+The stake rounding the replay applies, named once.
+
+`replay_spec` hands it to the pricing pipeline and `resolve_slate_with_overrides` hands it to
+the re-solved sheet. Two literals would eventually disagree, and the disagreement would show up
+as a leg that the ticket sizes at £0.90 and the executor drops -- a difference nobody would read
+as a rounding bug.
+"""
+const REPLAY_ROUNDING = MD.FloorOrDrop(minimum = 1.0)
 
 """
     replay_spec(st, fixtures) -> MD.MatchDaySpec
@@ -966,7 +1076,7 @@ replay_spec(st::ReplayState, fixtures::Vector{MD.Fixture}) = MD.MatchDaySpec(
     lineups = st.card.lineups,
     book = st.card.book,
     instrument = MD.BestOfBackLay(),
-    rounding = MD.FloorOrDrop(minimum = 1.0),
+    rounding = REPLAY_ROUNDING,
     features = replay_materialisers(),
     gate = MD.GateChain(MD.IdentityResolved(), MD.MaxBookAge(Minute(10)),
                         MD.MaxSpread(0.08), MD.MinMatched(minimum = 20.0)),
@@ -1063,6 +1173,10 @@ function reprice!(st::ReplayState)
                                slot.fold_idx, slot.fold_warning)
         st.slate = slate
         st.slate_t = st.clock.t
+        # A re-solved vector belongs to the book it was solved against. This minute's book is a
+        # different one, so the re-solve is retired -- the OVERRIDES are not, because a bet that
+        # is on the exchange stays on it when the clock moves.
+        st.resolved = nothing
         st.tick_note = ""
         st.tick_seq += 1
     catch e
@@ -1295,7 +1409,10 @@ loud.
 function execute!(st::ReplayState; allow_in_play::Bool = false)
     assert_replay_schema(st.schema)
     return lock(st.lock) do
-        slate = st.slate
+        # `active_slate`, not `st.slate`: when the operator has re-solved around what they
+        # actually placed, THAT is the vector the account should reserve. With no overrides the
+        # two are the same object and this reads exactly as it did.
+        slate = active_slate(st)
         slate === nothing && return (ok = false, error = "nothing is priced yet")
         MD.n_legs(slate) > 0 || return (ok = false, error = "the priced slate has no legs")
         (st.slate_t < T_KICKOFF || allow_in_play) || return (ok = false, error =
@@ -2300,4 +2417,1246 @@ function selection_history(st::ReplayState, match_id::Integer, symbol::AbstractS
             markers = (lineups = T_LINEUP, exec = T_EXEC, kickoff = T_KICKOFF),
         )
     end
+end
+
+# ===================================================================
+# 12. The execution ticket: manual overrides and the dynamic re-solver
+# ===================================================================
+#
+# WHY THIS EXISTS. `Portfolio` solves ONE joint problem for the whole settlement window, and
+# `execute!` commits that vector or nothing. That is correct when a machine places the bets. It
+# is not what happens: a human places them, on Betfair or in Bet Angel, one at a time, and by the
+# time the fourth is on the first has partially filled at a different price, the third was never
+# available and the second they decided against. The vector the account then holds is NOT the
+# vector the allocator solved, and every leg still to be placed is now sized for a portfolio that
+# does not exist.
+#
+# WHAT THE RE-SOLVER IS. A CONSTRAINED version of the same drawdown solve, not a rescale and not
+# a second allocator:
+#
+#     max k  s.t.  Σ_t log Σ_i p_t,i (1 + [R_t a_frozen]_i + k [R_t a_free]_i)^(-λ)  <=  0
+#                  Σ committed_frac + k Σ free_frac  <=  exposure_cap
+#
+# The frozen legs enter the wealth relative as CONSTANTS -- which is what a placed bet is -- and
+# one factor scales what is left. Setting every leg to `:auto` recovers `k = 1` and therefore the
+# untouched Kelly vector, which is the property `R33` pins: the re-solver is a no-op on a slate
+# nobody has touched.
+#
+# WHY k MAY EXCEED 1. Skipping a leg releases both its exposure and its contribution to the
+# drawdown penalty, so the remaining legs are genuinely entitled to more than the full-slate
+# solution gave them. `Portfolio._bisect_k` searches [0,1] because it is scaling a vector that
+# has not yet been budgeted; this one searches [0, k_cap] because it is re-budgeting a vector
+# that has. That is the one place the two solvers differ, and it is deliberate.
+#
+# WHAT IT WILL NOT DO. It will not reduce a `:placed` leg. The money is at the venue; an
+# allocator that could shrink it would be describing a position the account does not hold.
+# If the frozen commitment alone breaches the cap, the free legs go to ZERO and the ticket says
+# so -- it never rebalances by pretending a placed bet can be unplaced.
+
+"""
+    override_key(match_id, market, line, selection) -> Tuple{Int,MD.SelectionKey}
+
+The address of one leg, in the MODEL's selection space.
+
+`SelectionKey` is a `NamedTuple`, so this is just a spelling -- but it is the spelling used by
+`slate.instruments`, `slate.books`, `orders_to_paper` and the settlement grader, and writing it
+once is what stops an override landing on a synthetic's venue runner instead of on the position
+it expresses.
+"""
+override_key(match_id::Integer, market::AbstractString, line::Real, selection) =
+    (Int(match_id), (group = String(market), line = Float64(line),
+                     selection = Symbol(selection)))
+
+"""
+    find_leg(slate, match_id, market, selection; line = nothing) -> Union{Nothing,NamedTuple}
+
+Resolve a leg the browser named by `(match_id, market, selection)` against the priced sheet,
+inferring `line` when it was not given.
+
+The console's ticket knows the line and sends it. `curl` does not, and a market with exactly one
+staked line -- which is every 1X2 and BTTS leg, and in practice most O/U ones -- has an
+unambiguous answer. Ambiguity is REFUSED by name rather than resolved by taking the first match:
+staking the wrong Over/Under line is not a mistake that announces itself.
+"""
+function find_leg(slate::MD.PricedSlate, match_id::Integer, market::AbstractString,
+                  selection; line::Union{Nothing,Real} = nothing)
+    sheet = slate.sheet
+    mid, grp, sel = Int(match_id), String(market), Symbol(selection)
+    hits = Int[]
+    for i in 1:nrow(sheet)
+        sheet.match_id[i] == mid || continue
+        sheet.group[i] == grp || continue
+        sheet.selection[i] == sel || continue
+        line === nothing || sheet.line[i] ≈ Float64(line) || continue
+        push!(hits, i)
+    end
+    isempty(hits) && return nothing
+    length(hits) == 1 || error(
+        "replay: ($mid, $grp, $sel) matches $(length(hits)) staked lines " *
+        "($(join(sheet.line[hits], ", "))). Pass `line` to say which -- an override applied to " *
+        "the wrong Over/Under line freezes a bet that was never placed.")
+    i = only(hits)
+    return (row = i, key = override_key(mid, grp, sheet.line[i], sel),
+            side = sheet.side[i], venue_odds = sheet.venue_odds[i],
+            venue_stake = sheet.venue_stake[i], risk = sheet.risk[i])
+end
+
+"""
+    set_override!(st, match_id, market, selection, status; line, stake, odds) -> NamedTuple
+
+Record what the operator did with one leg, and invalidate any standing re-solve.
+
+The re-solve is discarded rather than recomputed: pressing `[✓ Placed]` on four legs would
+otherwise solve the portfolio four times on the way to the answer the operator wants once, and
+three of those answers would flash across the ticket as if they meant something.
+"""
+function set_override!(st::ReplayState, match_id::Integer, market::AbstractString,
+                       selection, status::Symbol;
+                       line::Union{Nothing,Real} = nothing,
+                       stake::Real = 0.0, odds::Real = 0.0)
+    return lock(st.lock) do
+        slate = st.slate
+        slate === nothing && return (ok = false, error = "nothing is priced yet")
+        leg = find_leg(slate, match_id, market, selection; line = line)
+        leg === nothing && return (ok = false, error =
+            "replay: no staked leg ($match_id, $market, $selection) on the slate priced at " *
+            "T$(_signed(st.slate_t))m. Overrides address legs the model recommended; a bet on " *
+            "something it did not recommend is not an override of it.")
+
+        st.resolved = nothing
+        if status === :auto
+            delete!(st.overrides, leg.key)
+            st.resolve_note = ""
+            return (ok = true, note = "$(market) $(selection) back to auto", status = "auto",
+                    key = _key_label(leg.key))
+        end
+
+        # A `[✓ Placed]` press with no numbers means "I took the recommendation": the venue stake
+        # and the venue price the ticket was showing. Typing them again to say so would be the
+        # commonest action on the panel and the one most likely to be mistyped.
+        s = status === :placed ? (stake > 0 ? Float64(stake) : Float64(leg.venue_stake)) : 0.0
+        o = status === :placed ? (odds  > 1 ? Float64(odds)  : Float64(leg.venue_odds))  : 0.0
+        ov = StakingOverride(status; placed_stake = s, placed_odds = o)
+        st.overrides[leg.key] = ov
+        st.resolve_note = ""
+        return (ok = true, status = String(status), key = _key_label(leg.key),
+                stake = round(s, digits = 2), odds = o,
+                committed_risk = round(committed_risk(ov, leg.side), digits = 2),
+                note = status === :placed ?
+                    "placed £$(round(s, digits = 2)) @ $(o) on $(market) $(selection)" :
+                    "skipped $(market) $(selection)")
+    end
+end
+
+_key_label(k::Tuple{Int,MD.SelectionKey}) =
+    string(k[1]) * " " * k[2].group * (k[2].line == 0 ? "" : " " * string(k[2].line)) *
+    " " * String(k[2].selection)
+
+"""
+    clear_overrides!(st) -> NamedTuple
+
+Back to pure Kelly: every leg `:auto`, no re-solved slate, the priced vector as the allocator
+left it.
+"""
+function clear_overrides!(st::ReplayState)
+    return lock(st.lock) do
+        n = length(st.overrides)
+        empty!(st.overrides)
+        st.resolved = nothing
+        st.resolve_note = ""
+        return (ok = true, n_cleared = n,
+                note = "cleared $n override(s); the slate is the untouched Kelly vector")
+    end
+end
+
+"""
+    active_slate(st) -> Union{Nothing,MD.PricedSlate}
+
+The vector `execute!` would commit: the re-solved one when it is still valid for the minute on
+screen, the priced one otherwise.
+
+Validity is `resolved_t == slate_t` and nothing weaker. A stake vector is solved against ONE
+book; carrying it across a reprice would execute stakes computed from prices that have since
+moved, which is the exact error the live console's `stale` flag exists to make visible.
+"""
+active_slate(st::ReplayState) =
+    (st.resolved !== nothing && st.resolved_t == st.slate_t) ? st.resolved : st.slate
+
+"""
+    slate_books(st, slate) -> Vector{PF.MatchBook}
+
+The payoff matrices and score grids the visible slate was staked from, rebuilt.
+
+`PricedSlate` carries the SHEET but not the books it was solved from -- `MatchBook` holds an
+`N x n` return matrix per fixture and a full score grid, and putting those on the wire twice a
+second is not what the console needs. The re-solver does need them, so they are rebuilt on the
+press of the button rather than on every tick: `slot_latents` is memoised on the lineup, so this
+costs one `build_books` and no posterior extraction.
+"""
+function slate_books(st::ReplayState, slate::MD.PricedSlate)
+    slot = active_slot(st)
+    slot.status === :ready || error(
+        "replay: model $(slot.key) is $(slot.status), so there are no payoff matrices to " *
+        "re-solve against.")
+    passed = MD.FixtureCard[c for c in slate.cards if MD.is_ready(c.readiness)]
+    isempty(passed) && error("replay: every fixture on the priced slate is gated.")
+    spec = replay_spec(st, MD.Fixture[c.fixture for c in passed])
+    latents = slot_latents(slot, spec, st.ds, passed, slate.odds, slate.as_of)
+    isempty(latents) && error("replay: no latents for the priced slate.")
+    return PF.build_books(st.system.book, latents, slot.fit, slate.odds,
+                          MD.fixture_info(passed); require_result = false)
+end
+
+"""
+    _bisect_scale(f, hi) -> Float64
+
+The largest `k` in `[0, hi]` with `f(k) <= 0`, for a penalty that crosses zero once from below.
+
+`Portfolio._bisect_k` is the same routine with `hi` pinned to 1. It is not reused because the
+whole point of the re-solve is that `hi` is not 1: freeing a skipped leg's budget can entitle the
+remainder to more than the full-slate solution gave them, and a solver that cannot return more
+than 1 would silently refuse to reallocate anything.
+"""
+function _bisect_scale(f, hi::Float64; iters::Int = 60)
+    hi > 0 || return 0.0
+    f(hi) <= 0.0 && return hi
+    lo, h = 0.0, hi
+    for _ in 1:iters
+        mid = 0.5 * (lo + h)
+        f(mid) > 0.0 ? (h = mid) : (lo = mid)
+    end
+    return lo
+end
+
+"""
+    _drawdown_scale(risk, probs, frozen, free, k_max) -> Float64
+
+Solve the drawdown budget for the free legs with the placed ones held constant.
+
+`frozen[t]` and `free[t]` are per-fixture RETURN vectors (`R * a`), already in bankroll
+fractions, so wealth on outcome `i` of fixture `t` is `1 + frozen[t][i] + k * free[t][i]`.
+
+Only `SlateDrawdown(:sequential)` and `NoRisk` are solved. `:joint` Monte-Carlos the simultaneous
+sum against a seeded RNG, and a re-solve that drew a different sample than the pricing run would
+move the answer for a reason the operator could not see; `IsolatedDrawdown` budgets per fixture,
+which a slate-wide reallocation is not. Both are refused BY NAME rather than approximated,
+because the approximation would be invisible in the number it produced.
+"""
+function _drawdown_scale(risk::PF.SlateDrawdown, probs::Vector{Vector{Float64}},
+                         frozen::Vector{Vector{Float64}}, free::Vector{Vector{Float64}},
+                         k_max::Float64)
+    risk.mode === :sequential || error(
+        "replay: the dynamic re-solver solves SlateDrawdown(:sequential) only; this system is " *
+        "configured `mode = :$(risk.mode)`, whose penalty is a seeded Monte-Carlo sum. " *
+        "Re-drawing it here would move the stake for a reason invisible on the ticket.")
+    λ = risk.lambda
+    f = function (k)
+        tot = 0.0
+        @inbounds for t in eachindex(probs)
+            s = 0.0
+            for i in eachindex(probs[t])
+                w = 1.0 + frozen[t][i] + k * free[t][i]
+                w <= 0.0 && return Inf      # a branch that bankrupts the account is infeasible
+                s += probs[t][i] * w^(-λ)
+            end
+            tot += log(s)
+        end
+        return tot
+    end
+    return _bisect_scale(f, k_max)
+end
+
+_drawdown_scale(::PF.NoRisk, ::Vector{Vector{Float64}}, ::Vector{Vector{Float64}},
+                ::Vector{Vector{Float64}}, k_max::Float64) = k_max
+
+_drawdown_scale(r::PF.AbstractRiskModel, ::Vector{Vector{Float64}}, ::Vector{Vector{Float64}},
+                ::Vector{Vector{Float64}}, ::Float64) = error(
+    "replay: the dynamic re-solver has no constrained form for $(typeof(r)). SlateDrawdown " *
+    "solves one budget for the whole window, which is the problem a slate-wide reallocation " *
+    "poses; a per-fixture budget is a different one.")
+
+"""
+    resolve_slate_with_overrides(st; slate, books) -> MD.PricedSlate
+
+Re-optimise the uncommitted legs around what has already been placed.
+
+Returns a NEW `PricedSlate` over the same fixtures: `:placed` legs frozen at the stake and price
+they actually got, `:skipped` legs gone, and the rest scaled by the single factor that satisfies
+both the drawdown budget and the residual exposure cap. It is stored on `st.resolved` and becomes
+what `execute!` commits, until the next reprice retires it.
+
+`books` is injectable so the pure test tier can hand-build the payoff matrices and assert the
+arithmetic without a database, a `DataStore` or a trained fit behind it.
+
+Three properties are worth stating because the panel depends on all three:
+
+1. **A placed leg is untouchable.** Its risk is `committed_risk`, its price is the one it got,
+   and neither the cap nor the budget may move it.
+2. **A skipped leg releases everything.** Its exposure AND its column of the return matrix, which
+   is why skipping can make the remaining legs bigger and not merely leave them alone.
+3. **Nothing is levered past the budget.** `k` is capped by `(exposure_cap - committed) / free`
+   before the drawdown solve even runs, so a slate whose commitments already fill the cap
+   re-solves to zero rather than to a negative residual quietly treated as room.
+"""
+function resolve_slate_with_overrides(st::ReplayState;
+                                      slate::Union{Nothing,MD.PricedSlate} = nothing,
+                                      books::Union{Nothing,Vector{PF.MatchBook}} = nothing)
+    s = slate === nothing ? st.slate : slate
+    s === nothing && error("replay: nothing is priced yet, so there is nothing to re-solve.")
+    sheet = s.sheet
+    n = nrow(sheet)
+    n > 0 || error("replay: the priced slate has no legs.")
+
+    bankroll = s.bankroll
+    cap = isnan(s.exposure_cap) ? _policy_cap(st.system) : s.exposure_cap
+    isnan(cap) && error("replay: the portfolio system carries no exposure cap, so there is no " *
+                        "residual capacity to reallocate within.")
+
+    # --- classify every row ------------------------------------------------------------------
+    status = Vector{Symbol}(undef, n)
+    frozen_frac = zeros(Float64, n)
+    free_frac = zeros(Float64, n)
+    for i in 1:n
+        key = override_key(sheet.match_id[i], sheet.group[i], sheet.line[i], sheet.selection[i])
+        ov = get(st.overrides, key, nothing)
+        st_i = ov === nothing ? :auto : ov.status
+        status[i] = st_i
+        if st_i === :placed
+            frozen_frac[i] = committed_risk(ov, sheet.side[i]) / bankroll
+        elseif st_i === :auto
+            free_frac[i] = Float64(sheet.frac[i])
+        end
+    end
+
+    committed = sum(frozen_frac)
+    free_total = sum(free_frac)
+    residual = max(0.0, cap - committed)
+    k_cap = free_total > 0 ? residual / free_total : 0.0
+
+    # --- the constrained drawdown solve ------------------------------------------------------
+    # A re-solve must never be the press that kills the console. If the payoff matrices cannot
+    # be rebuilt -- the model slot is between loads, or the slate was handed in from outside the
+    # pricing path -- the budget is not solvable and the free legs are held at `min(1, k_cap)`:
+    # bounded by residual capacity and never levered above the size the allocator already
+    # authorised. That is conservative in the one direction that matters, and the reason is
+    # written onto the note rather than left to be inferred from a number that did not move.
+    bk, degraded = if books !== nothing
+        (books, "")
+    else
+        try
+            (slate_books(st, s), "")
+        catch e
+            (PF.MatchBook[], "; the drawdown budget was NOT re-solved (" *
+                             sprint(showerror, e) * ") -- uncommitted legs are held at or " *
+                             "below their priced size")
+        end
+    end
+    ix = Dict{Tuple{Int,String,Float64,Symbol},Tuple{Int,Int}}()
+    for (bi, b) in enumerate(bk), (j, sel) in enumerate(b.sels)
+        ix[(b.m_id, sel.group, sel.line, sel.selection)] = (bi, j)
+    end
+
+    probs = Vector{Vector{Float64}}(undef, length(bk))
+    frozen_ret = Vector{Vector{Float64}}(undef, length(bk))
+    free_ret = Vector{Vector{Float64}}(undef, length(bk))
+    for (bi, b) in enumerate(bk)
+        probs[bi] = b.p_grid
+        frozen_ret[bi] = zeros(Float64, length(b.p_grid))
+        free_ret[bi] = zeros(Float64, length(b.p_grid))
+    end
+
+    unmapped = 0
+    for i in 1:n
+        isempty(bk) && break
+        (frozen_frac[i] > 0 || free_frac[i] > 0) || continue
+        hit = get(ix, (sheet.match_id[i], sheet.group[i], sheet.line[i], sheet.selection[i]),
+                  nothing)
+        if hit === nothing
+            unmapped += 1
+            continue
+        end
+        bi, j = hit
+        col = @view bk[bi].R[:, j]
+        if frozen_frac[i] > 0
+            # The frozen leg's payoff is repriced at the price it ACTUALLY got. `R[:, j]` holds
+            # `odds_used - 1` on the outcomes the leg wins and `-1` on the ones it loses, so
+            # scaling only the positive entries moves the win payoff and leaves the loss at the
+            # full stake -- which is what a fill two ticks away from the quote really did.
+            adj = _fill_adjustment(st.overrides, sheet, i)
+            for r in eachindex(col)
+                v = col[r] * frozen_frac[i]
+                frozen_ret[bi][r] += v > 0 ? v * adj : v
+            end
+        end
+        if free_frac[i] > 0
+            for r in eachindex(col)
+                free_ret[bi][r] += col[r] * free_frac[i]
+            end
+        end
+    end
+
+    k_dd = if free_total <= 0
+        0.0
+    elseif isempty(bk)
+        min(1.0, k_cap)
+    else
+        _drawdown_scale(st.system.policy.risk, probs, frozen_ret, free_ret, k_cap)
+    end
+    k = min(k_cap, k_dd)
+
+    # --- rebuild the sheet -------------------------------------------------------------------
+    out = copy(sheet)
+    out.frac = [status[i] === :placed ? frozen_frac[i] :
+                status[i] === :auto ? k * free_frac[i] : 0.0 for i in 1:n]
+    out.stake = out.frac .* bankroll
+    out._resolve_status = status
+    keep = [status[i] !== :skipped && out.stake[i] > 0 for i in 1:n]
+    out = out[keep, :]
+
+    placed = out[out._resolve_status .=== :placed, :]
+    auto = out[out._resolve_status .=== :auto, :]
+    # `NoMinimum` for the placed half is not laxity: the exchange minimum decides what MAY be
+    # placed, and these already have been. Rounding a filled £0.80 lay out of the sheet would
+    # drop a liability the account is genuinely carrying.
+    MD._attach_instruments!(auto, s.instruments, REPLAY_ROUNDING)
+    MD._attach_instruments!(placed, s.instruments, MD.NoMinimum())
+    for i in 1:nrow(placed)
+        key = override_key(placed.match_id[i], placed.group[i], placed.line[i],
+                           placed.selection[i])
+        ov = st.overrides[key]
+        placed.risk[i] = committed_risk(ov, placed.side[i])
+        placed.venue_odds[i] = ov.placed_odds
+        placed.venue_stake[i] = ov.placed_stake
+        placed.odds[i] = effective_odds(ov, placed.side[i])
+    end
+
+    final = vcat(auto, placed)
+    DataFrames.select!(final, DataFrames.Not(:_resolve_status))
+    isempty(final) || sort!(final, [:slate, :stake], rev = [false, true])
+    isempty(final) || MD.annotate_capacity!(final, s.books)
+
+    exposure = isempty(final) ? 0.0 : sum(Float64, final.frac)
+    total_risk = isempty(final) ? 0.0 : sum(Float64, final.risk)
+    isempty(final) || (final.k_risk .= k)
+    isempty(final) || (final.slate_exposure .= exposure)
+    isempty(final) || (final.capped .= k_cap <= k_dd)
+
+    n_placed = count(==(:placed), status)
+    n_skipped = count(==(:skipped), status)
+    n_auto = count(==(:auto), status)
+    note = if n_placed + n_skipped == 0
+        "no overrides: the re-solve reproduces the priced Kelly vector"
+    elseif free_total <= 0
+        "every leg is committed or skipped -- nothing left to re-solve"
+    elseif residual <= 0
+        "committed risk £$(round(committed * bankroll, digits = 2)) already fills the " *
+        "$(round(100 * cap, digits = 1))% cap; the $(n_auto) uncommitted leg(s) go to zero"
+    else
+        "froze $(n_placed), skipped $(n_skipped), re-solved $(n_auto) at k = " *
+        "$(round(k, digits = 4)) " * (k_cap <= k_dd ? "(exposure cap binds)" :
+                                      "(drawdown budget binds)")
+    end
+    if unmapped > 0
+        note *= "; $(unmapped) leg(s) had no payoff column in the rebuilt book and were left " *
+                "out of the budget"
+    end
+    note *= degraded
+    st.resolve_note = note
+
+    return MD.PricedSlate(uuid4(), s.account_id, s.window, s.as_of, bankroll, final, s.odds,
+                          s.cards, s.blocked, s.instruments, s.books, k, exposure,
+                          k_cap <= k_dd, s.risk_lambda, cap, total_risk, s.fold_idx, s.warning)
+end
+
+"""
+`(placed effective odds - 1) / (quoted effective odds - 1)`: how much bigger the frozen leg's win
+payoff is than the one the allocator priced. `1.0` when the fill matched the quote, which is the
+common case and must cost nothing.
+"""
+function _fill_adjustment(overrides, sheet, i::Int)
+    key = override_key(sheet.match_id[i], sheet.group[i], sheet.line[i], sheet.selection[i])
+    ov = get(overrides, key, nothing)
+    (ov === nothing || ov.status !== :placed) && return 1.0
+    quoted = Float64(sheet.odds[i]) - 1.0
+    quoted > 0 || return 1.0
+    got = effective_odds(ov, sheet.side[i]) - 1.0
+    return got > 0 ? got / quoted : 1.0
+end
+
+"""
+    resolve!(st) -> NamedTuple
+
+The `[🔄 RE-SOLVE REMAINING STAKES]` intent: re-solve, install, and report what moved.
+"""
+function resolve!(st::ReplayState)
+    return lock(st.lock) do
+        st.slate === nothing && return (ok = false, error = "nothing is priced yet")
+        before = MD.n_legs(st.slate)
+        st.resolved = resolve_slate_with_overrides(st)
+        st.resolved_t = st.slate_t
+        return (ok = true, note = st.resolve_note,
+                n_legs = MD.n_legs(st.resolved), n_legs_priced = before,
+                k_risk = round(st.resolved.k_risk, digits = 4),
+                total_risk = round(st.resolved.total_risk, digits = 2),
+                exposure_pct = round(100 * st.resolved.slate_exposure, digits = 2))
+    end
+end
+
+# ===================================================================
+# 13. Fixture intelligence: recent form and the lineup delta
+# ===================================================================
+#
+# TWO QUESTIONS AN OPERATOR ASKS OF A CARD THAT THE MODEL DOES NOT ANSWER FOR THEM.
+#
+#   "Is this team any good right now?"    -- the last five results, with the shot volume behind
+#                                            them, because three 1-0 wins off four shots is a
+#                                            different fact from three 1-0 wins off eighteen.
+#   "Is this their team?"                 -- the announced XI against the one that usually
+#                                            starts, so a missing regular is visible BEFORE the
+#                                            model's lineup pillar prices it rather than after.
+#
+# WHAT IS NOT HERE, AND WHY. There is no xG. `sofascore.match_statistics` holds ZERO rows for
+# tournaments 56 and 57 -- Scottish League One and Two are not statted by that provider, which is
+# the same fact that motivates `current_development/bbc_xg_proxy/` -- so `ds.statistics` for this
+# segment is an empty frame. A widget that showed an xG column here would be showing a number
+# nothing produced. What DOES exist for every match is the BBC shot count (`ds.bbc`: shots and
+# shots on target per side, 2,007 matches over 20/21-26/27), and that is what the form badge
+# carries instead, labelled as what it is. `xg_available` is reported per row so a segment that
+# DOES have xG -- the same code over a statted tournament -- lights it up with no edit here.
+#
+# THE FILTRATION CONTRACT APPLIES TO THIS PANEL TOO, and it is the reason `before` is an argument
+# rather than `today()`. Form is read from matches STRICTLY BEFORE the replayed match day, and
+# the announced XI is read through `MD.lineup(card.lineups, f, as_of)` -- the same point-in-time
+# source the pricing pipeline reads, so the panel cannot show a teamsheet the model could not see.
+
+"Points a result is worth, from the perspective of the team the row was built for."
+_form_points(r::AbstractString) = r == "W" ? 3 : r == "D" ? 1 : 0
+
+"""
+    _bbc_shots(ds, match_id) -> Union{Nothing,NamedTuple}
+
+Home/away shots and shots on target for one match, from the BBC per-match totals.
+
+`ds.bbc` is the only shot source that covers Scottish League One and Two. It is a lookup rather
+than a join because the caller wants five rows, not a table.
+"""
+function _bbc_shots(ds, match_id::Integer)
+    (ds === nothing || !hasproperty(ds, :bbc) || nrow(ds.bbc) == 0) && return nothing
+    idx = findfirst(==(Int(match_id)), ds.bbc.match_id)
+    idx === nothing && return nothing
+    r = ds.bbc[idx, :]
+    num(x) = (x === missing || (x isa Real && isnan(x))) ? nothing : Float64(x)
+    return (shots_h = num(r.shots_h), shots_a = num(r.shots_a),
+            sot_h = num(r.sot_h), sot_a = num(r.sot_a))
+end
+
+"""
+    _xg_for_match(ds, match_id) -> Union{Nothing,NamedTuple}
+
+Sofascore expected goals for one match, or `nothing` where the provider has none.
+
+Returns `nothing` for every Scottish League One/Two fixture, and that is the correct answer
+rather than a gap to be filled: see the section note. The lookup is written generically so the
+same panel over a statted tournament reports real xG with no change here.
+"""
+function _xg_for_match(ds, match_id::Integer)
+    (ds === nothing || !hasproperty(ds, :statistics) || nrow(ds.statistics) == 0) && return nothing
+    stats = ds.statistics
+    hasproperty(stats, :stat_key) || return nothing
+    for i in 1:nrow(stats)
+        stats.match_id[i] == Int(match_id) || continue
+        String(stats.stat_key[i]) == "expectedGoals" || continue
+        (ismissing(stats.home_value[i]) || ismissing(stats.away_value[i])) && continue
+        return (home = Float64(stats.home_value[i]), away = Float64(stats.away_value[i]))
+    end
+    return nothing
+end
+
+"""
+    team_form(ds, team, before; n = 5) -> NamedTuple
+
+The team's last `n` completed matches before `before`, newest first, with the aggregate.
+
+Newest first is the ordering the badge row is read in -- an operator scanning `W W L D W` reads
+the leftmost as "most recent" -- and the aggregate is computed over exactly the rows returned, so
+a team with three matches played reports a three-match form line rather than a five-match one
+padded with silence.
+"""
+function team_form(ds, team::AbstractString, before::Date; n::Int = 5)
+    rows = NamedTuple[]
+    (ds === nothing || !hasproperty(ds, :matches)) &&
+        return (matches = rows, n = 0, points = 0, ppg = 0.0, w = 0, d = 0, l = 0,
+                gf = 0, ga = 0, gd = 0, sot_for = nothing, sot_against = nothing,
+                xg_for = nothing, xg_against = nothing, xg_available = false)
+    m = ds.matches
+    order = Int[]
+    for i in 1:nrow(m)
+        (m.home_team[i] == team || m.away_team[i] == team) || continue
+        m.match_date[i] < before || continue
+        (ismissing(m.home_score[i]) || ismissing(m.away_score[i])) && continue
+        push!(order, i)
+    end
+    sort!(order, by = i -> m.match_date[i], rev = true)
+    length(order) > n && (order = order[1:n])
+
+    for i in order
+        home = m.home_team[i] == team
+        gf = Int(home ? m.home_score[i] : m.away_score[i])
+        ga = Int(home ? m.away_score[i] : m.home_score[i])
+        res = gf > ga ? "W" : gf == ga ? "D" : "L"
+        sh = _bbc_shots(ds, m.match_id[i])
+        xg = _xg_for_match(ds, m.match_id[i])
+        push!(rows, (
+            match_id = Int(m.match_id[i]),
+            date = string(m.match_date[i]),
+            home = home,
+            venue = home ? "H" : "A",
+            opponent = String(home ? m.away_team[i] : m.home_team[i]),
+            score = string(gf) * "-" * string(ga),
+            goals_for = gf, goals_against = ga,
+            result = res, points = _form_points(res),
+            tournament_id = Int(m.tournament_id[i]),
+            shots_for = sh === nothing ? nothing : (home ? sh.shots_h : sh.shots_a),
+            shots_against = sh === nothing ? nothing : (home ? sh.shots_a : sh.shots_h),
+            sot_for = sh === nothing ? nothing : (home ? sh.sot_h : sh.sot_a),
+            sot_against = sh === nothing ? nothing : (home ? sh.sot_a : sh.sot_h),
+            xg_for = xg === nothing ? nothing : (home ? xg.home : xg.away),
+            xg_against = xg === nothing ? nothing : (home ? xg.away : xg.home),
+        ))
+    end
+
+    n_played = length(rows)
+    _sum(f) = begin
+        vals = Float64[v for v in (getproperty(r, f) for r in rows) if v !== nothing]
+        isempty(vals) ? nothing : round(sum(vals), digits = 2)
+    end
+    pts = sum(Int[r.points for r in rows]; init = 0)
+    return (
+        matches = rows, n = n_played, points = pts,
+        ppg = n_played > 0 ? round(pts / n_played, digits = 2) : 0.0,
+        w = count(r -> r.result == "W", rows),
+        d = count(r -> r.result == "D", rows),
+        l = count(r -> r.result == "L", rows),
+        gf = sum(Int[r.goals_for for r in rows]; init = 0),
+        ga = sum(Int[r.goals_against for r in rows]; init = 0),
+        gd = sum(Int[r.goals_for - r.goals_against for r in rows]; init = 0),
+        sot_for = _sum(:sot_for), sot_against = _sum(:sot_against),
+        xg_for = _sum(:xg_for), xg_against = _sum(:xg_against),
+        xg_available = any(r -> r.xg_for !== nothing, rows),
+    )
+end
+
+"""
+    start_rates(ds, team, before; season_id, min_season_matches, window) -> NamedTuple
+
+How often each player has STARTED for this team, over the matches that happened before `before`.
+
+Two bases, and which one was used is reported rather than assumed:
+
+* the **season** basis, when the team has played at least `min_season_matches` in `season_id`;
+* the **trailing** basis -- the last `window` matches whenever they were played -- otherwise.
+
+The fallback is not a nicety. This console's default match day is the second Saturday of a
+season: a season basis there is one match, on which every player who played has a 100% start rate
+and the panel says nothing. A trailing window crosses the summer, which is a real weakness on a
+promoted squad, so the basis is named in the payload and the console prints it.
+
+`ds.lineups` is the PLAYED teamsheet, which is the right source for a start rate and the wrong
+one for anything at or after `before` -- hence the strict date filter, which is the same
+filtration guarantee `PreloadedLineups` gives the pricing path.
+"""
+function start_rates(ds, team::AbstractString, before::Date;
+                     season_id::Union{Nothing,Integer} = nothing,
+                     min_season_matches::Int = 4, window::Int = 10)
+    empty_out = (players = Dict{Int,NamedTuple}(), n_matches = 0, basis = "none",
+                 match_ids = Int[])
+    (ds === nothing || !hasproperty(ds, :matches) || !hasproperty(ds, :lineups)) && return empty_out
+    nrow(ds.lineups) == 0 && return empty_out
+    m = ds.matches
+
+    played = Int[]
+    for i in 1:nrow(m)
+        (m.home_team[i] == team || m.away_team[i] == team) || continue
+        m.match_date[i] < before || continue
+        (ismissing(m.home_score[i]) || ismissing(m.away_score[i])) && continue
+        push!(played, i)
+    end
+    isempty(played) && return empty_out
+    sort!(played, by = i -> m.match_date[i], rev = true)
+
+    in_season = season_id === nothing ? Int[] :
+                Int[i for i in played if !ismissing(m.season_id[i]) &&
+                                          Int(m.season_id[i]) == Int(season_id)]
+    use, basis = length(in_season) >= min_season_matches ?
+                 (in_season, "season") :
+                 (length(played) > window ? played[1:window] : played, "trailing")
+
+    side_of = Dict{Int,String}()
+    for i in use
+        side_of[Int(m.match_id[i])] = m.home_team[i] == team ? "home" : "away"
+    end
+
+    lu = ds.lineups
+    starts = Dict{Int,Int}(); apps = Dict{Int,Int}()
+    names = Dict{Int,String}(); pos = Dict{Int,String}()
+    # The denominator is matches that actually CARRY a teamsheet, not matches that were played.
+    # A fixture the store has no lineup for is not evidence that a player did not start it, and
+    # counting it as one would drag every regular's rate down by the store's coverage gaps.
+    covered = Set{Int}()
+    for i in 1:nrow(lu)
+        mid = Int(lu.match_id[i])
+        want = get(side_of, mid, nothing)
+        want === nothing && continue
+        String(lu.team_side[i]) == want || continue
+        pid = Int(lu.player_id[i])
+        pid == 0 && continue                     # BBC fallback rows with no sofascore id
+        push!(covered, mid)
+        apps[pid] = get(apps, pid, 0) + 1
+        lu.is_substitute[i] || (starts[pid] = get(starts, pid, 0) + 1)
+        names[pid] = String(lu.player_name[i])
+        pos[pid] = ismissing(lu.position[i]) ? "" : String(lu.position[i])
+    end
+
+    n = length(covered)
+    players = Dict{Int,NamedTuple}()
+    for (pid, s) in starts
+        players[pid] = (player_id = pid, name = get(names, pid, string(pid)),
+                        position = get(pos, pid, ""), starts = s,
+                        appearances = get(apps, pid, s),
+                        start_rate = n > 0 ? round(s / n, digits = 3) : 0.0)
+    end
+    return (players = players, n_matches = n, basis = n == 0 ? "none" : basis,
+            match_ids = sort!(collect(covered)))
+end
+
+"""
+    lineup_delta(announced, rates; threshold, side) -> NamedTuple
+
+The announced XI against the players who usually start.
+
+`missing_starters` is the finding: a player whose start rate clears `threshold` and who is not in
+today's XI. `unexpected` is the mirror -- someone starting who rarely does -- and it is reported
+because on a lower-division card the two are usually the same event seen from opposite ends, and
+seeing both tells an operator whether it is a rotation or an absence.
+
+`announced === nothing` is NOT "full strength": before the scrape lands there is no teamsheet at
+all, and a panel that said "Full Strength XI" at T-60 would be asserting something no source
+supports. It says `no_xi` and the console prints the scrape time it is waiting for.
+"""
+function lineup_delta(announced::Union{Nothing,Vector{MD.Player}}, rates::NamedTuple;
+                      threshold::Float64 = 0.7)
+    if announced === nothing
+        return (status = "no_xi", n_announced = 0, n_starters = 0,
+                missing_starters = NamedTuple[], unexpected = NamedTuple[],
+                basis = rates.basis, basis_matches = rates.n_matches, threshold = threshold)
+    end
+    starters = MD.Player[p for p in announced if !p.substitute]
+    ids = Set(p.player_id for p in starters)
+    regulars = sort(NamedTuple[v for v in values(rates.players) if v.start_rate >= threshold];
+                    by = v -> -v.start_rate)
+    missing_starters = NamedTuple[
+        (player_id = r.player_id, name = r.name, position = r.position,
+         starts = r.starts, appearances = r.appearances,
+         start_rate_pct = round(100 * r.start_rate, digits = 1))
+        for r in regulars if !(r.player_id in ids)]
+    unexpected = NamedTuple[]
+    for p in starters
+        r = get(rates.players, p.player_id, nothing)
+        rate = r === nothing ? 0.0 : r.start_rate
+        rate < 0.35 && push!(unexpected,
+            (player_id = p.player_id, name = p.name, position = String(p.position),
+             starts = r === nothing ? 0 : r.starts,
+             start_rate_pct = round(100 * rate, digits = 1)))
+    end
+    status = rates.n_matches == 0 ? "no_history" :
+             isempty(missing_starters) ? "full_strength" : "missing_starters"
+    return (status = status, n_announced = length(announced), n_starters = length(starters),
+            missing_starters = missing_starters, unexpected = unexpected,
+            basis = rates.basis, basis_matches = rates.n_matches, threshold = threshold)
+end
+
+"""
+    fixture_stats(st, match_id; n_recent, threshold) -> NamedTuple
+
+The Team Form & Lineup Delta widget's whole payload for one fixture, at the replay's current
+instant.
+
+Form is memoised per fixture (it is a function of the match day and the store, neither of which
+moves while the scrubber does); the lineup delta is not, because it is exactly the thing that
+changes when the XI drops and a cached one would hide the transition this console exists to show.
+"""
+function fixture_stats(st::ReplayState, match_id::Integer; n_recent::Int = 5,
+                       threshold::Float64 = 0.7)
+    return lock(st.lock) do
+        f = card_fixture(st, match_id)
+        as_of = as_of_at(st.card, st.clock.t)
+        before = st.card.day
+        ds = st.ds
+
+        season = nothing
+        if ds !== nothing && hasproperty(ds, :matches)
+            i = findfirst(==(Int(f.m_id)), ds.matches.match_id)
+            i !== nothing && !ismissing(ds.matches.season_id[i]) &&
+                (season = Int(ds.matches.season_id[i]))
+            if season === nothing && nrow(ds.matches) > 0
+                sids = Int[Int(x) for x in ds.matches.season_id if !ismissing(x)]
+                isempty(sids) || (season = maximum(sids))
+            end
+        end
+
+        form = get!(st.form_cache, Int(f.m_id)) do
+            (home = team_form(ds, f.home, before; n = n_recent),
+             away = team_form(ds, f.away, before; n = n_recent))
+        end
+
+        lu = MD.lineup(st.card.lineups, f, as_of)
+        drop = lineup_drop_minute(st.card, f)
+        rates_h = start_rates(ds, f.home, before; season_id = season)
+        rates_a = start_rates(ds, f.away, before; season_id = season)
+
+        return (
+            ok = true,
+            match_id = f.m_id,
+            fixture = f.home * " v " * f.away,
+            home = f.home, away = f.away,
+            kickoff = string(f.kickoff),
+            tournament_id = f.tournament_id,
+            day = string(st.card.day),
+            t = st.clock.t,
+            as_of = string(as_of),
+            n_recent = n_recent,
+            # Stated on the payload rather than only in a docstring: this segment has no xG and
+            # the panel must say why, not leave an empty column the reader fills in themselves.
+            xg_note = (form.home.xg_available || form.away.xg_available) ? "" :
+                "no expected-goals source covers this tournament -- `sofascore.match_statistics` " *
+                "holds no rows for Scottish League One or Two, so the form line carries BBC " *
+                "shots and shots on target instead of xG.",
+            form = (home = form.home, away = form.away),
+            lineup = (
+                available = lu !== nothing,
+                source = lu === nothing ? "none" : String(lu.source),
+                confirmed = lu === nothing ? false : lu.confirmed,
+                scraped_at = lu === nothing ? nothing : string(lu.scraped_at),
+                drop_min = drop === nothing ? nothing : -drop,
+                home = lineup_delta(lu === nothing ? nothing : lu.home, rates_h;
+                                    threshold = threshold),
+                away = lineup_delta(lu === nothing ? nothing : lu.away, rates_a;
+                                    threshold = threshold),
+                xi_home = lu === nothing ? NamedTuple[] :
+                    [(player_id = p.player_id, name = p.name, position = String(p.position),
+                      substitute = p.substitute) for p in lu.home],
+                xi_away = lu === nothing ? NamedTuple[] :
+                    [(player_id = p.player_id, name = p.name, position = String(p.position),
+                      substitute = p.substitute) for p in lu.away],
+            ),
+        )
+    end
+end
+
+# ===================================================================
+# 14. The model diagnostic scorecard
+# ===================================================================
+#
+# THREE SOURCES, THREE DIFFERENT CLAIMS, AND THEY ARE NOT INTERCHANGEABLE.
+#
+#   `mcmc_experiments.fold_results`  -- what the TRAINING RUN scored out of sample, fold by fold.
+#                                       LogLoss, Brier and RPS are written there by the run that
+#                                       produced the chain this console is pricing with. It is
+#                                       the broadest evidence and the least specific: it says
+#                                       nothing about the market.
+#   `mcmc_experiments.match_latents` -- the persisted posterior means, which can be scored AGAINST
+#                                       THE CLOSING MARKET on the same matches. That is the
+#                                       paired comparison "LogLoss vs market" actually means, and
+#                                       it exists only for the folds whose latents were stored.
+#   `paper_replay.clv_audit`         -- what THIS ACCOUNT's bets did against the closing line.
+#                                       The only one of the three that is about betting rather
+#                                       than about forecasting, and the only one that moves when
+#                                       the operator presses Execute.
+#
+# NOTHING IS FABRICATED WHEN A SOURCE IS EMPTY. `m12_hybrid_production_wealth_player_rapm` has no
+# `logloss` on any of its fold rows -- its runner did not write them -- and the scorecard reports
+# `nothing` with the reason attached rather than an average over the folds that do, which would
+# be an average of a different model. Every metric on this payload carries the count it was
+# computed from, so a figure standing on two folds cannot be read as one standing on forty.
+
+import Distributions
+
+const EV = BayesianFootball.Evaluation
+
+"Independent-Poisson 1X2 probabilities from the posterior-mean intensities."
+function _poisson_1x2(λh::Real, λa::Real; max_goals::Int = 12)
+    dh, da = Distributions.Poisson(Float64(λh)), Distributions.Poisson(Float64(λa))
+    ph = [Distributions.pdf(dh, i) for i in 0:max_goals]
+    pa = [Distributions.pdf(da, i) for i in 0:max_goals]
+    h = d = a = 0.0
+    @inbounds for i in 0:max_goals, j in 0:max_goals
+        p = ph[i+1] * pa[j+1]
+        i > j ? (h += p) : i == j ? (d += p) : (a += p)
+    end
+    tot = h + d + a
+    tot > 0 || return (0.0, 0.0, 0.0)
+    return (h / tot, d / tot, a / tot)
+end
+
+"Log loss, Brier and RPS of one 1X2 forecast against the realised outcome index (1 = H, 2 = D, 3 = A)."
+function _score_1x2(p::NTuple{3,Float64}, outcome::Int)
+    q = clamp(p[outcome], 1e-12, 1.0)
+    y = (outcome == 1, outcome == 2, outcome == 3)
+    brier = sum((p[k] - (y[k] ? 1.0 : 0.0))^2 for k in 1:3)
+    cp = 0.0; cy = 0.0; rps = 0.0
+    for k in 1:2
+        cp += p[k]; cy += y[k] ? 1.0 : 0.0
+        rps += (cp - cy)^2
+    end
+    return (logloss = -log(q), brier = brier, rps = rps / 2)
+end
+
+"""
+    _experiment_scores(st, slot) -> NamedTuple
+
+The fold table for one run in `mcmc_experiments`, aggregated, memoised on `(experiment, name)`.
+
+Keyed on the pair rather than on the name because the name is NOT unique: three different
+experiments in this database hold a run called `m05_joint_production_wealth`, and only one of
+them is the fit this console loaded. The registry addresses models by the pair for the same
+reason, and reading the scorecard by name alone would report another experiment's numbers under
+this model's label.
+"""
+function _experiment_scores(st::ReplayState, slot::ModelSlot)
+    key = (slot.experiment, slot.run_name)
+    return get!(st.scorecard_cache, key) do
+        try
+            store = TT.PostgresStorage(slot.experiment)
+            conn = LibPQ.Connection(store.conn_str)
+            try
+                runs = DataFrame(LibPQ.execute(conn, """
+                    SELECT run_id, status, created_at, git_commit, git_branch
+                    FROM runs WHERE name = \$1 AND experiment_name = \$2
+                    ORDER BY created_at DESC LIMIT 1;""",
+                    (slot.run_name, slot.experiment)))
+                nrow(runs) == 1 || return (ok = false,
+                    error = "no run '$(slot.run_name)' in experiment '$(slot.experiment)'")
+                run_id = first(runs).run_id
+                folds = DataFrame(LibPQ.execute(conn, """
+                    SELECT fold_idx, logloss, brier, rps, n_matches, first_match_date,
+                           last_match_date, converged, r_hat_max, divergences
+                    FROM fold_results WHERE run_id = \$1 ORDER BY fold_idx;""", (run_id,)))
+                return (ok = true, run_id = string(run_id),
+                        status = String(first(runs).status),
+                        created_at = string(first(runs).created_at),
+                        git_commit = String(first(runs).git_commit),
+                        folds = folds)
+            finally
+                close(conn)
+            end
+        catch e
+            return (ok = false, error = sprint(showerror, e))
+        end
+    end
+end
+
+_col(df::DataFrame, name::Symbol) =
+    Float64[Float64(x) for x in df[!, name] if !ismissing(x)]
+
+"Mean of the present values, or `nothing` when nothing is present -- never `NaN`, which JSON3 writes as `null` anyway but which arithmetic downstream would propagate."
+_mean_or_nothing(v::Vector{Float64}; digits::Int = 4) =
+    isempty(v) ? nothing : round(sum(v) / length(v), digits = digits)
+
+"""
+    _fold_summary(scores) -> NamedTuple
+
+The fold table reduced to the five numbers the scorecard shows, plus the counts behind each.
+
+`logloss_weighted` is `Σ (logloss × n_matches) / Σ n_matches` and is reported SEPARATELY from the
+plain fold mean rather than instead of it: `n_matches` was added to `fold_results` by a later
+migration, so most historical folds carry it as NULL and a weighted figure over the two that do
+would describe two weekends, not the run.
+"""
+function _fold_summary(scores)
+    scores.ok || return (ok = false, error = scores.error, n_folds = 0)
+    f = scores.folds
+    ll, br, rp = _col(f, :logloss), _col(f, :brier), _col(f, :rps)
+    wn = Float64[]; wl = Float64[]
+    for i in 1:nrow(f)
+        (ismissing(f.n_matches[i]) || ismissing(f.logloss[i])) && continue
+        push!(wn, Float64(f.n_matches[i])); push!(wl, Float64(f.logloss[i]))
+    end
+    dates = [d for d in f.first_match_date if !ismissing(d)]
+    dates2 = [d for d in f.last_match_date if !ismissing(d)]
+    rh = _col(f, :r_hat_max)
+    return (
+        ok = true, run_id = scores.run_id, status = scores.status,
+        created_at = scores.created_at, git_commit = scores.git_commit,
+        n_folds = nrow(f),
+        n_scored = length(ll),
+        n_converged = count(x -> !ismissing(x) && x, f.converged),
+        logloss = _mean_or_nothing(ll), brier = _mean_or_nothing(br), rps = _mean_or_nothing(rp),
+        logloss_weighted = isempty(wn) ? nothing :
+                           round(sum(wl .* wn) / sum(wn), digits = 4),
+        n_matches = isempty(wn) ? nothing : Int(sum(wn)),
+        first_match_date = isempty(dates) ? nothing : string(minimum(dates)),
+        last_match_date = isempty(dates2) ? nothing : string(maximum(dates2)),
+        r_hat_max = isempty(rh) ? nothing : round(maximum(rh), digits = 4),
+        divergences = sum(Int[Int(x) for x in f.divergences if !ismissing(x)]; init = 0),
+        note = isempty(ll) ?
+            "this run wrote no proper scores to `fold_results` -- its runner persisted chains " *
+            "and convergence diagnostics but not the out-of-sample evaluation, so LogLoss, " *
+            "Brier and RPS are unavailable for it rather than zero." : "",
+    )
+end
+
+"""
+    _paired_scores(st, slot) -> NamedTuple
+
+Score the run's persisted posterior means against the CLOSING MARKET on the same matches.
+
+This is the only place the scorecard earns the phrase "vs market". `match_latents` holds the
+posterior-mean intensities for the folds whose latents were stored; `ds.matches` holds what
+actually happened; `ds.odds.prob_fair_close` holds the de-vigged closing price. Scoring all three
+on one match set makes model and market comparable -- an unpaired comparison of a fold mean
+against a market average over different matches is not a comparison at all.
+
+The 1X2 grid is INDEPENDENT Poisson on the stored means. That is not the model's own predictive
+distribution -- a Dixon-Coles or copula pillar correlates the two counts, and the posterior is a
+distribution rather than its mean -- so this figure is a diagnostic of the stored latents, and it
+is labelled as one on the payload. `crps` is `Evaluation.compute_crps`, the repository's own
+kernel, called with `Inf` dispersion for the same reason: the stored row carries a mean, not a
+dispersion, and inventing one would make the number incomparable with every CRPS in the archive.
+"""
+function _paired_scores(st::ReplayState, slot::ModelSlot)
+    ds = st.ds
+    scores = _experiment_scores(st, slot)
+    scores.ok || return (ok = false, error = scores.error, n = 0)
+    (ds === nothing || !hasproperty(ds, :matches)) &&
+        return (ok = false, error = "no DataStore in this process", n = 0)
+    key = ("paired", slot.experiment * "/" * slot.run_name)
+    return get!(st.scorecard_cache, key) do
+        try
+            store = TT.PostgresStorage(slot.experiment)
+            conn = LibPQ.Connection(store.conn_str)
+            lat = try
+                DataFrame(LibPQ.execute(conn, """
+                    SELECT ml.match_id, ml.mean_lambda_h, ml.mean_lambda_a, fr.fold_idx
+                    FROM match_latents ml
+                    JOIN fold_results fr ON fr.fold_id = ml.fold_id
+                    WHERE fr.run_id = \$1;""", (scores.run_id,)))
+            finally
+                close(conn)
+            end
+            nrow(lat) == 0 && return (ok = false, n = 0, error =
+                "this run persisted no `match_latents`, so there is no stored posterior to " *
+                "score against the closing market.")
+
+            goals = Dict{Int,Tuple{Int,Int}}()
+            for i in 1:nrow(ds.matches)
+                (ismissing(ds.matches.home_score[i]) || ismissing(ds.matches.away_score[i])) &&
+                    continue
+                goals[Int(ds.matches.match_id[i])] =
+                    (Int(ds.matches.home_score[i]), Int(ds.matches.away_score[i]))
+            end
+            mkt = Dict{Int,Dict{Symbol,Float64}}()
+            if hasproperty(ds, :odds) && nrow(ds.odds) > 0
+                for i in 1:nrow(ds.odds)
+                    ds.odds.market_name[i] == "1X2" || continue
+                    p = ds.odds.prob_fair_close[i]
+                    (ismissing(p) || !(0 < p < 1)) && continue
+                    get!(mkt, Int(ds.odds.match_id[i]), Dict{Symbol,Float64}())[ds.odds.selection[i]] =
+                        Float64(p)
+                end
+            end
+
+            m_ll = Float64[]; m_br = Float64[]; m_rps = Float64[]; m_crps = Float64[]
+            k_ll = Float64[]; k_br = Float64[]; k_rps = Float64[]
+            seen = Set{Int}()
+            for i in 1:nrow(lat)
+                mid = Int(lat.match_id[i])
+                mid in seen && continue          # one fold's copy is enough; folds overlap
+                g = get(goals, mid, nothing)
+                g === nothing && continue
+                push!(seen, mid)
+                λh, λa = Float64(lat.mean_lambda_h[i]), Float64(lat.mean_lambda_a[i])
+                p = _poisson_1x2(λh, λa)
+                outcome = g[1] > g[2] ? 1 : g[1] == g[2] ? 2 : 3
+                s = _score_1x2(p, outcome)
+                push!(m_ll, s.logloss); push!(m_br, s.brier); push!(m_rps, s.rps)
+                push!(m_crps, 0.5 * (EV.compute_crps(g[1], λh, Inf) +
+                                     EV.compute_crps(g[2], λa, Inf)))
+                q = get(mkt, mid, nothing)
+                q === nothing && continue
+                (haskey(q, :home) && haskey(q, :draw) && haskey(q, :away)) || continue
+                tot = q[:home] + q[:draw] + q[:away]
+                tot > 0 || continue
+                pm = (q[:home] / tot, q[:draw] / tot, q[:away] / tot)
+                sm = _score_1x2(pm, outcome)
+                push!(k_ll, sm.logloss); push!(k_br, sm.brier); push!(k_rps, sm.rps)
+            end
+
+            return (
+                ok = !isempty(m_ll), n = length(m_ll), n_market = length(k_ll),
+                folds = length(unique(lat.fold_idx)),
+                logloss = _mean_or_nothing(m_ll), brier = _mean_or_nothing(m_br),
+                rps = _mean_or_nothing(m_rps), crps = _mean_or_nothing(m_crps),
+                market_logloss = _mean_or_nothing(k_ll), market_brier = _mean_or_nothing(k_br),
+                market_rps = _mean_or_nothing(k_rps),
+                logloss_vs_market = (isempty(m_ll) || isempty(k_ll)) ? nothing :
+                    round(sum(m_ll) / length(m_ll) - sum(k_ll) / length(k_ll), digits = 4),
+                method = "independent Poisson on the stored posterior-mean intensities; CRPS " *
+                         "via Evaluation.compute_crps with no dispersion. A diagnostic of the " *
+                         "persisted latents, not the model's own predictive distribution. " *
+                         "LogLoss and Brier are PER MATCH over the three 1X2 outcomes, which " *
+                         "is not the per-selection convention `fold_results` carries -- the " *
+                         "two are on different scales and are never compared here.",
+                error = "",
+            )
+        catch e
+            return (ok = false, n = 0, error = sprint(showerror, e))
+        end
+    end
+end
+
+"""
+    _clv_scorecard(st, run_name) -> NamedTuple
+
+What this replay account's bets from this MODEL did against the closing line, and what they
+settled for.
+
+Read live and never cached: it is the one panel on the scorecard that changes when the operator
+presses Execute, and a cached CLV rate that did not move after a settlement would be read as
+"the bets made no difference".
+"""
+function _clv_scorecard(st::ReplayState, run_name::AbstractString)
+    st.conn === nothing && return (ok = false, n_bets = 0,
+                                   error = "no ledger connection in this process")
+    assert_replay_schema(st.schema)
+    s = st.schema
+    try
+        clv = DataFrame(LibPQ.execute(st.conn, """
+            SELECT count(*) AS n, count(*) FILTER (WHERE c.beat_close) AS n_beat,
+                   avg(c.clv) AS clv, avg(c.clv_pct) AS clv_pct,
+                   avg(c.entry_lead_min) AS lead_min
+            FROM $s.clv_audit c
+            JOIN $s.paper_orders o ON o.order_id = c.order_id
+            JOIN $s.paper_slates sl ON sl.slate_id = o.slate_id
+            WHERE o.account_id = \$1 AND sl.run_name = \$2;""", (st.account_id, run_name)))
+        pnl = DataFrame(LibPQ.execute(st.conn, """
+            SELECT count(*) AS n_settled,
+                   COALESCE(sum(ps.net_pnl), 0) AS net_pnl,
+                   COALESCE(sum(ps.gross_return), 0) AS gross_return,
+                   count(*) FILTER (WHERE ps.outcome = 'WIN') AS n_win
+            FROM $s.paper_settlements ps
+            JOIN $s.paper_orders o ON o.order_id = ps.order_id
+            JOIN $s.paper_slates sl ON sl.slate_id = o.slate_id
+            WHERE o.account_id = \$1 AND sl.run_name = \$2;""", (st.account_id, run_name)))
+        risk = DataFrame(LibPQ.execute(st.conn, """
+            SELECT COALESCE(sum(f.risk_filled), 0) AS risk
+            FROM $s.paper_fills f
+            JOIN $s.paper_orders o ON o.order_id = f.order_id
+            JOIN $s.paper_slates sl ON sl.slate_id = o.slate_id
+            JOIN $s.paper_settlements ps ON ps.order_id = o.order_id
+            WHERE o.account_id = \$1 AND sl.run_name = \$2;""", (st.account_id, run_name)))
+
+        n = Int(first(clv).n); beat = Int(first(clv).n_beat)
+        r = Float64(first(risk).risk); net = Float64(first(pnl).net_pnl)
+        num(x) = ismissing(x) ? nothing : round(Float64(x), digits = 4)
+        return (ok = true, n_bets = n, n_beat = beat,
+                beat_pct = n > 0 ? round(100 * beat / n, digits = 1) : nothing,
+                clv = num(first(clv).clv), clv_pct = num(first(clv).clv_pct),
+                entry_lead_min = num(first(clv).lead_min),
+                n_settled = Int(first(pnl).n_settled), n_win = Int(first(pnl).n_win),
+                matched_risk = round(r, digits = 2),
+                net_pnl = round(net, digits = 2),
+                gross_return = round(Float64(first(pnl).gross_return), digits = 2),
+                roi_pct = r > 0 ? round(100 * net / r, digits = 2) : nothing,
+                account_id = st.account_id, schema = s, error = "")
+    catch e
+        return (ok = false, n_bets = 0, error = sprint(showerror, e))
+    end
+end
+
+"""
+    model_scorecard(st, model_key; baseline) -> NamedTuple
+
+The Model Diagnostics widget's payload: what the run scored, what it scored against the market,
+what its bets did, and how all three compare with the `m00` control.
+
+`m00_poisson_control` is the baseline and not an arbitrary choice: it is the pillar with no
+production, no wealth and no player term, so a richer model that does not beat it has bought
+structure that did not pay. The comparison is reported as a DELTA with the control's own counts
+alongside, because "better LogLoss" over a different number of folds is not better.
+"""
+function model_scorecard(st::ReplayState, model_key::AbstractString;
+                         baseline::AbstractString = "m00")
+    # Under the state lock because `_clv_scorecard` reads `st.conn`, which the WebSocket pusher's
+    # `_batch_status` is also using. One LibPQ connection, two threads, no lock is a protocol
+    # error that presents as a corrupted result set rather than as an exception.
+    return lock(st.lock) do
+        _model_scorecard(st, model_key, String(baseline))
+    end
+end
+
+function _model_scorecard(st::ReplayState, model_key::AbstractString, baseline::String)
+    slot = find_slot(st, model_key)
+    oos = _fold_summary(_experiment_scores(st, slot))
+    paired = _paired_scores(st, slot)
+    clv = _clv_scorecard(st, slot.run_name)
+
+    control = nothing
+    if slot.key != String(baseline)
+        try
+            b = find_slot(st, baseline)
+            co = _fold_summary(_experiment_scores(st, b))
+            cp = _paired_scores(st, b)
+            delta(a, c) = (a === nothing || c === nothing) ? nothing : round(a - c, digits = 4)
+            control = (key = b.key, label = b.label, run_name = b.run_name,
+                       experiment = b.experiment,
+                       logloss = co.ok ? co.logloss : nothing,
+                       brier = co.ok ? co.brier : nothing,
+                       rps = co.ok ? co.rps : nothing,
+                       n_folds = co.ok ? co.n_folds : 0,
+                       n_scored = co.ok ? co.n_scored : 0,
+                       paired_logloss = cp.ok ? cp.logloss : nothing,
+                       paired_crps = cp.ok ? cp.crps : nothing,
+                       paired_n = cp.n,
+                       d_logloss = delta(oos.ok ? oos.logloss : nothing,
+                                         co.ok ? co.logloss : nothing),
+                       d_brier = delta(oos.ok ? oos.brier : nothing,
+                                       co.ok ? co.brier : nothing),
+                       d_rps = delta(oos.ok ? oos.rps : nothing, co.ok ? co.rps : nothing),
+                       d_paired_logloss = delta(paired.ok ? paired.logloss : nothing,
+                                                cp.ok ? cp.logloss : nothing),
+                       d_paired_crps = delta(paired.ok ? paired.crps : nothing,
+                                             cp.ok ? cp.crps : nothing),
+                       comparable = (oos.ok && co.ok && oos.n_scored > 0 && co.n_scored > 0))
+        catch e
+            control = (key = String(baseline), error = sprint(showerror, e))
+        end
+    end
+
+    notes = String[]
+    oos.ok && !isempty(oos.note) && push!(notes, oos.note)
+    if !paired.ok && !isempty(paired.error)
+        push!(notes, "paired vs-market scoring: " * paired.error)
+    end
+    clv.ok && clv.n_bets == 0 && push!(notes,
+        "no CLV rows for this model on account '$(st.account_id)' yet -- execute and settle a " *
+        "replayed slate and this panel fills in from `$(st.schema).clv_audit`.")
+    control !== nothing && hasproperty(control, :comparable) && !control.comparable &&
+        push!(notes, "the control comparison is unavailable: one of the two runs wrote no " *
+                     "proper scores to `fold_results`.")
+
+    return (
+        ok = true,
+        model = (key = slot.key, label = slot.label, run_name = slot.run_name,
+                 experiment = slot.experiment, status = String(slot.status),
+                 error = slot.error, fold_idx = slot.fold_idx,
+                 fold_warning = slot.fold_warning,
+                 n_covered = length(slot.covered), n_refused = length(slot.refused),
+                 active = slot.key == st.active),
+        oos = oos,
+        paired = paired,
+        clv = clv,
+        control = control,
+        notes = notes,
+        at = string(Dates.now()),
+    )
 end
