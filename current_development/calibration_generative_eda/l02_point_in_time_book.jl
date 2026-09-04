@@ -363,3 +363,71 @@ function book_drift(pit_book::AbstractDataFrame, close_book::AbstractDataFrame)
     j.fair_drift = j.fair_close .- j.fair_pit
     return j
 end
+
+
+# %%
+# ===================================================================
+# 5. Closing-line value
+# ===================================================================
+#
+# CLV is the diagnostic a T−25 strategy earns and a close-priced one cannot even
+# ask for. A backtest settled on realised outcomes is a sample of a few hundred
+# binary draws; CLV asks a different and much better-powered question — did the
+# market subsequently move TOWARD the bet? — and it answers it on every bet
+# struck, whether it won or lost.
+#
+# It is not a substitute for P&L. A strategy can have positive CLV and lose money
+# over a season, and the reverse. It is evidence about EDGE, where settlement is
+# evidence about edge plus variance.
+
+"""
+    bet_clv(bets, drift) -> DataFrame
+
+Join a portfolio bet ledger to the T−25 → close price drift, one row per bet.
+
+`clv_pct` is `100·(odds_taken / odds_close − 1)`: positive means the bet was
+struck at a longer price than the market closed at, i.e. the market moved toward
+the bet. `fair_gain` is the same thing in probability space,
+`fair_close − fair_pit`, which is the units the calibration weight law reads.
+
+A bet whose selection is absent from the drift frame — struck on a market the
+close book did not carry — is DROPPED and counted by `clv_summary`, never
+imputed. There is no closing price to compare it to and inventing one would put
+the answer in the question.
+"""
+function bet_clv(bets::AbstractDataFrame, drift::AbstractDataFrame)
+    nrow(bets) == 0 && return DataFrame()
+    hasproperty(bets, :match_id) && hasproperty(bets, :selection) || error(
+        "bet_clv: expected a `result.trajectory.bets` ledger with :match_id and :selection.")
+    d = select(drift, [:match_id, :selection, :odds_pit, :odds_close_final,
+                       :fair_pit, :fair_close, :staleness_minutes])
+    j = innerjoin(bets, unique(d, [:match_id, :selection]); on = [:match_id, :selection])
+    nrow(j) == 0 && return j
+    j.clv_pct = 100 .* (j.odds ./ j.odds_close_final .- 1.0)
+    j.fair_gain = j.fair_close .- j.fair_pit
+    return j
+end
+
+"""
+    clv_summary(bets, clv) -> NamedTuple
+
+Headline CLV, stake-weighted as well as flat.
+
+The stake-weighted figure is the one that matters: a strategy with positive CLV
+on its small bets and negative CLV on its large ones has negative CLV where the
+money is, and the flat mean hides it.
+"""
+function clv_summary(bets::AbstractDataFrame, clv::AbstractDataFrame)
+    n_bets = nrow(bets)
+    nrow(clv) == 0 && return (; n_bets, n_matched = 0, n_unmatched = n_bets,
+                              mean_clv_pct = NaN, median_clv_pct = NaN,
+                              stake_weighted_clv_pct = NaN, pct_positive = NaN,
+                              mean_fair_gain = NaN)
+    w = clv.stake
+    return (; n_bets, n_matched = nrow(clv), n_unmatched = n_bets - nrow(clv),
+            mean_clv_pct = mean(clv.clv_pct),
+            median_clv_pct = median(clv.clv_pct),
+            stake_weighted_clv_pct = sum(w .* clv.clv_pct) / sum(w),
+            pct_positive = 100 * count(>(0.0), clv.clv_pct) / nrow(clv),
+            mean_fair_gain = mean(clv.fair_gain))
+end
