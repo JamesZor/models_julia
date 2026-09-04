@@ -349,14 +349,28 @@ function refusal_counts(frame::AbstractDataFrame)
     return sort!(collect(counts), by = last, rev = true)
 end
 
-"Coverage of an inversion over the fixtures a latent container holds."
+"""
+    inversion_coverage(rates, match_ids) -> NamedTuple
+
+Coverage of an inversion over the fixtures a latent container holds, reported two
+ways because only one of them measures dilution.
+
+`coverage` is against EVERY fixture, and it counts a fixture the book never quoted
+as a failure. Such a fixture contributes no scored observation either —
+`require_market` drops it before any metric sees it — so it dilutes nothing.
+`coverage_quoted` is against the fixtures that had a book to invert, and that is
+the number to read when asking how much of the measured effect the refusals ate.
+"""
 function inversion_coverage(rates::AbstractDict{Int, MarketRateFit}, match_ids)
     ids = Int[Int(m) for m in match_ids]
     accepted = count(m -> haskey(rates, m) && rates[m].accepted, ids)
     absent = count(m -> !haskey(rates, m), ids)
+    quoted = count(m -> haskey(rates, m) && rates[m].n_targets > 0, ids)
     return (; n_fixtures = length(ids), n_accepted = accepted,
             n_refused = length(ids) - accepted - absent, n_absent = absent,
-            coverage = isempty(ids) ? NaN : accepted / length(ids))
+            n_quoted = quoted,
+            coverage = isempty(ids) ? NaN : accepted / length(ids),
+            coverage_quoted = quoted == 0 ? NaN : accepted / quoted)
 end
 
 
@@ -908,4 +922,191 @@ function odds_inventory(odds_df::AbstractDataFrame)
                 :prob_fair_close => (p -> mean(skipmissing(p))) => :mean_fair)
     sort!(g, [:market_name, :market_line, :selection])
     return g
+end
+
+
+# %%
+# ===================================================================
+# 9. The tradeable book and per-direction attribution  (Phase 2)
+# ===================================================================
+#
+# WHY O/U 0.5 IS NOT TRADEABLE ON THIS BOOK. `l01_betfair_closing_odds` de-vigs by
+# normalising `prob_implied_close` within `(match, market, line)`, which is right on
+# a two-sided quote and DEGENERATE on a one-sided one: a lone `over_05` row is
+# normalised to `prob_fair_close = 1.0`. On the Scottish Lower archive the O/U 0.5
+# ladder is quoted 982 over against 408 under — 574 fixtures one-sided — and the
+# symptom is unmissable: the closing line's own LogLoss on that family is 1.31832
+# against the model's 0.21098. Every other scored line is paired to within three
+# rows.
+#
+# Staking against a fabricated fair price of 1.0 would manufacture an edge out of a
+# de-vigging artefact, so `l01_tradeable_markets` drops the line and
+# `l01_full_direction_markets` keeps it for the diagnostic arm that documents the
+# exclusion. `l01_wide_markets` is left exactly as r01 ran it so that run stays
+# reproducible from the committed code.
+
+"The 11 directions Phase 2 stakes: 1X2, O/U 1.5/2.5/3.5, BTTS. No O/U 0.5."
+l01_tradeable_markets() = Data.AbstractMarket[
+    Data.Market1X2(),
+    Data.MarketOverUnder(1.5),
+    Data.MarketOverUnder(2.5),
+    Data.MarketOverUnder(3.5),
+    Data.MarketBTTS(),
+]
+
+"All 13 directions of the work package, including the O/U 0.5 line. Diagnostic only."
+l01_full_direction_markets() = Data.AbstractMarket[
+    Data.Market1X2(),
+    Data.MarketOverUnder(0.5),
+    Data.MarketOverUnder(1.5),
+    Data.MarketOverUnder(2.5),
+    Data.MarketOverUnder(3.5),
+    Data.MarketBTTS(),
+]
+
+"A `BookSpec` over `markets`, otherwise the audited production settings."
+function l01_book_spec(markets)
+    return BookSpec(
+        markets = Data.MarketConfig(Data.AbstractMarket[m for m in markets]),
+        price = DeArb(),
+        allocator = KellyLogUtility(),
+        shrink = BayesianFootball.Portfolio.FractionalKelly(0.30),
+        exec = ExecutionConfig(
+            commission = PerBetCommission(0.02),
+            budget = 0.99,
+            min_selection_stake = 0.001,
+        ),
+    )
+end
+
+"""
+    l01_policy_spec(trust) -> PolicySpec
+
+The canonical production risk settings — `SlateDrawdown(23.0)`, `FixedCap(0.25)`,
+`DailySlate()` — with only the trust model varying.
+
+`FixedCap(0.25)`, not the 0.20 of experiment 06's flat research baseline: the
+`CanonicalScottishLowerTrust` champion (+155.93%) was measured at 0.25, and a
+comparison that moved the cap and the trust at once would not attribute either.
+"""
+l01_policy_spec(trust) = PolicySpec(
+    trust = trust,
+    risk = SlateDrawdown(23.0),
+    cap = FixedCap(0.25),
+    grouping = DailySlate(),
+)
+
+"""
+    direction_ledger(result) -> DataFrame
+
+The trade ledger aggregated to one row per betting direction, in units of the
+INITIAL bankroll.
+
+`trajectory.bets.stake` and `.pnl` are fractions of the bankroll at their own
+slate, so summing them raw across a compounding backtest adds different units.
+Every row here is rescaled by its slate's opening bankroll first — the same
+correction `MARKET_LINE_EDA_REPORT.md` §0 applies, and the reason its currency
+figures and a naive `sum(bets.pnl)` disagree.
+
+| column | is |
+|---|---|
+| `flat_roi` | `mean(payoff)` — what a unit-stake bettor would have made |
+| `kelly_roi` | turnover-weighted return, the rate the allocator actually earned |
+| `capital_share` | this direction's share of all capital staked |
+| `efficiency` | `kelly_roi` over the whole book's, so 1.00 is carrying its weight |
+| `calibration` | realised win rate minus mean `p_model`; positive = model UNDER-rates |
+"""
+function direction_ledger(result)
+    bets = result.trajectory.bets
+    nrow(bets) == 0 && return DataFrame()
+    open_of = Dict(d.date => d.bankroll_open for d in result.daily_states)
+    b = copy(bets)
+    scale = [get(open_of, d, NaN) for d in b.date]
+    b.stake_units = b.stake .* scale
+    b.pnl_units = b.pnl .* scale
+    b.won = b.payoff .> 0.0
+
+    total_stake = sum(skipmissing(b.stake_units))
+    total_pnl = sum(skipmissing(b.pnl_units))
+    book_kelly_roi = total_stake == 0.0 ? NaN : total_pnl / total_stake
+
+    g = combine(groupby(b, [:family, :selection]),
+                nrow => :n_bets,
+                :won => mean => :win_rate,
+                :odds => mean => :mean_odds,
+                :p_model => mean => :p_model,
+                :p_market => mean => :p_market,
+                :stake_units => sum => :stake_units,
+                :pnl_units => sum => :pnl_units,
+                :payoff => mean => :mean_payoff)
+    # `pnl == stake * payoff` and `settle_vector` has already deducted commission, so
+    # both rates below are net. They differ only in the weighting: flat weights every
+    # bet equally, Kelly weights it by the capital the allocator actually committed.
+    g.flat_roi = 100 .* g.mean_payoff
+    g.kelly_roi = 100 .* g.pnl_units ./ g.stake_units
+    g.capital_share = 100 .* g.stake_units ./ total_stake
+    g.efficiency = (g.pnl_units ./ g.stake_units) ./ book_kelly_roi
+    g.edge = g.p_model .- g.p_market
+    g.calibration = g.win_rate .- g.p_model
+    sort!(g, :capital_share; rev = true)
+    return g
+end
+
+"""
+    tiered_trust_from_ledger(ledger; tier1, tier2, min_bets) -> (TieredTrust, DataFrame)
+
+Fit a `TieredTrust` from one window's direction ledger.
+
+The tier LADDER is the audited one — `CanonicalScottishLowerTrust`'s 0.35 / 0.25 /
+0.00 — and only the ASSIGNMENT is refitted. That is deliberate: experiment 06 §2.1
+established that `SlateDrawdown` makes absolute trust levels irrelevant and only the
+1.4 : 1.0 conviction ratio bites, so re-fitting the levels would be re-deriving a
+quantity already shown not to matter. The question Phase 2 asks is whether
+calibration changes WHICH directions earn which tier.
+
+    tier 1  kelly_roi > 0  and  efficiency >= 1.00  and  n_bets >= min_bets
+    tier 2  kelly_roi > 0  and  efficiency >= 0.25  and  n_bets >= min_bets
+    gated   otherwise
+
+Causality is carried by the caller: fit on the selection window, score on the
+window the rule never saw. A vector fitted and scored on the same slates is not a
+result, and `MARKET_LINE_EDA_REPORT.md` §5.1 is the record of that rule class
+failing when it was allowed to.
+"""
+function tiered_trust_from_ledger(ledger::AbstractDataFrame;
+                                  tier1::Float64 = 0.35, tier2::Float64 = 0.25,
+                                  min_bets::Int = 50)
+    table = Dict{Tuple{String,Float64,Symbol},Float64}()
+    rows = NamedTuple[]
+    for r in eachrow(ledger)
+        group, line = _direction_key(r.family, r.selection)
+        w = if r.n_bets < min_bets || !isfinite(r.kelly_roi) || r.kelly_roi <= 0
+            0.0
+        elseif r.efficiency >= 1.00
+            tier1
+        elseif r.efficiency >= 0.25
+            tier2
+        else
+            0.0
+        end
+        table[(group, line, r.selection)] = w
+        push!(rows, (; family = r.family, group, line, selection = r.selection,
+                     n_bets = r.n_bets, kelly_roi = r.kelly_roi,
+                     efficiency = r.efficiency, tier = w))
+    end
+    return TieredTrust(table; default = 0.0), sort!(DataFrame(rows), :tier; rev = true)
+end
+
+"`(group, line)` for a `TieredTrust` key, recovered from the ledger's trust-key string."
+function _direction_key(family::AbstractString, selection::Symbol)
+    s = String(selection)
+    (s in ("home", "draw", "away")) && return ("1x2", 0.0)
+    startswith(s, "btts_") && return ("btts", 0.0)
+    for prefix in ("over_", "under_")
+        if startswith(s, prefix)
+            d = s[(length(prefix) + 1):end]
+            return ("over_under", parse(Float64, d[1:(end - 1)] * "." * d[end]))
+        end
+    end
+    error("_direction_key: no market family owns selection :$selection (family \"$family\").")
 end
