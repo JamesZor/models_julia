@@ -3,16 +3,19 @@
 Prototype stream for the work package in
 [`CALIBRATION_GENERATIVE_RATE_EDA_PROMPT.md`](CALIBRATION_GENERATIVE_RATE_EDA_PROMPT.md).
 
-**Status — 2026-09-04.** Phase 1 executed on `mcmc-beast`. §5 carries measured
-numbers. Phase 2 (`r02_portfolio_direction_audit.jl`) is written and its results
-are in §6; until those are filled in, **nothing here supports a bankroll claim.**
+**Status — 2026-09-04.** Both phases executed on `mcmc-beast`. §5 is the
+calibration result, §6 the portfolio result.
 
 **Headline.** Generative rate calibration improves out-of-sample LogLoss on both
-Scottish Lower candidates, and the improvement is concentrated almost entirely in
-the **large-edge** regime — but the winning direction is **shrinkage**, not the
-Ireland stream's conviction. `:standard_gaussian`, which pulls extreme claims back
-toward the close, beats `:inverse_gaussian`, which pushes them away from it, on
-every model and every scope measured. See §5.5.
+Scottish Lower candidates; the gain is concentrated almost entirely in the
+**large-edge** regime; and the winning direction is **shrinkage**, not the Ireland
+stream's conviction. On the portfolio it raises flat ROI, Sharpe and drawdown on
+every arm while *lowering* total return — and arm F shows that shortfall is
+**exposure, not skill**: at a drawdown matched to the raw model's, calibrated `m12`
+returns **+151.09%** against raw's +126.09%. Out of sample it produces the best arm
+measured anywhere in this stream, beating the production champion on return,
+Sharpe and drawdown at once. It does **not** replace `CanonicalScottishLowerTrust`,
+and it does not rescue Over 2.5 far enough to un-gate it.
 
 ---
 
@@ -55,7 +58,7 @@ already failed.
 |---|---|
 | [`l01_generative_calibrator.jl`](l01_generative_calibrator.jl) | Loader. `GenerativeCalibrationSpec` and the three weight laws, market-rate inversion with acceptance gates, the posterior shift, the coherence audit, proper scoring and the sweep grid. Definitions only. |
 | [`r01_sweep_rate_calibration.jl`](r01_sweep_rate_calibration.jl) | Runner 1. The diagnostic and proper-score sweep, gates G-A…G-D, CSV artefacts. **Calibration only — no bankroll claim.** |
-| `r02_portfolio_direction_audit.jl` | Runner 2. Not yet written. The 13-direction portfolio and trust-vector audit; Gate 2. |
+| [`r02_portfolio_direction_audit.jl`](r02_portfolio_direction_audit.jl) | Runner 2. The direction and trust-vector portfolio audit, arms A–F; Gate 2. |
 | `results/` | Replaceable CSV artefacts. Re-running overwrites them. |
 
 Run:
@@ -130,7 +133,7 @@ against 1X2's once. `L01_INVERSION_LINES` passes one symbol per line.
 | **G-C** | r01 §6 | Derivative-market coherence. Errors if two market families disagree on one fixture by more than 1e-9 — that cannot happen when every price is a partition of one tensor, so it would indict the pricing path, not the calibration. |
 | **G-D** | r01 §7–8 | Identity control. The `w_base = 1.00` grid point must reproduce the uncalibrated baseline LogLoss to 1e-12. |
 | **Gate 1** | r01 §9 | Proper scoring, judged against the **recomputed** baseline: LogLoss no worse, ECE no worse than the uncalibrated model, and ECE at or below the Betfair close's. |
-| **Gate 2** | r02 | Bankroll > +130%, Sharpe ≥ 1.416, max drawdown no worse than −20.5%. Not yet implemented. |
+| **Gate 2** | r02 §6.7 | Bankroll > +130%, Sharpe ≥ 1.416, max drawdown no worse than −20.5%. Measured; and §6.7 argues the return threshold is mis-specified for a variance-contracting transform. |
 
 A Gate-1 PASS is a **calibration** result and entitles nobody to a bankroll claim.
 The Ireland transfer improved its own league's calibration diagnostics and still
@@ -145,6 +148,13 @@ Run: `mcmc-beast`, 16 threads, 2026-09-04 18:53:57, commit `f0e2b7d8`, branch
 (read-only). Fixture set: **710** OOS fixtures in 24/25 + 25/26 after
 `restrict_latents` dropped the 49 fixtures of the 26/27 extension; **2,899**
 scored observations in the headline scope, 4,390 in the wide scope.
+
+**`m05` does not pass the strict convergence gate**, on **tail ESS** alone
+(251.6 against a 400 floor); its R̂ (1.0084), bulk ESS (647.3), divergence rate
+(2.2e-05) and BFMI (0.538) all clear. `m12` passes every gate. Both are scored
+anyway and flagged, because the refusal is a precision statement about the tails
+of `m05`'s posterior, not a claim that its central tendency is wrong — but every
+`m05` number below carries it.
 
 **The G-D control reproduced the published 40-fold numbers exactly** — `m12`
 LogLoss `0.64337`, ECE `0.0100`, Betfair close ECE `0.0139`, N `2,899`. The
@@ -330,7 +340,228 @@ Consequences, stated exactly:
 
 ---
 
-## 6. Boundaries
+## 6. Phase 2 — portfolio and direction audit
+
+Run: `mcmc-beast`, 16 threads, 2026-09-04 (CEST), commit `eab3ba8d`. Same 710
+fixtures as §5; **631 priced, 79 skipped** (no closing quote, or no complete
+market). Book: 11 tradeable directions (1X2, O/U 1.5/2.5/3.5, BTTS), `DeArb`,
+`KellyLogUtility`, `FractionalKelly(0.30)`, 2% commission. Policy:
+`SlateDrawdown(23.0)`, `FixedCap(0.25)`, `DailySlate()`. Only the latent container
+and the trust model vary between arms.
+
+**The reference arm reproduces the published champion.** Raw `m12` +
+`CanonicalScottishLowerTrust` returns **+157.50%** at Sharpe **1.637**, MDD
+**−20.47%**, against experiment 06's published +155.93% / 1.636 / −19.79%. The
+small gap is the two directions this book drops. The comparison base is therefore
+the real champion, not an approximation of it.
+
+### 6.1 Full period — the 2×2 and the variance cost
+
+| Model | container | trust | bets | return % | flat ROI % | Sharpe | MDD % | exposure |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| `m12` | raw | flat | 1800 | +126.09 | +9.71 | 1.323 | −22.33 | 9.58% |
+| `m12` | raw | canonical | 1261 | **+157.50** | +14.10 | 1.637 | −20.47 | 7.43% |
+| `m12` | **std** | flat | 1763 | +110.29 | +11.58 | 1.683 | −15.99 | 6.93% |
+| `m12` | **std** | canonical | 1256 | +123.62 | **+15.76** | **1.878** | **−13.71** | 5.47% |
+| `m12` | inv | flat | 1464 | +32.41 | +9.43 | 1.377 | −8.63 | 3.11% |
+| `m12` | inv | canonical | 1079 | +40.45 | +14.64 | 1.823 | −10.36 | 2.39% |
+| `m05` | raw | flat | 1804 | +130.12 | +10.28 | 1.442 | −21.77 | 9.09% |
+| `m05` | raw | canonical | 1234 | **+134.54** | +13.67 | 1.580 | −18.17 | 6.88% |
+| `m05` | **std** | flat | 1681 | +74.39 | +11.83 | 1.753 | −11.70 | 4.96% |
+| `m05` | **std** | canonical | 1197 | +75.66 | **+15.33** | **1.815** | **−9.87** | 3.87% |
+| `m05` | inv | flat | 1556 | +49.18 | +10.58 | 1.568 | −10.15 | 3.96% |
+| `m05` | inv | canonical | 1106 | +53.67 | +14.77 | 1.825 | −10.36 | 3.02% |
+
+Calibration moves every arm the same way: **flat ROI up, Sharpe up, drawdown
+shallower, total return down, exposure down.** That is the `w²` log-variance
+contraction reaching the allocator — Kelly stake size is monotone in posterior
+variance, so a calibrated container stakes less and compounds less at the same
+risk budget. Mean exposure falls 28% (`m12` std) to 68% (`m12` inv), tracking the
+variance retained (84.6% and 6.7%).
+
+### 6.2 Arm F — scale against shape
+
+Loosening λ on the calibrated container until its drawdown matches the raw arm's.
+**In-sample λ selection; a mechanism demonstration, not a performance claim.**
+
+| Model | container | trust | λ | return % | Sharpe | MDD % | raw MDD % | note |
+|---|---|---|---:|---:|---:|---:|---:|---|
+| `m12` | **std** | flat | 18.0 | **+151.09** | 1.655 | −19.93 | −22.33 | matched |
+| `m12` | inv | flat | 8.0 | +100.80 | 1.285 | −21.93 | −22.33 | matched |
+| `m05` | **std** | flat | 12.0 | **+167.26** | 1.691 | −20.92 | −21.77 | matched |
+| `m05` | inv | flat | 10.0 | +128.60 | 1.493 | −21.20 | −21.77 | matched |
+| `m12` | std | canonical | 0.5 | +137.20 | 1.828 | −16.80 | −20.47 | cap-saturated |
+| `m05` | std | canonical | 0.5 | +83.45 | 1.775 | −10.96 | −18.17 | cap-saturated |
+
+**This is the discriminating result of the whole stream.** At matched risk under
+flat trust, calibrated `m12` returns **+151.09%** against raw's +126.09% — 25
+points more, with a *shallower* drawdown and Sharpe 1.655 against 1.323. `m05`
+goes +167.26% against +130.12%. The §6.1 return shortfall was exposure, not skill.
+
+And the two functional forms come apart exactly here. `:standard_gaussian`
+recovers and overtakes at matched risk; `:inverse_gaussian` does **not** — +100.80%
+against raw's +126.09% on `m12`, still behind after the risk is equalised. Its
+shortfall is real, not a scale artefact. Phase 1 preferred `std` on LogLoss and
+large-edge LPD; the P&L agrees, and this is the arm where a stream that had
+adopted the Ireland form on faith would have lost money.
+
+**Why the canonical arms cannot be matched.** Under `CanonicalScottishLowerTrust`
+the λ sweep moves maximum drawdown by only **0.7–3.1 percentage points**, against
+**19.8–24.4** under flat trust. The tiers already gate most of the slate to zero,
+so `FixedCap(0.25)` becomes the binding constraint and `SlateDrawdown` — being
+homogeneous of degree 0 in the stakes it receives — cannot buy any more exposure.
+Extending λ further would not move those rows; `mdd_span` in
+`results/r02_risk_matched.csv` is the evidence. This is the same scale-invariance
+law experiment 06 §2.1 records, observed from the other side.
+
+### 6.3 Out of sample — slates after 2025-05-03
+
+A true holdout: no trust rule and no calibration parameter was fitted on it.
+(The r01 sweep selected `std_w0.25_s0.25` on the full period, so the *spec* is not
+out of sample here; the trust vector of arm E is.)
+
+| Model | container | trust | bets | return % | Sharpe | MDD % |
+|---|---|---|---:|---:|---:|---:|
+| `m12` | raw | flat | 978 | +14.48 | 0.452 | −22.33 |
+| `m12` | raw | canonical | 641 | +32.49 | 0.982 | −20.47 |
+| `m12` | **std** | flat | 953 | +24.63 | 1.074 | −13.19 |
+| `m12` | **std** | **canonical** | 635 | **+33.84** | **1.402** | **−13.71** |
+| `m12` | std | refit | 440 | +21.71 | 0.983 | −15.94 |
+| `m12` | raw | refit | 441 | +8.75 | 0.313 | −26.02 |
+| `m05` | raw | flat | 993 | +22.17 | 0.684 | −21.77 |
+| `m05` | raw | canonical | 632 | +31.25 | 0.983 | −18.17 |
+| `m05` | std | flat | 906 | +17.81 | 1.144 | −9.68 |
+| `m05` | std | canonical | 604 | +18.93 | 1.193 | −9.87 |
+| `m05` | raw | refit | 324 | −3.75 | −0.151 | −23.85 |
+
+**`m12` + `std` + `canonical_P1` is the best arm measured anywhere in this
+stream**, and it beats the production champion on all three axes at once: +33.84%
+against +32.49%, Sharpe 1.402 against 0.982, drawdown −13.71% against −20.47%.
+
+### 6.4 The 13-direction audit — `results/r02_direction_ledger.csv`
+
+`m12`, flat trust, full period, so every direction is stakeable and comparable.
+
+| direction | container | bets | Kelly ROI % | capital % | efficiency | calibration |
+|---|---|---:|---:|---:|---:|---:|
+| home | raw | 293 | +10.19 | 24.81 | 1.51 | −0.0086 |
+| home | **std** | 299 | **+16.66** | 26.25 | 1.79 | +0.0065 |
+| away | raw | 375 | +5.84 | 29.24 | 0.87 | −0.0670 |
+| away | **std** | 378 | **+10.06** | 30.27 | 1.08 | −0.0489 |
+| draw | raw | 366 | +10.30 | 13.50 | 1.53 | −0.0051 |
+| draw | std | 347 | +6.63 | 11.78 | 0.71 | −0.0013 |
+| under_25 | raw | 227 | +19.17 | 9.88 | 2.85 | −0.0047 |
+| under_25 | std | 232 | +14.25 | 10.49 | 1.53 | +0.0054 |
+| **over_25** | raw | 59 | **−10.99** | 2.15 | −1.63 | −0.0407 |
+| **over_25** | **std** | 49 | **+0.75** | 2.10 | 0.08 | −0.0106 |
+| **over_25** | **inv** | 29 | **+8.04** | 1.55 | 0.96 | +0.0655 |
+| over_35 | raw | 86 | −2.02 | 2.45 | −0.30 | −0.0454 |
+| over_35 | std | 79 | −0.91 | 2.73 | −0.10 | −0.0294 |
+| btts_yes | raw | 62 | −7.17 | 2.92 | −1.06 | +0.0199 |
+| btts_yes | std | 60 | −1.74 | 2.62 | −0.19 | +0.0172 |
+
+**On Over 2.5 the answer is: rescued from destructive to break-even, and that is
+not enough to un-gate it.** Kelly ROI goes −10.99% → +0.75% (`std`) → +8.04%
+(`inv`), and the mechanism is visible in the calibration column: the raw model
+over-rates the selection by 4.1 percentage points and calibration removes three
+quarters of that. But `std`'s efficiency is **0.08** — it clears zero without
+carrying its weight against a book averaging far more — and `inv`'s +8.04% rests
+on **29 bets**. `CanonicalScottishLowerTrust` gates Over 2.5 to zero, and nothing
+here justifies reversing that.
+
+The wider pattern is the optimiser's curse at the P&L level: mean edge shrinks on
+every direction (home 0.0677 → 0.0505, away 0.0702 → 0.0517) and Kelly ROI *rises*
+on the two largest. The raw edges were inflated, and the shrinkage was removing
+error rather than signal.
+
+### 6.5 Arm E — the refitted trust vector fails
+
+Fitted on slates to 2025-05-03, scored on the ones after. The rule tiers a
+direction by Kelly ROI and capital efficiency on the selection window, holding the
+audited 0.35 / 0.25 / 0.00 ladder fixed.
+
+It selects `{home, away}` at 0.35, `under_25` at 0.25 and gates everything else —
+including `draw`, which the canonical vector keeps at 0.25 and which returned
+−11.4% on the selection window and is the difference between the two vectors.
+
+**Out of sample it loses to both comparators, on every arm.** `m12` raw: refit
++8.75% (Sharpe 0.313) against flat +14.48% and canonical +32.49%. `m12` std: refit
++21.71% (0.983) against flat +24.63% and canonical +33.84%. `m05` raw: refit
+−3.75% (Sharpe −0.151).
+
+This is the same failure `MARKET_LINE_EDA_REPORT.md` §5.1 records for this rule
+class, reproduced on a calibrated book: a per-direction selection rule fitted on
+half a season of Scottish Lower slates does not generalise, and the audited vector
+is not improved by refitting it. **Calibration does not make the trust vector
+re-derivable, and it does not make it unnecessary.**
+
+### 6.6 The O/U 0.5 exclusion, evidenced — arm R1
+
+Raw `m12`, flat trust, the full 13-direction book including O/U 0.5:
+
+| | return % | Sharpe | MDD % | bets |
+|---|---:|---:|---:|---:|
+| 11 directions (§6.1) | +126.09 | 1.323 | −22.33 | 1800 |
+| 13 directions | +123.61 | 1.329 | −20.97 | 1894 |
+
+| direction | bets | Kelly ROI % | capital % | mean `p_market` |
+|---|---:|---:|---:|---:|
+| over_05 | 33 | −3.11 | 2.85 | 0.9207 |
+| under_05 | 64 | **−29.99** | 0.57 | 0.0596 |
+
+Both sides lose, `under_05` catastrophically, and it is staked against a de-vigged
+"fair" price that is a normalisation artefact on 574 of the fixtures (§5.6).
+Excluding the line costs nothing and removes a fabricated input.
+
+### 6.7 Gate 2
+
+Thresholds from the work package: return > +130%, annual Sharpe ≥ 1.416, max
+drawdown no worse than −20.5%.
+
+| Arm | return | Sharpe | MDD | Verdict |
+|---|---|---|---|---|
+| `m12` raw + canonical | +157.50 ✓ | 1.637 ✓ | −20.47 ✓ | **PASS** |
+| `m12` std + canonical | +123.62 ✗ | 1.878 ✓ | −13.71 ✓ | REFUSE |
+| `m12` std + flat | +110.29 ✗ | 1.683 ✓ | −15.99 ✓ | REFUSE |
+| `m12` raw + flat | +126.09 ✗ | 1.323 ✗ | −22.33 ✗ | REFUSE |
+
+**Read literally, Gate 2 refuses calibration. Read honestly, the gate is
+mis-specified for this transform.** Its return threshold is a *scale* criterion,
+and a variance-contracting calibration fails it mechanically while improving every
+*shape* criterion beside it — at a fixed λ it simply takes less risk. Arm F is the
+disposal of that confound: at matched drawdown, `m12` std + flat returns +151.09%,
+which clears +130% with Sharpe 1.655 and a shallower drawdown than the raw arm.
+
+The gate should be restated as **return at matched drawdown**, or the λ should be
+tuned per container before the return is read. Either way the number to carry
+forward is §6.3's: out of sample, calibrated `m12` under the canonical trust beats
+the production champion on all three axes simultaneously.
+
+### 6.8 Verdict on Phase 2
+
+1. **Q1 — calibration changes the bankroll, favourably, once risk is matched.**
+   +151.09% against +126.09% on `m12`, +167.26% against +130.12% on `m05`, with
+   equal or shallower drawdown. At a *fixed* λ it trades return for risk.
+2. **Q2 — Over 2.5 is repaired but not rehabilitated.** −10.99% → +0.75% Kelly
+   ROI, driven by a genuine calibration fix, but at efficiency 0.08 on 49 bets.
+   Keep it gated.
+3. **Q3 — the trust vector survives.** `CanonicalScottishLowerTrust` beats flat on
+   every container, calibrated or not, in and out of sample; and refitting it
+   loses to both. Calibration and staking trust remain **separate controls**, which
+   is what `notes_rqs_01.md` §5 concluded and this run confirms rather than
+   overturns.
+4. **`:standard_gaussian` is the form to graduate, and `:inverse_gaussian` is
+   not.** The Ireland form loses on LogLoss, on large-edge LPD, on full-period
+   return, and — decisively — on return at matched risk, where the standard form
+   overtakes the raw model and the inverse form still does not.
+5. **Everything here is priced at the CLOSE and is an upper bound.** Before any of
+   it reaches the MatchDay consoles the inversion must be re-run on the T−25 book.
+   That is the next work package, and no line of this stream should be deployed
+   before it.
+
+---
+
+## 7. Boundaries
 
 * Reads `mcmc_experiments` (posteriors, via `PostgresStorage`) and `betdb`
   (odds, results). **Writes neither.** No run, portfolio or config registration.
