@@ -290,7 +290,8 @@ for (label, rates, secs) in (("T−25", r03_rates_t25, t_pit),
 end
 CSV.write(joinpath(R03_OUT, "r03_inversion_t25.csv"), inversion_frame(r03_rates_t25))
 
-"How far the inverted rates themselves move between the two instants."
+# How far the inverted rates themselves move between the two instants. A bare
+# string here would be parsed as a docstring on the `let`, which is not documentable.
 let both = [m for m in r03_all_ids
             if haskey(r03_rates_t25, m) && r03_rates_t25[m].accepted &&
                haskey(r03_rates_close, m) && r03_rates_close[m].accepted]
