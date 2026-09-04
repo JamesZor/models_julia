@@ -257,6 +257,11 @@ r05_ou05_ids = let ou05 = filter(r -> r.market_name == "OverUnder" &&
             nrow(ou05), length(unique(ou05.match_id)))
     println("    (l02 requires both sides before de-vigging, so the r01 O/U 0.5")
     println("     defect of README §5.6 cannot occur in this book.)")
+    let f = filter(r -> r.market_name == "OverUnder" && r.market_line == 0.5, t25_full)
+        @printf("    the FULL T−25 book carries %d over %d — the shortfall is the close\n",
+                nrow(f), length(unique(f.match_id)))
+        println("     book's own one-sided O/U 0.5 quotes failing the matched-key join.")
+    end
     Set{Int}(Int.(ou05.match_id))
 end
 
