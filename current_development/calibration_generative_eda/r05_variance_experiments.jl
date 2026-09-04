@@ -136,16 +136,26 @@ dose-response arm — a real dispersion effect must be larger under it.
 const R05_FORMS = R05_SMOKE ? ["std"] : ["std", "inv"]
 
 """
-λ ladder for the frontier panel. Reaches further down than r04's because a
-variance-CONTRACTING scheme needs a looser budget to reach the raw arm's drawdown,
-and a variance-PRESERVING one needs a tighter one; the ladder has to bracket both
-or the frontier is a line segment with the answer off the end of it.
+The λ ladder. STOPS AT 8.0, and that is a measurement rather than a guess: a smoke
+run over [23, 12, 6] returned bit-identical rows at 12 and 6 on every container, so
+`SlateDrawdown` has stopped binding somewhere above 12 and `FixedCap(0.25)` and the
+Kelly fraction are carrying the constraint from there down. Rungs below 8 would be
+duplicate rows dressed as a sweep. T6 reports the saturation rather than hiding it,
+because it is the boundary condition H3 has to live inside.
 """
-const R05_RISK_LAMBDAS = R05_SMOKE ? [23.0, 12.0, 6.0] :
-    [23.0, 18.0, 15.0, 12.0, 10.0, 8.0, 6.0, 5.0, 4.0, 3.0, 2.0]
+const R05_RISK_LAMBDAS = R05_SMOKE ? [23.0, 12.0] :
+    [23.0, 18.0, 15.0, 12.0, 10.0, 8.0]
 
-"Scheme E's second knob. `l01_book_spec` hard-codes 0.30; H3 needs both."
-const R05_KELLY_FRACTIONS = R05_SMOKE ? [0.30] : [0.30, 0.40]
+"""
+The Kelly ladder — the risk knob that is still live once λ has saturated.
+
+`l01_book_spec` hard-codes 0.30. Scheme E of the work package is this knob and λ
+turned together on the pool and the raw model; it is swept over EVERY container
+here instead, because the arbiter in §9 is "best return at or inside a common
+drawdown" and a knob offered to one arm and not another would decide that question
+by construction.
+"""
+const R05_KELLY_FRACTIONS = R05_SMOKE ? [0.30, 0.50] : [0.30, 0.40, 0.50]
 
 "Directions scored. 13, not r03's 11 — the O/U 0.5 ladder IS the Jensen tail."
 const R05_SCORED_MARKETS = l01_full_direction_markets()
@@ -394,9 +404,11 @@ CSV.write(joinpath(R05_OUT, "r05_variance_jensen.csv"), DataFrame(r05_jensen_row
 #
 #   Panel P  full T−25 book, λ 23.0, Kelly 0.30 — the production settings
 #   Panel O  the same, restricted to slates after the split date
-#   Panel F  the λ ladder at Kelly 0.30 — the frontier, and the arbiter
-#   Panel E  the λ ladder at Kelly 0.40, on `raw` and `*_A_pool` only — H3's second
-#            knob, applied to the two arms H3 is a counter-hypothesis ABOUT
+#   Panel F  the whole (λ, Kelly) risk surface — the frontier, and the arbiter.
+#            Work-package Scheme E is the `raw` and `*_A_pool` part of this surface;
+#            it is run on every container because §9 compares arms at a COMMON
+#            drawdown, and a risk knob given to one arm and withheld from another
+#            would settle that comparison by construction rather than by evidence.
 
 const R05_FLAT = l01_policy_spec(FlatTrust(1.0))
 const R05_CANON = l01_policy_spec(CanonicalScottishLowerTrust())
@@ -421,10 +433,6 @@ r05_pf_rows = NamedTuple[]
 r05_clv_rows = NamedTuple[]
 r05_direction_frames = DataFrame[]
 
-"Scheme E's second knob is only run on the arms H3 is an argument about."
-r05_wants_kelly(arm, kelly) =
-    kelly == 0.30 || arm.id == "raw" || endswith(arm.id, "A_pool")
-
 println("\n--- Gate 2 · Panels P / O / F / E on the full T−25 book ---")
 @printf(" %-28s | %-14s | %-13s | %5s | %9s | %8s | %8s | %7s\n",
         "Model", "container", "trust", "bets", "return %", "MDD %", "Sharpe", "Calmar")
@@ -433,7 +441,6 @@ println("-"^118)
 t_portfolio = @elapsed for name in R05_MODELS
     for arm in r05_containers[name]
         for kelly in R05_KELLY_FRACTIONS
-            r05_wants_kelly(arm, kelly) || continue
             bspec = l03_book_spec(R05_STAKED_MARKETS; kelly_fraction = kelly)
             books, rep = R05_PF.build_books_reported(bspec, arm.latents, t25_full,
                                                      ds.matches; require_result = true,
@@ -445,9 +452,9 @@ t_portfolio = @elapsed for name in R05_MODELS
                     policy = r05_trust_of(tname, λ)
                     result = R05_PF.simulate_portfolio(policy, books; bootstrap = false)
                     production = (λ == 23.0 && kelly == 0.30)
-                    panel = production ? "P" : (kelly == 0.30 ? "F" : "E")
                     push!(r05_pf_rows,
-                          r05_row(name, arm, tname, panel, "full", λ, kelly, result.summary))
+                          r05_row(name, arm, tname, production ? "P" : "F", "full",
+                                  λ, kelly, result.summary))
 
                     if production
                         clv = bet_clv(result.trajectory.bets, r05_drift)
@@ -492,46 +499,60 @@ isempty(r05_direction_frames) ||
 
 # %%
 # ===================================================================
-# 9. The frontier, read at matched drawdown
+# 9. The frontier, read at a common drawdown
 # ===================================================================
 #
-# The comparison every earlier phase had to hedge. For each container, take the λ
-# whose realised max drawdown is closest to the RAW arm's at λ 23 — the common
-# reference risk — and read the return there. Linear interpolation between the two
-# bracketing λ rungs where the ladder brackets the target, and the nearest rung
-# with the gap reported where it does not.
+# The comparison every earlier phase had to hedge, and the only well-posed form of
+# the question. Each container has a whole (λ, Kelly) risk surface behind it; a
+# return quoted at one point of that surface says nothing, because the arm beside
+# it can be moved to the same risk. So:
+#
+#     for each arm, over its entire risk surface, take the BEST return among the
+#     settings whose realised max drawdown is no deeper than the RAW arm's at the
+#     production budget — and report which setting that was.
+#
+# That is the upper envelope, not an interpolation along one knob. It is the right
+# object here because the surface is two-dimensional and NOT monotone in either
+# knob alone: λ saturates (T6), after which only Kelly moves risk, and two settings
+# can land on the same drawdown with different returns.
+#
+# An arm that cannot reach the reference drawdown at all is reported with the
+# deepest drawdown its surface can produce, rather than extrapolated past the end
+# of the sweep. Extrapolating a compounding curve off the end of a grid is how a
+# mechanism demonstration becomes a fabricated number.
 
 """
-    frontier_at(rows, target_mdd) -> NamedTuple
+    frontier_envelope(rows, target_mdd; tol) -> NamedTuple
 
-Return, Sharpe and λ at the drawdown `target_mdd`, interpolated along the ladder.
+Best return on a risk surface subject to a drawdown budget.
 
-Drawdowns are NEGATIVE percentages, so "closest to target" is on |mdd|. A ladder
-that does not bracket the target reports its nearest rung and the residual gap
-rather than extrapolating; extrapolating a compounding curve off the end of a
-sweep is how a mechanism demonstration turns into a fabricated number.
+`tol` (0.25 percentage points) exists so a row sitting a rounding error outside the
+budget is not excluded on a difference no one could act on. Drawdowns are negative
+percentages throughout, so every comparison here is on the absolute value.
 """
-function frontier_at(rows::AbstractDataFrame, target_mdd::Float64)
-    nrow(rows) == 0 && return (; risk_lambda = NaN, total_return_pct = NaN,
-                               sharpe_ann = NaN, mdd = NaN, gap = NaN, bracketed = false)
-    d = sort(DataFrame(rows), :max_drawdown_pct; rev = true)   # shallowest first
-    a = abs.(d.max_drawdown_pct)
+function frontier_envelope(rows::AbstractDataFrame, target_mdd::Float64;
+                           tol::Float64 = 0.25)
+    nrow(rows) == 0 && return (; risk_lambda = NaN, kelly_fraction = NaN,
+                               total_return_pct = NaN, sharpe_ann = NaN, calmar = NaN,
+                               realised_mdd = NaN, deepest_mdd = NaN,
+                               n_settings = 0, reached = false)
     t = abs(target_mdd)
-    if t <= first(a) || t >= last(a)
-        i = argmin(abs.(a .- t))
-        return (; risk_lambda = d.risk_lambda[i], total_return_pct = d.total_return_pct[i],
-                sharpe_ann = d.sharpe_ann[i], mdd = d.max_drawdown_pct[i],
-                gap = a[i] - t, bracketed = false)
+    a = abs.(rows.max_drawdown_pct)
+    deepest = maximum(a)
+    ok = findall(<=(t + tol), a)
+    if isempty(ok)                       # cannot get INSIDE the budget at all
+        i = argmin(a)
+        return (; risk_lambda = rows.risk_lambda[i], kelly_fraction = rows.kelly_fraction[i],
+                total_return_pct = rows.total_return_pct[i], sharpe_ann = rows.sharpe_ann[i],
+                calmar = rows.calmar[i], realised_mdd = rows.max_drawdown_pct[i],
+                deepest_mdd = -deepest, n_settings = nrow(rows), reached = false)
     end
-    j = findfirst(>=(t), a)
-    i = j - 1
-    span = a[j] - a[i]
-    f = span > 0 ? (t - a[i]) / span : 0.0
-    return (; risk_lambda = d.risk_lambda[i] + f * (d.risk_lambda[j] - d.risk_lambda[i]),
-            total_return_pct = d.total_return_pct[i] +
-                               f * (d.total_return_pct[j] - d.total_return_pct[i]),
-            sharpe_ann = d.sharpe_ann[i] + f * (d.sharpe_ann[j] - d.sharpe_ann[i]),
-            mdd = target_mdd, gap = 0.0, bracketed = true)
+    i = ok[argmax(rows.total_return_pct[ok])]
+    return (; risk_lambda = rows.risk_lambda[i], kelly_fraction = rows.kelly_fraction[i],
+            total_return_pct = rows.total_return_pct[i], sharpe_ann = rows.sharpe_ann[i],
+            calmar = rows.calmar[i], realised_mdd = rows.max_drawdown_pct[i],
+            deepest_mdd = -deepest, n_settings = nrow(rows),
+            reached = deepest >= t - tol)
 end
 
 r05_frontier_rows = NamedTuple[]
@@ -541,17 +562,14 @@ for name in R05_MODELS, tname in ("flat_1.0", "canonical_P1")
                        r.risk_lambda == 23.0, r05_portfolio)
     nrow(base) == 0 && continue
     target = first(base).max_drawdown_pct
-    for arm in r05_containers[name], kelly in R05_KELLY_FRACTIONS
-        rows = filter(r -> r.model == name && r.container == arm.id && r.trust == tname &&
-                           r.window == "full" && r.kelly_fraction == kelly, r05_portfolio)
+    for arm in r05_containers[name]
+        rows = filter(r -> r.model == name && r.container == arm.id &&
+                           r.trust == tname && r.window == "full", r05_portfolio)
         nrow(rows) == 0 && continue
-        f = frontier_at(rows, target)
+        f = frontier_envelope(rows, target)
         push!(r05_frontier_rows,
-              (; model = name, container = arm.id, form = arm.form, scheme = arm.scheme,
-                 trust = tname, kelly_fraction = kelly, target_mdd = target,
-                 risk_lambda = f.risk_lambda, total_return_pct = f.total_return_pct,
-                 sharpe_ann = f.sharpe_ann, realised_mdd = f.mdd,
-                 mdd_gap = f.gap, bracketed = f.bracketed))
+              merge((; model = name, container = arm.id, form = arm.form,
+                     scheme = arm.scheme, trust = tname, target_mdd = target), f))
     end
 end
 r05_frontier = DataFrame(r05_frontier_rows)
@@ -594,21 +612,46 @@ end
 
 if nrow(r05_frontier) > 0
     println("\n" * "="^140)
-    println(" T3 · THE ARBITER — return AT THE RAW ARM'S DRAWDOWN, λ interpolated along the ladder")
+    println(" T3 · THE ARBITER — best return over the whole (λ, Kelly) surface, INSIDE the raw arm's drawdown")
     println("="^140)
-    @printf(" %-28s | %-14s | %-13s | %5s | %8s | %9s | %8s | %s\n",
-            "Model", "container", "trust", "Kelly", "λ", "return %", "Sharpe", "note")
+    @printf(" %-28s | %-14s | %-13s | %8s | %5s | %9s | %8s | %7s | %8s | %s\n",
+            "Model", "container", "trust", "λ", "Kelly", "return %", "MDD %",
+            "Sharpe", "budget %", "note")
     println("-"^140)
-    for r in eachrow(sort(r05_frontier, [:model, :trust, :kelly_fraction,
-                                         order(:total_return_pct, rev = true)]))
-        @printf(" %-28s | %-14s | %-13s | %5.2f | %8.2f | %+9.2f | %8.3f | %s\n",
-                r.model, r.container, r.trust, r.kelly_fraction, r.risk_lambda,
-                r.total_return_pct, r.sharpe_ann,
-                r.bracketed ? "" : @sprintf("NOT BRACKETED (%.2fpp off target)", r.mdd_gap))
+    for r in eachrow(sort(r05_frontier, [:model, :trust, order(:total_return_pct, rev = true)]))
+        @printf(" %-28s | %-14s | %-13s | %8.2f | %5.2f | %+9.2f | %8.2f | %7.3f | %8.2f | %s\n",
+                r.model, r.container, r.trust, r.risk_lambda, r.kelly_fraction,
+                r.total_return_pct, r.realised_mdd, r.sharpe_ann, r.target_mdd,
+                r.reached ? "" : @sprintf("CANNOT REACH BUDGET (deepest %.2f%%)", r.deepest_mdd))
     end
-    println(" Every row is at the SAME realised drawdown. A dispersion scheme earns its")
-    println(" place here only by beating A_pool and raw at matched risk — anything it")
-    println(" gains merely by staking bigger has already been given to them by λ.")
+    println(" Every arm is given the SAME drawdown budget and the whole risk surface to")
+    println(" spend it with. A dispersion scheme earns its place here only by beating")
+    println(" A_pool inside that budget — return it gains merely by staking bigger has")
+    println(" already been offered to A_pool by λ and by the Kelly fraction.")
+end
+
+println("\n" * "="^140)
+println(" T6 · THE RISK KNOB'S CEILING — max drawdown against λ, at each Kelly fraction")
+println("="^140)
+println(" H3 assumes drawdown headroom can be spent with the risk budget. It can, until")
+println(" `SlateDrawdown` stops binding — after which λ moves nothing and only the Kelly")
+println(" fraction is still a risk knob. This table is where that boundary is.")
+let ref = filter(r -> r.window == "full" && r.trust == "canonical_P1" &&
+                      (r.container == "raw" || endswith(r.container, "A_pool")),
+                 r05_portfolio)
+    @printf("\n %-28s | %-14s | %5s | %s\n", "Model", "container", "Kelly",
+            join([@sprintf("%8.1f", λ) for λ in R05_RISK_LAMBDAS], " "))
+    println("-"^140)
+    for name in R05_MODELS, c in unique(ref.container), k in R05_KELLY_FRACTIONS
+        cells = String[]
+        for λ in R05_RISK_LAMBDAS
+            g = filter(r -> r.model == name && r.container == c &&
+                            r.kelly_fraction == k && r.risk_lambda == λ, ref)
+            push!(cells, nrow(g) == 0 ? "       ·" :
+                  @sprintf("%8.2f", first(g).max_drawdown_pct))
+        end
+        @printf(" %-28s | %-14s | %5.2f | %s\n", name, c, k, join(cells, " "))
+    end
 end
 
 println("\n" * "="^140)
@@ -625,19 +668,22 @@ end
 
 if !isempty(r05_direction_frames)
     println("\n" * "="^140)
-    println(" T5 · OVER 2.5 ACROSS SCHEMES (canonical trust, Panel P)")
+    println(" T5 · OVER 2.5 ACROSS SCHEMES (Panel P)")
     println("="^140)
     all_dir = vcat(r05_direction_frames...; cols = :union)
-    o25 = filter(r -> r.selection == :over_25 && r.trust == "canonical_P1", all_dir)
-    @printf(" %-28s | %-14s | %5s | %8s | %9s | %9s | %9s | %10s\n",
-            "Model", "container", "bets", "win rate", "mean odds", "kelly ROI",
-            "flat ROI", "cap share")
+    o25 = filter(r -> r.selection == :over_25, all_dir)
+    @printf(" %-28s | %-14s | %-13s | %5s | %8s | %9s | %9s | %9s | %10s\n",
+            "Model", "container", "trust", "bets", "win rate", "mean odds",
+            "kelly ROI", "flat ROI", "cap share")
     println("-"^140)
-    for r in eachrow(sort(o25, [:model, :container]))
-        @printf(" %-28s | %-14s | %5d | %8.3f | %9.3f | %+9.2f | %+9.2f | %10.2f\n",
-                r.model, r.container, r.n_bets, r.win_rate, r.mean_odds,
+    for r in eachrow(sort(o25, [:model, :trust, :container]))
+        @printf(" %-28s | %-14s | %-13s | %5d | %8.3f | %9.3f | %+9.2f | %+9.2f | %10.2f\n",
+                r.model, r.container, r.trust, r.n_bets, r.win_rate, r.mean_odds,
                 r.kelly_roi, r.flat_roi, r.capital_share)
     end
+    println(" `CanonicalScottishLowerTrust` gates Over 2.5 to zero, so a canonical row is")
+    println(" absent by design rather than by a lack of edge; the flat rows are where")
+    println(" README §7's Over 2.5 rescue is visible.")
 end
 
 println("\n" * "="^140)
