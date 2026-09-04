@@ -988,11 +988,19 @@ The canonical production risk settings — `SlateDrawdown(23.0)`, `FixedCap(0.25
 `FixedCap(0.25)`, not the 0.20 of experiment 06's flat research baseline: the
 `CanonicalScottishLowerTrust` champion (+155.93%) was measured at 0.25, and a
 comparison that moved the cap and the trust at once would not attribute either.
+
+`risk_lambda` exists for ONE purpose — the risk-matched arm. A calibration that
+contracts posterior variance stakes smaller and therefore compounds less, so a
+return comparison at a fixed risk budget compares two different amounts of risk
+taken. Loosening lambda until the drawdowns match is how that is separated. It is a
+MECHANISM DEMONSTRATION, not a performance claim: lambda is chosen against the same
+slates the return is then read off, which is precisely the selection bias every
+other number in this stream is arranged to avoid.
 """
-l01_policy_spec(trust) = PolicySpec(
+l01_policy_spec(trust; risk_lambda::Real = 23.0, cap::Real = 0.25) = PolicySpec(
     trust = trust,
-    risk = SlateDrawdown(23.0),
-    cap = FixedCap(0.25),
+    risk = SlateDrawdown(Float64(risk_lambda)),
+    cap = FixedCap(Float64(cap)),
     grouping = DailySlate(),
 )
 

@@ -391,6 +391,68 @@ println("="^150)
 
 # %%
 # ===================================================================
+# 7b. Arm F — the risk-matched comparison
+# ===================================================================
+#
+# WHY THIS ARM EXISTS. Log-linear pooling contracts posterior log-variance by w².
+# Kelly stake size is monotone in that variance, so a calibrated container stakes
+# LESS and therefore compounds less, at the same `SlateDrawdown` budget. Total
+# return then measures how much risk each arm took as much as how well it picked,
+# and the work package's Gate-2 return threshold — a SCALE criterion — is one a
+# variance-contracting transform fails mechanically while improving every SHAPE
+# criterion beside it.
+#
+# This arm separates the two. It loosens λ on the calibrated container until its
+# maximum drawdown matches the raw arm's, and reads the return there.
+#
+# IT IS NOT A PERFORMANCE CLAIM. λ is chosen against the same slates the return is
+# then read off. That is in-sample selection, and it is the one place in this stream
+# where that is done deliberately, to demonstrate a mechanism rather than to
+# estimate a return. Nothing in §9's Gate-2 verdict reads this table.
+
+const R02_RISK_LAMBDAS = [23.0, 18.0, 15.0, 12.0, 10.0, 8.0, 6.0, 5.0, 4.0, 3.0]
+
+println("\n--- arm F · risk-matched (mechanism demonstration, NOT a performance claim) ---")
+r02_risk_rows = NamedTuple[]
+for name in R02_MODELS
+    labels = [a.label for a in r02_containers[name]]
+    for trust_name in ("flat_1.0", "canonical_P1")
+        trust = trust_name == "flat_1.0" ? FlatTrust(1.0) : CanonicalScottishLowerTrust()
+        base = filter(r -> r.model == name && r.container == "raw" &&
+                           r.trust == trust_name && r.window == "full", r02_summary)
+        nrow(base) == 0 && continue
+        target = first(base).max_drawdown_pct
+        for lab in labels
+            lab == "raw" && continue
+            books = r02_books[(name, lab)]
+            best = nothing
+            for λ in R02_RISK_LAMBDAS
+                row, _ = r02_run("F_risk_matched", name, lab, trust_name, books,
+                                 l01_policy_spec(trust; risk_lambda = λ))
+                cand = merge(row, (; risk_lambda = λ, target_mdd = target))
+                # keep the loosest budget whose drawdown is still no deeper than raw's
+                if cand.max_drawdown_pct >= target
+                    best = cand
+                end
+            end
+            if best === nothing
+                @printf("  %-30s %-4s %-13s no λ in the grid stays inside raw's %.2f%% drawdown\n",
+                        name, lab, trust_name, target)
+                continue
+            end
+            push!(r02_risk_rows, best)
+            @printf("  %-30s %-4s %-13s λ %5.1f  return %+8.2f%%  Sharpe %5.3f  MDD %7.2f%% (raw %7.2f%%)\n",
+                    name, lab, trust_name, best.risk_lambda, best.total_return_pct,
+                    best.sharpe_ann, best.max_drawdown_pct, target)
+        end
+    end
+end
+r02_risk = isempty(r02_risk_rows) ? DataFrame() : DataFrame(r02_risk_rows)
+nrow(r02_risk) > 0 && CSV.write(joinpath(R02_OUT, "r02_risk_matched.csv"), r02_risk)
+
+
+# %%
+# ===================================================================
 # 8. The re-optimised trust vector
 #    Fitted on slates <= split, scored on slates > split
 # ===================================================================
@@ -449,13 +511,15 @@ CSV.write(joinpath(R02_OUT, "r02_portfolio_summary.csv"), r02_summary)
 println("\n" * "="^150)
 println(" ARM COMPARISON — matched book (11 directions), FixedCap(0.25), SlateDrawdown(23.0)")
 println("="^150)
-@printf(" %-30s | %-11s | %-13s | %5s | %9s | %8s | %8s | %8s\n",
-        "Model", "container", "trust", "bets", "return %", "flat ROI", "Sharpe", "MDD %")
-println("-"^150)
+@printf(" %-30s | %-11s | %-13s | %5s | %9s | %8s | %8s | %8s | %8s\n",
+        "Model", "container", "trust", "bets", "return %", "flat ROI", "Sharpe",
+        "MDD %", "exposure")
+println("-"^160)
 for row in eachrow(filter(r -> r.window == "full" && r.arm != "R1_13direction", r02_summary))
-    @printf(" %-30s | %-11s | %-13s | %5d | %+9.2f | %+8.2f | %8.3f | %8.2f\n",
+    @printf(" %-30s | %-11s | %-13s | %5d | %+9.2f | %+8.2f | %8.3f | %8.2f | %7.2f%%\n",
             row.model, row.container, row.trust, row.n_bets, row.total_return_pct,
-            row.flat_roi_pct, row.sharpe_ann, row.max_drawdown_pct)
+            row.flat_roi_pct, row.sharpe_ann, row.max_drawdown_pct,
+            100 * row.mean_exposure)
 end
 println("="^150)
 
@@ -491,7 +555,7 @@ println("\n" * "="^110)
 println(" ARTEFACTS")
 println("="^110)
 for f in ["r02_portfolio_summary.csv", "r02_direction_ledger.csv",
-          "r02_refit_trust_vectors.csv"]
+          "r02_refit_trust_vectors.csv", "r02_risk_matched.csv"]
     isfile(joinpath(R02_OUT, f)) && @printf("  %s\n", joinpath(R02_OUT, f))
 end
 println("""
@@ -499,6 +563,9 @@ println("""
     Q1  calibration effect  = (raw, flat) vs (std|inv, flat), same book and cap.
     Q2  Over 2.5            = the over_25 rows of §7, raw against calibrated.
     Q3  trust necessity     = (std, flat) against (raw, canonical_P1).
+    Q4  scale vs shape      = arm F. If the calibrated arm reaches raw's return
+                              once its drawdown is loosened to match, the return
+                              shortfall was exposure, not skill. In-sample λ.
   A calibrated arm that beats raw+flat but not raw+canonical has improved the
   model, not replaced the trust vector. Record the numbers in README.md §6 with
   this run's context before drawing a conclusion from any of them.
