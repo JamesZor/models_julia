@@ -82,6 +82,8 @@ already failed.
 | [`l02_point_in_time_book.jl`](l02_point_in_time_book.jl) | Loader. The T−25 point-in-time book, its staleness and completeness gates, book drift and closing-line value. |
 | [`r03_t25_book_and_calibration.jl`](r03_t25_book_and_calibration.jl) | Runner 3. The T−25 book, rate re-inversion, and the calibration sweep at tradeable prices; Gate 1 restated. |
 | [`r04_t25_portfolio.jl`](r04_t25_portfolio.jl) | Runner 4. The portfolio at T−25, the close-vs-T−25 attribution, and CLV. |
+| [`l03_variance_schemes.jl`](l03_variance_schemes.jl) | Loader. The pool decomposed into a pooled location and a 2×2 residual map, seven dispersion schemes over it, the market-free Jensen tail diagnostics, and the gate that keeps `A_pool` identical to `l01`'s pool. |
+| [`r05_variance_experiments.jl`](r05_variance_experiments.jl) | Runner 5. Dispersion held against location under two weight laws: Gate 1 with the tail audit, Gate 2 over the whole (λ, Kelly) risk surface, and the frontier read at a common drawdown. |
 | `results/` | Replaceable CSV artefacts. Re-running overwrites them. |
 
 Run:
@@ -92,6 +94,10 @@ julia> include("current_development/calibration_generative_eda/r01_sweep_rate_ca
 
 R01_SMOKE=1 julia --project -t 16 ...     # 3-spec dry run, one model, not a result
 ```
+
+Each runner has its own smoke switch on the same pattern — `R03_SMOKE`, `R04_SMOKE`,
+`R05_SMOKE`. r04 needs `results/r03_best_per_form_t25.csv`; r05 needs it too, and
+reads the location laws from it rather than restating them.
 
 ---
 
@@ -162,6 +168,7 @@ against 1X2's once. `L01_INVERSION_LINES` passes one symbol per line.
 | **Gate 1 at T−25** | r03 §7.3 | The same proper-score gate against the T−25 book. Passes on every form and both models. |
 | **Gate 2 at T−25** | r04 §7.4 | The portfolio at tradeable prices, risk-matched against the raw T−25 arm. |
 | **Gate 2** | r02 §6.7 | Bankroll > +130%, Sharpe ≥ 1.416, max drawdown no worse than −20.5%. Measured; and §6.7 argues the return threshold is mis-specified for a variance-contracting transform. |
+| **G-0** | r05 §8.1 | Dispersion identity control. `A_pool` must reproduce `l01.calibrate_latents` on every draw of every fixture to 1e-9 relative, or the baseline of §8 is not the pool r01–r04 measured and no difference in that section means what its heading says. |
 
 A Gate-1 PASS is a **calibration** result and entitles nobody to a bankroll claim.
 The Ireland transfer improved its own league's calibration diagnostics and still
@@ -802,6 +809,16 @@ in calibration's favour on return at any arm.
    to shrink with its location. That is the next thing to build, and it is a
    modelling change rather than another sweep.
 
+> **Item 7 is wrong, and §8 is the retraction.** The variance-preserving pool was
+> built (`l03_variance_schemes.jl`) and it recovers nothing, because there was
+> nothing to recover: restoring up to **11.8×** the posterior log-variance moves
+> the staked exposure by **0.4%** (§8.5). The stake shrinkage §7.4 measured is
+> caused by the LOCATION shift contracting the model's edges, not by the `w²`
+> contraction of the width. Item 5 does not survive either — at a common drawdown
+> with both risk knobs available, the `inv` container returns **+192.23%** against
+> the raw model's +151.52%, so calibration at T−25 buys return as well as
+> risk-adjusted quality once the risk budget is allowed to move (§8.7).
+
 ### 7.8 What still stands between this and a Saturday
 
 * **Fill model.** Bets are struck at the archived traded price in whatever size
@@ -819,7 +836,554 @@ in calibration's favour on return at any arm.
 
 ---
 
-## 8. Boundaries
+## 8. Phase 4 — variance preservation and dispersion transforms
+
+Loader [`l03_variance_schemes.jl`](l03_variance_schemes.jl), runner
+[`r05_variance_experiments.jl`](r05_variance_experiments.jl). Run on `mcmc-beast`,
+16 threads, 2026-09-04, commit `72a39cca`, 449.9 s wall.
+
+§7.7 closed Phase 3 with an open item: the log-linear pool contracts posterior
+log-variance by `w²` as a side effect of the algebra, and the reading offered there
+was that Fractional Kelly therefore stakes smaller and the calibrated arm compounds
+less. Four hypotheses were on the table.
+
+| | claim |
+|---|---|
+| **H1** | the contraction is an ARTEFACT. Move the location, keep the width, and the compounding returns at no cost in proper score |
+| **H2** | the contraction is LOAD-BEARING. Restoring width re-inflates the Jensen term `E[e^(−Λ)] ≥ e^(−E[Λ])` (`eda/README.md` Discovery 2) and manufactures longshot mass the allocator then bets |
+| **H3** | the question is malformed. `SlateDrawdown` absorbs uniform stake changes (Discovery 4), so the unused drawdown headroom is spendable with a risk knob and no posterior needs touching |
+| **H4** | some asymmetric scheme beats all three |
+
+**The result, in one line: H1's premise is false.** Restoring the posterior width
+moves the Kelly stake by less than half a percent, so there was never a
+compounding loss to recover. H2's mechanism is real, behaves exactly as predicted,
+and is one order of magnitude too small to matter. H3 is supported and turns out to
+be worth **+41 percentage points** of compound return. H4 survives as a small,
+consistent, second-order effect — and it is not the effect anyone proposed.
+
+### 8.1 Separating location from dispersion
+
+`l01`'s pool applies `log λ̃⁽ˢ⁾ = w·log λ⁽ˢ⁾ + (1 − w)·log λ_mkt` to every draw,
+which is exactly
+
+```
+log λ̃⁽ˢ⁾ = c + w·u⁽ˢ⁾ ,   c = w·m + (1 − w)·log λ_mkt ,   u⁽ˢ⁾ = log λ⁽ˢ⁾ − m
+```
+
+with `m` the raw posterior log-location. `l03` freezes `c` — the location law stays
+`l01`'s, unchanged — and replaces `w·u` with `κ + M·u` for a 2×2 residual map `M`
+and a scalar anchor `κ`. Every row below therefore differs from the baseline **in
+dispersion and nothing else**, which is the one thing r01–r04 could not say.
+
+`M` is 2×2 rather than two scalars because the two things a football posterior is
+uncertain about are not `λ_home` and `λ_away` but **supremacy** `u_h − u_a` (what
+1X2 prices) and **totals** `u_h + u_a` (what O/U and BTTS price). A retention pair
+`(ρ_s, ρ_t)` maps back to a symmetric `M`, and reduces to `ρ·I` when `ρ_s = ρ_t`.
+
+| scheme | `ρ_s` | `ρ_t` | anchor | is |
+|---|---|---|---|---|
+| `A_pool` | `w` | `w` | — | the production pool, `Var = w²σ²` |
+| `B_full` | 1 | 1 | — | full mean-shift variance preservation (work package Scheme B) |
+| `B_anch` | 1 | 1 | pool mean | the same, with the predictive rate anchored to `A_pool`'s |
+| `C_sqrt` | `√w` | `√w` | — | `Var = wσ²` (work package Scheme C) |
+| `D_sup` | 1 | `w̄` | — | supremacy preserved, totals contracted |
+| `D_sup_anch` | 1 | `w̄` | pool mean | the same, anchored |
+| `D_tot` | `w̄` | 1 | — | totals preserved, supremacy contracted — **falsification control** |
+
+Two design points carry most of the interpretive weight.
+
+**`C_sqrt` is not a midpoint, it is the coherent Bayesian answer.** If the log-rate
+posterior is `N(m, σ²)` and the market is an independent noisy observation of the
+same log-rate with precision `τ`, the conjugate posterior has mean
+`(σ⁻²m + τ·log λ_mkt)/(σ⁻² + τ)` and variance `w·σ²`, where `w = σ⁻²/(σ⁻² + τ)` is
+exactly the pool weight. So `C_sqrt` **is** "model the market as a likelihood with
+explicit `τ_mkt`", and the pool's `w²σ²` is what you get when the same information
+is counted twice — once in the location, once in the width.
+
+**`κ` separates "wider" from "hotter".** `E[Λ] = E[e^(log Λ)]` grows with
+`Var(log Λ)`, so a variance-preserving scheme does not only widen the posterior, it
+also predicts more goals than the calibrated location said. `:pool_mean` anchoring
+chooses `κ` on the draws so the scheme's mean rate equals `A_pool`'s exactly. An
+anchored scheme and its unanchored twin then differ **only** in first predictive
+moment, which turns out to be where almost all of the action is.
+
+**G-0.** `A_pool` must reproduce `l01.calibrate_latents`, or the baseline is not the
+pool r01–r04 measured and no difference in this section means what its heading says.
+Maximum relative departure over every draw of every fixture:
+
+| model | form | departure | bound |
+|---|---|---:|---:|
+| `m12` | std | 4.34e-16 | 1e-9 |
+| `m12` | inv | 2.22e-16 | 1e-9 |
+| `m05` | std | 4.39e-16 | 1e-9 |
+| `m05` | inv | 4.11e-16 | 1e-9 |
+
+Two location laws are run, not one, because the effect size should scale with how
+much variance the pool destroys. r03's `std_w0.40_s0.15` (median `w` 0.84) retains
+about 70%; its `inv_w0.25_s0.35` (median `w` 0.29) retains about 9%. A dispersion
+effect that is real must be larger under `inv`.
+
+### 8.2 The dispersion each scheme delivers — `results/r05_variance_dispersion.csv`
+
+Retained log-variance against the RAW posterior, in three bases, median over the 580
+fixtures with an accepted market inversion (`m12`; `m05` is within 0.04 everywhere):
+
+| form | scheme | median `w` | ret side | ret sup | ret tot | rate ratio |
+|---|---|---:|---:|---:|---:|---:|
+| std | `A_pool` | 0.840 | 0.706 | 0.687 | 0.674 | 1.0000 |
+| std | `B_full` | 0.840 | 1.000 | 1.000 | 1.000 | 1.0013 |
+| std | `B_anch` | 0.840 | 1.000 | 1.000 | 1.000 | 1.0000 |
+| std | `C_sqrt` | 0.840 | 0.840 | 0.816 | 0.815 | 1.0006 |
+| std | `D_sup` | 0.840 | 0.819 | **1.000** | 0.665 | 1.0006 |
+| std | `D_tot` | 0.840 | 0.849 | 0.665 | **1.000** | 1.0007 |
+| inv | `A_pool` | 0.291 | **0.085** | 0.094 | 0.094 | 1.0000 |
+| inv | `B_full` | 0.291 | 1.000 | 1.000 | 1.000 | 1.0038 |
+| inv | `B_anch` | 0.291 | 1.000 | 1.000 | 1.000 | 1.0000 |
+| inv | `C_sqrt` | 0.291 | 0.291 | 0.303 | 0.303 | 1.0009 |
+| inv | `D_sup` | 0.291 | 0.511 | **1.000** | 0.092 | 1.0017 |
+| inv | `D_tot` | 0.291 | 0.596 | 0.092 | **1.000** | 1.0021 |
+
+The transforms do what they are supposed to. Under `inv` the pool destroys **91.5%**
+of the posterior log-variance and `B_full` restores all of it — an **11.8×** change
+in posterior width, which is the largest lever this study has. `D_sup` and `D_tot`
+are exact mirrors: each preserves precisely what the other discards.
+
+The `rate ratio` column is the predictive rate against `A_pool`'s. Unanchored
+preservation makes the model **0.13% to 0.50% hotter**; the anchored twins sit at
+1.0000 by construction. Keep that number in view — it is small, and it turns out to
+be the only thing in this table that any downstream number responds to.
+
+### 8.3 Gate 1 — proper scores are almost perfectly indifferent to dispersion
+
+Headline scope (1X2 + O/U 2.5 + BTTS), T−25 book, 2,148 scored rows, market LogLoss
+0.63306. `A_pool` reproduces r03's row for the same spec, as it must.
+
+| model | container | LogLoss | ECE | Brier |
+|---|---|---:|---:|---:|
+| `m12` | `raw` | 0.63488 | 0.0151 | 0.22196 |
+| `m12` | `std_A_pool` | 0.63188 | 0.0093 | 0.22066 |
+| `m12` | `std_B_full` | 0.63188 | 0.0092 | 0.22066 |
+| `m12` | `std_B_anch` | 0.63187 | 0.0098 | 0.22065 |
+| `m12` | `std_C_sqrt` | 0.63188 | 0.0092 | 0.22066 |
+| `m12` | `std_D_sup` | 0.63188 | 0.0092 | 0.22066 |
+| `m12` | `std_D_tot` | 0.63188 | 0.0093 | 0.22066 |
+| `m12` | `inv_A_pool` | **0.63064** | 0.0133 | 0.22001 |
+| `m12` | `inv_B_full` | 0.63068 | 0.0144 | 0.22002 |
+| `m12` | `inv_B_anch` | 0.63070 | 0.0131 | 0.22004 |
+| `m12` | `inv_C_sqrt` | 0.63065 | 0.0133 | 0.22001 |
+| `m12` | `inv_D_sup` | 0.63068 | 0.0136 | 0.22002 |
+| `m12` | `inv_D_sup_anch` | 0.63069 | **0.0126** | 0.22003 |
+| `m12` | `inv_D_tot` | **0.63064** | 0.0134 | 0.22001 |
+
+Under `std` every scheme agrees to the fifth decimal place. Under `inv` — where the
+posterior width changes by a factor of twelve — the whole spread of LogLoss is
+**6e-5**, against a raw-to-calibrated gap of 4.2e-3, i.e. **seventy times larger**.
+H1's "no cost in proper score" is satisfied, and so is its mirror image: no benefit
+either.
+
+One structure does survive the noise floor, and it is not the one that was proposed.
+The LogLoss ordering under `inv` is **identical on both models**:
+
+* `A_pool` and `D_tot` tie exactly (`m12` 0.63064, `m05` 0.63027);
+* `B_full` and `D_sup` tie exactly (`m12` 0.63068, `m05` 0.63033/0.63034).
+
+`D_tot` preserves **totals** dispersion and costs nothing. `D_sup` preserves
+**supremacy** dispersion and costs the whole of the (tiny) penalty, the same penalty
+`B_full` pays for preserving both. The per-family scores say the same thing from the
+other end: on 1X2 (n = 1,560), `inv_A_pool` and `inv_D_tot` both score 0.61140 while
+`inv_D_sup` scores 0.61145.
+
+**So whatever small proper-score cost dispersion carries is a supremacy effect, not a
+totals effect — the opposite of what the Jensen argument predicts.** The falsification
+control earned its place: reporting `D_sup` alone would have produced a confident
+story pointing the wrong way.
+
+### 8.4 The Jensen term, measured — `results/r05_variance_jensen.csv`
+
+Computed straight off the draws, market-free, over all 710 priced fixtures, because
+Discovery 2 is a claim about the predictive distribution and not about any price.
+`mixture − plugin` is `E[P(N ≤ n | Λ)] − P(N ≤ n | E[Λ])`, which **is** the Jensen
+term written out. `m12`:
+
+| container | ret tot | sd(log Λ_tot) | Jensen U0.5 | Jensen U1.5 | Jensen O3.5 |
+|---|---:|---:|---:|---:|---:|
+| `raw` | 1.000 | 0.1876 | +0.00118 | +0.00199 | +0.00040 |
+| `inv_A_pool` | 0.094 | 0.0858 | **+0.00034** | +0.00056 | +0.00012 |
+| `inv_C_sqrt` | 0.303 | 0.1222 | +0.00054 | +0.00091 | +0.00019 |
+| `inv_D_sup` | 0.092 | 0.0895 | +0.00035 | +0.00059 | +0.00012 |
+| `inv_D_tot` | 1.000 | 0.1871 | +0.00117 | +0.00198 | +0.00039 |
+| `inv_B_full` | 1.000 | 0.1886 | **+0.00119** | +0.00200 | +0.00039 |
+
+**H2's mechanism is confirmed, exactly and cleanly.** The Jensen term is a monotone
+function of retained TOTALS dispersion and of nothing else: `D_sup`, which preserves
+supremacy, sits on top of `A_pool`; `D_tot`, which preserves totals, sits on top of
+`B_full`. The pool suppresses it by a factor of 3.5 and full preservation restores it
+to the raw model's value to three significant figures. The scheme pair was designed
+to isolate this and it isolated it.
+
+**And it does not matter.** The whole term is **0.12 percentage points** of
+probability at its largest. Set against it:
+
+| quantity | `m12` |
+|---|---:|
+| realised goalless rate, 710 fixtures | 0.0620 |
+| predicted `P(under 0.5)`, across all 15 containers | 0.0682 – 0.0693 |
+| **bias (predicted − realised)** | **+0.0063 to +0.0074** |
+| the entire Jensen term | ≤ 0.0012 |
+
+The model over-predicts goalless draws by roughly 0.65pp under every scheme, and at
+most a fifth of that is dispersion. **The `P(under 0.5)` bias is a location error,
+not a dispersion error**, and no dispersion transform can fix it or meaningfully
+worsen it.
+
+Two scope notes are owed. `eda/README.md` Discovery 2 quotes a realised goalless rate
+of **3.36%** against a predicted 6.97%; this study measures **6.20%** over its 710
+gate-restricted fixtures and **6.82%** over the 44 of them the T−25 O/U 0.5 ladder
+actually quotes. Those are different fixture sets answering different questions and
+must not be read as a contradiction. On the quoted subset `m12`'s calibrated containers sit
+*under* the realised rate (predicted 0.0662–0.0678, bias −0.0020 to −0.0004) and only
+the raw model sits above it (0.0710, +0.0028), so the "manufactured longshot mass" of
+Discovery 2 is not visible at T−25 on this book —
+which is a statement about coverage and de-vigging (§7.1), not a refutation of it.
+
+The Jensen term also cuts both ways, and the O/U 3.5 column shows it: restoring
+totals dispersion moves `bias(over 3.5)` from −0.0069 toward −0.0047, i.e. it
+*improves* the over-tail while worsening the under-tail. On the family scores the two
+cancel — `ou_35` LogLoss is 0.66028 for `inv_A_pool` and 0.65991 for `inv_B_full`,
+marginally in preservation's favour.
+
+### 8.5 The premise fails — dispersion does not move the Kelly stake
+
+This is the finding that settles H1, and it needs no drawdown argument. Mean
+portfolio exposure, `m12`, canonical trust, production risk budget:
+
+| container | ret side | mean exposure | vs `A_pool` |
+|---|---:|---:|---:|
+| `raw` | 1.000 | 0.06878 | — |
+| `std_A_pool` | 0.706 | 0.04320 | — |
+| `std_B_full` | 1.000 | 0.04307 | **−0.3%** |
+| `std_C_sqrt` | 0.840 | 0.04315 | −0.1% |
+| `std_D_sup` | 0.819 | 0.04312 | −0.2% |
+| `inv_A_pool` | **0.085** | 0.03067 | — |
+| `inv_B_full` | **1.000** | 0.03078 | **+0.4%** |
+| `inv_C_sqrt` | 0.291 | 0.03068 | +0.0% |
+| `inv_D_sup` | 0.511 | 0.03101 | +1.1% |
+
+**Restoring 11.8× the posterior log-variance changes the staked exposure by 0.4%.**
+Meanwhile the raw → calibrated step cuts exposure by **37%** (0.0688 → 0.0432) and
+then by a further **29%** (→ 0.0307) — under a dispersion transform that is, by
+construction, doing nothing to the width in the second step and everything to it in
+the first.
+
+The stake shrinkage §7.4 recorded is therefore caused by the **location shift**, not
+by the variance contraction. That is not a subtle attribution: the model's edges
+`p_model − p_market` shrink toward zero because the pool moves the location toward
+the market, and Kelly stakes on edges. Posterior width enters the predictive
+probability only through a mixture over `Λ` whose spread (`cv(Λ_tot)` ≈ 0.03–0.07)
+is small beside the Poisson sampling variance the score grid already carries, so
+changing it changes the probabilities in the fourth decimal place and the stakes with
+them.
+
+**H1 is refuted at its premise.** There was no Kelly sizing to recover, because none
+was lost to dispersion.
+
+### 8.6 Gate 2 — the portfolio at the production risk budget
+
+`SlateDrawdown(23.0)`, `FixedCap(0.25)`, `DailySlate()`, `FractionalKelly(0.30)`, 11
+tradeable directions, full T−25 book. `raw` and `*_A_pool` reproduce §7.4 exactly.
+
+| model | container | trust | bets | return % | MDD % | Sharpe | Calmar |
+|---|---|---|---:|---:|---:|---:|---:|
+| `m12` | `raw` | canonical | 1127 | **+151.52** | −16.15 | 1.592 | 9.383 |
+| `m12` | `std_A_pool` | canonical | 1103 | +72.85 | −11.36 | 1.606 | 6.414 |
+| `m12` | `std_B_full` | canonical | 1100 | +73.38 | −11.22 | 1.609 | 6.537 |
+| `m12` | `std_B_anch` | canonical | 1105 | **+73.65** | −11.25 | 1.613 | **6.548** |
+| `m12` | `std_C_sqrt` | canonical | 1102 | +73.14 | −11.31 | 1.609 | 6.469 |
+| `m12` | `std_D_sup` | canonical | 1099 | +73.20 | −11.26 | 1.606 | 6.502 |
+| `m12` | `std_D_tot` | canonical | 1102 | +73.26 | −11.26 | 1.613 | 6.504 |
+| `m12` | `inv_A_pool` | canonical | 975 | +65.64 | **−7.76** | 1.772 | 8.458 |
+| `m12` | `inv_B_full` | canonical | 967 | +65.32 | −7.85 | 1.750 | 8.319 |
+| `m12` | `inv_B_anch` | canonical | 984 | **+66.82** | −7.95 | **1.775** | 8.401 |
+| `m12` | `inv_C_sqrt` | canonical | 973 | +65.52 | −7.75 | 1.765 | 8.455 |
+| `m12` | `inv_D_sup` | canonical | 970 | +65.23 | −7.90 | 1.747 | 8.256 |
+| `m12` | `inv_D_sup_anch` | canonical | 977 | +66.08 | −7.85 | 1.762 | 8.412 |
+| `m12` | `inv_D_tot` | canonical | 974 | +65.52 | −7.78 | 1.771 | 8.421 |
+| `m05` | `raw` | canonical | 1113 | **+130.15** | −16.07 | 1.544 | 8.101 |
+| `m05` | `std_A_pool` | canonical | 1078 | +63.01 | −10.84 | 1.484 | 5.815 |
+| `m05` | `std_B_anch` | canonical | 1080 | **+64.07** | −10.73 | **1.494** | **5.972** |
+| `m05` | `inv_A_pool` | canonical | 944 | +63.91 | **−6.86** | 1.943 | 9.315 |
+| `m05` | `inv_B_full` | canonical | 941 | +63.76 | −7.22 | 1.905 | 8.828 |
+| `m05` | `inv_B_anch` | canonical | 956 | **+65.40** | −6.92 | **1.944** | **9.450** |
+
+The whole spread across seven dispersion schemes is **1.6 points of return** on a
++65% base. The raw-to-calibrated gap on the same axis is **86 points**. Dispersion is
+a rounding error on the thing it was proposed to fix.
+
+There is nonetheless a consistent ordering inside the noise, and it holds on **both**
+models and **both** location laws:
+
+```
+B_anch  >  D_sup_anch  ≳  A_pool ≈ C_sqrt ≈ D_tot  >  B_full  ≳  D_sup
+```
+
+The **anchored** preserving schemes are at the top and the **unanchored** ones at the
+bottom, with the pool in the middle. `B_full` and `B_anch` have identical dispersion
+in every basis and differ only in `κ` — 0.13–0.50% of predictive rate — and that
+single difference is worth **+1.5 points** of return on `m12 inv` (+65.32 → +66.82)
+and **+1.6** on `m05 inv` (+63.76 → +65.40), plus 0.04 of Sharpe.
+
+**So the operative variable is not the width at all. It is the first predictive
+moment that changing the width drags along with it.** That is a Jensen effect, as H2
+said — but on `E[Λ]`, not on the zero-goal mass, and it is a *bias* rather than a
+*tail* story.
+
+### 8.7 The arbiter — return inside a common drawdown
+
+A return quoted at a fixed λ compares two different amounts of risk taken, and H1 and
+H3 cannot be separated by any such row. Panel F therefore sweeps the **whole (λ,
+Kelly) surface** — λ ∈ {23, 18, 15, 12, 10, 8} × Kelly ∈ {0.30, 0.40, 0.50, 0.60},
+24 settings per container — and reads off the **best return whose realised drawdown
+is no deeper than the raw arm's at the production budget**. Same fixtures, same
+book, same budget, every arm handed both knobs.
+
+`m12`, canonical trust, budget −16.15%:
+
+| container | λ | Kelly | return % | MDD % | Sharpe |
+|---|---:|---:|---:|---:|---:|
+| `inv_B_anch` | 8.0 | 0.60 | **+195.90** | −15.69 | 1.729 |
+| `inv_D_sup_anch` | 8.0 | 0.60 | +192.73 | −15.38 | 1.713 |
+| `inv_D_tot` | 8.0 | 0.60 | +192.42 | −15.35 | 1.729 |
+| `inv_A_pool` | 8.0 | 0.60 | +192.23 | −15.32 | 1.727 |
+| `inv_C_sqrt` | 8.0 | 0.60 | +191.68 | −15.30 | 1.720 |
+| `inv_B_full` | 8.0 | 0.60 | +190.55 | −15.15 | 1.703 |
+| `inv_D_sup` | 8.0 | 0.60 | +189.63 | −15.13 | 1.698 |
+| **`raw`** | 23.0 | 0.30 | **+151.52** | −16.15 | 1.592 |
+| `std_B_anch` | 18.0 | 0.40 | +98.29 | −14.25 | 1.577 |
+| `std_A_pool` | 18.0 | 0.40 | +97.20 | −14.37 | 1.572 |
+
+`m05`, canonical trust, budget −16.07%: `inv_B_anch` **+191.51%** at −14.87, against
+`inv_A_pool` +186.70% and `raw` +130.15%. Same shape.
+
+Three things follow, in descending order of importance.
+
+**1. §7.4's headline reverses at matched risk, and by a wide margin.** The
+inverse-form calibration returns **+192%** at a drawdown *shallower* than the raw
+model's +151.52% at −16.15%. §7.4 reported the same container at +65.64% and
+concluded "at a fixed risk budget, calibration costs more return at T−25 than it did
+at the close". That conclusion was an artefact of the fixed budget: the calibrated
+arm was leaving **8.4 percentage points of drawdown headroom unspent**, and r04's
+λ-only ladder could not reach it because λ alone saturates (§8.8). Spending it with
+both knobs is worth **+41 points** of compound return over raw and **+127 points**
+over the same container at the production settings. **H3 is supported, and it is by
+some distance the largest effect in this study.**
+
+**2. r04's ranking of the location laws also reverses.** §7.4's risk-matched panel
+put `std` ahead of `inv` on `m12` (+134.17 vs +64.09). Inside a common drawdown with
+both knobs available, `inv` reaches +192.23 and `std` only +97.20 — because `inv`
+strikes fewer, higher-conviction bets and so has far more headroom per unit of
+drawdown to lever into. The earlier ranking was a statement about how far a
+one-dimensional ladder happened to reach, not about the containers.
+
+**3. Dispersion is worth ~2% of what the risk knob is worth.** The best scheme beats
+the pool by **+3.67 points** (195.90 vs 192.23) on `m12` and **+4.81** on `m05`.
+The risk knob beats the production setting by **+126.59 points** on the same
+container. Both are real; they are not the same order of magnitude, and a project
+with finite attention should spend it on the second.
+
+Every `inv` row above is marked `reached = false` in
+`results/r05_variance_frontier.csv`: those arms cannot spend the budget even at the
+loosest setting on the grid (deepest reachable −15.15% to −15.69% against −16.15%).
+Their returns are therefore a **lower bound** on what a matched-risk comparison would
+give them, which strengthens the conclusion rather than weakening it.
+
+### 8.8 The risk knob's ceiling, and why r04 could not find this
+
+`SlateDrawdown` solves for a scalar `k` by bisection on `[0, 1]`
+(`src/Portfolio/implementations/risk.jl`, `_bisect_k`), so **`k` can only shrink a
+stake vector, never lever it up**. That produces two regimes, and only one knob is
+live in each. Max drawdown against λ, `m12`, canonical trust:
+
+| container | Kelly | λ=23 | λ=18 | λ=15 | λ=12 | λ=10 | λ=8 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `raw` | 0.30 | −16.15 | −19.06 | −19.29 | −19.29 | −19.29 | −19.29 |
+| `raw` | 0.60 | −16.36 | −20.42 | −23.97 | −30.33 | −36.31 | −39.87 |
+| `std_A_pool` | 0.30 | −11.36 | −14.03 | −14.03 | −14.03 | −14.03 | −14.03 |
+| `std_A_pool` | 0.60 | −11.39 | −14.37 | −17.04 | −20.93 | −24.87 | −27.34 |
+| `inv_A_pool` | 0.30 | −7.76 | −7.85 | −7.85 | −7.85 | −7.85 | −7.85 |
+| `inv_A_pool` | 0.60 | −7.83 | −9.85 | −11.64 | −14.27 | −15.26 | **−15.32** |
+
+* **While `k < 1`** the constraint binds, and it absorbs a uniform stake change
+  exactly — `eda/README.md` Discovery 4 seen from the other side. At λ = 23, Kelly
+  0.30 and 0.60 give −16.15% and −16.36%: the Kelly fraction is inert.
+* **Once `k` pins at 1** the risk model is no longer doing anything, λ moves nothing
+  (every `k = 0.30` row is flat from λ = 15 down), and the Kelly fraction becomes the
+  only live risk knob.
+
+This is why r04 §7's risk-matched panel reported "NOT MATCHED" on every row and had
+to caveat itself: it swept λ only, so it hit the ceiling at λ ≈ 12–15 and could not
+go further. The headroom it was looking for was real; the knob it was turning had
+stopped working.
+
+The ceiling is a container property. At the loosest setting on the grid the deepest
+attainable drawdown is −39.87% for `raw`, −27.34% for `std_A_pool` and **−15.32%**
+for `inv_A_pool` — which is why the `inv` arms cannot reach the raw arm's budget at
+all. It is also the reason there is a real question here that this section does not
+answer: whether λ = 8 with Kelly 0.60 is a configuration anyone should deploy, as
+against one that happens to sit inside a backtested drawdown. See §8.11.
+
+### 8.9 Directional audit — where the anchor's 1.5 points come from
+
+Over 2.5, flat trust (the canonical trust gates this direction to zero, so it is
+absent there by design, not for want of edge). `m12`, `inv` law:
+
+| container | rate ratio | bets | win rate | Kelly ROI % | flat ROI % |
+|---|---:|---:|---:|---:|---:|
+| `inv_A_pool` | 1.0000 | 42 | 0.476 | +12.83 | +1.39 |
+| `inv_B_full` | 1.0038 | **48** | 0.458 | +10.48 | **−1.69** |
+| `inv_B_anch` | 1.0000 | **38** | 0.500 | **+14.32** | **+7.10** |
+
+`m05`, `inv` law: `A_pool` 47 bets / +5.51 Kelly ROI / −2.09 flat; `B_full` **57
+bets** / +2.96 / **−8.21**; `B_anch` 42 bets / +6.90 / −4.50.
+
+**This is the mechanism behind §8.6's ordering, and it is legible.** Unanchored
+preservation raises `E[Λ]` by 0.4%, which shifts probability mass toward the Over
+side, which makes the allocator strike **six more Over 2.5 bets on `m12` and ten more
+on `m05`** — and those marginal bets lose. Anchoring removes the rate inflation, the
+marginal bets go away, and the direction's flat ROI improves by **8.8 points** on
+`m12`. Over 2.5 is the direction `eda/README.md` Discovery 3 identifies as
+retail-shaded and README §7 records as rescued by calibration; it is exactly where a
+0.4% upward bias in the goal rate is most expensive.
+
+Under 2.5, canonical trust, is the largest capital consumer (19–22% of stake) and is
+indifferent: `m12 inv` Kelly ROI ranges +30.37 (`B_anch`) to +32.46 (`B_full`) across
+all seven schemes, with no ordering that repeats on `m05`.
+
+### 8.10 Closing-line value, and out of sample
+
+CLV, `m12`, canonical trust, Panel P. Every arm remains positive; the calibrated arms
+keep roughly twice the raw model's mean CLV, as §7.5 found.
+
+| container | bets | mean CLV % | stake-weighted % | % positive |
+|---|---:|---:|---:|---:|
+| `raw` | 1009 | +0.314 | +1.029 | 50.7 |
+| `std_A_pool` | 983 | +0.397 | +1.063 | 52.1 |
+| `inv_A_pool` | 871 | **+0.573** | +1.056 | **55.0** |
+| `inv_C_sqrt` | 869 | +0.570 | +1.052 | 54.9 |
+| `inv_B_anch` | 879 | +0.553 | +1.048 | 54.9 |
+| `inv_B_full` | 865 | +0.547 | +1.035 | 54.6 |
+| `inv_D_sup` | 867 | +0.521 | +1.030 | 54.4 |
+
+**No dispersion scheme improves CLV on the pool, and every one of them is at best
+level with it.** The pool and its conjugate cousin `C_sqrt` are the top two on both
+models. That is the expected result once §8.5 is believed: CLV is a property of
+*which* bets get struck, which is a location question, and dispersion barely moves
+the bet set (871 bets against 865–879).
+
+Out of sample — slates after 2025-05-03, T−25 prices, canonical trust:
+
+| model | container | return % | MDD % | Sharpe |
+|---|---|---:|---:|---:|
+| `m12` | `raw` | **+31.77** | −16.15 | 0.941 |
+| `m12` | `std_A_pool` | +24.63 | −8.61 | 1.269 |
+| `m12` | `std_B_anch` | +24.87 | −8.69 | **1.274** |
+| `m12` | `inv_A_pool` | +15.22 | **−7.76** | 1.010 |
+| `m12` | `inv_B_full` | +14.54 | −7.85 | 0.963 |
+| `m12` | `inv_B_anch` | +15.38 | −7.95 | 1.008 |
+| `m05` | `raw` | **+30.09** | −16.07 | 0.945 |
+| `m05` | `inv_A_pool` | +18.84 | −6.86 | **1.351** |
+| `m05` | `inv_B_anch` | +19.26 | −6.92 | 1.353 |
+| `m05` | `inv_B_full` | +17.80 | −7.22 | 1.264 |
+
+The out-of-sample window reproduces the ordering rather than contradicting it —
+`B_anch` above `A_pool` above `B_full`, on both models and both laws — but the whole
+spread is **0.8 points of return** over **50 slates**, which is far inside what
+that many slates can resolve. It should be read as "not contradicted", not as
+"confirmed".
+
+### 8.11 Verdict on Phase 4
+
+1. **H1 is refuted at its premise, not merely unsupported.** Restoring the posterior
+   width — up to **11.8×** under the `inv` law — moves the Kelly stake by **0.4%**
+   (§8.5). §7.7's reading, that the `w²` contraction shrinks Fractional Kelly stakes
+   and costs compounding, is wrong. The stake shrinkage is caused by the location
+   shift contracting the model's edges, and dispersion has essentially no channel to
+   the allocator: posterior spread in `Λ` (`cv` ≈ 0.03–0.07) is small beside the
+   Poisson variance already in the score grid. **This corrects a claim published in
+   §7.7 of this document.**
+
+2. **H2's mechanism is confirmed and quantified, and it is negligible.** The Jensen
+   term tracks retained TOTALS dispersion monotonically and exactly — `D_sup` sits on
+   `A_pool`, `D_tot` sits on `B_full` — and full preservation multiplies it by 3.5
+   (§8.4). It is at most **0.0012** of probability, against a `P(under 0.5)` bias of
+   **+0.0065** that no scheme changes. It also cuts both ways: it worsens the under
+   tail and improves the over tail, and on family LogLoss the two cancel.
+
+3. **H3 is supported and is the only first-order effect in this study.** Spending the
+   calibrated arm's unused drawdown headroom with **both** risk knobs takes `m12 inv`
+   from +65.64% to **+192.23%** at a drawdown shallower than the raw model's, beating
+   raw's +151.52% by 41 points (§8.7). r04 could not find this because λ alone
+   saturates once `SlateDrawdown`'s `k` pins at 1 (§8.8). This also **reverses two
+   Phase 3 conclusions**: that calibration costs return at tradeable prices, and that
+   `std` outranks `inv`.
+
+4. **H4 survives, in a form nobody proposed.** The winning scheme is `B_anch` — full
+   variance preservation with the predictive rate anchored back to the pool's — on
+   both models, both location laws, at the production budget, at matched risk, and
+   out of sample. But the anchor is doing all the work and the variance preservation
+   none: `B_full` and `B_anch` have identical dispersion in every basis and differ
+   only by 0.13–0.50% of predictive rate, and that difference is worth +1.5 points of
+   return (§8.6) and +8.8 points of Over 2.5 flat ROI (§8.9). The supremacy/totals
+   asymmetry the scheme family was built to test is real in the diagnostics and
+   inert in the portfolio.
+
+5. **The falsification control did its job.** `D_tot` was included so that a `D_sup`
+   result could not be read as a supremacy story by default. It reversed the expected
+   sign twice: the proper-score cost of dispersion turned out to track **supremacy**,
+   while the Jensen tail term turned out to track **totals**. Half the experiment
+   would have supported a confident and wrong conclusion.
+
+6. **`C_sqrt` — the coherent Bayesian update — is indistinguishable from the pool.**
+   If the market is an independent noisy observation with precision `τ`, the correct
+   posterior variance is `wσ²`, not the pool's `w²σ²`. Every score and every
+   portfolio number for `C_sqrt` sits on `A_pool`'s to three significant figures.
+   The double-counting the log-linear pool commits is real and it is unmeasurable
+   here, which is worth knowing before anyone rebuilds the calibrator to fix it.
+
+**Recommendation.** Leave `calibrate_latents` exactly as it is. The pool's `w²`
+contraction costs nothing worth recovering, and the one change that does pay —
+anchoring the predictive rate so the calibrated container is not silently 0.4% hotter
+than its own location says — is a two-line correction to the existing transform
+rather than a new scheme. The engineering effort this stream has left belongs in the
+risk budget, where §8.7 found 41 points, and not in the posterior, where §8.6 found
+1.6.
+
+### 8.12 What this section does not settle
+
+* **The λ = 8 / Kelly 0.60 configuration is not validated, only measured.** §8.7
+  reports the best point on a 24-setting surface, chosen against the same slates the
+  return is read off. That is the identical in-sample selection bias r02 §6.2 and r04
+  §7 flagged, and it is why those panels are labelled mechanism demonstrations. A
+  deployable claim needs the risk setting chosen on one window and scored on another,
+  and this runner does not do that.
+* **A backtested drawdown is not a risk limit.** Deep Kelly fractions with a
+  non-binding risk model are exactly the regime where a fill model matters most
+  (§7.8), and the +192% row stakes roughly twice the production exposure into
+  Scottish League Two liquidity.
+* **The differences that survive are small relative to the sample.** 1.6 points of
+  return over 99 slates, and 0.8 over the 50 out-of-sample ones, are consistent orderings rather
+  than resolved ones. They repeat across two models and two location laws, which is
+  why they are reported; they are not separately significant.
+* **The O/U 0.5 evidence is thin.** The T−25 matched book quotes that ladder on 44 of
+  the 710 priced fixtures (the full T−25 book on 312). The market-free Jensen audit
+  in §8.4 has full coverage and is the load-bearing tail evidence; the `ou_05` family
+  scores at n = 69 are context.
+* **`observation_params` is `nothing` throughout.** These containers price a
+  double-Poisson grid. A negative-binomial or copula observation carries its own
+  dispersion, and nothing here says how these transforms interact with it.
+
+---
+
+## 9. Boundaries
 
 * Reads `mcmc_experiments` (posteriors, via `PostgresStorage`) and `betdb`
   (odds, results). **Writes neither.** No run, portfolio or config registration.
