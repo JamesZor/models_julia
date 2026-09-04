@@ -242,9 +242,10 @@ println("\n--- books ---")
 @printf("  T−25 (matched) : %6d rows, %5d fixtures  — scored on this, as r03 was\n",
         nrow(t25_matched), length(unique(t25_matched.match_id)))
 let ou05 = filter(r -> r.market_name == "OverUnder" && r.market_line == 0.5, t25_matched)
-    @printf("  O/U 0.5 rows in the scoring book: %d over %d fixtures (both sides " *
-            "required by l02, so the r01 de-vig defect cannot occur here)\n",
+    @printf("  O/U 0.5 rows in the scoring book: %d over %d fixtures\n",
             nrow(ou05), length(unique(ou05.match_id)))
+    println("    (l02 requires both sides before de-vigging, so the r01 O/U 0.5")
+    println("     defect of README §5.6 cannot occur in this book.)")
 end
 
 r05_raw = Dict{String, Any}()
@@ -365,8 +366,7 @@ t_scores = @elapsed for name in R05_MODELS
         fams.spec .= a.id
         push!(r05_family_frames, fams)
         push!(r05_jensen_rows, merge((; model = name, container = a.id), js))
-        @printf("  %-30s %-14s LL %.5f (mkt %.5f)  ECE %.4f  Brier %.5f  " *
-                "P(U0.5) %.4f (real %.4f)\n",
+        @printf("  %-30s %-14s LL %.5f (mkt %.5f)  ECE %.4f  Brier %.5f  P(U0.5) %.4f (real %.4f)\n",
                 name, a.id, row.head_logloss, row.head_market_logloss,
                 row.head_ece, row.head_brier, js.p_under_05, js.realised_under_05)
     end

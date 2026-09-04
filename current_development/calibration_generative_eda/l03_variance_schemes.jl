@@ -442,10 +442,11 @@ function assert_scheme_a_matches(l::CountLatents{Float64},
     dh = maximum(abs.(got.λ_home .- ref.λ_home) ./ ref.λ_home)
     da = maximum(abs.(got.λ_away .- ref.λ_away) ./ ref.λ_away)
     worst = max(dh, da)
-    worst <= rtol || error(@sprintf(
-        "assert_scheme_a_matches: A_pool departs from l01.calibrate_latents by %.3e " *
-        "relative (bound %.1e). The dispersion decomposition is wrong and no " *
-        "downstream comparison is interpretable.", worst, rtol))
+    worst <= rtol || error(
+        "assert_scheme_a_matches: A_pool departs from l01.calibrate_latents by " *
+        @sprintf("%.3e", worst) * " relative (bound " * @sprintf("%.1e", rtol) *
+        "). The dispersion decomposition is wrong and no downstream comparison " *
+        "is interpretable.")
     return (; max_rel_home = dh, max_rel_away = da, rtol = rtol)
 end
 
