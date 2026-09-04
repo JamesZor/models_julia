@@ -328,3 +328,40 @@ Implementation gates: [`HIERARCHICAL_KAPPA_SMOKE.md`](HIERARCHICAL_KAPPA_SMOKE.m
 | `r66_compare_hierarchical_kappa.jl` | Proper scores, clustered paired contrasts, GLM edge, finishing-factor posterior |
 | `r67_portfolio_hierarchical_kappa.jl` | Portfolio backtest under both policies, with PostgreSQL persistence |
 | `results/hierarchical_kappa/` | Every CSV behind the report |
+
+---
+
+## Season extension — 2026/27 (`r68`–`r69`)
+
+The 40-fold grid trains through May 2026. On 2026-09-04 the two production runs were extended
+into the live season by widening the splitter's `target_seasons` to
+`["24/25", "25/26", "26/27"]` and sampling only the folds that adds. The 40 existing folds are
+loaded from `fit_artifacts`, never refitted, and the extended `Fit` is written back to the same
+immutable run UUID — so fold numbering appends rather than renumbers, which is what
+`MatchDay.select_split` depends on.
+
+| Run | UUID | Folds | New | OOS fixtures | Wall time |
+|---|---|---|---|---|---|
+| `m12_joint_hybrid_synergy` | `132df5c2-…-3aeb2b2cbaef` | 40 → **43** | 41, 42, 43 | 710 → **759** | 13.1 min |
+| `m05_joint_production_wealth` | `ed541a7c-…-783517728d47` | 40 → **43** | 41, 42, 43 | 710 → **759** | 9.4 min |
+
+Folds 41–43 cover the 49 fixtures played 2026-08-01 → 2026-08-29 and are clean on every gate:
+worst-case R̂ 1.0062, bulk ESS 1007.5, tail ESS 1046.0, **0 divergences**. `select_split` picks
+**fold 43** for the 2026-09-05 card with no warning, and fold 43's `team_map` covers all 24
+teams — including `ross-county` and `airdrieonians`, which the 40-fold map could not price.
+
+**`--refresh` is not optional.** A 65-hour-old DataStore cache stops at 2026-08-22 and yields 2
+folds instead of 3; the symptom is only a quieter preview line.
+
+**MatchDay cannot yet serve this model family.** `RatingsFromTracker` reads
+`model.player_ratings_feature`, which a builder-family `PoissonCountModel` does not have, and
+`:player_lineup_ratings_map` — the map `PlayerLineupPillar` actually reads at OOS — is absent
+from `MatchDay.INJECTABLE_KEYS`, so it is neither materialised nor coverage-checked. Fixing only
+the crash would price every fixture with a zero lineup pillar, silently. Detail and the shape of
+a fix: **[`EXTEND_2627_REPORT.md`](EXTEND_2627_REPORT.md)** §5.1.
+
+| File | Role |
+|---|---|
+| `r68_extend_joint_player_2627.jl` | Widened splitter, deserialization shim, `extend_fit` under `QueuedExecution(16)` |
+| `r69_verify_matchday_2627.jl` | Read-only audit: persistence, per-fold convergence split new/historical, `select_split`, feature coverage, `matchday_latents` |
+| `EXTEND_2627_REPORT.md` | Runtimes, convergence tables, the two MatchDay blockers, environment findings |

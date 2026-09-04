@@ -1,0 +1,135 @@
+====================================================================================================
+  POST-EXTENSION AUDIT — 43-FOLD FITS AND SATURDAY 2026-09-05 READINESS
+====================================================================================================
+  storage  : PostgresStorage(host="mcmc-beast", port=5432, db="mcmc_experiments", experiment="scottish_lower_joint_player_2426")
+  DataStore: 2019 matches
+
+----------------------------------------------------------------------------------------------------
+  m12_joint_hybrid_synergy  (132df5c2-c742-4e95-8693-3aeb2b2cbaef)
+----------------------------------------------------------------------------------------------------
+
+  PERSISTENCE (what the extension wrote)
+    Fit carries 43 folds                           PASS
+    OOS fixtures == 759                            PASS
+    fold_results rows == 43                        PASS
+    match_latents rows == 759                      PASS
+    fit_artifacts blob rewritten                   PASS
+    fold_results agrees with Fit on R̂              PASS
+
+  CONVERGENCE — NEW FOLDS 41-43 ONLY (the extension's own chains)
+    folds 41-43 present                            PASS
+    max split R̂ <= 1.05                            PASS
+    min bulk ESS >= 100.0                          PASS
+    min tail ESS >= 100.0                          PASS
+    divergences == 0                               PASS
+    max R̂ 1.0062 | bulk ESS 1007.5 | tail ESS 1080.3 | divergences 0
+
+  CONVERGENCE — ALL 43 FOLDS (what MatchDay's gate sees)
+    all 43: max R̂ <= 1.05                          PASS
+    all 43: min bulk ESS >= 100.0                  PASS
+    all 43: min tail ESS >= 100.0                  PASS
+    all 43: divergences == 0                       FAIL
+    Evaluation.convergence_verdict                 PASS
+    max R̂ 1.0104 (fold 12) | bulk ESS 880.7 | tail ESS 634.2 (fold 12) | divergences 3
+    folds carrying divergences: 3, 19, 25   (historical: 3, 19, 25 | new: )
+
+  Folds 41-43 as stored in fold_results
+3×9 DataFrame
+ Row │ fold_idx  r_hat_max  ess_bulk_min  ess_tail_min  divergences  converged  n_matches  first_match_date  last_match_date
+     │ Int32?    Float64?   Int32?        Int32?        Int32?       Bool?      Int32?     Date?             Date?
+─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │       41    1.00618          1007          1344            0       true         20  2026-08-01        2026-08-08
+   2 │       42    1.00512          1375          1080            0       true         19  2026-08-15        2026-08-22
+   3 │       43    1.00496          1612          1599            0       true         10  2026-08-28        2026-08-29
+
+----------------------------------------------------------------------------------------------------
+  m05_joint_production_wealth  (ed541a7c-01e2-447e-a771-783517728d47)
+----------------------------------------------------------------------------------------------------
+
+  PERSISTENCE (what the extension wrote)
+    Fit carries 43 folds                           PASS
+    OOS fixtures == 759                            PASS
+    fold_results rows == 43                        PASS
+    match_latents rows == 759                      PASS
+    fit_artifacts blob rewritten                   PASS
+    fold_results agrees with Fit on R̂              PASS
+
+  CONVERGENCE — NEW FOLDS 41-43 ONLY (the extension's own chains)
+    folds 41-43 present                            PASS
+    max split R̂ <= 1.05                            PASS
+    min bulk ESS >= 100.0                          PASS
+    min tail ESS >= 100.0                          PASS
+    divergences == 0                               PASS
+    max R̂ 1.0055 | bulk ESS 1076.3 | tail ESS 1046.0 | divergences 0
+
+  CONVERGENCE — ALL 43 FOLDS (what MatchDay's gate sees)
+    all 43: max R̂ <= 1.05                          PASS
+    all 43: min bulk ESS >= 100.0                  PASS
+    all 43: min tail ESS >= 100.0                  PASS
+    all 43: divergences == 0                       FAIL
+    Evaluation.convergence_verdict                 FAIL
+    max R̂ 1.0084 (fold 17) | bulk ESS 647.3 | tail ESS 251.6 (fold 21) | divergences 1
+    folds carrying divergences: 26   (historical: 26 | new: )
+    convergence_verdict failed on: tail ESS
+      min tail ESS 251.6 at fold 21 (gate > 400)
+
+  Folds 41-43 as stored in fold_results
+3×9 DataFrame
+ Row │ fold_idx  r_hat_max  ess_bulk_min  ess_tail_min  divergences  converged  n_matches  first_match_date  last_match_date
+     │ Int32?    Float64?   Int32?        Int32?        Int32?       Bool?      Int32?     Date?             Date?
+─────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   1 │       41    1.00464          1196          1254            0       true         20  2026-08-01        2026-08-08
+   2 │       42    1.00554          1076          1046            0       true         19  2026-08-15        2026-08-22
+   3 │       43    1.00474          1176          1382            0       true         10  2026-08-28        2026-08-29
+
+====================================================================================================
+  MATCHDAY READINESS — 2026-09-05 (as_of 2026-09-05T13:35:00 UTC)
+====================================================================================================
+CanonicalFit 'm12_joint_hybrid_synergy' (scottish_lower_joint_player_2426)
+  model      : PoissonCountModel{GlobalInterception, TimeDecayDynamics, GlobalHomeAdvantage, Tuple{PlayerLineupPillar{BayesianFootball.Features.ShotsPlusMinusFeature, BenchWeightedPlayerAggregation, Distributions.Normal{Float64}, Distributions.Normal{Float64}, Nothing}, ProductionWealthCovariate{ProductionWealthFeature{RichardsSigmoid}, Distributions.Truncated{Distributions.Normal{Float64}, Distributions.Continuous, Float64, Float64, Nothing}, SupremacyRole}}, JointGammaPoissonObservation{MatchProxyXGFeature, Distributions.Truncated{Distributions.Normal{Float64}, Distributions.Continuous, Float64, Float64, Float64}, Distributions.Normal{Float64}}, ClampGuard}
+  folds      : 43
+  converged  : true
+  loaded     : 2026-09-04T11:47:58.648
+
+  fixtures on the card: 10
+    16362611  kelty-hearts-fc          vs annan-athletic            2026-09-05T14:00:00  t57
+    16362613  clyde-fc                 vs edinburgh-city-fc         2026-09-05T14:00:00  t57
+    16362608  forfar-athletic          vs stranraer                 2026-09-05T14:00:00  t57
+    16362436  queen-of-the-south       vs airdrieonians             2026-09-05T14:00:00  t56
+    16362602  stirling-albion          vs the-spartans-fc           2026-09-05T14:00:00  t57
+    16362431  cove-rangers             vs alloa-athletic            2026-09-05T14:00:00  t56
+    16362432  east-fife                vs ross-county               2026-09-05T14:00:00  t56
+    16362433  peterhead                vs montrose                  2026-09-05T14:00:00  t56
+    16362435  east-kilbride            vs hamilton-academical       2026-09-05T14:00:00  t56
+    16362604  dumbarton                vs elgin-city                2026-09-05T14:00:00  t57
+
+  select_split
+    chose fold 43 of 43 rebuilt boundaries (fit carries 43 folds)
+    warning: (none)
+
+  Fold 43 FeatureSet coverage of tomorrow's 10 fixtures
+    team_map                                       24 teams, missing: (none)
+    player_ratings_map                             0/10 covered  (materialised by MatchDay)
+    player_lineup_ratings_map                      0/10 covered  (NOT in INJECTABLE_KEYS — carried forward from training)
+
+  matchday_latents RAISED:
+    FieldError: type PoissonCountModel has no field `player_ratings_feature`, available fields: `interception`, `dynamics`, `home_advantage`, `covariates`, `observation`, `guard`
+
+  Operational gates
+    canonical_fit(require_converged=true) loads    PASS
+    canonical_fit reports converged                PASS
+    canonical_fit folds == 43                      PASS
+    card has 10 fixtures                           PASS
+    select_split chose fold 43                     PASS
+    select_split warning empty                     PASS
+    identity resolved for every fixture            FAIL
+    lineup available for every fixture             PASS
+    every team on the card is in team_map          PASS
+    matchday_latents ran without raising           FAIL
+    matchday_latents priced every fixture          FAIL
+    all rates finite and positive                  FAIL
+
+====================================================================================================
+  EXTENSION : CLEAN — folds 41-43 converged and persisted.
+  MATCHDAY  : NOT READY — see the FAIL lines above.
+====================================================================================================
