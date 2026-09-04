@@ -1,0 +1,5 @@
+model,max_rhat,min_ess_bulk,min_ess_tail,divergences,wallclock_seconds,n_folds
+m05_hierarchical_kappa,1.0097442807788342,722,500,0,18934.974254846587,40
+m05_joint_production_wealth,1.008394826111158,647,252,1,8316.712850093836,40
+m12_hierarchical_kappa,1.0091196013751829,910,379,0,24463.60858702658,40
+m12_joint_hybrid_synergy,1.010449852466397,881,634,3,11454.31966090203,40

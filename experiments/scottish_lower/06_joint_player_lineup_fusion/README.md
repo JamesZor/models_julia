@@ -288,3 +288,43 @@ every score. That is the whole result, and it is the reason `r63` exists separat
 mean calibration is the best in the grid while its worst bin is by far the worst, which points
 at a thin extreme-probability bin rather than a systematic bias. `m12`'s 0.196 is the safer
 choice for deployment, and is the arm the MatchDay consoles load.
+
+---
+
+## Follow-on study — Hierarchical Team Kappa (`r64`–`r67`)
+
+A fifth generation was tested on top of this grid: making the two-arm observation's finishing factor
+**per team, partially pooled around the league factor**, instead of one number for the league.
+
+```
+shared        log κ                                            ~ Normal(0, 0.20)
+hierarchical  log κ_t = log κ + σ_κ · (raw_t − mean(raw)),  σ_κ ~ truncated(Normal(0, 0.10), 0, ∞)
+```
+
+Two candidates were fitted over the same 40 boundaries and the same 710 held-out fixtures, each
+against the shared-κ control it differs from in exactly one component:
+
+| Arm | Control | Hierarchical candidate | Run UUID |
+|---|---|---|---|
+| `m05` | `m05_joint_production_wealth` | `m05_hierarchical_kappa` | `b3e19ad4-f755-4b89-addd-ff7592787deb` |
+| `m12` | `m12_joint_hybrid_synergy` | `m12_hierarchical_kappa` | `a0847873-de69-4e25-824f-c03e4a4fd8c4` |
+
+**Verdict: DO NOT ADOPT.** Zero divergences in 128,000 draws per model, and nothing found. Across
+957 team-fold pairs per candidate, **no team's 90% HPDI on its finishing delta excludes zero**; σ_κ
+is pushed *below* its prior (posterior mean 0.045 against a prior mean of 0.080); the paired LogLoss
+contrast is `p = 0.98` and `p = 0.94`; and the fractional-Kelly backtest loses 4.5–6.0 points of
+terminal bankroll in all four model × configuration pairings. `m12_joint_hybrid_synergy` with
+`SharedKappa()` remains the canonical fit the MatchDay consoles load.
+
+Full analysis, tables and threats to validity: **[`HIERARCHICAL_KAPPA_REPORT.md`](HIERARCHICAL_KAPPA_REPORT.md)**.
+Implementation gates: [`HIERARCHICAL_KAPPA_SMOKE.md`](HIERARCHICAL_KAPPA_SMOKE.md).
+
+| File | Role |
+|---|---|
+| `l64_hierarchical_kappa_loader.jl` | The two hierarchical candidates, the σ_κ prior, the 0.90-acceptance sampler |
+| `r64_smoke_hierarchical_kappa.jl` | Nine-gate production-settings smoke over two folds |
+| `r65_train_hierarchical_kappa_40fold.jl` | The 40-fold production grid (prepare-only by default) |
+| `l66_hierarchical_kappa_eval_loader.jl` | Run manifest, Betfair closing frame, fit loader, artefact compatibility shim |
+| `r66_compare_hierarchical_kappa.jl` | Proper scores, clustered paired contrasts, GLM edge, finishing-factor posterior |
+| `r67_portfolio_hierarchical_kappa.jl` | Portfolio backtest under both policies, with PostgreSQL persistence |
+| `results/hierarchical_kappa/` | Every CSV behind the report |
