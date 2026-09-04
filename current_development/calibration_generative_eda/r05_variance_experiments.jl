@@ -155,7 +155,7 @@ here instead, because the arbiter in §9 is "best return at or inside a common
 drawdown" and a knob offered to one arm and not another would decide that question
 by construction.
 """
-const R05_KELLY_FRACTIONS = R05_SMOKE ? [0.30, 0.50] : [0.30, 0.40, 0.50]
+const R05_KELLY_FRACTIONS = R05_SMOKE ? [0.30, 0.50] : [0.30, 0.40, 0.50, 0.60]
 
 "Directions scored. 13, not r03's 11 — the O/U 0.5 ladder IS the Jensen tail."
 const R05_SCORED_MARKETS = l01_full_direction_markets()
@@ -251,11 +251,13 @@ println("\n--- books ---")
         nrow(t25_full), length(unique(t25_full.match_id)))
 @printf("  T−25 (matched) : %6d rows, %5d fixtures  — scored on this, as r03 was\n",
         nrow(t25_matched), length(unique(t25_matched.match_id)))
-let ou05 = filter(r -> r.market_name == "OverUnder" && r.market_line == 0.5, t25_matched)
+r05_ou05_ids = let ou05 = filter(r -> r.market_name == "OverUnder" &&
+                                      r.market_line == 0.5, t25_matched)
     @printf("  O/U 0.5 rows in the scoring book: %d over %d fixtures\n",
             nrow(ou05), length(unique(ou05.match_id)))
     println("    (l02 requires both sides before de-vigging, so the r01 O/U 0.5")
     println("     defect of README §5.6 cannot occur in this book.)")
+    Set{Int}(Int.(ou05.match_id))
 end
 
 r05_raw = Dict{String, Any}()
@@ -355,7 +357,18 @@ t_scores = @elapsed for name in R05_MODELS
                                     markets = R05_SCORED_MARKETS, threaded = true)
     anchor = edge_anchor(actx)
 
-    realised = realised_totals(ds.matches, latent_match_ids(raw_arm.latents))
+    priced_ids = latent_match_ids(raw_arm.latents)
+    realised = realised_totals(ds.matches, priced_ids)
+    # `eda/README.md` Discovery 2 quotes a 3.36% realised goalless rate; this study's
+    # full gated fixture set is a different scope, so the O/U 0.5-QUOTED subset — the
+    # fixtures on which that ladder could actually have been traded — is measured
+    # beside it rather than the two being quietly compared.
+    quoted_ids = [m for m in priced_ids if m in r05_ou05_ids]
+    realised_q = realised_totals(ds.matches, quoted_ids)
+    @printf("\n  %s: realised goalless rate %.4f over %d priced fixtures\n",
+            name, realised.under_05, realised.n)
+    @printf("    and %.4f over the %d of them the O/U 0.5 ladder quotes\n",
+            realised_q.under_05, realised_q.n)
 
     for a in arms
         row, fams = score_calibration(name, a.spec, a.latents, t25_matched, ds.matches;
@@ -364,6 +377,8 @@ t_scores = @elapsed for name in R05_MODELS
                                       edge_large = R05_EDGE_LARGE)
         jd = jensen_diagnostics(a.latents; label = a.id)
         js = jensen_summary(jd, realised; label = a.id)
+        jq = jensen_summary(jd[in.(jd.match_id, Ref(r05_ou05_ids)), :], realised_q;
+                            label = a.id)
         d = a.disp
         push!(r05_score_rows, merge(
             row,
@@ -375,7 +390,13 @@ t_scores = @elapsed for name in R05_MODELS
             Base.structdiff(js, NamedTuple{(:scheme,)})))
         fams.spec .= a.id
         push!(r05_family_frames, fams)
-        push!(r05_jensen_rows, merge((; model = name, container = a.id), js))
+        push!(r05_jensen_rows,
+              merge((; model = name, container = a.id), js,
+                    (; quoted_n = jq.n_fixtures,
+                       quoted_p_under_05 = jq.p_under_05,
+                       quoted_jensen_under_05 = jq.jensen_under_05,
+                       quoted_realised_under_05 = jq.realised_under_05,
+                       quoted_bias_under_05 = jq.bias_under_05)))
         @printf("  %-30s %-14s LL %.5f (mkt %.5f)  ECE %.4f  Brier %.5f  P(U0.5) %.4f (real %.4f)\n",
                 name, a.id, row.head_logloss, row.head_market_logloss,
                 row.head_ece, row.head_brier, js.p_under_05, js.realised_under_05)
@@ -547,7 +568,13 @@ function frontier_envelope(rows::AbstractDataFrame, target_mdd::Float64;
                 calmar = rows.calmar[i], realised_mdd = rows.max_drawdown_pct[i],
                 deepest_mdd = -deepest, n_settings = nrow(rows), reached = false)
     end
-    i = ok[argmax(rows.total_return_pct[ok])]
+    # Ties are real: while `SlateDrawdown`'s k is still binding it absorbs a
+    # uniform stake change exactly, so two Kelly fractions can return the same
+    # number to the last bit. Break toward the SMALLER knob — the cheaper way of
+    # buying a return that two settings buy equally.
+    i = ok[first(sortperm(collect(zip(-rows.total_return_pct[ok],
+                                      rows.kelly_fraction[ok],
+                                      -rows.risk_lambda[ok]))))]
     return (; risk_lambda = rows.risk_lambda[i], kelly_fraction = rows.kelly_fraction[i],
             total_return_pct = rows.total_return_pct[i], sharpe_ann = rows.sharpe_ann[i],
             calmar = rows.calmar[i], realised_mdd = rows.max_drawdown_pct[i],
@@ -636,23 +663,32 @@ println("="^140)
 println(" H3 assumes drawdown headroom can be spent with the risk budget. It can, until")
 println(" `SlateDrawdown` stops binding — after which λ moves nothing and only the Kelly")
 println(" fraction is still a risk knob. This table is where that boundary is.")
-let ref = filter(r -> r.window == "full" && r.trust == "canonical_P1" &&
-                      (r.container == "raw" || endswith(r.container, "A_pool")),
+let ref = filter(r -> r.window == "full" &&
+                      (r.container == "raw" || endswith(r.container, "_A_pool")),
                  r05_portfolio)
-    @printf("\n %-28s | %-14s | %5s | %s\n", "Model", "container", "Kelly",
-            join([@sprintf("%8.1f", λ) for λ in R05_RISK_LAMBDAS], " "))
+    @printf("\n %-28s | %-14s | %-13s | %5s | %s\n", "Model", "container", "trust",
+            "Kelly", join([@sprintf("%8.1f", λ) for λ in R05_RISK_LAMBDAS], " "))
     println("-"^140)
-    for name in R05_MODELS, c in unique(ref.container), k in R05_KELLY_FRACTIONS
+    for name in R05_MODELS, c in unique(ref.container),
+        tname in ("flat_1.0", "canonical_P1"), k in R05_KELLY_FRACTIONS
         cells = String[]
         for λ in R05_RISK_LAMBDAS
-            g = filter(r -> r.model == name && r.container == c &&
+            g = filter(r -> r.model == name && r.container == c && r.trust == tname &&
                             r.kelly_fraction == k && r.risk_lambda == λ, ref)
             push!(cells, nrow(g) == 0 ? "       ·" :
                   @sprintf("%8.2f", first(g).max_drawdown_pct))
         end
-        @printf(" %-28s | %-14s | %5.2f | %s\n", name, c, k, join(cells, " "))
+        all(==("       ·"), cells) && continue
+        @printf(" %-28s | %-14s | %-13s | %5.2f | %s\n", name, c, tname, k,
+                join(cells, " "))
     end
 end
+println(" Rows that repeat across λ are `SlateDrawdown`'s scaling k pinned at its")
+println(" ceiling of 1.0 (`_bisect_k` returns at most 1 — the risk model can shrink")
+println(" a stake vector and never lever it up). Rows that repeat across KELLY are")
+println(" the opposite regime: k is still binding, and it absorbs a uniform stake")
+println(" change exactly, which is `eda/README.md` Discovery 4 seen from the other")
+println(" side. Only one of the two knobs is live at a time.")
 
 println("\n" * "="^140)
 println(" T4 · CLOSING-LINE VALUE (Panel P)")
