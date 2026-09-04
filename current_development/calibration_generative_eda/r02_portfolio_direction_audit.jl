@@ -442,24 +442,34 @@ for name in R02_MODELS
                     best = cand
                 end
             end
-            # λ INERT MEANS THE CAP BINDS, NOT THE GRID. `SlateDrawdown` is homogeneous
-            # of degree 0 in the stakes it receives, so once `FixedCap` is what limits
-            # exposure, loosening the drawdown budget cannot buy any more of it — the
-            # whole λ sweep returns one number. Reporting that as a grid-floor artefact
-            # would name the wrong mechanism, so the two are distinguished by whether
-            # the drawdown responded to λ at all.
-            cap_bound = (maximum(mdds) - minimum(mdds)) < 1e-9
+            # A SATURATED λ RESPONSE IS THE CAP BINDING, NOT THE GRID RUNNING OUT.
+            # `SlateDrawdown` is homogeneous of degree 0 in the stakes it receives, so
+            # once `FixedCap(0.25)` is what limits exposure, loosening the drawdown
+            # budget buys almost nothing more. MEASURED on this book: the λ sweep moves
+            # maximum drawdown by 19.8-24.4 percentage points under flat trust and by
+            # 0.7-3.1 under the canonical tiers, which already gate most of the slate to
+            # zero. An arm that never reaches the target with a span that small has not
+            # run out of grid — extending λ further would not move it — so the two are
+            # reported as different mechanisms. The threshold sits between the two
+            # measured regimes and `mdd_span` is written to the CSV so the call is
+            # checkable rather than asserted.
+            mdd_span = maximum(mdds) - minimum(mdds)
+            reached = best !== nothing && best.max_drawdown_pct <= target + 0.5
+            cap_saturated = !reached && mdd_span < 5.0
             if best === nothing
                 @printf("  %-30s %-4s %-13s no λ in the grid stays inside raw's %.2f%% drawdown\n",
                         name, lab, trust_name, target)
                 continue
             end
-            bottomed = !cap_bound && best.risk_lambda == minimum(R02_RISK_LAMBDAS)
-            note = cap_bound ? "  [CAP-BOUND — λ inert, FixedCap(0.25) is what limits exposure]" :
-                   bottomed  ? "  [GRID FLOOR — return is a LOWER BOUND]" : ""
+            bottomed = !cap_saturated && !reached &&
+                       best.risk_lambda == minimum(R02_RISK_LAMBDAS)
+            note = cap_saturated ?
+                     "  [CAP-SATURATED — FixedCap(0.25) binds before λ can match the risk]" :
+                   bottomed ? "  [GRID FLOOR — return is a LOWER BOUND]" : ""
             push!(r02_risk_rows, merge(best, (; grid_bottomed = bottomed,
-                                              cap_bound = cap_bound,
-                                              mdd_span = maximum(mdds) - minimum(mdds))))
+                                              cap_saturated = cap_saturated,
+                                              risk_matched = reached,
+                                              mdd_span = mdd_span)))
             @printf("  %-30s %-4s %-13s λ %5.2f  return %+8.2f%%  Sharpe %5.3f  MDD %7.2f%% (raw %7.2f%%)%s\n",
                     name, lab, trust_name, best.risk_lambda, best.total_return_pct,
                     best.sharpe_ann, best.max_drawdown_pct, target, note)
