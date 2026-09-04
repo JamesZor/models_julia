@@ -3,10 +3,21 @@
 Prototype stream for the work package in
 [`CALIBRATION_GENERATIVE_RATE_EDA_PROMPT.md`](CALIBRATION_GENERATIVE_RATE_EDA_PROMPT.md).
 
-**Status — 2026-09-04.** Both phases executed on `mcmc-beast`. §5 is the
-calibration result, §6 the portfolio result.
+**Status — 2026-09-04.** Four runners executed on `mcmc-beast`. §5 is the
+calibration result at the close, §6 the portfolio result at the close, §7 both
+again at **T−25 — a price a bettor could actually have taken.**
 
-**Headline.** Generative rate calibration improves out-of-sample LogLoss on both
+> **CORRECTION, and it matters.** r01 and r02 both state that every return in them
+> is "an upper bound" because they are priced at the close. **That claim has the
+> sign backwards.** §7.2 measures it: staking the identical model, trust and
+> fixtures at T−25 instead of the close returns **more**, not less — +113.60%
+> against +79.88% on `m12` under flat trust, +159.32% against +121.13% under the
+> canonical tiers. The closing price is the *converged* price; a model with real
+> edge is better off taking the earlier, softer one. Closing-price staking was a
+> **penalty** on these backtests, not a flattery. The caveat was right that the
+> number was not tradeable and wrong about which way it erred.
+
+**Headline (close-priced, §5–§6).** Generative rate calibration improves out-of-sample LogLoss on both
 Scottish Lower candidates; the gain is concentrated almost entirely in the
 **large-edge** regime; and the winning direction is **shrinkage**, not the Ireland
 stream's conviction. On the portfolio it raises flat ROI, Sharpe and drawdown on
@@ -16,6 +27,15 @@ returns **+151.09%** against raw's +126.09%. Out of sample it produces the best 
 measured anywhere in this stream, beating the production champion on return,
 Sharpe and drawdown at once. It does **not** replace `CanonicalScottishLowerTrust`,
 and it does not rescue Over 2.5 far enough to un-gate it.
+
+**Headline (T−25, §7).** All three functional forms clear Gate 1 at tradeable
+prices on both models — where at the close `m12` refused all three — because the
+T−25 book is measurably less calibrated (ECE 0.0183) than the close (0.0119) and
+there is more error left to remove. But **the optimum moves**: on T−25 rates the
+*inverse* form wins on LogLoss, reversing §5, and r01's close-fitted pick gives up
+0.0015–0.0020 LogLoss when transferred. On the portfolio, calibration at T−25 buys
+risk-adjusted quality rather than return, and every arm — calibrated or not — has
+**positive closing-line value**.
 
 ---
 
@@ -59,6 +79,9 @@ already failed.
 | [`l01_generative_calibrator.jl`](l01_generative_calibrator.jl) | Loader. `GenerativeCalibrationSpec` and the three weight laws, market-rate inversion with acceptance gates, the posterior shift, the coherence audit, proper scoring and the sweep grid. Definitions only. |
 | [`r01_sweep_rate_calibration.jl`](r01_sweep_rate_calibration.jl) | Runner 1. The diagnostic and proper-score sweep, gates G-A…G-D, CSV artefacts. **Calibration only — no bankroll claim.** |
 | [`r02_portfolio_direction_audit.jl`](r02_portfolio_direction_audit.jl) | Runner 2. The direction and trust-vector portfolio audit, arms A–F; Gate 2. |
+| [`l02_point_in_time_book.jl`](l02_point_in_time_book.jl) | Loader. The T−25 point-in-time book, its staleness and completeness gates, book drift and closing-line value. |
+| [`r03_t25_book_and_calibration.jl`](r03_t25_book_and_calibration.jl) | Runner 3. The T−25 book, rate re-inversion, and the calibration sweep at tradeable prices; Gate 1 restated. |
+| [`r04_t25_portfolio.jl`](r04_t25_portfolio.jl) | Runner 4. The portfolio at T−25, the close-vs-T−25 attribution, and CLV. |
 | `results/` | Replaceable CSV artefacts. Re-running overwrites them. |
 
 Run:
@@ -77,10 +100,13 @@ R01_SMOKE=1 julia --project -t 16 ...     # 3-spec dry run, one model, not a res
 These are recorded here because each one would silently alter a headline figure if
 it were changed, and none of them is visible in a results table.
 
-**The calibrating price is the close.** Rates are inverted from the Betfair
-close (TWA over `[−20 min, kick-off]`) — the snapshot experiment 06 scored against.
-A closing price is not available when a bet is struck, so **any P&L this stream
-eventually reports is an upper bound** until the snapshot is moved back to T−25.
+**The calibrating price is the close — in §5 and §6 only.** Rates there are
+inverted from the Betfair close (TWA over `[−20 min, kick-off]`), the snapshot
+experiment 06 scored against. A closing price is not available when a bet is
+struck, which is why §7 rebuilds everything at T−25. **The direction of that error
+was not what I assumed:** §7.2 measures the same strategies returning 22–38 points
+MORE at T−25, so closing-price staking was a penalty. §5 and §6 understate the raw
+model rather than flattering it.
 
 **The fixture set is pinned to the published gate.** Gate 1 quotes LogLoss
 `0.64337` and ECE `0.0100` from the 40-fold 24/25 + 25/26 study (2,899 scored
@@ -133,6 +159,8 @@ against 1X2's once. `L01_INVERSION_LINES` passes one symbol per line.
 | **G-C** | r01 §6 | Derivative-market coherence. Errors if two market families disagree on one fixture by more than 1e-9 — that cannot happen when every price is a partition of one tensor, so it would indict the pricing path, not the calibration. |
 | **G-D** | r01 §7–8 | Identity control. The `w_base = 1.00` grid point must reproduce the uncalibrated baseline LogLoss to 1e-12. |
 | **Gate 1** | r01 §9 | Proper scoring, judged against the **recomputed** baseline: LogLoss no worse, ECE no worse than the uncalibrated model, and ECE at or below the Betfair close's. |
+| **Gate 1 at T−25** | r03 §7.3 | The same proper-score gate against the T−25 book. Passes on every form and both models. |
+| **Gate 2 at T−25** | r04 §7.4 | The portfolio at tradeable prices, risk-matched against the raw T−25 arm. |
 | **Gate 2** | r02 §6.7 | Bankroll > +130%, Sharpe ≥ 1.416, max drawdown no worse than −20.5%. Measured; and §6.7 argues the return threshold is mis-specified for a variance-contracting transform. |
 
 A Gate-1 PASS is a **calibration** result and entitles nobody to a bankroll claim.
@@ -561,7 +589,237 @@ the production champion on all three axes simultaneously.
 
 ---
 
-## 7. Boundaries
+## 7. Phase 3 — the T−25 book, at tradeable prices
+
+Runners: [`r03_t25_book_and_calibration.jl`](r03_t25_book_and_calibration.jl),
+[`r04_t25_portfolio.jl`](r04_t25_portfolio.jl); builder
+[`l02_point_in_time_book.jl`](l02_point_in_time_book.jl). Run on `mcmc-beast`,
+16 threads, 2026-09-04, commit `6fbc1e1a`.
+
+**T−25 is the start of MatchDay's execution band** (T−25 to T−12, AGENTS.md §7.2)
+and therefore the earliest instant a slate is committed — the most conservative
+honest cutoff.
+
+### 7.1 The book at T−25
+
+**Not a windowed TWA.** Measured over 599,529 archived ticks on 1,641 fixtures, a
+`(−30, −25)` window carries 8,644 selection groups against the close book's
+26,341, at a **median of one tick** — so its "time-weighted average" is one number
+with a weight, and widening it to recover coverage averages prices up to four
+hours old. `l02` instead takes the **last tick at or before the cutoff**, the way
+the replay console's `PreloadedBook` does, and carries its staleness as a column.
+
+| | rows | fixtures | markets | median staleness | p90 staleness | median overround |
+|---|---:|---:|---:|---:|---:|---:|
+| close book | 14,617 | 1,627 | — | — | — | — |
+| **T−25, bound 90 min** | **10,373** | **1,572** | 4,491 | **8.0 min** | 51.0 min | 1.0015 |
+| T−25, bound 30 min | 6,879 | 1,341 | — | — | 20.4 min | — |
+| T−25, bound 60 min | 9,050 | 1,510 | — | — | 34.5 min | — |
+| T−25, bound 180 min | 12,841 | 1,621 | — | — | 94.0 min | — |
+
+Market refusals at the 90-minute bound: 3,230 stale beyond it, 2,876 incomplete,
+1,580 with no completeness contract (correct score, Asian handicap), **1** on
+overround. The overround filter, which I expected to bind hardest pre-match,
+turned out to be irrelevant — exchange traded prices are near-fair at T−25 as
+well as at the close.
+
+`l02` also **fixes the §5.6 de-vig defect at source**: completeness is checked
+*before* normalisation, so a one-sided quote is refused by name instead of
+normalising to a fair probability of exactly 1.0. `l01`'s builder is untouched so
+r01 and r02 stay reproducible.
+
+Every head-to-head below runs on the **7,270-row / 1,478-fixture intersection** of
+the two books, so price is never confounded with coverage.
+
+### 7.2 What the close knows that T−25 does not
+
+| | median | p90 | sd |
+|---|---:|---:|---:|
+| \|log price drift\|, T−25 → close | 0.0221 | 0.0715 | — |
+| fair-probability drift | +0.00033 | — | 0.01615 |
+| inverted `log λ_mkt` drift, home | — | 0.1432 | 0.1010 |
+| inverted `log λ_mkt` drift, away | — | 0.1826 | 0.1138 |
+
+Per family: 1X2 median |log drift| 0.0260, O/U 0.0183, BTTS 0.0194.
+
+**The λ drift is the same order as the smallest σ in the grid** (0.15), which is
+why the parameters had to be re-swept rather than transferred — the weight law's
+input is drawn from a different distribution at the two instants.
+
+**And the price effect runs the other way from the caveat.** Same model, same
+trust, same fixtures, staked at each instant:
+
+| Model | trust | @close | @T−25 | Δ return | Δ Sharpe |
+|---|---|---:|---:|---:|---:|
+| `m12` | flat | +79.88 | **+113.60** | **+33.72** | +0.234 |
+| `m12` | canonical | +121.13 | **+159.32** | **+38.20** | +0.204 |
+| `m05` | flat | +76.04 | **+98.77** | +22.73 | +0.153 |
+| `m05` | canonical | +108.97 | **+135.58** | +26.61 | +0.155 |
+
+The close is the converged price. A model with genuine edge does better taking the
+earlier, softer one — which is the same statement as the positive CLV in §7.5.
+
+### 7.3 Calibration at T−25 — Gate 1 passes everywhere, and the optimum moves
+
+Headline scope, matched rows, calibrated with **T−25 rates** and scored against
+the **T−25 fair price**.
+
+| Model | form | spec | LogLoss | Δ base | ECE | T−25 book ECE | median `w` | var retained |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| `m12` | — | uncalibrated | 0.63488 | — | 0.0151 | 0.0183 | 1.000 | — |
+| `m12` | **inverse** | `inv_w0.25_s0.35` | **0.63064** | −0.00424 | 0.0133 | 0.0183 | 0.291 | **0.085** |
+| `m12` | standard | `std_w0.40_s0.15` | 0.63188 | −0.00300 | **0.0093** | 0.0183 | 0.840 | 0.706 |
+| `m12` | static | `sta_w0.40` | 0.63089 | −0.00399 | 0.0093 | 0.0183 | 0.400 | 0.160 |
+| `m05` | — | uncalibrated | 0.63381 | — | 0.0179 | 0.0183 | 1.000 | — |
+| `m05` | **inverse** | `inv_w0.25_s0.35` | **0.63027** | −0.00354 | 0.0076 | 0.0183 | 0.287 | 0.082 |
+| `m05` | standard | `std_w0.40_s0.15` | 0.63165 | −0.00216 | 0.0094 | 0.0183 | 0.856 | 0.732 |
+| `m05` | static | `sta_w0.40` | 0.63076 | −0.00305 | **0.0030** | 0.0183 | 0.400 | 0.160 |
+
+**All six (model × form) PASS Gate 1**, where at the close `m12` refused all
+three. The reason is in the last-but-two column: the T−25 book's ECE is **0.0183**
+against the close's **0.0119**. The market's calibration advantage is largely made
+in the final 25 minutes, so at T−25 there is more error to remove and a model can
+beat the price it can actually take.
+
+**The optimum moved, and it moved back toward Ireland.** On T−25 rates the
+**inverse** form wins on LogLoss for both models — reversing §5.3, where the
+standard form won on closing rates.
+
+| Model | r01's close-fitted pick | its LogLoss on T−25 rates | best T−25 spec | forgone |
+|---|---|---:|---:|---:|
+| `m12` | `std_w0.25_s0.25` | 0.63267 | 0.63064 | **+0.00203** |
+| `m05` | `std_w0.25_s0.15` | 0.63178 | 0.63027 | **+0.00151** |
+
+This is the same lesson the Ireland transfer taught, one level down: **which
+functional form is right depends on how sharp the book you are pooling with is.**
+Against a converged closing line, shrinking extreme claims wins. Against a softer
+T−25 book, holding conviction on them wins. A stream that had fixed the form on
+either result alone would have been wrong on the other, and that is now measured
+rather than argued.
+
+### 7.4 The portfolio at T−25 — full book, what a bettor actually has
+
+`SlateDrawdown(23.0)`, `FixedCap(0.25)`, `DailySlate()`, 11 tradeable directions.
+
+| Model | container | trust | bets | return % | flat ROI % | Sharpe | MDD % |
+|---|---|---|---:|---:|---:|---:|---:|
+| `m12` | raw | flat | 1592 | +111.70 | +9.79 | 1.220 | −23.45 |
+| `m12` | **raw** | **canonical** | 1127 | **+151.52** | +15.04 | 1.592 | −16.15 |
+| `m12` | inv | canonical | 975 | +65.64 | **+17.44** | **1.772** | **−7.76** |
+| `m12` | std | flat | 1503 | +63.35 | +9.63 | 1.396 | −12.10 |
+| `m12` | std | canonical | 1103 | +72.85 | +13.62 | 1.606 | −11.36 |
+| `m12` | sta | canonical | 980 | +49.94 | +14.90 | 1.697 | −6.61 |
+| `m05` | **raw** | **canonical** | 1113 | **+130.15** | +14.67 | 1.544 | −16.07 |
+| `m05` | inv | canonical | 944 | +63.91 | **+18.28** | **1.943** | **−6.86** |
+| `m05` | std | canonical | 1078 | +63.01 | +12.92 | 1.484 | −10.84 |
+
+**At a fixed risk budget, calibration costs more return at T−25 than it did at the
+close** — and the mechanism is the same `w²` contraction, now biting harder because
+the T−25-optimal specs retain far less variance (0.085–0.160 for the inverse and
+static forms, against 0.846 for r01's close-fitted standard pick).
+
+Risk-matched to the raw T−25 arm (in-sample λ; a mechanism demonstration, not a
+performance claim — and none of these reached the target inside the 0.5pp
+tolerance, so each is the nearest λ below it):
+
+| Model | container | λ | return % | Sharpe | MDD % | raw MDD % |
+|---|---|---:|---:|---:|---:|---:|
+| `m12` | **std** | 12.0 | **+134.17** | 1.314 | −22.22 | −23.45 |
+| `m12` | sta | 10.0 | +88.93 | 1.156 | −19.49 | −23.45 |
+| `m12` | inv | 15.0 | +64.09 | 1.043 | −21.05 | −23.45 |
+| `m05` | sta | 10.0 | +85.32 | 1.182 | −19.78 | −22.73 |
+| `m05` | std | 15.0 | +83.96 | 1.158 | −20.01 | −22.73 |
+| `m05` | inv | 12.0 | +82.91 | 1.134 | −22.05 | −22.73 |
+
+**`m12`'s standard-form advantage survives the move to tradeable prices**
+(+134.17% against raw's +111.70%, at a shallower drawdown — the same ~+22pp
+matched-risk gain §6.2 measured at the close). **`m05`'s does not** (+83.96%
+against raw's +93.23%), though at 2.7pp less drawdown. The Phase 2 claim was
+`m12`-specific and should not have been read as a property of the transform.
+
+Note also that the **LogLoss-optimal form is the portfolio-worst one on both
+models**: the inverse form wins §7.3 and finishes last in every risk-matched row.
+Choosing a calibration on a proper score alone would have picked exactly wrong for
+the allocator, and that is the third time this stream has recorded that gap.
+
+### 7.5 Closing-line value
+
+The diagnostic a T−25 strategy earns and a close-priced one cannot pose: did the
+market move *toward* the bet after it was struck?
+
+| Model | container | trust | bets | mean CLV % | stake-weighted % | % positive |
+|---|---|---|---:|---:|---:|---:|
+| `m12` | raw | canonical | 1014 | +0.266 | +0.988 | 50.5 |
+| `m12` | **inv** | canonical | 885 | **+0.510** | +1.009 | **54.4** |
+| `m12` | std | canonical | 993 | +0.354 | +1.025 | 52.0 |
+| `m12` | sta | canonical | 889 | +0.500 | **+1.133** | 54.1 |
+| `m05` | raw | canonical | 1010 | +0.327 | +0.940 | 51.8 |
+| `m05` | **inv** | canonical | 854 | **+0.552** | +0.964 | **54.7** |
+| `m05` | std | canonical | 982 | +0.471 | +0.996 | 53.4 |
+
+**Every arm has positive CLV**, and the calibrated arms have roughly twice the raw
+model's. Calibration is selecting bets the market subsequently agrees with — which
+is the same fact as §7.2's price effect, seen per bet instead of per book.
+
+Read this carefully. CLV says the calibrated arms pick *better*; §7.4 says they
+stake *less*. Both are true, they are not in tension, and only the second one
+compounds.
+
+### 7.6 Out of sample — slates after 2025-05-03, T−25 prices
+
+| Model | container | trust | return % | Sharpe | MDD % |
+|---|---|---|---:|---:|---:|
+| `m12` | **raw** | canonical | **+31.77** | 0.941 | −16.15 |
+| `m12` | **std** | canonical | +24.63 | **1.269** | **−8.61** |
+| `m12` | inv | canonical | +15.22 | 1.010 | −7.76 |
+| `m05` | **raw** | canonical | **+30.09** | 0.945 | −16.07 |
+| `m05` | **inv** | canonical | +18.84 | **1.351** | −6.86 |
+| `m05` | std | canonical | +19.99 | 1.081 | −9.08 |
+
+Raw wins on return, calibrated wins on Sharpe and halves the drawdown. That is the
+same trade as everywhere else in this stream, and out of sample it is not resolved
+in calibration's favour on return at any arm.
+
+### 7.7 Verdict on Phase 3
+
+1. **The T−25 book exists and is usable.** 1,572 of 1,627 fixtures, median
+   staleness 8 minutes, near-fair overround. The cutoff is not the obstacle.
+2. **Closing-price staking was a penalty, not a flattery.** Correcting r01/r02's
+   caveat: the same strategies return **22–38 points more** at T−25. Everything
+   this stream has published understated the raw model.
+3. **Gate 1 passes at tradeable prices on every form and both models**, because
+   the T−25 book is measurably less calibrated than the close.
+4. **Calibration parameters do not transfer between price instants**, and the
+   winning functional form flips with the sharpness of the book being pooled
+   with. This reconciles the Ireland result rather than dismissing it.
+5. **On the portfolio, calibration at T−25 buys risk-adjusted quality, not
+   return.** `m12`'s matched-risk advantage survives; `m05`'s does not.
+6. **Positive CLV everywhere, strongest on the calibrated arms.** The bet
+   selection is genuinely better; the sizing is what gives the return back.
+7. **What would actually change the recommendation:** a variance-preserving
+   version of the pool. Every cost measured in §7.4 traces to `w²` contraction
+   reaching Kelly, and nothing in the construction requires the posterior spread
+   to shrink with its location. That is the next thing to build, and it is a
+   modelling change rather than another sweep.
+
+### 7.8 What still stands between this and a Saturday
+
+* **Fill model.** Bets are struck at the archived traded price in whatever size
+  the allocator asked for. The live system rests at the touch and the archive
+  carries at most three levels (AGENTS.md §7.4). These returns are still an upper
+  bound — a smaller one than r01/r02's, and now for this reason rather than the
+  price instant.
+* **Traded price, not the resting ladder.** `betfair.odds_history` archives what
+  someone paid; the console prices off `betfair_live.order_book_1m`. A T−25 traded
+  price is not necessarily what was showing on the side we would have taken.
+* **Staleness.** Bounded at 90 minutes, median 8. A 40-minute-old price is the
+  last trade, not a live quote.
+* **In-sample spec selection.** r03 chose the calibration parameters over the full
+  period; §7.6 holds out the slates, not the spec.
+
+---
+
+## 8. Boundaries
 
 * Reads `mcmc_experiments` (posteriors, via `PostgresStorage`) and `betdb`
   (odds, results). **Writes neither.** No run, portfolio or config registration.
