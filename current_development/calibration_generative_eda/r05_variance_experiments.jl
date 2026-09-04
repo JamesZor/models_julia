@@ -1,0 +1,653 @@
+# ==============================================================================
+# r05 — Variance preservation: does the pool's w² contraction cost anything?
+# ==============================================================================
+#
+# ------------------------------------------------------------------------------
+# THE QUESTION
+# ------------------------------------------------------------------------------
+#
+# README §7.7 closed Phase 3 with an open item. The T−25 calibration halves ECE and
+# earns +1.02% stake-weighted CLV, and it still compounds less than the raw model at
+# a fixed risk budget, because the log-linear pool contracts posterior log-variance
+# by w² and Fractional Kelly reads the whole predictive distribution. Two readings
+# of that were on the table and they make opposite predictions:
+#
+#   H1  the contraction is an ARTEFACT of the pooling algebra. Move the location,
+#       keep the width, and the compounding comes back at no cost in proper score.
+#   H2  the contraction is LOAD-BEARING. Restoring width at a shifted location
+#       re-inflates the Jensen tail term E[e^(−Λ)] ≥ e^(−E[Λ]) (`eda/README.md`
+#       Discovery 2), manufacturing longshot mass the model then bets.
+#   H3  the question is malformed. `SlateDrawdown` absorbs uniform stake changes
+#       (`eda/README.md` Discovery 4), so the calibrated arm's unused drawdown
+#       headroom can be spent with a risk knob, and no posterior needs touching.
+#   H4  some asymmetric scheme beats all three.
+#
+# This runner settles it by making location and dispersion independently
+# controllable (`l03_variance_schemes.jl`) and then scoring and staking seven
+# dispersion transforms under TWO location laws, against the same T−25 book.
+#
+# ------------------------------------------------------------------------------
+# THE ATTRIBUTION CONTRACT
+# ------------------------------------------------------------------------------
+#
+# Every scheme shares:
+#
+#   * the fixture set (24/25 + 25/26, gate-restricted, as r03/r04),
+#   * the T−25 book and the rates inverted from it,
+#   * the WEIGHT LAW and therefore the pooled LOCATION c — `A_pool` reproduces
+#     `l01.calibrate_latents` bit-for-bit-to-1e-9, checked by G-0 before anything
+#     downstream is read,
+#   * the book spec, `FixedCap(0.25)`, `DailySlate()` and 2% commission.
+#
+# Only the residual map M and the anchor κ move between rows. A difference in this
+# table is therefore a difference in DISPERSION and nothing else — which is the one
+# thing r01–r04 could not say, because there the weight moved the width and the
+# location together.
+#
+# Two location laws are run, not one, because the effect size scales with how much
+# variance the pool destroys: `std_w0.40_s0.15` retains ~70% (median w ≈ 0.84) and
+# `inv_w0.25_s0.35` retains far less. A dispersion effect that is real should be
+# larger under `inv`, and an artefact of one grid point should not be.
+#
+# ------------------------------------------------------------------------------
+# WHY THE FRONTIER PANEL IS THE ARBITER
+# ------------------------------------------------------------------------------
+#
+# A return quoted at a fixed λ compares two different amounts of risk taken, which
+# is the exact confound r02 §6.2 and r04 §7 both had to work around. H1 and H3
+# cannot be separated by any single-λ row: a variance-preserving scheme stakes
+# bigger and therefore returns more AND draws down more, and so does raising the
+# risk budget. Panel F sweeps λ for every scheme and reports the whole
+# (drawdown, return) frontier, so the question becomes the only one that is
+# well-posed — AT MATCHED DRAWDOWN, does any dispersion scheme buy return that the
+# risk knob could not have bought more cheaply?
+#
+# ------------------------------------------------------------------------------
+# PERSISTENCE CAVEAT
+# ------------------------------------------------------------------------------
+#
+# Replaceable CSVs under `results/`. Writes nothing to `mcmc_experiments`. Reads
+# `betdb` for odds and results only; `paper_runbook` is never opened and the
+# consoles on 8085 / 8086 are untouched.
+#
+# ------------------------------------------------------------------------------
+# USAGE
+# ------------------------------------------------------------------------------
+#
+#   julia --project -t 16
+#   julia> include("current_development/calibration_generative_eda/r05_variance_experiments.jl")
+#
+#   R05_SMOKE=1  one model, three schemes, one location law, short λ ladder.
+#
+# Requires `results/r03_best_per_form_t25.csv`; run r03 first. The location laws are
+# read from it rather than restated, so this runner cannot silently calibrate with a
+# spec r03 did not nominate.
+# ==============================================================================
+
+# %%
+# ===================================================================
+# 1. Packages and implementation
+# ===================================================================
+
+using BayesianFootball
+using CSV
+using DataFrames
+using Dates
+using LinearAlgebra
+using Printf
+using Statistics
+using ThreadPinning
+
+pinthreads(:cores)
+LinearAlgebra.BLAS.set_num_threads(1)
+
+include(joinpath(@__DIR__, "l01_generative_calibrator.jl"))
+include(joinpath(@__DIR__, "l02_point_in_time_book.jl"))
+include(joinpath(@__DIR__, "l03_variance_schemes.jl"))
+
+const R05_PF = BayesianFootball.Portfolio
+
+
+# %%
+# ===================================================================
+# 2. Configuration
+# ===================================================================
+
+const R05_EXPERIMENT = "scottish_lower_joint_player_2426"
+const R05_GATE_SEASONS = ["24/25", "25/26"]
+const R05_SMOKE = get(ENV, "R05_SMOKE", "0") != "0"
+const R05_MODELS = R05_SMOKE ? ["m12_joint_hybrid_synergy"] :
+    ["m12_joint_hybrid_synergy", "m05_joint_production_wealth"]
+
+const R05_AS_OF = -25.0
+const R05_MAX_STALENESS = 90.0
+const R05_SPLIT_DATE = Date(2025, 5, 3)
+const R05_INVERSION = MarketInversionConfig()
+const R05_N_BINS = 10
+const R05_EDGE_SMALL = 0.02
+const R05_EDGE_LARGE = 0.05
+const R05_OUT = joinpath(@__DIR__, "results")
+
+"""
+The location laws, by r03's own nomination. `std` is the Phase 3 champion and the
+one README §7 quotes; `inv` destroys far more posterior width and is here as the
+dose-response arm — a real dispersion effect must be larger under it.
+"""
+const R05_FORMS = R05_SMOKE ? ["std"] : ["std", "inv"]
+
+"""
+λ ladder for the frontier panel. Reaches further down than r04's because a
+variance-CONTRACTING scheme needs a looser budget to reach the raw arm's drawdown,
+and a variance-PRESERVING one needs a tighter one; the ladder has to bracket both
+or the frontier is a line segment with the answer off the end of it.
+"""
+const R05_RISK_LAMBDAS = R05_SMOKE ? [23.0, 12.0, 6.0] :
+    [23.0, 18.0, 15.0, 12.0, 10.0, 8.0, 6.0, 5.0, 4.0, 3.0, 2.0]
+
+"Scheme E's second knob. `l01_book_spec` hard-codes 0.30; H3 needs both."
+const R05_KELLY_FRACTIONS = R05_SMOKE ? [0.30] : [0.30, 0.40]
+
+"Directions scored. 13, not r03's 11 — the O/U 0.5 ladder IS the Jensen tail."
+const R05_SCORED_MARKETS = l01_full_direction_markets()
+
+"Directions staked. 11, unchanged from Phase 2/3. No O/U 0.5. See l01 §9."
+const R05_STAKED_MARKETS = l01_tradeable_markets()
+
+mkpath(R05_OUT)
+
+
+# %%
+# ===================================================================
+# 3. The location laws r03 nominated
+# ===================================================================
+
+"""
+    r05_location_laws() -> Dict{String, Dict{String, GenerativeCalibrationSpec}}
+
+`model → form → spec`, read from `r03_best_per_form_t25.csv`.
+
+Same discipline as r04: the specs are r03's nominations, not this file's opinion,
+so the two cannot drift and this runner cannot calibrate with something that never
+cleared Gate 1 at tradeable prices.
+"""
+function r05_location_laws()
+    path = joinpath(R05_OUT, "r03_best_per_form_t25.csv")
+    isfile(path) || error(
+        "r05 needs $(path). Run r03_t25_book_and_calibration.jl first — the " *
+        "location laws are r03's nominations and are not restated here.")
+    df = CSV.read(path, DataFrame)
+    out = Dict{String, Dict{String, GenerativeCalibrationSpec}}()
+    for r in eachrow(df)
+        method = Symbol(r.method)
+        form = method === :inverse_gaussian ? "inv" :
+               method === :standard_gaussian ? "std" : "sta"
+        spec = GenerativeCalibrationSpec(
+            method = method, w_base = Float64(r.w_base),
+            sigma = method === :static_geometric ? 0.25 : Float64(r.sigma),
+            w_max = Float64(r.w_max))
+        get!(() -> Dict{String, GenerativeCalibrationSpec}(), out, String(r.model))[form] = spec
+    end
+    return out
+end
+
+r05_laws = r05_location_laws()
+r05_schemes = R05_SMOKE ?
+    filter(s -> s.id in ("A_pool", "B_full", "D_sup"), l03_schemes()) : l03_schemes()
+
+println("\n" * "="^118)
+println(" r05 · VARIANCE PRESERVATION AND DISPERSION TRANSFORMS AT T$(R05_AS_OF)")
+println("="^118)
+@printf("  started    : %s\n", Dates.format(now(), "yyyy-mm-dd HH:MM:SS"))
+@printf("  threads    : %d\n", Threads.nthreads())
+R05_SMOKE && println("  MODE       : SMOKE")
+println("\n  dispersion schemes under test:")
+for s in r05_schemes
+    @printf("    %-12s [%s]  %s\n", s.id, s.family, s.note)
+end
+println("\n  location laws (r03 nominations, held fixed across schemes):")
+for name in R05_MODELS, form in R05_FORMS
+    haskey(r05_laws, name) && haskey(r05_laws[name], form) || continue
+    @printf("    %-30s %-4s %s\n", name, form, spec_label(r05_laws[name][form]))
+end
+
+
+# %%
+# ===================================================================
+# 4. Data, books, rates
+# ===================================================================
+
+ds = Data.load_datastore_cached(Data.ScottishLower(); max_age_hours = 10_000)
+db = PostgresStorage(R05_EXPERIMENT)
+
+r05_gate_ids = Set{Int}(
+    Int.(ds.matches.match_id[in.(ds.matches.season, Ref(R05_GATE_SEASONS))]))
+
+close_book = l01_betfair_closing_odds(ds)
+t25_full, t25_refusals = point_in_time_book(
+    ds; config = PointInTimeBookConfig(as_of_minutes = R05_AS_OF,
+                                       max_staleness_minutes = R05_MAX_STALENESS))
+assert_book_as_of(t25_full, R05_AS_OF)
+
+const R05_KEY = [:match_id, :market_name, :market_line, :selection]
+r05_keys = innerjoin(unique(select(t25_full, R05_KEY)),
+                     unique(select(close_book, R05_KEY)); on = R05_KEY)
+t25_matched = sort!(innerjoin(t25_full, r05_keys; on = R05_KEY), R05_KEY)
+assert_book_as_of(t25_matched, R05_AS_OF)
+
+r05_drift = book_drift(t25_full, close_book)
+
+println("\n--- books ---")
+@printf("  T−25 (full)    : %6d rows, %5d fixtures  — staked on this\n",
+        nrow(t25_full), length(unique(t25_full.match_id)))
+@printf("  T−25 (matched) : %6d rows, %5d fixtures  — scored on this, as r03 was\n",
+        nrow(t25_matched), length(unique(t25_matched.match_id)))
+let ou05 = filter(r -> r.market_name == "OverUnder" && r.market_line == 0.5, t25_matched)
+    @printf("  O/U 0.5 rows in the scoring book: %d over %d fixtures (both sides " *
+            "required by l02, so the r01 de-vig defect cannot occur here)\n",
+            nrow(ou05), length(unique(ou05.match_id)))
+end
+
+r05_raw = Dict{String, Any}()
+for name in R05_MODELS
+    fit = load_fit(db, name)
+    fit.diagnostics.passed ||
+        @warn "$name did not pass strict convergence gating" gates=fit.diagnostics.failed_gates
+    r05_raw[name] = restrict_latents(fit_latents(fit), r05_gate_ids)
+end
+r05_all_ids = sort!(collect(union((Set(latent_match_ids(r05_raw[n])) for n in R05_MODELS)...)))
+r05_rates = invert_market_rates(t25_full; config = R05_INVERSION, match_ids = r05_all_ids)
+
+@printf("\n  fixtures priced : %d;  market rates accepted on %d\n",
+        length(r05_all_ids), count(f -> f.accepted, values(r05_rates)))
+
+
+# %%
+# ===================================================================
+# 5. G-0 · the gate that keeps A_pool the production pool
+# ===================================================================
+
+println("\n--- G-0 · A_pool must reproduce l01.calibrate_latents ---")
+for name in R05_MODELS, form in R05_FORMS
+    haskey(r05_laws[name], form) || continue
+    chk = assert_scheme_a_matches(r05_raw[name], r05_rates, r05_laws[name][form])
+    @printf("  %-30s %-4s max relative departure %.2e (bound %.0e)  PASS\n",
+            name, form, max(chk.max_rel_home, chk.max_rel_away), chk.rtol)
+end
+println("  Every row below is a difference against A_pool. If this gate had failed,")
+println("  the baseline would not be the pool r01–r04 measured and no difference in")
+println("  this file would mean what its column heading says.")
+
+
+# %%
+# ===================================================================
+# 6. The containers
+# ===================================================================
+
+println("\n--- containers · dispersion applied at a frozen location ---")
+r05_containers = Dict{String, Vector{NamedTuple}}()
+r05_disp_rows = NamedTuple[]
+
+for name in R05_MODELS
+    arms = NamedTuple[(id = "raw", form = "none", scheme = "none",
+                       spec = GenerativeCalibrationSpec(method = :static_geometric,
+                                                        w_base = 1.0),
+                       latents = r05_raw[name], disp = nothing)]
+    for form in R05_FORMS
+        haskey(r05_laws[name], form) || continue
+        spec = r05_laws[name][form]
+        for s in r05_schemes
+            lat, diag = apply_dispersion(r05_raw[name], r05_rates, spec, s)
+            summ = dispersion_summary(diag)
+            push!(arms, (id = form * "_" * s.id, form = form, scheme = s.id,
+                         spec = spec, latents = lat, disp = summ))
+            push!(r05_disp_rows, merge((; model = name, form = form, scheme = s.id,
+                                        spec = spec_label(spec), family = s.family,
+                                        anchor = String(s.anchor)), summ))
+        end
+    end
+    r05_containers[name] = arms
+end
+
+@printf(" %-30s | %-4s | %-12s | %7s | %9s | %9s | %9s | %10s\n",
+        "Model", "form", "scheme", "med w", "ret side", "ret sup", "ret tot", "rate ratio")
+println("-"^118)
+for r in r05_disp_rows
+    @printf(" %-30s | %-4s | %-12s | %7.3f | %9.3f | %9.3f | %9.3f | %10.4f\n",
+            r.model, r.form, r.scheme, r.w_median, r.ret_side_median,
+            r.ret_sup_median, r.ret_tot_median, r.rate_ratio_median)
+end
+println("  `ret *` is retained log-variance against the RAW posterior, in three")
+println("  bases. `rate ratio` is the predictive rate against A_pool's — the")
+println("  anchored schemes sit at 1.0000 by construction and their unanchored")
+println("  twins do not, which is the whole of the H2 contrast.")
+
+CSV.write(joinpath(R05_OUT, "r05_variance_dispersion.csv"), DataFrame(r05_disp_rows))
+
+
+# %%
+# ===================================================================
+# 7. Gate 1 · proper scores and the Jensen tail audit
+# ===================================================================
+
+println("\n--- Gate 1 · proper scores on the T−25 book, and the tail audit ---")
+
+r05_score_rows = NamedTuple[]
+r05_family_frames = DataFrame[]
+r05_jensen_rows = NamedTuple[]
+
+t_scores = @elapsed for name in R05_MODELS
+    arms = r05_containers[name]
+    raw_arm = first(a for a in arms if a.id == "raw")
+
+    actx = build_evaluation_context(raw_arm.latents, t25_matched, ds.matches,
+                                    L01_EVAL.AbstractScoringRule[L01_EVAL.LogLoss()];
+                                    markets = R05_SCORED_MARKETS, threaded = true)
+    anchor = edge_anchor(actx)
+
+    realised = realised_totals(ds.matches, latent_match_ids(raw_arm.latents))
+
+    for a in arms
+        row, fams = score_calibration(name, a.spec, a.latents, t25_matched, ds.matches;
+                                      markets = R05_SCORED_MARKETS, n_bins = R05_N_BINS,
+                                      anchor = anchor, edge_small = R05_EDGE_SMALL,
+                                      edge_large = R05_EDGE_LARGE)
+        jd = jensen_diagnostics(a.latents; label = a.id)
+        js = jensen_summary(jd, realised; label = a.id)
+        d = a.disp
+        push!(r05_score_rows, merge(
+            row,
+            (; container = a.id, form = a.form, scheme = a.scheme,
+               ret_side = d === nothing ? 1.0 : d.ret_side_median,
+               ret_sup = d === nothing ? 1.0 : d.ret_sup_median,
+               ret_tot = d === nothing ? 1.0 : d.ret_tot_median,
+               rate_ratio = d === nothing ? NaN : d.rate_ratio_median),
+            Base.structdiff(js, NamedTuple{(:scheme,)})))
+        fams.spec .= a.id
+        push!(r05_family_frames, fams)
+        push!(r05_jensen_rows, merge((; model = name, container = a.id), js))
+        @printf("  %-30s %-14s LL %.5f (mkt %.5f)  ECE %.4f  Brier %.5f  " *
+                "P(U0.5) %.4f (real %.4f)\n",
+                name, a.id, row.head_logloss, row.head_market_logloss,
+                row.head_ece, row.head_brier, js.p_under_05, js.realised_under_05)
+    end
+end
+@printf("  scored in %s\n", Training.format_elapsed(t_scores))
+
+r05_scores = DataFrame(r05_score_rows)
+CSV.write(joinpath(R05_OUT, "r05_variance_scores.csv"), r05_scores)
+CSV.write(joinpath(R05_OUT, "r05_variance_family_scores.csv"),
+          vcat(r05_family_frames...; cols = :union))
+CSV.write(joinpath(R05_OUT, "r05_variance_jensen.csv"), DataFrame(r05_jensen_rows))
+
+
+# %%
+# ===================================================================
+# 8. Gate 2 · the portfolio at T−25, and the risk frontier
+# ===================================================================
+#
+# ONE loop, not two. `build_books_reported` materialises a priced book per slate and
+# is both the expensive step and the memory-heavy one, so every simulation that
+# reads a given (container, Kelly fraction) — Panel P at the production budget, the
+# out-of-sample window, the whole λ ladder — is run while those books are alive, and
+# they are dropped before the next container is built. Caching them all instead
+# would hold thirty book sets in memory at once for no gain.
+#
+#   Panel P  full T−25 book, λ 23.0, Kelly 0.30 — the production settings
+#   Panel O  the same, restricted to slates after the split date
+#   Panel F  the λ ladder at Kelly 0.30 — the frontier, and the arbiter
+#   Panel E  the λ ladder at Kelly 0.40, on `raw` and `*_A_pool` only — H3's second
+#            knob, applied to the two arms H3 is a counter-hypothesis ABOUT
+
+const R05_FLAT = l01_policy_spec(FlatTrust(1.0))
+const R05_CANON = l01_policy_spec(CanonicalScottishLowerTrust())
+
+r05_trust_of(tname, λ) = tname == "flat_1.0" ?
+    l01_policy_spec(FlatTrust(1.0); risk_lambda = λ) :
+    l01_policy_spec(CanonicalScottishLowerTrust(); risk_lambda = λ)
+
+function r05_row(model, arm, trust_name, panel, window, λ, kelly, s)
+    return (model = String(model), container = String(arm.id), form = String(arm.form),
+            scheme = String(arm.scheme), trust = String(trust_name),
+            panel = String(panel), window = String(window),
+            risk_lambda = Float64(λ), kelly_fraction = Float64(kelly),
+            n_bets = s.n_bets, n_slates = s.n_slates,
+            total_return_pct = s.total_return_pct, flat_roi_pct = s.roi,
+            max_drawdown_pct = s.mdd, sharpe_ann = s.sharpe_ann,
+            calmar = s.calmar, win_rate = s.win_rate,
+            mean_exposure = s.mean_exposure)
+end
+
+r05_pf_rows = NamedTuple[]
+r05_clv_rows = NamedTuple[]
+r05_direction_frames = DataFrame[]
+
+"Scheme E's second knob is only run on the arms H3 is an argument about."
+r05_wants_kelly(arm, kelly) =
+    kelly == 0.30 || arm.id == "raw" || endswith(arm.id, "A_pool")
+
+println("\n--- Gate 2 · Panels P / O / F / E on the full T−25 book ---")
+@printf(" %-28s | %-14s | %-13s | %5s | %9s | %8s | %8s | %7s\n",
+        "Model", "container", "trust", "bets", "return %", "MDD %", "Sharpe", "Calmar")
+println("-"^118)
+
+t_portfolio = @elapsed for name in R05_MODELS
+    for arm in r05_containers[name]
+        for kelly in R05_KELLY_FRACTIONS
+            r05_wants_kelly(arm, kelly) || continue
+            bspec = l03_book_spec(R05_STAKED_MARKETS; kelly_fraction = kelly)
+            books, rep = R05_PF.build_books_reported(bspec, arm.latents, t25_full,
+                                                     ds.matches; require_result = true,
+                                                     quiet = true)
+            ev = filter(b -> b.date > R05_SPLIT_DATE, books)
+
+            for tname in ("flat_1.0", "canonical_P1")
+                for λ in R05_RISK_LAMBDAS
+                    policy = r05_trust_of(tname, λ)
+                    result = R05_PF.simulate_portfolio(policy, books; bootstrap = false)
+                    production = (λ == 23.0 && kelly == 0.30)
+                    panel = production ? "P" : (kelly == 0.30 ? "F" : "E")
+                    push!(r05_pf_rows,
+                          r05_row(name, arm, tname, panel, "full", λ, kelly, result.summary))
+
+                    if production
+                        clv = bet_clv(result.trajectory.bets, r05_drift)
+                        push!(r05_clv_rows,
+                              merge((; model = name, container = arm.id, form = arm.form,
+                                     scheme = arm.scheme, trust = tname, panel = "P"),
+                                    clv_summary(result.trajectory.bets, clv)))
+                        d = direction_ledger(result)
+                        if nrow(d) > 0
+                            insertcols!(d, 1, :model => name, :container => arm.id,
+                                        :form => arm.form, :scheme => arm.scheme,
+                                        :trust => tname)
+                            push!(r05_direction_frames, d)
+                        end
+                        @printf(" %-28s | %-14s | %-13s | %5d | %+9.2f | %8.2f | %8.3f | %7.3f\n",
+                                name, arm.id, tname, result.summary.n_bets,
+                                result.summary.total_return_pct, result.summary.mdd,
+                                result.summary.sharpe_ann, result.summary.calmar)
+                        if !isempty(ev)
+                            es = R05_PF.simulate_portfolio(policy, ev; bootstrap = false).summary
+                            push!(r05_pf_rows,
+                                  r05_row(name, arm, tname, "O", "evaluation", λ, kelly, es))
+                        end
+                    end
+                end
+            end
+            books = nothing
+            ev = nothing
+            GC.gc(false)
+        end
+    end
+end
+@printf("  Gate 2 complete in %s\n", Training.format_elapsed(t_portfolio))
+
+r05_portfolio = DataFrame(r05_pf_rows)
+CSV.write(joinpath(R05_OUT, "r05_variance_portfolio_summary.csv"), r05_portfolio)
+CSV.write(joinpath(R05_OUT, "r05_variance_clv.csv"), DataFrame(r05_clv_rows))
+isempty(r05_direction_frames) ||
+    CSV.write(joinpath(R05_OUT, "r05_variance_direction_ledger.csv"),
+              vcat(r05_direction_frames...; cols = :union))
+
+
+# %%
+# ===================================================================
+# 9. The frontier, read at matched drawdown
+# ===================================================================
+#
+# The comparison every earlier phase had to hedge. For each container, take the λ
+# whose realised max drawdown is closest to the RAW arm's at λ 23 — the common
+# reference risk — and read the return there. Linear interpolation between the two
+# bracketing λ rungs where the ladder brackets the target, and the nearest rung
+# with the gap reported where it does not.
+
+"""
+    frontier_at(rows, target_mdd) -> NamedTuple
+
+Return, Sharpe and λ at the drawdown `target_mdd`, interpolated along the ladder.
+
+Drawdowns are NEGATIVE percentages, so "closest to target" is on |mdd|. A ladder
+that does not bracket the target reports its nearest rung and the residual gap
+rather than extrapolating; extrapolating a compounding curve off the end of a
+sweep is how a mechanism demonstration turns into a fabricated number.
+"""
+function frontier_at(rows::AbstractDataFrame, target_mdd::Float64)
+    nrow(rows) == 0 && return (; risk_lambda = NaN, total_return_pct = NaN,
+                               sharpe_ann = NaN, mdd = NaN, gap = NaN, bracketed = false)
+    d = sort(DataFrame(rows), :max_drawdown_pct; rev = true)   # shallowest first
+    a = abs.(d.max_drawdown_pct)
+    t = abs(target_mdd)
+    if t <= first(a) || t >= last(a)
+        i = argmin(abs.(a .- t))
+        return (; risk_lambda = d.risk_lambda[i], total_return_pct = d.total_return_pct[i],
+                sharpe_ann = d.sharpe_ann[i], mdd = d.max_drawdown_pct[i],
+                gap = a[i] - t, bracketed = false)
+    end
+    j = findfirst(>=(t), a)
+    i = j - 1
+    span = a[j] - a[i]
+    f = span > 0 ? (t - a[i]) / span : 0.0
+    return (; risk_lambda = d.risk_lambda[i] + f * (d.risk_lambda[j] - d.risk_lambda[i]),
+            total_return_pct = d.total_return_pct[i] +
+                               f * (d.total_return_pct[j] - d.total_return_pct[i]),
+            sharpe_ann = d.sharpe_ann[i] + f * (d.sharpe_ann[j] - d.sharpe_ann[i]),
+            mdd = target_mdd, gap = 0.0, bracketed = true)
+end
+
+r05_frontier_rows = NamedTuple[]
+for name in R05_MODELS, tname in ("flat_1.0", "canonical_P1")
+    base = filter(r -> r.model == name && r.container == "raw" && r.trust == tname &&
+                       r.window == "full" && r.kelly_fraction == 0.30 &&
+                       r.risk_lambda == 23.0, r05_portfolio)
+    nrow(base) == 0 && continue
+    target = first(base).max_drawdown_pct
+    for arm in r05_containers[name], kelly in R05_KELLY_FRACTIONS
+        rows = filter(r -> r.model == name && r.container == arm.id && r.trust == tname &&
+                           r.window == "full" && r.kelly_fraction == kelly, r05_portfolio)
+        nrow(rows) == 0 && continue
+        f = frontier_at(rows, target)
+        push!(r05_frontier_rows,
+              (; model = name, container = arm.id, form = arm.form, scheme = arm.scheme,
+                 trust = tname, kelly_fraction = kelly, target_mdd = target,
+                 risk_lambda = f.risk_lambda, total_return_pct = f.total_return_pct,
+                 sharpe_ann = f.sharpe_ann, realised_mdd = f.mdd,
+                 mdd_gap = f.gap, bracketed = f.bracketed))
+    end
+end
+r05_frontier = DataFrame(r05_frontier_rows)
+nrow(r05_frontier) > 0 &&
+    CSV.write(joinpath(R05_OUT, "r05_variance_frontier.csv"), r05_frontier)
+
+
+# %%
+# ===================================================================
+# 10. Headline tables
+# ===================================================================
+
+println("\n" * "="^140)
+println(" T1 · GATE 1 — proper scores, and what the dispersion did to the tails")
+println("="^140)
+@printf(" %-28s | %-14s | %8s | %7s | %8s | %8s | %8s | %8s | %8s\n",
+        "Model", "container", "LogLoss", "ECE", "Brier", "ret tot", "P(U0.5)", "bias U0.5",
+        "bias O3.5")
+println("-"^140)
+for r in eachrow(r05_scores)
+    @printf(" %-28s | %-14s | %8.5f | %7.4f | %8.5f | %8.3f | %8.4f | %+8.4f | %+8.4f\n",
+            r.model, r.container, r.head_logloss, r.head_ece, r.head_brier,
+            r.ret_tot, r.p_under_05, r.bias_under_05, r.bias_over_35)
+end
+println(" `bias` is mean predicted minus realised frequency over the same fixtures.")
+println(" H2 predicts it grows with retained TOTALS dispersion on the under tail.")
+
+println("\n" * "="^140)
+println(" T2 · GATE 2 — the portfolio at the production risk budget (λ 23, Kelly 0.30)")
+println("="^140)
+@printf(" %-28s | %-14s | %-13s | %5s | %9s | %8s | %8s | %7s | %9s\n",
+        "Model", "container", "trust", "bets", "return %", "MDD %", "Sharpe", "Calmar",
+        "exposure")
+println("-"^140)
+for r in eachrow(filter(x -> x.panel == "P", r05_portfolio))
+    @printf(" %-28s | %-14s | %-13s | %5d | %+9.2f | %8.2f | %8.3f | %7.3f | %9.4f\n",
+            r.model, r.container, r.trust, r.n_bets, r.total_return_pct,
+            r.max_drawdown_pct, r.sharpe_ann, r.calmar, r.mean_exposure)
+end
+
+if nrow(r05_frontier) > 0
+    println("\n" * "="^140)
+    println(" T3 · THE ARBITER — return AT THE RAW ARM'S DRAWDOWN, λ interpolated along the ladder")
+    println("="^140)
+    @printf(" %-28s | %-14s | %-13s | %5s | %8s | %9s | %8s | %s\n",
+            "Model", "container", "trust", "Kelly", "λ", "return %", "Sharpe", "note")
+    println("-"^140)
+    for r in eachrow(sort(r05_frontier, [:model, :trust, :kelly_fraction,
+                                         order(:total_return_pct, rev = true)]))
+        @printf(" %-28s | %-14s | %-13s | %5.2f | %8.2f | %+9.2f | %8.3f | %s\n",
+                r.model, r.container, r.trust, r.kelly_fraction, r.risk_lambda,
+                r.total_return_pct, r.sharpe_ann,
+                r.bracketed ? "" : @sprintf("NOT BRACKETED (%.2fpp off target)", r.mdd_gap))
+    end
+    println(" Every row is at the SAME realised drawdown. A dispersion scheme earns its")
+    println(" place here only by beating A_pool and raw at matched risk — anything it")
+    println(" gains merely by staking bigger has already been given to them by λ.")
+end
+
+println("\n" * "="^140)
+println(" T4 · CLOSING-LINE VALUE (Panel P)")
+println("="^140)
+@printf(" %-28s | %-14s | %-13s | %5s | %10s | %12s | %10s\n",
+        "Model", "container", "trust", "bets", "mean CLV%", "stake-wtd %", "% positive")
+println("-"^140)
+for r in eachrow(DataFrame(r05_clv_rows))
+    @printf(" %-28s | %-14s | %-13s | %5d | %+10.3f | %+12.3f | %10.1f\n",
+            r.model, r.container, r.trust, r.n_matched, r.mean_clv_pct,
+            r.stake_weighted_clv_pct, r.pct_positive)
+end
+
+if !isempty(r05_direction_frames)
+    println("\n" * "="^140)
+    println(" T5 · OVER 2.5 ACROSS SCHEMES (canonical trust, Panel P)")
+    println("="^140)
+    all_dir = vcat(r05_direction_frames...; cols = :union)
+    o25 = filter(r -> r.selection == :over_25 && r.trust == "canonical_P1", all_dir)
+    @printf(" %-28s | %-14s | %5s | %8s | %9s | %9s | %9s | %10s\n",
+            "Model", "container", "bets", "win rate", "mean odds", "kelly ROI",
+            "flat ROI", "cap share")
+    println("-"^140)
+    for r in eachrow(sort(o25, [:model, :container]))
+        @printf(" %-28s | %-14s | %5d | %8.3f | %9.3f | %+9.2f | %+9.2f | %10.2f\n",
+                r.model, r.container, r.n_bets, r.win_rate, r.mean_odds,
+                r.kelly_roi, r.flat_roi, r.capital_share)
+    end
+end
+
+println("\n" * "="^140)
+println(" ARTEFACTS")
+for f in ("r05_variance_dispersion.csv", "r05_variance_scores.csv",
+          "r05_variance_family_scores.csv", "r05_variance_jensen.csv",
+          "r05_variance_portfolio_summary.csv", "r05_variance_clv.csv",
+          "r05_variance_direction_ledger.csv", "r05_variance_frontier.csv")
+    p = joinpath(R05_OUT, f)
+    isfile(p) && @printf("  %-42s %8d bytes\n", f, filesize(p))
+end
+@printf("\n  finished   : %s\n", Dates.format(now(), "yyyy-mm-dd HH:MM:SS"))
+println("="^140)
