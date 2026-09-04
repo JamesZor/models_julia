@@ -18,8 +18,8 @@
 # place, which (a) mutates a cache and (b) has no path for any feature other than ratings --
 # so no market-pillar engine could ever run on match day. Materialisers dispatch per feature.
 
-export select_split, matchday_latents, RatingsFromTracker, LeagueFromFixture,
-       MarketPillarFromBook, MaterialiserChain, check_coverage
+export select_split, matchday_latents, RatingsFromTracker, LineupAggregateFromRAPM,
+       LeagueFromFixture, MarketPillarFromBook, MaterialiserChain, check_coverage
 
 """
     INJECTABLE_KEYS
@@ -36,6 +36,14 @@ is priced silently rather than refused -- which is why every one of them must be
 * `:player_ratings_map` -- read by every player-level engine
   (`DynamicSmileDoublePoissonXGOutfieldPlayerTimeDecayModel` and friends); default `Dict()`,
   i.e. zero player strength.
+* `:player_lineup_ratings_map` -- read by the **builder** family's `PlayerLineupPillar`
+  (`Models.PreGame`'s `engine.jl`: `get(d, :player_lineup_ratings_map, Dict{Int,PMLineupAggregate}())`,
+  consumed by `predictor_oos(::PlayerLineupPillar, ...)`); default
+  `_pm_empty_lineup_aggregate()`, i.e. **the lineup pillar contributes exactly zero**. This key
+  was absent from this tuple until 2026-09-04, which made the omission invisible in the worst
+  possible way: `m12_joint_hybrid_synergy` would have priced a full Scottish card with no lineup
+  term at all, and nothing would have raised, because the fallback is a valid value rather than a
+  missing one.
 * `:league_lookup` -- read by every pooled multi-division engine
   (`DynamicFunnelDoublePoissonGoalsLeagueTimeDecayModel`, `...PlusMinus...`,
   `...SmileLeague...`) as `get(league_lookup, mid, 0)`; default `0`, which **zeroes the
@@ -43,7 +51,7 @@ is priced silently rather than refused -- which is why every one of them must be
   gap between League One and League Two, so an unmaterialised fixture is priced at the mean of
   the two tiers.
 """
-const INJECTABLE_KEYS = (:player_ratings_map, :league_lookup)
+const INJECTABLE_KEYS = (:player_ratings_map, :player_lineup_ratings_map, :league_lookup)
 
 """
     check_coverage(fs, fixtures, model)
@@ -75,6 +83,16 @@ function check_coverage(fs, fx::Vector{Fixture}, model)
         isempty(missing_ids) || push!(problems,
             "fixtures with no entry in player_ratings_map (extract_parameters would fall back " *
             "to an empty Dict and price them with zero player strength): " *
+            join(string.(missing_ids), ", "))
+    end
+
+    if haskey(data, :player_lineup_ratings_map)
+        lm = data[:player_lineup_ratings_map]
+        missing_ids = [f.m_id for f in fx if !haskey(lm, f.m_id)]
+        isempty(missing_ids) || push!(problems,
+            "fixtures with no entry in player_lineup_ratings_map (PlayerLineupPillar's " *
+            "predictor_oos would fall back to the neutral aggregate, contributing exactly zero " *
+            "lineup effect while still producing a plausible-looking price): " *
             join(string.(missing_ids), ", "))
     end
 
@@ -225,7 +243,14 @@ struct RatingsFromTracker <: AbstractFeatureMaterialiser end
 function materialise!(::RatingsFromTracker, ::Val{:player_ratings_map}, fs,
                       fx::Vector{Fixture}, ctx)
     ds, model = ctx.ds, ctx.model
-    tracker   = model.player_ratings_feature.tracker
+    # DECLINE, do not throw. A builder-family `PoissonCountModel` carries its player term inside
+    # `covariates` as a `PlayerLineupPillar` and has no `player_ratings_feature` at all; reading
+    # the field raised a `FieldError` that took down the whole match day. Returning `false` lets
+    # `MaterialiserChain` fall through to `LineupAggregateFromRAPM`, and a key that NO member
+    # claims is still an error in `matchday_latents` -- so declining here cannot silently skip a
+    # feature, only redirect it.
+    hasproperty(model, :player_ratings_feature) || return false
+    tracker = model.player_ratings_feature.tracker
     latest, fallback = latest_player_ratings(ds, tracker)
 
     map_ = fs.data[:player_ratings_map]
@@ -278,6 +303,179 @@ function latest_player_ratings(ds, tracker)
             (hasproperty(tracker, :prior_mean) ? tracker.prior_mean : fallback) : Float64(v)
     end
     return out, fallback
+end
+
+"""
+    LineupAggregateFromRAPM()
+
+The plus-minus counterpart of `RatingsFromTracker`: turns tomorrow's teamsheet into the two
+lineup maps the `AbstractPlusMinusFeature` extractor emits at training time.
+
+Claims a FeatureSet only when it carries `:plus_minus_ratings` -- the fold's leak-controlled
+`Dict{player_id => RAPM rating}`, fit on the history block alone. That is a property of the data
+rather than a type test, which matters because the same FeatureSet shape is produced for both the
+builder family (`PlayerLineupPillar`) and the legacy player-level engines.
+
+**Which rating vector, and why this is not a leak.** The ratings are the fold's own, frozen at
+training time; only the *teamsheet* is new. `plus_minus_extractors.jl` makes the same argument
+where it builds the training-time map over the whole DataStore rather than the fold: applying a
+history-fit rating to a future XI is precisely the pre-match quantity under test.
+
+**Fidelity.** Both maps mirror `plus_minus_extractors.jl` exactly, including the two places where
+the two maps deliberately disagree:
+
+* `:player_lineup_ratings_map` (`pm_lineup_aggregates`) EXCLUDES goalkeepers and includes
+  substitutes, in the 18-field order `PMLineupAggregate` declares.
+* `:player_ratings_map` INCLUDES goalkeepers, is starters-only, and drops any player whose fitted
+  rating is exactly `0.0` -- the extractor's `rt == 0.0 && continue`, which is what makes
+  `flat_plus_minus_fallback` meaningful.
+
+Expected minutes are recomputed the way the extractor's rolling state computes them: the mean of
+a player's last five positive `minutes_played`, clamped at 120, defaulting to 90 for a starter
+and 0 for a substitute with no usable history. Because `as_of` is after every match in `ds`, that
+final state IS the pre-match value for tomorrow. Only `MinuteWeightedPlayerAggregation` reads
+those two fields; `m12_joint_hybrid_synergy` uses `BenchWeightedPlayerAggregation` and does not.
+They are filled anyway, because a materialiser that populated some fields of a struct and left
+others at zero would be a trap for the next model.
+
+`MatchDay.clean_position` and `Features.pm_clean_position` are separate functions that agree on
+every value SofaScore emits (`G`/`GK`, `D`/`DF`, `F`/`FW`/`A`, everything else `M`). The
+`Player.position` symbol is already normalised by the lineup source, so it is used directly.
+
+RELATION TO THE REPLAY ENGINE. `current_development/match_day_inference/replay_state.jl` has
+carried a local `PointInTimeLineupRatings` since the replay console was built, for exactly this
+gap; it is why the replay suite's R10/R11 pass while the live path could not price m12 at all.
+This is the live-path version, and it differs deliberately in two places:
+
+* **No XI, no entry.** The replay materialiser writes the NEUTRAL aggregate for a fixture whose
+  teamsheet has not dropped yet, because before the drop that IS the state being replayed. Here
+  the fixture is left absent so `check_coverage` refuses it. On a live Saturday a missing XI
+  means the scrape failed, and pricing a real card off a zero pillar is the outcome this whole
+  key exists to prevent.
+* **Minute slots 17-18.** The replay version weights starters 1.0 and substitutes 0.0, on the
+  grounds that a pre-match teamsheet has no minute history. That reading is right for a debutant
+  and wrong for everyone else: the extractor's `minute_history` holds the player's PREVIOUS five
+  appearances, which are available pre-match, and only an empty history falls back to 90/0. This
+  version reproduces the rolling mean, so a `MinuteWeightedPlayerAggregation` model would be
+  served the quantity it was trained on. Neither version's choice reaches
+  `m12_joint_hybrid_synergy`, whose `BenchWeightedPlayerAggregation` reads slots 1-4 only.
+
+The two should eventually be one function; merging them changes replay behaviour that R10/R11
+pin, so it is a separate change rather than a side effect of this one.
+"""
+struct LineupAggregateFromRAPM <: AbstractFeatureMaterialiser end
+
+function materialise!(::LineupAggregateFromRAPM, ::Val{:player_lineup_ratings_map}, fs,
+                      fx::Vector{Fixture}, ctx)
+    haskey(fs.data, :plus_minus_ratings) || return false
+    rating_of = fs.data[:plus_minus_ratings]
+    expected  = expected_minutes(ctx.ds)
+    map_ = fs.data[:player_lineup_ratings_map]
+    for f in fx
+        lu = get(ctx.lineups, f.m_id, nothing)
+        lu === nothing && continue
+        map_[f.m_id] = pm_lineup_aggregate(lu, rating_of, expected)
+    end
+    return true
+end
+
+function materialise!(::LineupAggregateFromRAPM, ::Val{:player_ratings_map}, fs,
+                      fx::Vector{Fixture}, ctx)
+    haskey(fs.data, :plus_minus_ratings) || return false
+    rating_of = fs.data[:plus_minus_ratings]
+    map_ = fs.data[:player_ratings_map]
+    for f in fx
+        lu = get(ctx.lineups, f.m_id, nothing)
+        lu === nothing && continue
+        entry = Dict{Tuple{String,String},Float64}()
+        for (side, players) in (("home", lu.home), ("away", lu.away))
+            for p in players
+                p.substitute && continue                  # starters only
+                rt = get(rating_of, p.player_id, 0.0)
+                (isfinite(rt) && rt != 0.0) || continue   # extractor drops unrated players
+                key = (side, String(p.position))
+                entry[key] = get(entry, key, 0.0) + rt
+            end
+        end
+        map_[f.m_id] = entry
+    end
+    return true
+end
+
+materialise!(::LineupAggregateFromRAPM, ::Val, _fs, ::Vector{Fixture}, _ctx) = false
+
+"""
+    pm_lineup_aggregate(lineup, rating_of, expected_minutes) -> PMLineupAggregate
+
+One teamsheet collapsed into the 18 pre-match sums, in `PMLineupAggregate`'s field order.
+
+The index arithmetic is copied from `Features.pm_lineup_aggregates` rather than re-derived, so
+the two stay comparable line by line: starters land in slots 1-2 and 5-10, substitutes in 3-4 and
+11-16, and every outfielder contributes to the minute-weighted slots 17-18.
+"""
+function pm_lineup_aggregate(lu::Lineup, rating_of::AbstractDict, expected::AbstractDict)
+    values = zeros(Float64, 18)
+    for (home, players) in ((true, lu.home), (false, lu.away))
+        for p in players
+            p.position === :G && continue                 # goalkeepers are not in this aggregate
+            rating = get(rating_of, p.player_id, 0.0)
+            isfinite(rating) || continue
+            pos_index = p.position === :D ? 0 : p.position === :M ? 1 : 2
+            if p.substitute
+                values[home ? 3 : 4] += rating
+                values[(home ? 11 : 14) + pos_index] += rating
+            else
+                values[home ? 1 : 2] += rating
+                values[(home ? 5 : 8) + pos_index] += rating
+            end
+            minutes = get(expected, p.player_id, p.substitute ? 0.0 : 90.0)
+            values[home ? 17 : 18] += rating * (minutes / 90.0)
+        end
+    end
+    return Features.PMLineupAggregate(Tuple(values))
+end
+
+"""
+    expected_minutes(ds) -> Dict{Int,Float64}
+
+Each player's mean minutes over his last five positive appearances, clamped at 120.
+
+Mirrors the rolling `minute_history` inside `Features.pm_lineup_aggregates`: rows are walked in
+`(match_date, match_id)` order, a positive `minutes_played` is appended, and the window is capped
+at five. A player with no usable history is simply absent, and the caller supplies the
+starter/substitute default -- the same split the extractor makes.
+
+Returns an empty `Dict` when the segment has no `minutes_played` column, which on tiers 56/57 is
+also effectively true before 23/24; the fallback then applies to everyone, which is exactly what
+training saw.
+"""
+function expected_minutes(ds)
+    out = Dict{Int,Float64}()
+    lu = ds.lineups
+    cols = propertynames(lu)
+    (:player_id in cols && :minutes_played in cols && :match_id in cols) || return out
+    nrow(lu) == 0 && return out
+
+    date_of = Dict{Int,Date}(Int(r.match_id) => r.match_date for r in eachrow(ds.matches))
+    order = sortperm(1:nrow(lu); by = i -> begin
+        mid = Int(lu.match_id[i])
+        (get(date_of, mid, Date(9999, 12, 31)), mid)
+    end)
+
+    history = Dict{Int,Vector{Float64}}()
+    for i in order
+        ismissing(lu.player_id[i]) && continue
+        ismissing(lu.minutes_played[i]) && continue
+        m = Float64(lu.minutes_played[i])
+        (isfinite(m) && m > 0.0) || continue
+        h = get!(history, Int(lu.player_id[i]), Float64[])
+        push!(h, min(m, 120.0))
+        length(h) > 5 && popfirst!(h)
+    end
+    for (player_id, h) in history
+        out[player_id] = sum(h) / length(h)
+    end
+    return out
 end
 
 """

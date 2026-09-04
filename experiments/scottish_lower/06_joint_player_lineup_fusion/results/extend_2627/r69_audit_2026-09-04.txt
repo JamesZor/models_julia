@@ -89,7 +89,7 @@ CanonicalFit 'm12_joint_hybrid_synergy' (scottish_lower_joint_player_2426)
   model      : PoissonCountModel{GlobalInterception, TimeDecayDynamics, GlobalHomeAdvantage, Tuple{PlayerLineupPillar{BayesianFootball.Features.ShotsPlusMinusFeature, BenchWeightedPlayerAggregation, Distributions.Normal{Float64}, Distributions.Normal{Float64}, Nothing}, ProductionWealthCovariate{ProductionWealthFeature{RichardsSigmoid}, Distributions.Truncated{Distributions.Normal{Float64}, Distributions.Continuous, Float64, Float64, Nothing}, SupremacyRole}}, JointGammaPoissonObservation{MatchProxyXGFeature, Distributions.Truncated{Distributions.Normal{Float64}, Distributions.Continuous, Float64, Float64, Float64}, Distributions.Normal{Float64}}, ClampGuard}
   folds      : 43
   converged  : true
-  loaded     : 2026-09-04T11:47:58.648
+  loaded     : 2026-09-04T12:51:24.726
 
   fixtures on the card: 10
     16362611  kelty-hearts-fc          vs annan-athletic            2026-09-05T14:00:00  t57
@@ -110,10 +110,7 @@ CanonicalFit 'm12_joint_hybrid_synergy' (scottish_lower_joint_player_2426)
   Fold 43 FeatureSet coverage of tomorrow's 10 fixtures
     team_map                                       24 teams, missing: (none)
     player_ratings_map                             0/10 covered  (materialised by MatchDay)
-    player_lineup_ratings_map                      0/10 covered  (NOT in INJECTABLE_KEYS — carried forward from training)
-
-  matchday_latents RAISED:
-    FieldError: type PoissonCountModel has no field `player_ratings_feature`, available fields: `interception`, `dynamics`, `home_advantage`, `covariates`, `observation`, `guard`
+    player_lineup_ratings_map                      0/10 covered  (materialised by MatchDay)
 
   Operational gates
     canonical_fit(require_converged=true) loads    PASS
@@ -125,9 +122,25 @@ CanonicalFit 'm12_joint_hybrid_synergy' (scottish_lower_joint_player_2426)
     identity resolved for every fixture            FAIL
     lineup available for every fixture             PASS
     every team on the card is in team_map          PASS
-    matchday_latents ran without raising           FAIL
-    matchday_latents priced every fixture          FAIL
-    all rates finite and positive                  FAIL
+    matchday_latents ran without raising           PASS
+    matchday_latents priced every fixture          PASS
+    all rates finite and positive                  PASS
+
+  Posterior rates (mean over draws)
+10×5 DataFrame
+ Row │ match_id  fixture                            mean_λ_a  mean_λ_h  total_goals
+     │ Any       String                             Float64   Float64   Float64
+─────┼──────────────────────────────────────────────────────────────────────────────
+   1 │ 16362613  clyde-fc v edinburgh-city-fc        1.10845   1.56812      2.67658
+   2 │ 16362608  forfar-athletic v stranraer         1.2616    1.47045      2.73205
+   3 │ 16362436  queen-of-the-south v airdrieonia…   1.27144   1.51124      2.78268
+   4 │ 16362602  stirling-albion v the-spartans-fc   1.42224   1.32973      2.75197
+   5 │ 16362432  east-fife v ross-county             1.27515   1.45552      2.73067
+   6 │ 16362431  cove-rangers v alloa-athletic       1.21549   1.39727      2.61276
+   7 │ 16362604  dumbarton v elgin-city              1.40631   1.34912      2.75542
+   8 │ 16362611  kelty-hearts-fc v annan-athletic    1.30755   1.52554      2.83309
+   9 │ 16362435  east-kilbride v hamilton-academi…   1.11811   1.59918      2.71729
+  10 │ 16362433  peterhead v montrose                1.19534   1.60796      2.80329
 
 ====================================================================================================
   EXTENSION : CLEAN — folds 41-43 converged and persisted.

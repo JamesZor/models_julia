@@ -353,12 +353,18 @@ teams — including `ross-county` and `airdrieonians`, which the 40-fold map cou
 **`--refresh` is not optional.** A 65-hour-old DataStore cache stops at 2026-08-22 and yields 2
 folds instead of 3; the symptom is only a quieter preview line.
 
-**MatchDay cannot yet serve this model family.** `RatingsFromTracker` reads
+**MatchDay could not serve this model family, and now can.** `RatingsFromTracker` read
 `model.player_ratings_feature`, which a builder-family `PoissonCountModel` does not have, and
-`:player_lineup_ratings_map` — the map `PlayerLineupPillar` actually reads at OOS — is absent
-from `MatchDay.INJECTABLE_KEYS`, so it is neither materialised nor coverage-checked. Fixing only
-the crash would price every fixture with a zero lineup pillar, silently. Detail and the shape of
-a fix: **[`EXTEND_2627_REPORT.md`](EXTEND_2627_REPORT.md)** §5.1.
+`:player_lineup_ratings_map` — the map `PlayerLineupPillar` actually reads at OOS — was absent
+from `MatchDay.INJECTABLE_KEYS`, so it was neither materialised nor coverage-checked. Fixing only
+the crash would have priced every fixture with a zero lineup pillar, silently. `MatchDay` now
+carries `LineupAggregateFromRAPM`, the key is injectable and coverage-checked, and
+`RatingsFromTracker` declines rather than throws. `matchday_latents` prices all ten fixtures with
+finite rates and a non-zero, correctly scaled pillar. Detail:
+**[`EXTEND_2627_REPORT.md`](EXTEND_2627_REPORT.md)** §5.1.
+
+**Still pending for a live card:** `betdb` holds no crosswalk rows and no exchange markets for
+2026-09-05 yet, so identity resolution fails. Expected 27 h out; re-check at T−25.
 
 | File | Role |
 |---|---|

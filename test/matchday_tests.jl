@@ -328,8 +328,100 @@ end
     # by accident when a new pooled engine is served
     members = MD.MatchDaySpec().features.members
     @test any(m -> m isa MD.RatingsFromTracker, members)
+    @test any(m -> m isa MD.LineupAggregateFromRAPM, members)
     @test any(m -> m isa MD.LeagueFromFixture, members)
-    @test length(MD.INJECTABLE_KEYS) == 2
+    @test length(MD.INJECTABLE_KEYS) == 3
+end
+
+@testset "M15b RatingsFromTracker declines a model it cannot read, rather than throwing" begin
+    # Regression, 2026-09-04: `RatingsFromTracker` read `model.player_ratings_feature`
+    # unconditionally. A builder-family `PoissonCountModel` keeps its player term inside
+    # `covariates` as a `PlayerLineupPillar` and has no such field, so serving
+    # `m12_joint_hybrid_synergy` died with a FieldError before pricing a single fixture.
+    # Declining lets the chain reach `LineupAggregateFromRAPM`; a key NO member claims is still
+    # an error in `matchday_latents`, so this cannot silently skip a feature.
+    fs = (data = Dict{Symbol,Any}(:player_ratings_map => Dict{Int,Any}()),)
+    fx = [MD.Fixture(101, "a", "b", DateTime(2026, 8, 8, 13), 56)]
+    ctx = (ds = nothing, model = (interception = 1, covariates = ()), lineups = Dict())
+
+    @test !MD.materialise!(MD.RatingsFromTracker(), Val(:player_ratings_map), fs, fx, ctx)
+end
+
+@testset "M15c check_coverage catches an unmaterialised player_lineup_ratings_map" begin
+    # Regression, 2026-09-04: `:player_lineup_ratings_map` -- the map `PlayerLineupPillar`
+    # actually reads at OOS -- was absent from INJECTABLE_KEYS and from check_coverage. Its
+    # fallback is `_pm_empty_lineup_aggregate()`, a VALID value, so an uncovered fixture was
+    # priced with the lineup pillar contributing exactly zero and nothing raised.
+    fx = [MD.Fixture(101, "ross-county", "montrose", DateTime(2026, 8, 8, 13), 56)]
+    neutral = BayesianFootball.Features._pm_empty_lineup_aggregate()
+
+    # the fallback really is all-zero -- which is why silence here was so expensive
+    @test all(iszero, values(neutral))
+
+    covered = (data = Dict{Symbol,Any}(:player_lineup_ratings_map => Dict(101 => neutral)),)
+    @test MD.check_coverage(covered, fx, nothing)
+
+    bare = (data = Dict{Symbol,Any}(:player_lineup_ratings_map => Dict{Int,Any}()),)
+    @test_throws ErrorException MD.check_coverage(bare, fx, nothing)
+end
+
+@testset "M15d LineupAggregateFromRAPM reproduces the training-time aggregate exactly" begin
+    # The property that matters is train/serve PARITY, so this asserts it directly: the same XI
+    # and the same rating vector must give the same `PMLineupAggregate` whether it is built by
+    # `Features.pm_lineup_aggregates` at training time or by the materialiser at T-25.
+    #
+    # Match 1 is history and carries the minutes; match 2 is the fixture being aggregated. The
+    # extractor sees both (it applies a match's own minutes only AFTER aggregating it), while the
+    # serving side sees only match 1 -- which is exactly the information available pre-match.
+    F = BayesianFootball.Features
+
+    lineups = DataFrame(
+        match_id      = [1, 1, 1, 1, 1, 1,   2, 2, 2, 2, 2, 2],
+        player_id     = [10, 11, 12, 20, 21, 22,  10, 11, 12, 20, 21, 22],
+        team_side     = ["home", "home", "home", "away", "away", "away",
+                         "home", "home", "home", "away", "away", "away"],
+        position      = ["G", "D", "F", "G", "M", "F",
+                         "G", "D", "F", "G", "M", "F"],
+        is_substitute = [false, false, true, false, false, true,
+                         false, false, true, false, false, true],
+        minutes_played = [90, 90, 30, 90, 60, 45,  90, 90, 30, 90, 60, 45],
+    )
+    matches = DataFrame(match_id = [1, 2], match_date = [Date(2026, 8, 1), Date(2026, 8, 8)])
+    rating_of = Dict(10 => 0.5, 11 => 0.2, 12 => -0.3, 20 => 0.1, 21 => 0.4, 22 => 0.7)
+
+    trained = F.pm_lineup_aggregates(lineups, matches, rating_of)[2]
+
+    history = (lineups = lineups[lineups.match_id .== 1, :],
+               matches = matches[matches.match_id .== 1, :])
+    xi(side, sub) = MD.Player[
+        MD.Player(Int(r.player_id), "p", Symbol(r.position), r.is_substitute)
+        for r in eachrow(lineups[(lineups.match_id .== 2) .& (lineups.team_side .== side), :])]
+    lu = MD.Lineup(xi("home", false), xi("away", false), false, :provisional,
+                   DateTime(2026, 8, 8, 12))
+
+    served = MD.pm_lineup_aggregate(lu, rating_of, MD.expected_minutes(history))
+
+    for name in propertynames(trained)
+        @test getproperty(served, name) ≈ getproperty(trained, name) atol = 1e-12
+    end
+
+    # and the parts that are easy to get wrong, asserted by hand rather than by equality:
+    @test served.home_outfield ≈ 0.2          # the keeper (0.5) is EXCLUDED; only D 0.2 starts
+    @test served.home_bench    ≈ -0.3         # the substitute forward
+    @test served.away_outfield ≈ 0.4          # keeper 0.1 excluded, M 0.4 starts
+    @test served.home_D ≈ 0.2 && served.home_F ≈ 0.0     # F 12 is a sub, so not in home_F
+    @test served.home_bench_F ≈ -0.3
+end
+
+@testset "M15e LineupAggregateFromRAPM declines a FeatureSet with no RAPM ratings" begin
+    # `:plus_minus_ratings` is the discriminator: a FeatureSet without it was not built by the
+    # plus-minus family, and claiming its lineup map would invent ratings the model never saw.
+    fs = (data = Dict{Symbol,Any}(:player_lineup_ratings_map => Dict{Int,Any}()),)
+    fx = [MD.Fixture(101, "a", "b", DateTime(2026, 8, 8, 13), 56)]
+    ctx = (ds = nothing, model = nothing, lineups = Dict())
+
+    @test !MD.materialise!(MD.LineupAggregateFromRAPM(), Val(:player_lineup_ratings_map),
+                           fs, fx, ctx)
 end
 
 @testset "M16 team_name_score tiers, on the real 2026-08-07 spellings" begin

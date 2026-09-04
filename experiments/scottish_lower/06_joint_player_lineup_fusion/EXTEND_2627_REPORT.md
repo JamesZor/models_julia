@@ -14,10 +14,12 @@ Runners: [`r68_extend_joint_player_2627.jl`](r68_extend_joint_player_2627.jl) (s
 | | |
 |---|---|
 | **Extension** | **CLEAN.** Folds 41–43 sampled, converged, and persisted for both runs. The 40 historical folds were reloaded, not refitted. |
-| **Saturday 2026-09-05 pricing** | **NOT READY.** Two blockers, neither caused by the extension. `MatchDay.matchday_latents` cannot serve this model family at all (§5.1), and tomorrow's exchange data does not exist yet (§5.2). |
+| **Model path** | **READY.** `matchday_latents` prices all 10 fixtures off fold 43 with finite rates and a non-zero lineup pillar, after the MatchDay fix in §5.1. |
+| **Exchange data** | **PENDING, and outside this work.** `betdb` holds no crosswalk rows and no live markets for 2026-09-05 yet, so identity resolution fails today. Expected 27 h out; must be re-checked at T−25 (§5.2). |
 
-The two halves are independent, and the report keeps them apart deliberately: the training
-side is sound and can be relied on; the serving side has a defect that predates today.
+The three lines are independent, and the report keeps them apart deliberately: the training side
+is sound, the serving defect it exposed is fixed and tested, and the last item is a collector
+timing question that no amount of modelling will settle.
 
 ---
 
@@ -151,7 +153,7 @@ appended rather than renumbered, which is the property `select_split` depends on
 Card: 10 fixtures, all kicking off 14:00 UTC (15:00 BST), tournaments 56 and 57. `as_of` for
 the checks below is T−25 = `2026-09-05T13:35:00`.
 
-**What works:**
+**What works (after the §5.1 fix):**
 
 | gate | result |
 |---|---|
@@ -168,7 +170,9 @@ and it holds. So does the `team_map`: `ross-county` and `airdrieonians` moved up
 were absent from the 40-fold team map — the r06 runbook had to drop them from the card. Fold 43
 covers them.
 
-### 5.1 BLOCKER — `matchday_latents` cannot serve this model family
+### 5.1 FIXED — `matchday_latents` could not serve this model family
+
+**What it did.** The first audit run died before pricing a single fixture:
 
 ```
 FieldError: type PoissonCountModel has no field `player_ratings_feature`,
@@ -179,43 +183,112 @@ available fields: `interception`, `dynamics`, `home_advantage`, `covariates`, `o
 `RatingsFromTracker` was written for the older player-level engine family, where the tracker
 hangs off `model.player_ratings_feature`. m12 is a builder-family `PoissonCountModel` whose
 player term is a `PlayerLineupPillar{ShotsPlusMinusFeature, BenchWeightedPlayerAggregation}`
-inside `model.covariates`. The materialiser claims `:player_ratings_map`, then dies reading a
+inside `model.covariates`. The materialiser claimed `:player_ratings_map`, then died reading a
 field that does not exist.
 
-**The crash is the smaller half of the problem.** Behind it:
+**The crash was the smaller half.** Behind it:
 
-* `MatchDay.INJECTABLE_KEYS` is `(:player_ratings_map, :league_lookup)`.
+* `MatchDay.INJECTABLE_KEYS` was `(:player_ratings_map, :league_lookup)`.
 * The builder engine does **not** read `:player_ratings_map` at OOS. It reads
   `:player_lineup_ratings_map` — `get(d, :player_lineup_ratings_map, Dict{Int,PMLineupAggregate}())`
   in `src/models/pregame/builder/engine.jl:531`, consumed by
   `predictor_oos(::PlayerLineupPillar, …)`.
-* That key is in fold 43's FeatureSet (2019 entries) but covers **0 of tomorrow's 10 fixtures**,
-  because they are not in `ds.matches`. It is not in `INJECTABLE_KEYS`, so MatchDay neither
-  materialises it nor checks it, and `check_coverage` only inspects `:player_ratings_map`.
+* That key was in fold 43's FeatureSet (2019 entries) but covered **0 of tomorrow's 10 fixtures**,
+  because they are not in `ds.matches`. It was not in `INJECTABLE_KEYS`, so MatchDay neither
+  materialised it nor checked it, and `check_coverage` only inspected `:player_ratings_map`.
 
-So fixing the `FieldError` alone would produce a **worse** outcome than the crash: every fixture
-would fall through to `_pm_empty_lineup_aggregate()`, the lineup pillar would contribute exactly
-zero to all 10 prices, and nothing would raise. m12 would quietly price as m05-with-extra-noise
-— and m12 over m05 is the entire thesis of this experiment. This is the silent stale-value
-failure `inference.jl`'s own docstring says the guard exists to prevent; the guard just does not
-cover this key.
+Fixing the `FieldError` alone would have produced a **worse** outcome than the crash: every
+fixture would fall through to `_pm_empty_lineup_aggregate()`, the lineup pillar would contribute
+exactly zero to all 10 prices, and nothing would raise, because the fallback is a valid value
+rather than a missing one. m12 would quietly price as m05-with-extra-noise — and m12 over m05 is
+the entire thesis of this experiment.
 
-**What a fix needs** (not attempted here — it changes what gets priced, and belongs behind
-tests rather than inside a verification run):
+**The fix** (`src/MatchDay/inference.jl`, `src/MatchDay/types.jl`):
 
-1. A `LineupAggregateFromRAPM` materialiser keyed on `Val{:player_lineup_ratings_map}`, building
-   a `PMLineupAggregate` per fixture from `fs.data[:plus_minus_ratings]` (already exposed,
-   `Dict{Int,Float64}`) and the card's XI. For `BenchWeightedPlayerAggregation` only the
-   `home_outfield` / `away_outfield` / `home_bench` / `away_bench` fields are read, mirroring the
-   `values[1..4]` accumulation in `src/features/extractors/plus_minus_extractors.jl`. The
-   minute-weighted fields need a rolling history the extractor does not export, and m12 does not
-   use them.
-2. `:player_lineup_ratings_map` added to `INJECTABLE_KEYS` **and** to `check_coverage`, so an
-   uncovered fixture is refused rather than priced neutral.
-3. `RatingsFromTracker` to decline (`return false`) rather than throw on a model with no
-   `player_ratings_feature`, so the chain can fall through to the pillar materialiser.
+1. `LineupAggregateFromRAPM`, a materialiser claiming `:player_lineup_ratings_map` and
+   `:player_ratings_map`, which builds each fixture's `PMLineupAggregate` from the card's XI and
+   the fold's own leak-controlled `:plus_minus_ratings` vector. It mirrors
+   `Features.pm_lineup_aggregates` field for field, including the two places the extractor's two
+   maps deliberately disagree — the lineup aggregate excludes goalkeepers and includes
+   substitutes; the ratings map includes goalkeepers, is starters-only, and drops any player
+   whose fitted rating is exactly `0.0`. Expected minutes are the rolling mean of a player's last
+   five positive appearances, which is what the extractor's `minute_history` holds.
+2. `:player_lineup_ratings_map` added to `INJECTABLE_KEYS` **and** to `check_coverage`, so a
+   fixture that cannot be materialised is refused rather than priced with a neutral pillar.
+3. `RatingsFromTracker` now declines (`return false`) on a model with no `player_ratings_feature`
+   rather than throwing. This cannot silently skip a feature: a key no chain member claims is
+   still an error in `matchday_latents`.
 
-### 5.2 BLOCKER — tomorrow's exchange data does not exist yet
+The claim test is `haskey(fs.data, :plus_minus_ratings)` — a property of the data rather than a
+type check, so the materialiser composes with `RatingsFromTracker` instead of competing with it.
+
+**Not a leak.** The RAPM rating vector is the fold's own, fit on its history block alone; only
+the teamsheet is new. `plus_minus_extractors.jl` makes the same argument where it builds the
+training-time map over the whole DataStore rather than the fold: applying a history-fit rating to
+a future XI is precisely the pre-match quantity under test.
+
+**Verification.** Re-running `r69`:
+
+```
+  matchday_latents ran without raising           PASS
+  matchday_latents priced every fixture          PASS
+  all rates finite and positive                  PASS
+```
+
+| fixture | mean λ_home | mean λ_away | total |
+|---|---|---|---|
+| peterhead v montrose | 1.608 | 1.195 | 2.803 |
+| east-kilbride v hamilton-academical | 1.599 | 1.118 | 2.717 |
+| clyde-fc v edinburgh-city-fc | 1.568 | 1.108 | 2.677 |
+| kelty-hearts-fc v annan-athletic | 1.526 | 1.308 | 2.833 |
+| queen-of-the-south v airdrieonians | 1.511 | 1.271 | 2.783 |
+| forfar-athletic v stranraer | 1.470 | 1.262 | 2.732 |
+| east-fife v ross-county | 1.456 | 1.275 | 2.731 |
+| cove-rangers v alloa-athletic | 1.397 | 1.215 | 2.613 |
+| dumbarton v elgin-city | 1.349 | 1.406 | 2.755 |
+| stirling-albion v the-spartans-fc | 1.330 | 1.422 | 2.752 |
+
+The gate that actually matters is not "did it run" but "is the pillar doing anything", since the
+failure mode being fixed is a plausible-looking zero. Measured on the materialised aggregates:
+
+* **0 of 10** fixtures produce an all-zero aggregate.
+* Scale against the 49 training-time aggregates stored for folds 41–43: `home_outfield` ranges
+  min −0.582 / median −0.109 / max 0.640 in training, against a median of **−0.070** for
+  tomorrow's ten, every value inside the trained range. `home_bench` median −0.060 in training
+  against **−0.010** tomorrow.
+* 778 players carry a fitted RAPM rating; 18–30 rated players per fixture across both squads.
+
+The lineup source is `:last_historical` for all ten — `sofascore.lineup_provisional` has not been
+scraped for tomorrow yet, so each side is its most recent completed XI. At T−25 the provisional
+XI should be available and `SourceChain` will prefer it.
+
+**Tests.** Five new testsets in `test/matchday_tests.jl` (M15b–M15e), all database-free. M15d is
+the one that matters: it asserts train/serve **parity** directly, by building the same XI and the
+same rating vector two ways and requiring `Features.pm_lineup_aggregates` and
+`MatchDay.pm_lineup_aggregate` to produce identical `PMLineupAggregate`s field by field.
+
+| suite | result |
+|---|---|
+| `test/matchday_tests.jl` | **153 / 153** |
+| `test/runtests.jl` | **3,300 / 3,300**, 5m50s |
+| `test/test_matchday_replay.jl` | 1,027 / 1,038 — **identical to the pre-change baseline** |
+
+The 11 replay failures (R22, R23, R31) are **pre-existing**: the same suite against the
+unmodified `src/MatchDay` fails the same 11 assertions in the same three testsets. They concern
+whether a model's fair-odds line steps at the XI drop on the replayed card, and are not addressed
+here.
+
+**One duplicate left standing.** `current_development/match_day_inference/replay_state.jl` has
+carried its own `PointInTimeLineupRatings` for this gap since the replay console was built —
+which is why the replay suite's R10/R11 pass while the live path could not price m12 at all. The
+two now differ in two documented places: this one refuses a fixture with no XI where the replay
+one writes a neutral entry (correct for replay, wrong for a live Saturday), and this one
+reproduces the extractor's rolling expected-minutes where the replay one weights starters 1.0.
+Neither difference reaches m12, whose `BenchWeightedPlayerAggregation` reads only slots 1–4.
+They should become one function; that changes replay behaviour R10/R11 pin, so it is a separate
+change rather than a side effect of this one.
+
+### 5.2 PENDING — tomorrow's exchange data does not exist yet
 
 Every card resolved `UNRESOLVED(absent_from_crosswalk)`. Measured against `betdb`:
 

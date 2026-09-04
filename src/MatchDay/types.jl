@@ -256,7 +256,8 @@ Base.@kwdef struct MatchDaySpec{F<:AbstractFixtureSource, I<:AbstractIdentityRes
     quote_rule::Q = BestAvailable()
     instrument::N = BestOfBackLay()
     rounding::R   = NoMinimum()
-    features::M   = MaterialiserChain(RatingsFromTracker(), LeagueFromFixture())
+    features::M   = MaterialiserChain(RatingsFromTracker(), LineupAggregateFromRAPM(),
+                                      LeagueFromFixture())
     gate::G       = GateChain(IdentityResolved(), MaxBookAge(Minute(30)))
     markets::Data.MarketConfig = Data.MarketConfig(
         reduce(vcat, (Data.AbstractMarket[Data.Market1X2(), Data.MarketBTTS()],
