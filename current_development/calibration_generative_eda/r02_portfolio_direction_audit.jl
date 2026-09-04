@@ -431,26 +431,38 @@ for name in R02_MODELS
             lab == "raw" && continue
             books = r02_books[(name, lab)]
             best = nothing
+            mdds = Float64[]
             for λ in R02_RISK_LAMBDAS
                 row, _ = r02_run("F_risk_matched", name, lab, trust_name, books,
                                  l01_policy_spec(trust; risk_lambda = λ))
                 cand = merge(row, (; risk_lambda = λ, target_mdd = target))
+                push!(mdds, cand.max_drawdown_pct)
                 # keep the loosest budget whose drawdown is still no deeper than raw's
                 if cand.max_drawdown_pct >= target
                     best = cand
                 end
             end
+            # λ INERT MEANS THE CAP BINDS, NOT THE GRID. `SlateDrawdown` is homogeneous
+            # of degree 0 in the stakes it receives, so once `FixedCap` is what limits
+            # exposure, loosening the drawdown budget cannot buy any more of it — the
+            # whole λ sweep returns one number. Reporting that as a grid-floor artefact
+            # would name the wrong mechanism, so the two are distinguished by whether
+            # the drawdown responded to λ at all.
+            cap_bound = (maximum(mdds) - minimum(mdds)) < 1e-9
             if best === nothing
                 @printf("  %-30s %-4s %-13s no λ in the grid stays inside raw's %.2f%% drawdown\n",
                         name, lab, trust_name, target)
                 continue
             end
-            bottomed = best.risk_lambda == minimum(R02_RISK_LAMBDAS)
-            push!(r02_risk_rows, merge(best, (; grid_bottomed = bottomed)))
+            bottomed = !cap_bound && best.risk_lambda == minimum(R02_RISK_LAMBDAS)
+            note = cap_bound ? "  [CAP-BOUND — λ inert, FixedCap(0.25) is what limits exposure]" :
+                   bottomed  ? "  [GRID FLOOR — return is a LOWER BOUND]" : ""
+            push!(r02_risk_rows, merge(best, (; grid_bottomed = bottomed,
+                                              cap_bound = cap_bound,
+                                              mdd_span = maximum(mdds) - minimum(mdds))))
             @printf("  %-30s %-4s %-13s λ %5.2f  return %+8.2f%%  Sharpe %5.3f  MDD %7.2f%% (raw %7.2f%%)%s\n",
                     name, lab, trust_name, best.risk_lambda, best.total_return_pct,
-                    best.sharpe_ann, best.max_drawdown_pct, target,
-                    bottomed ? "  [GRID FLOOR — return is a LOWER BOUND]" : "")
+                    best.sharpe_ann, best.max_drawdown_pct, target, note)
         end
     end
 end
