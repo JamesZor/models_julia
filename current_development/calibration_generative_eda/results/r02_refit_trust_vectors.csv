@@ -1,0 +1,67 @@
+model,container,family,group,line,selection,n_bets,kelly_roi,efficiency,tier
+m12_joint_hybrid_synergy,raw,1X2_away,1x2,0.0,away,206,23.34723827976224,1.4654555720739175,0.35
+m12_joint_hybrid_synergy,raw,1X2_home,1x2,0.0,home,145,27.292907254835054,1.7131166665380004,0.35
+m12_joint_hybrid_synergy,raw,O/U 2.5_under_25,over_under,2.5,under_25,103,6.798244201668842,0.4267110621940448,0.25
+m12_joint_hybrid_synergy,raw,1X2_draw,1x2,0.0,draw,166,-11.379341548266558,-0.7142566190749173,0.0
+m12_joint_hybrid_synergy,raw,O/U 3.5_under_35,over_under,3.5,under_35,33,16.034948222271993,1.0064789650351982,0.0
+m12_joint_hybrid_synergy,raw,O/U 3.5_over_35,over_under,3.5,over_35,52,-18.595027731022757,-1.1671696101597258,0.0
+m12_joint_hybrid_synergy,raw,O/U 2.5_over_25,over_under,2.5,over_25,32,7.725774987568019,0.4849301604093687,0.0
+m12_joint_hybrid_synergy,raw,O/U 1.5_under_15,over_under,1.5,under_15,41,47.855973040848156,3.0038157622488746,0.0
+m12_joint_hybrid_synergy,raw,O/U 1.5_over_15,over_under,1.5,over_15,16,26.21959189869329,1.6457469866468304,0.0
+m12_joint_hybrid_synergy,raw,BTTS_btts_no,btts,0.0,btts_no,12,-31.716624506094764,-1.9907838157509938,0.0
+m12_joint_hybrid_synergy,raw,BTTS_btts_yes,btts,0.0,btts_yes,16,30.836613872227982,1.9355474545406728,0.0
+m12_joint_hybrid_synergy,std,1X2_away,1x2,0.0,away,208,18.717855897421185,1.1931076599268284,0.35
+m12_joint_hybrid_synergy,std,1X2_home,1x2,0.0,home,151,28.04995539145414,1.7879513990040161,0.35
+m12_joint_hybrid_synergy,std,O/U 2.5_under_25,over_under,2.5,under_25,110,12.975425998529994,0.8270755066445794,0.25
+m12_joint_hybrid_synergy,std,1X2_draw,1x2,0.0,draw,152,-12.824832417890587,-0.8174764181815979,0.0
+m12_joint_hybrid_synergy,std,O/U 3.5_under_35,over_under,3.5,under_35,33,16.965013899377702,1.081378558796434,0.0
+m12_joint_hybrid_synergy,std,O/U 3.5_over_35,over_under,3.5,over_35,48,-19.91055965375997,-1.269132606133801,0.0
+m12_joint_hybrid_synergy,std,O/U 2.5_over_25,over_under,2.5,over_25,26,19.526258187328413,1.2446365834144588,0.0
+m12_joint_hybrid_synergy,std,O/U 1.5_under_15,over_under,1.5,under_15,43,34.24805508471378,2.1830287124284156,0.0
+m12_joint_hybrid_synergy,std,BTTS_btts_no,btts,0.0,btts_no,12,-25.983407616246396,-1.6562261632869915,0.0
+m12_joint_hybrid_synergy,std,O/U 1.5_over_15,over_under,1.5,over_15,13,24.439050284010158,1.5577862258896167,0.0
+m12_joint_hybrid_synergy,std,BTTS_btts_yes,btts,0.0,btts_yes,14,37.311758152663145,2.378314305935699,0.0
+m12_joint_hybrid_synergy,inv,1X2_home,1x2,0.0,home,173,34.582867379476255,2.0385706305527336,0.35
+m12_joint_hybrid_synergy,inv,1X2_away,1x2,0.0,away,216,15.892673871677331,0.9368320399881451,0.25
+m12_joint_hybrid_synergy,inv,O/U 2.5_under_25,over_under,2.5,under_25,93,5.513981931887726,0.3250349804833036,0.25
+m12_joint_hybrid_synergy,inv,O/U 3.5_over_35,over_under,3.5,over_35,46,-12.583149095258774,-0.7417441099948846,0.0
+m12_joint_hybrid_synergy,inv,1X2_draw,1x2,0.0,draw,45,6.3200562782280265,0.3725509793870421,0.0
+m12_joint_hybrid_synergy,inv,O/U 3.5_under_35,over_under,3.5,under_35,23,11.531460934926189,0.6797498117017824,0.0
+m12_joint_hybrid_synergy,inv,O/U 1.5_under_15,over_under,1.5,under_15,36,37.18518642058387,2.191970610673482,0.0
+m12_joint_hybrid_synergy,inv,BTTS_btts_no,btts,0.0,btts_no,12,-59.29725139383131,-3.495419678118008,0.0
+m12_joint_hybrid_synergy,inv,O/U 2.5_over_25,over_under,2.5,over_25,17,35.10001770512153,2.069055305344822,0.0
+m12_joint_hybrid_synergy,inv,BTTS_btts_yes,btts,0.0,btts_yes,7,-11.155820295235083,-0.6576067670746967,0.0
+m12_joint_hybrid_synergy,inv,O/U 1.5_over_15,over_under,1.5,over_15,5,10.246174867440844,0.6039855206647353,0.0
+m05_joint_production_wealth,raw,1X2_away,1x2,0.0,away,208,25.71640177972103,1.5887609194553711,0.35
+m05_joint_production_wealth,raw,1X2_home,1x2,0.0,home,154,27.075611193828298,1.6727329625501532,0.35
+m05_joint_production_wealth,raw,O/U 2.5_under_25,over_under,2.5,under_25,97,0.15008088154058088,0.009272006301329168,0.0
+m05_joint_production_wealth,raw,1X2_draw,1x2,0.0,draw,143,-14.9177000212289,-0.9216164456015177,0.0
+m05_joint_production_wealth,raw,O/U 3.5_over_35,over_under,3.5,over_35,56,-6.293364137492542,-0.3888044322528304,0.0
+m05_joint_production_wealth,raw,O/U 2.5_over_25,over_under,2.5,over_25,36,3.7299955921409254,0.2304393622908541,0.0
+m05_joint_production_wealth,raw,O/U 3.5_under_35,over_under,3.5,under_35,28,23.117283473000942,1.428187226987471,0.0
+m05_joint_production_wealth,raw,O/U 1.5_under_15,over_under,1.5,under_15,44,59.22313278348648,3.6588088683665068,0.0
+m05_joint_production_wealth,raw,O/U 1.5_over_15,over_under,1.5,over_15,17,23.248468481850924,1.4362918450854667,0.0
+m05_joint_production_wealth,raw,BTTS_btts_yes,btts,0.0,btts_yes,17,22.100354845543688,1.3653613124206234,0.0
+m05_joint_production_wealth,raw,BTTS_btts_no,btts,0.0,btts_no,11,-49.892259201434676,-3.0823469115762494,0.0
+m05_joint_production_wealth,std,1X2_away,1x2,0.0,away,215,17.86554123249539,1.0902986819173062,0.35
+m05_joint_production_wealth,std,1X2_home,1x2,0.0,home,159,29.440933770889963,1.796722017378956,0.35
+m05_joint_production_wealth,std,O/U 2.5_under_25,over_under,2.5,under_25,106,15.210174445733744,0.92824689350872,0.25
+m05_joint_production_wealth,std,1X2_draw,1x2,0.0,draw,113,-15.148254038027915,-0.924468013371428,0.0
+m05_joint_production_wealth,std,O/U 3.5_over_35,over_under,3.5,over_35,49,-8.159412287838924,-0.49795281021038873,0.0
+m05_joint_production_wealth,std,O/U 3.5_under_35,over_under,3.5,under_35,25,18.91212067299477,1.15416935729448,0.0
+m05_joint_production_wealth,std,O/U 2.5_over_25,over_under,2.5,over_25,25,16.15936405530403,0.9861740599312921,0.0
+m05_joint_production_wealth,std,O/U 1.5_under_15,over_under,1.5,under_15,46,35.240230622975226,2.1506416457625055,0.0
+m05_joint_production_wealth,std,BTTS_btts_no,btts,0.0,btts_no,12,-50.588021993535556,-3.0872870282839746,0.0
+m05_joint_production_wealth,std,O/U 1.5_over_15,over_under,1.5,over_15,12,20.884094120031037,1.2745150004574697,0.0
+m05_joint_production_wealth,std,BTTS_btts_yes,btts,0.0,btts_yes,13,15.949959640871738,0.9733945222687043,0.0
+m05_joint_production_wealth,inv,1X2_away,1x2,0.0,away,210,19.27490025482819,1.0856537735280187,0.35
+m05_joint_production_wealth,inv,1X2_home,1x2,0.0,home,163,34.209967050895486,1.9268675495101766,0.35
+m05_joint_production_wealth,inv,O/U 2.5_under_25,over_under,2.5,under_25,99,1.9033338163950237,0.10720478512126869,0.0
+m05_joint_production_wealth,inv,O/U 3.5_over_35,over_under,3.5,over_35,49,-6.558450887220348,-0.3694030506033568,0.0
+m05_joint_production_wealth,inv,1X2_draw,1x2,0.0,draw,68,-6.5411569861538545,-0.3684289760969451,0.0
+m05_joint_production_wealth,inv,O/U 3.5_under_35,over_under,3.5,under_35,23,22.549687588758978,1.2701053234494328,0.0
+m05_joint_production_wealth,inv,O/U 1.5_under_15,over_under,1.5,under_15,36,60.75410262180287,3.421959122831099,0.0
+m05_joint_production_wealth,inv,O/U 2.5_over_25,over_under,2.5,over_25,26,17.86795372650429,1.0064078740715807,0.0
+m05_joint_production_wealth,inv,BTTS_btts_no,btts,0.0,btts_no,13,-61.37253385196748,-3.4567921019811516,0.0
+m05_joint_production_wealth,inv,BTTS_btts_yes,btts,0.0,btts_yes,10,-2.3423926359870197,-0.13193465962069223,0.0
+m05_joint_production_wealth,inv,O/U 1.5_over_15,over_under,1.5,over_15,7,18.020462622937465,1.014997898233589,0.0

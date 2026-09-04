@@ -410,7 +410,12 @@ println("="^150)
 # where that is done deliberately, to demonstrate a mechanism rather than to
 # estimate a return. Nothing in §9's Gate-2 verdict reads this table.
 
-const R02_RISK_LAMBDAS = [23.0, 18.0, 15.0, 12.0, 10.0, 8.0, 6.0, 5.0, 4.0, 3.0]
+# Descending, and it must reach LOW enough that the drawdown constraint stops
+# binding before the grid runs out — otherwise the matched return is a lower bound
+# set by the grid rather than by the data, and the arm reports a floor as a result.
+# §7b prints a warning naming any arm that bottoms out.
+const R02_RISK_LAMBDAS =
+    [23.0, 18.0, 15.0, 12.0, 10.0, 8.0, 6.0, 5.0, 4.0, 3.0, 2.5, 2.0, 1.5, 1.0, 0.75, 0.5]
 
 println("\n--- arm F · risk-matched (mechanism demonstration, NOT a performance claim) ---")
 r02_risk_rows = NamedTuple[]
@@ -440,10 +445,12 @@ for name in R02_MODELS
                         name, lab, trust_name, target)
                 continue
             end
-            push!(r02_risk_rows, best)
-            @printf("  %-30s %-4s %-13s λ %5.1f  return %+8.2f%%  Sharpe %5.3f  MDD %7.2f%% (raw %7.2f%%)\n",
+            bottomed = best.risk_lambda == minimum(R02_RISK_LAMBDAS)
+            push!(r02_risk_rows, merge(best, (; grid_bottomed = bottomed)))
+            @printf("  %-30s %-4s %-13s λ %5.2f  return %+8.2f%%  Sharpe %5.3f  MDD %7.2f%% (raw %7.2f%%)%s\n",
                     name, lab, trust_name, best.risk_lambda, best.total_return_pct,
-                    best.sharpe_ann, best.max_drawdown_pct, target)
+                    best.sharpe_ann, best.max_drawdown_pct, target,
+                    bottomed ? "  [GRID FLOOR — return is a LOWER BOUND]" : "")
         end
     end
 end
