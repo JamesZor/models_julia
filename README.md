@@ -15,6 +15,7 @@ An end-to-end Bayesian quantitative workflow, from raw scrape to a stake at an e
 * **Layer 0 — Memory-optimised DataStore**: concurrent SQL extraction via `LibPQ`, strict typed schemas (`InlineStrings`), vig-removed market math.
 * **Layer 1 — Composable count builder & master engines**: mathematical Lego blocks assembled into `PoissonCountModel` or `NegBinCountModel` with $O(1)$ compiled ReverseDiff tapes.
 * **Layer 2 — Unified inference, latents & experiment truth (`Fit`)**: multi-threaded NUTS/ADVI, automated convergence auditing ($\hat R$, ESS, divergences, BFMI, tree depth), atomic disk persistence, and PostgreSQL run tracking with canonical configuration discovery.
+* **Layer 2, calibrator tier — Generative rate calibration (`CalibratedFit`)**: a tradeable **T−25 point-in-time book** (last visible tick, staleness-bounded, completeness-checked *before* de-vigging) inverted back to $(\lambda^{\text{mkt}}_h, \lambda^{\text{mkt}}_a)$ by Double-Poisson Nelder-Mead, then log-linearly pooled with **every posterior rate draw**. The calibrated container is priced through the same score-grid kernels the raw one is, so 1X2, every totals line and BTTS are three partitions of one $12\times12$ score tensor and **derivative coherence is structural**, not audited. Persisted alongside the run it calibrated.
 * **Layer 3 — Unified evaluation**: zero-copy `OddsView` over match markets with bit-identical LogLoss, CRPS, Brier, RPS and Expected Calibration Error against market closing prices.
 * **Layer 4 — Zero-allocation portfolio, staking & audit**: $O(1)$ indexed lookups (`OddsIndex`), fold-level pre-allocated workspaces (`BookWorkspace`), Baker-McHale shrinkage, fractional Kelly under a joint slate budget, and queryable PostgreSQL portfolio/trade persistence.
 * **Layer 5 — MatchDay execution**: point-in-time slate pricing, a transactional paper ledger, and two interactive browser consoles — **live** and **replay** — driven by the same pipeline.
@@ -46,12 +47,21 @@ PostgreSQL services and they answer different questions.
 
 **`mcmc_experiments` — Bayesian experiment and portfolio tracking**
 
-`config_registry` (canonical named components) · `configs` (the hash-addressed inference
-recipe) · `runs` (status, Git provenance, timings) · `fold_results` (convergence audit and
-OOS proper scores) · `match_latents` (point-in-time posterior predictions with compressed
-draws) · `fit_artifacts` (the exact serialized `Fit`) · `portfolio_runs` /
-`portfolio_bets` / `portfolio_artifacts` (simulation headline, trade ledger, exact
-`PortfolioResult`).
+Eleven tables. `config_registry` (canonical named components — models, splitters, samplers,
+fits, book/policy specs, **calibrators**) · `configs` (the hash-addressed inference recipe) ·
+`runs` (status, Git provenance, timings) · `fold_results` (convergence audit and OOS proper
+scores) · `match_latents` (point-in-time posterior predictions with compressed draws) ·
+`fit_artifacts` (the exact serialized `Fit`) · `portfolio_runs` / `portfolio_bets` /
+`portfolio_artifacts` (simulation headline, trade ledger, exact `PortfolioResult`) ·
+`calibration_runs` / `calibration_artifacts` (one row per model run × Layer-2 calibrator —
+the recipe, the price instant, coverage, headline proper scores and CLV — plus the exact
+calibrator, calibrated container and per-fixture diagnostic frame).
+
+A calibration hangs off the **raw** model run, since calibration resamples nothing. A
+portfolio priced from a calibrated container carries both lineages:
+`portfolio_runs.model_run_id` says which posterior, and
+`portfolio_runs.metadata ->> 'calibration_run_id'` says what was done to it before pricing —
+a JSONB pointer rather than a foreign key, so an uncalibrated portfolio stays insertable.
 
 The two are linked by `paper_slates.model_run_id → runs.run_id`, carried as an opaque UUID
 with no foreign key — they are separate servers. Rationale and the full schema reference:
@@ -166,6 +176,14 @@ Extraction, transformation and validation of raw PostgreSQL data into memory-opt
 * **Typed latents (`CountLatents`)**: structured $\lambda_{\text{home}}, \lambda_{\text{away}}$ matrices feeding zero-allocation score kernels (`SmileScoreGrid`).
 * **PostgreSQL experiment tracking**: `PostgresStorage` stores queryable runs, fold diagnostics, match latents and exact `Fit` artefacts; `DualStorage` also keeps an atomic filesystem copy.
 * **Config truth engine**: `config_registry`, `save_model`, `save_config`, `search_configs`, `show_config` give named, tagged, hash-addressed recipes shared across machines.
+
+### 🎯 Layer 2, calibrator tier: Generative rate calibration (`src/Calibration/`)
+* **`point_in_time_book(ds; config)`**: the last traded price at or before a cutoff, per selection, carrying its staleness. Market **completeness is checked before de-vigging** — normalising a one-sided quote yields a fair probability of exactly 1.0 and no error, which is how a de-vigging artefact becomes a fabricated edge.
+* **`GenerativeRateCalibrator`**: a location law (`InverseGaussianLaw`, `StandardGaussianLaw`, `StaticGeometricLaw`), a dispersion map (`PoolDispersion` by default), the Jensen anchor, and **the price instant it was fitted at** — `calibrate_fit` refuses a book from a different one, because calibration parameters do not transfer between instants.
+* **`calibrate_fit(cal, fit, book) -> CalibratedFit`**: `.fit` is a real `Training.Fit` carrying the calibrated container, so `run_portfolio_simulation(spec, policy, cf, book, ds)` and `evaluate_predictions(cf, ds)` work with **no change to `src/Portfolio/` or `src/evaluation/`**.
+* **Structural coherence**: every derivative price is read off one score tensor, so 1X2, every totals line and BTTS cannot disagree. `coherence_report` measures it rather than asserting it — worst family spread `6.66e-16` on the real Scottish Lower container.
+* **`save_calibration_db` / `link_portfolio_run`**: `calibration_runs`, `calibration_artifacts`, and the JSONB link back to the portfolio that priced from it.
+* Design record: [`docs/architecture/rfc_layer2_calibration_v2.md`](docs/architecture/rfc_layer2_calibration_v2.md). `BasicLogitShift` is deprecated — a selection-level shift cannot be coherent across derivative markets.
 
 ### 📊 Layer 3: Unified evaluation (`src/evaluation/`)
 * **`OddsView`**: zero-copy dense view over odds matrices with strict point-in-time (`stamp < kickoff`) assertion guards.

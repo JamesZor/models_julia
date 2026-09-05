@@ -476,7 +476,17 @@ extend that instead of raising a duplicate.
 | new feature extractor | `add_feature!(F_data, ::Val{:name}, ids, team_map, ds)` in `src/features/extractors/` |
 | new model component | `Config` struct + `@model` builder + `extract_*` in `src/models/pregame/components/` |
 | new backtest metric | subtype `AbstractWealthMetric` / `AbstractDistributionalMetric` |
-| new L2 shift model | subtype `AbstractLayerTwoModel` in `src/Calibration/shift_models/` |
+| new L2 calibrator | subtype `AbstractCalibrator` / `AbstractGenerativeRateCalibrator` in `src/Calibration/` — in practice a **location law** (`AbstractCalibrationWeightLaw` + `calibration_weight`) or a **dispersion map** (`AbstractDispersionMap` + `residual_map`) |
+
+`AbstractLayerTwoModel` and `BasicLogitShift` (`src/Calibration/shift_models/`) are
+**deprecated** and warn once per session. A selection-level logit shift moves each market's
+probability with its own offset, so `P(over 2.5) + P(under 2.5) != 1` and the shifted board
+is not a scoreline distribution at all. `GenerativeRateCalibrator` shifts the generative
+intensity instead, so every derivative price is read off one score tensor and cannot
+disagree — see
+[`docs/architecture/rfc_layer2_calibration_v2.md`](../architecture/rfc_layer2_calibration_v2.md).
+A calibrator returns the **same concrete latent container type** it was given; that contract
+is what lets `Evaluation` and `Portfolio` consume a calibrated posterior with no new methods.
 
 ### 5.4 Data contract
 

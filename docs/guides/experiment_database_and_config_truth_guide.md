@@ -10,7 +10,8 @@
 > [`src/training/inference/db_storage.jl`](../../src/training/inference/db_storage.jl),
 > [`src/training/inference/extension.jl`](../../src/training/inference/extension.jl),
 > [`src/Portfolio/db_storage.jl`](../../src/Portfolio/db_storage.jl),
-> [`src/Portfolio/extension.jl`](../../src/Portfolio/extension.jl), and
+> [`src/Portfolio/extension.jl`](../../src/Portfolio/extension.jl),
+> [`src/Calibration/db_storage.jl`](../../src/Calibration/db_storage.jl), and
 > [`src/training/inference/db/schema.sql`](../../src/training/inference/db/schema.sql).
 > The operational counterpart is
 > [`src/MatchDay/ledger/schema.jl`](../../src/MatchDay/ledger/schema.jl) and
@@ -34,7 +35,8 @@ The experiment database addresses those limitations with a central PostgreSQL se
 - **Multi-machine discovery:** the laptop and compute workers query one shared source instead
   of reconciling host-specific result directories.
 - **Configuration truth:** `config_registry` gives canonical models, splitters, samplers,
-  `FitConfig`s, books, and policies stable integer IDs, names, tags, descriptions, and hashes.
+  `FitConfig`s, books, policies, and **calibrators** stable integer IDs, names, tags,
+  descriptions, and hashes.
 - **Duplicate protection:** `configs.config_hash` uniquely identifies an inference recipe;
   `save_fit` returns the existing run UUID when that hash is already present.
 - **Lossless reconstruction:** compressed binary artefacts preserve exact Julia `Fit` and
@@ -91,11 +93,11 @@ market_group, market_line, selection)`, and `account_ledger (slate_id) WHERE kin
 
 ### 2.2 `mcmc_experiments` — the experiment database
 
-Nine tables, described column by column in the schema reference below:
+Eleven tables, described column by column in the schema reference below:
 
 | Table | Holds |
 |---|---|
-| `config_registry` | canonical named components — `model`, `splitter`, `sampler`, `fit`, `book_spec`, `policy_spec`, `portfolio` |
+| `config_registry` | canonical named components — `model`, `splitter`, `sampler`, `fit`, `book_spec`, `policy_spec`, `portfolio`, `calibrator` |
 | `configs` | the persisted inference recipe, one-to-one with a run; its `config_hash` is `save_fit`'s deduplication key |
 | `runs` | one row per inference run: status, Git provenance, timings |
 | `fold_results` | per-fold convergence audit and out-of-sample proper scores |
@@ -104,6 +106,8 @@ Nine tables, described column by column in the schema reference below:
 | `portfolio_runs` | headline ROI / drawdown / Sharpe per portfolio simulation |
 | `portfolio_bets` | the **backtest** trade ledger — one row per simulated bet |
 | `portfolio_artifacts` | the exact serialized `PortfolioResult`, plus the `BookSpec`/`PolicySpec` used |
+| `calibration_runs` | one row per (model run × Layer-2 calibrator): the recipe as JSONB, the price instant, coverage, headline proper scores and CLV |
+| `calibration_artifacts` | the exact serialized calibrator, the calibrated latent container, and the per-fixture diagnostic frame |
 
 ### 2.3 Why the paper ledger is not in here
 
@@ -167,11 +171,34 @@ The ledger lives in `betdb` deliberately:
  | lambda summaries          |             | FK portfolio_run_id      |     | result_blob BYTEA         |
  | compressed draws_blob     |             | market, stake, PnL       |     +---------------------------+
  +---------------------------+             +---------------------------+
+
+                         Layer-2 calibration (hangs off the SAME model run)
+
+ +---------------------------+   1 : many    +---------------------------+  1 : 1  +---------------------------+
+ | runs                      |-------------->| calibration_runs          |-------->| calibration_artifacts     |
+ | UQ run_id (UUID)          |  model_run_id | PK calibration_run_id     |         | PK/FK calibration_run_id  |
+ +---------------------------+               | FK model_run_id -> runs   |         | calibrator_blob BYTEA     |
+                                             | calibrator_name/hash      |         | calibrated_latents_blob   |
+                                             | book_as_of_minutes        |         | diagnostics_blob          |
+                                             | log_loss/ece/brier/clv    |         +---------------------------+
+                                             +-------------+-------------+
+                                                           ^
+                                                           : metadata ->> 'calibration_run_id'
+                                                           : (JSONB pointer, NO foreign key)
+                                             +-------------+-------------+
+                                             | portfolio_runs            |
+                                             +---------------------------+
 ```
 
 The UUID columns remain stable cross-machine identifiers. Fresh schemas also expose
-`BIGSERIAL` IDs on `runs`, `portfolio_runs`, and `config_registry` for concise interactive
-lookups.
+`BIGSERIAL` IDs on `runs`, `portfolio_runs`, `config_registry`, and `calibration_runs` for
+concise interactive lookups.
+
+A calibration run points at the **raw** model run, not at a second one: calibration does not
+resample anything, so `runs` still holds exactly one row per posterior. A portfolio priced
+from a calibrated container therefore carries two lineages — `portfolio_runs.model_run_id`
+says which posterior, and `portfolio_runs.metadata ->> 'calibration_run_id'` says what was
+done to it before pricing (section 6.6).
 
 ---
 
@@ -283,10 +310,13 @@ Headline output from one portfolio simulation.
 | `win_rate` | `DOUBLE PRECISION` | Nullable bet win rate. |
 | `n_bets` | `INT` | Not null bet count. |
 | `created_at` | `TIMESTAMP` | Not null persistence time. |
-| `metadata` | `JSONB` | Not null, default `{}`; convergence, failed gates, slate count, span, and caller metadata. |
+| `metadata` | `JSONB` | Not null, default `{}`; convergence, failed gates, slate count, span, caller metadata, and — when the book was priced from a calibrated container — `calibration_run_id`, `calibrator` and `book_as_of_minutes` (section 6.6). |
 
 Indexes: unique `idx_portfolio_runs_id`; `idx_portfolio_runs_created_at`;
-`idx_portfolio_runs_model_run_id`; and the unique constraint index on `portfolio_run_id`.
+`idx_portfolio_runs_model_run_id`; the expression index
+`idx_portfolio_runs_calibration ON portfolio_runs((metadata ->> 'calibration_run_id'))`,
+which is what makes reading the calibration link back cheap; and the unique constraint index
+on `portfolio_run_id`.
 
 ### 4.6 `portfolio_bets`
 
@@ -317,7 +347,7 @@ same name updates its payload and metadata without creating another row.
 | `id` | `BIGSERIAL` | Primary key and public component lookup ID. |
 | `name` | `VARCHAR` | Not null canonical name. |
 | `experiment_name` | `VARCHAR` | Not null namespace. |
-| `config_type` | `VARCHAR` | Not null classifier: `model`, `splitter`, `sampler`, `fit`, `book_spec`, `policy_spec`, or `portfolio`. |
+| `config_type` | `VARCHAR` | Not null classifier: `model`, `splitter`, `sampler`, `fit`, `book_spec`, `policy_spec`, `portfolio`, or `calibrator`. |
 | `description` | `VARCHAR` | Not null, default empty string. |
 | `tags` | `JSONB` | Not null JSON string array, default `[]`. |
 | `config_json` | `JSONB` | Not null searchable structural summary. |
@@ -352,6 +382,67 @@ relational latent rows exist.
 
 The artefact preserves daily states, bootstrap output, custom metrics, attribution, and all
 other values not represented by the headline tables.
+
+### 4.10 `calibration_runs`
+
+One row per (model run × Layer-2 calibrator). Written by
+[`save_calibration_db`](#66-layer-2-calibration-persistence); see
+[`docs/architecture/rfc_layer2_calibration_v2.md`](../architecture/rfc_layer2_calibration_v2.md)
+for what a calibrator is.
+
+| Column | Type | Constraint / meaning |
+|---|---|---|
+| `id` | `BIGSERIAL` | Human-friendly lookup ID. |
+| `calibration_run_id` | `UUID` | Primary key; stable calibration identifier. |
+| `model_run_id` | `UUID` | Not null foreign key to `runs(run_id)` with `ON DELETE CASCADE` — the **raw** posterior this was applied to. |
+| `experiment_name` | `VARCHAR` | Not null namespace, as every other table in this database is scoped. |
+| `calibrator_name` | `TEXT` | Not null; the calibrator's own `name`. |
+| `calibrator_hash` | `VARCHAR(64)` | Not null SHA-256 of the recipe. **Excludes the name** — two calibrators that differ only in what they are called are the same transform, and a rename must not orphan a run's lineage. |
+| `config_json` | `JSONB` | Not null queryable recipe: law type and parameters, dispersion map, anchor, fallback, inversion gates. Every scalar a sweep would `GROUP BY` is a top-level key. |
+| `book_as_of_minutes` | `DOUBLE PRECISION` | Minutes to kick-off of the book this was fitted against; `0.0` for a close. **A first-class column, not a JSON path** — see below. |
+| `n_fixtures` | `INT` | Fixtures the latent container held. |
+| `n_inverted` | `INT` | Fixtures whose book was successfully inverted. The rest passed through raw and are counted, never dropped or imputed. |
+| `log_loss` | `DOUBLE PRECISION` | Nullable. **Headline scope only** — see below. |
+| `ece` | `DOUBLE PRECISION` | Nullable expected calibration error, headline scope. |
+| `brier` | `DOUBLE PRECISION` | Nullable Brier score, headline scope. |
+| `clv_mean_pct` | `DOUBLE PRECISION` | Nullable flat mean closing-line value. |
+| `clv_weighted_pct` | `DOUBLE PRECISION` | Nullable **stake-weighted** CLV — the figure that matters, because a strategy with positive CLV on its small bets and negative CLV on its large ones has negative CLV where the money is. |
+| `created_at` | `TIMESTAMPTZ` | Not null, default `NOW()`. |
+| `metadata` | `JSONB` | Not null, default `{}`; coverage, refusal reasons and counts, weight and dispersion quantiles, and any caller metadata. |
+
+Indexes: unique `idx_calibration_runs_id`; `idx_calibration_runs_model_run_id`;
+`idx_calibration_runs_experiment`; `idx_calibration_runs_name`;
+`idx_calibration_runs_hash`; `idx_calibration_runs_created_at`.
+
+**Why `book_as_of_minutes` is a column and not a JSON path.** Calibration parameters do not
+transfer between price instants, and the *winning functional form flips* with the sharpness
+of the book being pooled with: against the converged Betfair close the shrinkage law wins on
+LogLoss, against the softer T−25 book the conviction law does, and a spec moved between the
+two gives up 0.0015–0.0020 LogLoss
+([stream README §7.3](../../current_development/calibration_generative_eda/README.md)). Two
+calibration runs at different instants are therefore **not comparable**, and the most
+important filter in the table must not require `config_json ->> …`.
+
+**Why the score columns are headline scope.** `log_loss`, `ece` and `brier` are
+`Evaluation.DEFAULT_SCORED_MARKETS` — 1X2 + O/U 2.5 + BTTS — because that is the only scope
+in which the published Gate-1 thresholds mean anything. A wide-book score written under the
+same column name would make two rows of a leaderboard silently incomparable, so it belongs
+in `metadata` under its own key.
+
+### 4.11 `calibration_artifacts`
+
+| Column | Type | Constraint / meaning |
+|---|---|---|
+| `calibration_run_id` | `UUID` | Primary key and foreign key to `calibration_runs(calibration_run_id)` with `ON DELETE CASCADE`. |
+| `calibrator_blob` | `BYTEA` | Not null Zstd-compressed serialized calibrator. |
+| `calibrated_latents_blob` | `BYTEA` | Nullable exact calibrated latent container. Written by default; pass `store_latents = false` when it is large and cheaply reproducible from the calibrator plus the book. |
+| `diagnostics_blob` | `BYTEA` | Nullable per-fixture diagnostic frame: `delta`, `w`, `kappa`, variance retention in three bases, predictive-rate ratio, and λ before and after. |
+
+`diagnostics_blob` is not decoration. It is what a post-mortem reads, and it is the one
+thing that does **not** reconstruct from the calibrator plus the book — it depends on the
+posterior, which lives in another table under another run's key. The whole write is one
+transaction: a `calibration_runs` row without its artefact is a run you cannot reproduce,
+and discovering that three weeks later is worse than the insert rolling back now.
 
 > **Trust boundary:** Julia `Serialization` is not a safe format for untrusted input. Connect
 > only to a trusted experiment database, and treat artefact reloads like executing trusted
@@ -450,12 +541,26 @@ fit_hash = save_config(
 
 book_id = save_book_spec(db, "closing_main", spec; tags = ["production"])
 policy_id = save_policy_spec(db, "quarter_kelly", policy; tags = ["production"])
+
+calibrator_id = save_calibrator(
+    db,
+    "scot_lower_t25_inv",
+    cal;
+    description = "Generative rate calibration, T-25 conviction law",
+    tags = ["production", "calibration_v2", "t25"],
+)
 ```
 
-`save_model`, `save_splitter`, `save_sampler`, `save_book_spec`, and `save_policy_spec` return
-the integer `config_registry.id`. The legacy generic `save_config` returns the 64-character
-configuration hash. A `(BookSpec, PolicySpec)` tuple can also be registered with
-`save_config` and recovered with `load_portfolio_spec`.
+`save_model`, `save_splitter`, `save_sampler`, `save_book_spec`, `save_policy_spec`, and
+`save_calibrator` return the integer `config_registry.id`. The legacy generic `save_config`
+returns the 64-character configuration hash. A `(BookSpec, PolicySpec)` tuple can also be
+registered with `save_config` and recovered with `load_portfolio_spec`.
+
+A calibrator is classified as `config_type = 'calibrator'` by any `AbstractCalibrator` in its
+supertype chain, resolved **by name** rather than by `isa` — `Training` loads before
+`Calibration` (which needs `Portfolio`), so it cannot reference the type directly. Name it
+for the price instant it was fitted at: `book_as_of_minutes` is part of the recipe, and
+`"scot_lower_inv"` is a name that will eventually be applied to the wrong book.
 
 ### 6.2 Load by integer ID
 
@@ -467,6 +572,7 @@ fit_cfg = load_fit_config(db, 3)
 fit = load_fit(db, 12)
 book = load_book_spec(db, 1)
 policy = load_policy_spec(db, 1)
+cal = load_calibrator(db, 1)
 ```
 
 The component numbers address `config_registry.id`; the fit number addresses `runs.id`.
@@ -482,6 +588,7 @@ fit_cfg = load_fit_config(db, "fit_joint_2426")
 fit = load_fit(db, "poisson_2426")       # latest run with this FitConfig.name
 book = load_book_spec(db, "closing_main")
 policy = load_policy_spec(db, "quarter_kelly")
+cal = load_calibrator(db, "scot_lower_t25_inv")
 ```
 
 Config names resolve to one canonical row because `(experiment_name, name)` is unique. A fit
@@ -533,6 +640,89 @@ absent from the existing bet ledger, continues from the closing bankroll, and at
 the bet ledger, headline summary, and exact result artefact. Book and policy specs are recovered
 from `portfolio_artifacts` when they were supplied to `save_portfolio_db`; otherwise pass them
 explicitly or register matching canonical specs.
+
+### 6.6 Layer-2 calibration persistence
+
+A calibration run hangs off the model run it calibrated. It does **not** create a second
+`runs` row, because calibration resamples nothing — `runs` stays one row per posterior.
+
+```julia
+book, refusals = point_in_time_book(ds; config = PointInTimeBookConfig(as_of_minutes = -25.0))
+
+cal = GenerativeRateCalibrator(
+    name = "scot_lower_t25_inv",
+    law  = InverseGaussianLaw(w_base = 0.25, sigma = 0.35),
+    book_as_of_minutes = -25.0,
+)
+
+run_id = save_fit(fit, db)                       # the RAW posterior's UUID
+cf     = calibrate_fit(cal, fit, book)           # -> CalibratedFit
+
+# Closing-line value needs the drift between the book you struck at and the close.
+result, _, _ = run_portfolio_simulation(spec, policy, cf, book, ds)
+drift = book_drift(book, closing_book(ds))
+bets  = result.trajectory.bets
+
+cal_run_id = save_calibration_db(
+    cf,
+    run_id,
+    db;
+    scores   = calibration_scores(cf, book, ds.matches),   # headline scope
+    clv      = clv_summary(bets, bet_clv(bets, drift)),
+    metadata = (; suite = "r06_production_parity", wide_scope = wide_scores),
+)
+
+recovered = load_calibration_db(cal_run_id, db)
+# recovered.calibrator  -> the exact GenerativeRateCalibrator
+# recovered.latents     -> the exact calibrated container (or `nothing` if not stored)
+# recovered.diagnostics -> the per-fixture delta / w / kappa frame
+# recovered.row         -> the queryable calibration_runs row
+
+list_calibration_runs(db; model_run_id = run_id)          # this posterior's leaderboard
+list_calibration_runs(db; calibrator = "scot_lower_t25_inv")
+```
+
+| Function | Does |
+|---|---|
+| `save_calibration_db(cf, model_run_id, storage; scores, clv, metadata, store_latents)` | Writes `calibration_runs` + `calibration_artifacts` in one transaction; returns the `calibration_run_id` UUID. `scores` and `clv` are the summary NamedTuples from `calibration_scores` and `clv_summary`, or `nothing`. `store_latents = false` omits the container blob. |
+| `load_calibration_db(calibration_run_id, storage)` | Returns `(; calibrator, latents, diagnostics, row)`. |
+| `list_calibration_runs(storage; model_run_id, calibrator)` | The calibration leaderboard for this experiment, newest first; filter by either, both, or neither. |
+
+`load_calibration_db` deliberately returns the container rather than a `CalibratedFit`:
+rebuilding one needs the raw `Fit`, which lives under its own key and may be gigabytes.
+Compose them when you want one — and note that re-deriving is also the cheapest possible
+regression check on the stored artefact:
+
+```julia
+c   = load_calibration_db(cal_run_id, db)
+fit = load_fit(db, c.row.model_run_id)
+cf  = calibrate_fit(c.calibrator, fit, book)     # must reproduce c.latents exactly
+```
+
+#### Linking a portfolio run
+
+`Portfolio.save_portfolio_db` already merges a caller's `metadata` into
+`portfolio_runs.metadata`, so the link needs **no change to `src/Portfolio/`**:
+
+```julia
+portfolio_run_id = link_portfolio_run(
+    result, run_id, cal_run_id, db;
+    book_spec = spec, policy_spec = policy, calibrator = cal,
+)
+
+portfolio_runs_for_calibration(cal_run_id, db)   # every portfolio priced from this calibration
+```
+
+`link_portfolio_run` is a thin wrapper over `save_portfolio_db` whose only job is to keep the
+key spelling in one place. Note that `model_run_id` stays the **raw** run's UUID:
+`portfolio_runs.model_run_id` means "which posterior was this priced from", and the calibrated
+posterior's lineage is the calibration row, which itself points back to that same run.
+
+**There is no foreign key, and there should not be.** `portfolio_runs` has to stay insertable
+for a portfolio built on a raw fit, which a `NOT NULL` reference would prevent, and a nullable
+one buys nothing over a JSONB key. The expression index
+`idx_portfolio_runs_calibration ON portfolio_runs((metadata ->> 'calibration_run_id'))` is
+what keeps the read back cheap.
 
 ---
 
@@ -682,6 +872,46 @@ ORDER BY r.created_at DESC;
 For immutable audit records, retain the run UUID and `configs.config_hash`; do not rely only
 on a mutable canonical name.
 
+### 8.4 Compare calibrators, and join a portfolio back to the one that priced it
+
+The JSONB pointer is what `idx_portfolio_runs_calibration` indexes, so the join below reads
+the index rather than scanning every portfolio row.
+
+```sql
+SELECT
+    cr.calibrator_name,
+    cr.book_as_of_minutes,
+    cr.config_json -> 'law' ->> 'type'        AS weight_law,
+    cr.config_json ->> 'dispersion_label'     AS dispersion,
+    cr.config_json ->> 'anchor'               AS anchor,
+    cr.n_inverted || '/' || cr.n_fixtures     AS inverted,
+    cr.log_loss,
+    cr.ece,
+    cr.clv_weighted_pct,
+    pr.total_return_pct,
+    pr.flat_roi_pct,
+    pr.sharpe_ann,
+    pr.max_drawdown_pct,
+    pr.n_bets
+FROM calibration_runs AS cr
+JOIN runs AS r
+  ON r.run_id = cr.model_run_id
+LEFT JOIN portfolio_runs AS pr
+       ON pr.metadata ->> 'calibration_run_id' = cr.calibration_run_id::text
+WHERE cr.experiment_name = 'scottish_lower_joint_player_2426'
+  AND r.name = 'm12_joint_hybrid_synergy'
+  AND cr.book_as_of_minutes = -25.0        -- never pool two price instants in one table
+ORDER BY pr.total_return_pct DESC NULLS LAST;
+```
+
+The `book_as_of_minutes` predicate is not optional hygiene. Rows at different instants
+answer different questions (section 4.10), and a leaderboard that mixes them will rank a
+close-fitted calibrator against a T−25 one and report the comparison as a result.
+
+An uncalibrated portfolio run has a `NULL` `metadata ->> 'calibration_run_id'` and simply
+does not appear on the right-hand side — which is the property the missing foreign key
+exists to preserve.
+
 ---
 
 ## 9. Avoiding redundant MCMC
@@ -771,7 +1001,11 @@ bootstrap DDL and the additive migration runner. Consequently:
 5. Check `configs.config_hash` before scheduling MCMC.
 6. Persist the fit and retain its returned UUID.
 7. Persist portfolio output against that immutable model run UUID.
-8. Use SQL for discovery and summaries; use loaders for exact Julia reconstruction.
-9. Keep trusted code and schema versions aligned with serialized artefacts.
-10. When a live or replay slate is involved, remember the direction of travel: it **reads** a
+8. When a Layer-2 calibrator is involved, register it (`save_calibrator`), persist the
+   calibration against the **raw** run UUID (`save_calibration_db`), and link the portfolio
+   with `link_portfolio_run` so the lineage is a query rather than a memory. Never compare
+   two calibration runs at different `book_as_of_minutes`.
+9. Use SQL for discovery and summaries; use loaders for exact Julia reconstruction.
+10. Keep trusted code and schema versions aligned with serialized artefacts.
+11. When a live or replay slate is involved, remember the direction of travel: it **reads** a
     converged run out of `mcmc_experiments` and **writes** only into `betdb.<paper_schema>`.

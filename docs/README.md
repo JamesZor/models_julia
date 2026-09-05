@@ -34,6 +34,14 @@ longer-lived material.
   — the `CountModelBuilder` contract.
 - [`feature_engineering_protocol.md`](architecture/feature_engineering_protocol.md) — the
   extractor contract and point-in-time guards.
+- [`rfc_layer2_calibration_v2.md`](architecture/rfc_layer2_calibration_v2.md) — **Layer-2
+  generative rate calibration as a production tier.** The market-rate inversion, the three
+  location laws and four dispersion maps, the tradeable T−25 book, the `CalibratedFit`
+  contract that lets a calibrated posterior reach `Portfolio` with no change to it, and the
+  `calibration_runs` / `calibration_artifacts` schema. Also records what it deliberately does
+  *not* claim, and the one place it departs from its own work package (`CalibratedLatents` is
+  an alias, not a wrapper — §3.1) and why. Measured evidence lives with the stream:
+  [`current_development/calibration_generative_eda/README.md`](../current_development/calibration_generative_eda/README.md).
 
 For the operational layer, the live and replay consoles are documented where they live:
 [`current_development/match_day_inference/README.md`](../current_development/match_day_inference/README.md)
@@ -85,7 +93,9 @@ description of the current system.
   [`meta_model_research_notes.md`](archive/meta_model_research_notes.md) — the Layer 3
   meta-model. Blending the market at L3 did not beat blending it inside L1.
 - [`l2_bayesian_calibration_research.md`](archive/l2_bayesian_calibration_research.md) —
-  Layer 2 Bayesian calibration. Did not improve betting returns.
+  Layer 2 Bayesian calibration. Did not improve betting returns. **Not** the current Layer-2
+  calibrator: that is generative *rate* calibration, in
+  [`architecture/rfc_layer2_calibration_v2.md`](architecture/rfc_layer2_calibration_v2.md).
 - [`hurdle_metric_plan.md`](archive/hurdle_metric_plan.md),
   [`hurdle_results_analysis.md`](archive/hurdle_results_analysis.md) — design notes and
   results for the Hurdle metric. The metric itself is live in `src/`; these are its
