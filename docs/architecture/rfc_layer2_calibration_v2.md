@@ -394,6 +394,33 @@ writes goes to `mcmc_experiments` on `mcmc-beast:5432` through
 T9/T10 skip **with a message** when `mcmc_experiments` or the DataStore cache is out of
 reach — a "passed" line from a tier that skipped is not evidence.
 
+### 7.1 Measured, 2026-09-05
+
+Both gates ran on `mcmc-beast` at `-t 16` against the live `mcmc_experiments`.
+
+**T1–T11: 529 assertions, 12 testsets, all passing** — including T2's bit-for-bit
+equivalence with `l01_generative_calibrator.jl` on all three location laws, T2c's
+`< 1e-12` reproduction of every `l03` dispersion scheme, and T10's lossless round-trip
+through `calibration_runs` / `calibration_artifacts` with a linked `portfolio_runs` row.
+`test/runtests.jl` was 3300/3300 before this suite was registered into it.
+
+**End-to-end parity** (`current_development/calibration_generative_eda/r06_production_parity.jl`):
+the real canonical `m12_joint_hybrid_synergy` fit, the real T−25 Betfair book (1,572
+fixtures, median staleness 8 minutes, overround 1.0015), the production
+`BookSpec`/`PolicySpec`, driven through `calibrate_fit` → `run_portfolio_simulation`.
+**All six rows of the stream's published §7.4 table reproduce to every printed digit** —
+bets, return, flat ROI, Sharpe and drawdown — with the bet count required to match
+*exactly*, because a book, fixture-set or allocator change moves it by one where no return
+tolerance would catch it.
+
+Derivative coherence on the real container: the worst disagreement between the six market
+families on any fixture is **6.66e-16**, across all four calibrators.
+
+Inversion coverage over the 710 gate-season fixtures: 580 accepted — **94.9% of the
+fixtures that had a book**, 81.7% of all of them. The two numbers are reported separately
+because only the first measures dilution; a fixture the book never quoted contributes no
+scored observation either.
+
 ---
 
 ## 8. What this RFC does not claim

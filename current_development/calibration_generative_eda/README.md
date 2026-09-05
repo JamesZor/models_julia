@@ -84,6 +84,7 @@ already failed.
 | [`r04_t25_portfolio.jl`](r04_t25_portfolio.jl) | Runner 4. The portfolio at T−25, the close-vs-T−25 attribution, and CLV. |
 | [`l03_variance_schemes.jl`](l03_variance_schemes.jl) | Loader. The pool decomposed into a pooled location and a 2×2 residual map, seven dispersion schemes over it, the market-free Jensen tail diagnostics, and the gate that keeps `A_pool` identical to `l01`'s pool. |
 | [`r05_variance_experiments.jl`](r05_variance_experiments.jl) | Runner 5. Dispersion held against location under two weight laws: Gate 1 with the tail audit, Gate 2 over the whole (λ, Kelly) risk surface, and the frontier read at a common drawdown. |
+| [`r06_production_parity.jl`](r06_production_parity.jl) | Runner 6. The **regression gate** on the graduation to `src/Calibration/`: the real canonical fit, the real T−25 book and the production specs, required to reproduce §7.4 row for row. No new numbers, by design. See §10. |
 | `results/` | Replaceable CSV artefacts. Re-running overwrites them. |
 
 Run:
@@ -1380,6 +1381,79 @@ risk budget, where §8.7 found 41 points, and not in the posterior, where §8.6 
 * **`observation_params` is `nothing` throughout.** These containers price a
   double-Poisson grid. A negative-binomial or copula observation carries its own
   dispersion, and nothing here says how these transforms interact with it.
+
+---
+
+## 10. Graduation to `src/Calibration/` — and the parity that licenses it
+
+**Status — 2026-09-05.** `l01_generative_calibrator.jl` and
+`l02_point_in_time_book.jl` have graduated into `src/Calibration/` on
+`feat/modernize-calibration-layer2`. Design record:
+[`docs/architecture/rfc_layer2_calibration_v2.md`](../../docs/architecture/rfc_layer2_calibration_v2.md).
+
+Everything §5–§8 claims was measured with the PROTOTYPE. A production module that is
+merely *close* to it is a different model, and every figure above would quietly become a
+figure about code nobody runs any more. So the graduation is gated twice.
+
+**Gate 1 — the transform.** `test/test_calibration_v2.jl` T2 `include`s and RUNS
+`l01_generative_calibrator.jl` as its reference implementation and asserts `==` on
+`Float64`, not `isapprox`. `PoolDispersion` reproduces `l01.calibrate_latents`
+**bit for bit** on all three location laws; T2c reproduces every `l03` dispersion scheme
+to `< 1e-12`. 529 assertions across 12 testsets, passing on `mcmc-beast` at `-t 16`.
+
+**Gate 2 — the pipeline.** [`r06_production_parity.jl`](r06_production_parity.jl) drives
+the real canonical `m12` fit, the real T−25 Betfair book and the production
+`BookSpec` / `PolicySpec` through `calibrate_fit` → `run_portfolio_simulation`, and
+requires §7.4 to come back row for row (0.01 on a percentage, 0.001 on a Sharpe, **exact**
+on the bet count — a bet count that moved by one means the book, the fixture set or the
+allocator moved, and no return tolerance would catch that).
+
+Measured on `mcmc-beast`, 2026-09-05:
+
+| container | trust | books | bets | return % | flat ROI % | Sharpe | MDD % | median `w` | var retained |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| raw | flat | 608 | 1592 | +111.70 | +9.79 | 1.220 | −23.45 | 1.000 | 1.000 |
+| raw | canonical | 608 | 1127 | +151.52 | +15.04 | 1.592 | −16.15 | 1.000 | 1.000 |
+| inv | flat | 608 | 1318 | +41.13 | +9.20 | 1.087 | −14.40 | 0.291 | 0.085 |
+| inv | canonical | 608 | 975 | +65.64 | +17.44 | 1.772 | −7.76 | 0.291 | 0.085 |
+| std | flat | 608 | 1503 | +63.35 | +9.63 | 1.396 | −12.10 | 0.840 | 0.706 |
+| std | canonical | 608 | 1103 | +72.85 | +13.62 | 1.606 | −11.36 | 0.840 | 0.706 |
+| sta | flat | 608 | 1323 | +36.78 | +9.00 | 1.239 | −9.10 | 0.400 | 0.160 |
+| sta | canonical | 608 | 980 | +49.94 | +14.90 | 1.697 | −6.61 | 0.400 | 0.160 |
+
+**All six published rows reproduce to every printed digit**, and the two `flat` rows §7.4
+did not carry are new here rather than different. The book itself reproduces too: 1,572
+fixtures, median staleness 8 minutes, overround 1.0015 (§7.1), with the inversion
+accepting 580 of 710 gate-season fixtures — **94.9% of the fixtures that had a book**, the
+number §3 says to read, against 81.7% of all of them.
+
+`GATE R06-B` additionally audits derivative coherence on the REAL container rather than a
+synthetic one: the worst disagreement between the six market families on any fixture is
+**6.66e-16**, across all four containers. Six partitions of one 12×12 tensor, and the
+audit says so rather than the argument.
+
+### 10.1 What changed on the way across, and what did not
+
+| | prototype | `src/Calibration/` |
+|---|---|---|
+| the transform | `calibrate_latents(l, rates, spec)` | `calibrate_latents(cal, l, rates)` — **identical arithmetic**, gated by T2 |
+| the weight law | `GenerativeCalibrationSpec(method = :inverse_gaussian, …)` | `InverseGaussianLaw(w_base, sigma)` — dispatch, not a `Symbol` branch |
+| the dispersion | `l03`'s seven `DispersionScheme`s | four `AbstractDispersionMap`s; **`PoolDispersion` is the default** |
+| the book | `point_in_time_book(ds; config)` | unchanged, plus `closing_book` from the same code path |
+| the price instant | a convention, checked by hand | `book_as_of_minutes` on the calibrator, asserted by `calibrate_fit` |
+| the portfolio | `run_portfolio_simulation(spec, policy, latents, book, ds)` | `…(spec, policy, cf::CalibratedFit, book, ds)`, **zero changes to `src/Portfolio/`** |
+| persistence | none — the stream wrote no rows | `config_registry` (`calibrator`), `calibration_runs`, `calibration_artifacts` |
+
+The one deliberate deviation from the work package is `CalibratedLatents`: it is an
+**alias** for `Models.AbstractPosteriorLatents`, not a wrapper struct, because
+`src/Portfolio/pricing.jl` dispatches on `l isa Models.SmileLatents` and a wrapper would
+fail that `isa` — building, pricing and staking a book that had silently **de-smiled** its
+totals ladder. RFC §3.1 records the reasoning.
+
+`PoolDispersion` is the default because §8.11 recommended exactly that, and the anchor is
+identically zero on it (§8.11 item 4's `B_anch` advantage is measured against `B_full`, not
+against the pool). `PreservedDispersion() + :pool_mean` reproduces `B_anch` for anyone who
+wants to spend the 1.5 points; it is one keyword.
 
 ---
 
