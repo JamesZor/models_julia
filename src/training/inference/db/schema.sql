@@ -121,6 +121,44 @@ CREATE TABLE IF NOT EXISTS portfolio_artifacts (
     policy_spec_blob BYTEA
 );
 
+-- Layer-2 calibration. One row per (model run x calibrator): the recipe as queryable
+-- JSONB, the headline proper scores in HEADLINE SCOPE (1X2 + O/U 2.5 + BTTS -- the only
+-- scope the published thresholds mean anything in), and closing-line value.
+--
+-- `book_as_of_minutes` is a first-class column rather than a JSON path deliberately: two
+-- calibration runs fitted at different price instants are not comparable (the winning
+-- functional form flips with the sharpness of the book being pooled with), so the most
+-- important filter must not need `->>`.
+CREATE TABLE IF NOT EXISTS calibration_runs (
+    id BIGSERIAL,
+    calibration_run_id UUID PRIMARY KEY,
+    model_run_id UUID NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    experiment_name VARCHAR NOT NULL,
+    calibrator_name TEXT NOT NULL,
+    calibrator_hash VARCHAR(64) NOT NULL,
+    config_json JSONB NOT NULL,
+    book_as_of_minutes DOUBLE PRECISION,
+    n_fixtures INT,
+    n_inverted INT,
+    log_loss DOUBLE PRECISION,
+    ece DOUBLE PRECISION,
+    brier DOUBLE PRECISION,
+    clv_mean_pct DOUBLE PRECISION,
+    clv_weighted_pct DOUBLE PRECISION,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+-- The exact objects. `diagnostics_blob` is not decoration: the per-fixture delta / w /
+-- kappa frame is what a post-mortem reads and it is the one thing that does NOT
+-- reconstruct from the calibrator plus the book, because it depends on the posterior.
+CREATE TABLE IF NOT EXISTS calibration_artifacts (
+    calibration_run_id UUID PRIMARY KEY REFERENCES calibration_runs(calibration_run_id) ON DELETE CASCADE,
+    calibrator_blob BYTEA NOT NULL,
+    calibrated_latents_blob BYTEA,
+    diagnostics_blob BYTEA
+);
+
 -- Add lookup IDs when migrating a database created by the UUID-only v1 schema. Existing UUID
 -- keys remain unique stable foreign-key targets. Fresh databases use BIGSERIAL primary keys.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS id BIGSERIAL;
@@ -133,6 +171,13 @@ ALTER TABLE fold_results ADD COLUMN IF NOT EXISTS last_match_date DATE;
 ALTER TABLE portfolio_artifacts ADD COLUMN IF NOT EXISTS book_spec_blob BYTEA;
 ALTER TABLE portfolio_artifacts ADD COLUMN IF NOT EXISTS policy_spec_blob BYTEA;
 UPDATE runs SET name = experiment_name WHERE name IS NULL;
+ALTER TABLE calibration_runs ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+ALTER TABLE calibration_runs ADD COLUMN IF NOT EXISTS experiment_name VARCHAR;
+ALTER TABLE calibration_runs ADD COLUMN IF NOT EXISTS book_as_of_minutes DOUBLE PRECISION;
+ALTER TABLE calibration_runs ADD COLUMN IF NOT EXISTS n_fixtures INT;
+ALTER TABLE calibration_runs ADD COLUMN IF NOT EXISTS n_inverted INT;
+ALTER TABLE calibration_artifacts ADD COLUMN IF NOT EXISTS diagnostics_blob BYTEA;
+UPDATE calibration_runs SET experiment_name = 'unknown' WHERE experiment_name IS NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_id ON runs(id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_runs_id ON portfolio_runs(id);
@@ -152,3 +197,14 @@ CREATE INDEX IF NOT EXISTS idx_fold_results_run_id ON fold_results(run_id);
 CREATE INDEX IF NOT EXISTS idx_match_latents_fold_id ON match_latents(fold_id);
 CREATE INDEX IF NOT EXISTS idx_portfolio_runs_model_run_id ON portfolio_runs(model_run_id);
 CREATE INDEX IF NOT EXISTS idx_portfolio_bets_run_id ON portfolio_bets(portfolio_run_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_calibration_runs_id ON calibration_runs(id);
+CREATE INDEX IF NOT EXISTS idx_calibration_runs_model_run_id ON calibration_runs(model_run_id);
+CREATE INDEX IF NOT EXISTS idx_calibration_runs_experiment ON calibration_runs(experiment_name);
+CREATE INDEX IF NOT EXISTS idx_calibration_runs_name ON calibration_runs(calibrator_name);
+CREATE INDEX IF NOT EXISTS idx_calibration_runs_hash ON calibration_runs(calibrator_hash);
+CREATE INDEX IF NOT EXISTS idx_calibration_runs_created_at ON calibration_runs(created_at);
+-- The calibration -> portfolio link lives in `portfolio_runs.metadata` rather than in a
+-- foreign key, because `portfolio_runs` must stay insertable for a portfolio built on a
+-- raw fit. This index is what makes reading the link back cheap.
+CREATE INDEX IF NOT EXISTS idx_portfolio_runs_calibration
+    ON portfolio_runs((metadata ->> 'calibration_run_id'));

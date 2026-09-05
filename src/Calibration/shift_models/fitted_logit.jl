@@ -1,7 +1,23 @@
-# src/calibration/fitted_logit.jl
+# src/Calibration/shift_models/fitted_logit.jl
+#
+# DEPRECATED, for the same reason as `basic_logit.jl`: a per-team logit offset is still a
+# SELECTION-level shift, so the shifted board is still not a scoreline distribution.
 
-struct TeamBiasLogitShift <: AbstractLayerTwoModel 
+"""
+    TeamBiasLogitShift()
+
+**DEPRECATED — use [`GenerativeRateCalibrator`](@ref).**
+
+A logit offset per team plus an intercept. Coherence across derivative markets fails
+exactly as it does for [`BasicLogitShift`](@ref); the per-team resolution does not change
+that.
+"""
+struct TeamBiasLogitShift <: AbstractLayerTwoModel
     # Can hold hyperparameters like L2 Regularization penalty later if needed
+    function TeamBiasLogitShift()
+        _warn_selection_level_deprecated("TeamBiasLogitShift")
+        return new()
+    end
 end
 
 struct FittedTeamBiasShift

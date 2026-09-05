@@ -1,7 +1,58 @@
-# src/Calibration/shift_models/basic_logic.jl
+# src/Calibration/shift_models/basic_logit.jl
+#
+# DEPRECATED. The selection-level logit shift, superseded by `GenerativeRateCalibrator`.
+#
+# WHY IT IS WRONG, PRECISELY. This model fits one GLM offset per SELECTION and applies it
+# to that selection's scalar probability. Applied to `over_25` and `under_25` with the two
+# offsets those two GLMs happen to learn,
+#
+#     logistic(logit(p_over) + c_over) + logistic(logit(p_under) + c_under)  !=  1
+#
+# and the 1X2 triple drifts off 1 the same way. There is no scoreline distribution behind
+# the shifted board at all, so "Over 2.5", "BTTS yes" and "Home" become three unrelated
+# claims that a Kelly allocator is then invited to hold simultaneously. Coherence is not
+# merely unchecked here; it is unrepresentable.
+#
+# It is RETAINED, not deleted, because a legacy script that stops running is a worse
+# outcome than one that prints a line. The warning fires once per session per model type.
 
+const _L2_DEPRECATION_WARNED = Ref(false)
+
+"""
+    _warn_selection_level_deprecated(what)
+
+Warn once per session that a selection-level shift model is being used.
+
+`maxlog = 1` on the `@warn` itself would be per-call-site; this is per-session across all
+of them, which is what "once" means to someone reading a log.
+"""
+function _warn_selection_level_deprecated(what::AbstractString)
+    _L2_DEPRECATION_WARNED[] && return nothing
+    _L2_DEPRECATION_WARNED[] = true
+    @warn(
+        "$what is deprecated; use GenerativeRateCalibrator for coherent derivative " *
+        "pricing. A selection-level logit shift moves each market's probability " *
+        "independently, so P(over 2.5) + P(under 2.5) no longer sums to 1 and the " *
+        "shifted board is not a scoreline distribution. GenerativeRateCalibrator shifts " *
+        "the generative intensity instead, so every derivative price is read off one " *
+        "score tensor and cannot disagree. See docs/architecture/rfc_layer2_calibration_v2.md.")
+    return nothing
+end
+
+"""
+    BasicLogitShift()
+
+**DEPRECATED — use [`GenerativeRateCalibrator`](@ref).**
+
+A single logit offset per selection, fitted by GLM against the realised outcome. See the
+header of this file for the coherence failure that motivates the replacement.
+"""
 struct BasicLogitShift <: AbstractLayerTwoModel
     # No hyperparameters needed for a pure shift
+    function BasicLogitShift()
+        _warn_selection_level_deprecated("BasicLogitShift")
+        return new()
+    end
 end
 
 struct FittedLogitShift

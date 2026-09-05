@@ -189,8 +189,28 @@ function _truth_config_value(config)
     return config
 end
 
+"""
+    _has_supertype_named(T, name) -> Bool
+
+Walk `T`'s supertype chain looking for an abstract type with this name.
+
+Resolved BY NAME rather than by `isa`, because `Calibration` loads AFTER `Training` (it
+needs `Portfolio`), so this module cannot reference `Calibration.AbstractCalibrator`
+directly. The same reason `_truth_config_type` matches `BookSpec` and `PolicySpec` on
+`nameof` rather than on the types themselves.
+"""
+function _has_supertype_named(T::Type, name::Symbol)
+    S = T
+    while S !== Any
+        nameof(S) === name && return true
+        S = supertype(S)
+    end
+    return false
+end
+
 function _truth_config_type(config)
     config isa FitConfig && return "fit"
+    _has_supertype_named(typeof(config), :AbstractCalibrator) && return "calibrator"
     config isa ComposableCountModel && return "model"
     config isa Data.AbstractSplitter && return "splitter"
     config isa Samplers.AbstractSamplerConfig && return "sampler"
@@ -299,7 +319,22 @@ save_book_spec(db::PostgresStorage, name::String, spec; kwargs...) =
 save_policy_spec(db::PostgresStorage, name::String, spec; kwargs...) =
     _save_component(db, name, spec, "policy_spec"; kwargs...)
 
-for fn in (:save_model, :save_splitter, :save_sampler, :save_book_spec, :save_policy_spec)
+"""
+    save_calibrator(db, name, calibrator; description = "", tags = []) -> Int
+
+Register a Layer-2 calibrator in `config_registry` under `config_type = 'calibrator'`, and
+return its lookup id.
+
+Joins `save_book_spec` / `save_policy_spec` on the same registry path, so a calibrator is
+named, hashed, tagged, deduplicated by `(experiment_name, name)` and searchable exactly as
+every other canonical recipe is. An untracked REPL object is not the source of truth
+(AGENTS.md §13.2), and that applies to the calibrator as much as to the model.
+"""
+save_calibrator(db::PostgresStorage, name::String, calibrator; kwargs...) =
+    _save_component(db, name, calibrator, "calibrator"; kwargs...)
+
+for fn in (:save_model, :save_splitter, :save_sampler, :save_book_spec, :save_policy_spec,
+           :save_calibrator)
     @eval $fn(db::PostgresStorage, name::AbstractString, value; kwargs...) =
         $fn(db, String(name), value; kwargs...)
 end
@@ -365,6 +400,9 @@ _load_book_spec(db, key) =
     _load_component(db, key, "book_spec", value -> nameof(typeof(value)) === :BookSpec)
 _load_policy_spec(db, key) =
     _load_component(db, key, "policy_spec", value -> nameof(typeof(value)) === :PolicySpec)
+_load_calibrator(db, key) =
+    _load_component(db, key, "calibrator",
+                    value -> _has_supertype_named(typeof(value), :AbstractCalibrator))
 _load_fit_config(db, key) =
     _load_component(db, key, "fit", value -> value isa FitConfig)
 _load_portfolio_spec(db, key) =
@@ -377,6 +415,7 @@ for (public, internal) in ((:load_model, :_load_model),
                            (:load_sampler, :_load_sampler),
                            (:load_book_spec, :_load_book_spec),
                            (:load_policy_spec, :_load_policy_spec),
+                           (:load_calibrator, :_load_calibrator),
                            (:load_fit_config, :_load_fit_config),
                            (:load_portfolio_spec, :_load_portfolio_spec))
     @eval begin

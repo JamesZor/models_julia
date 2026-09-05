@@ -42,9 +42,6 @@ include("training/training-module.jl") # *** ADDED NEW MODULE ***
 include("./experiments/experiment-module.jl") #
 include("./predictions/predictions-module.jl") #
 
-include("./Calibration/calibration-module.jl")
-
-
 include( "./signals/signals-module.jl")
 
 include("./evaluation/evaluation-module.jl")
@@ -55,6 +52,14 @@ include("./backtesting/backtesting-module.jl")
 
 # Portfolio depends on BackTesting's metric interface, so it must come after it.
 include("./Portfolio/portfolio-module.jl")
+
+# Calibration is the Layer-2 tier BETWEEN inference and portfolio allocation, so it must
+# come after both: `calibrate_fit` returns a `Training.Fit`, `CalibratedFit` extends
+# `Portfolio.build_books_reported` and `Evaluation.fit_latents` onto its own type, and
+# `save_calibration_db` writes beside `Portfolio.save_portfolio_db`. Nothing loaded before
+# this line references `Calibration` (only `types-interfaces.jl`'s
+# `AbstractLayerTwoModelConfig`, which is defined at the top and unaffected).
+include("./Calibration/calibration-module.jl")
 
 # MatchDay hands its output to Portfolio.stake_sheet, so it must come after Portfolio.
 include("./MatchDay/matchday-module.jl")
@@ -173,9 +178,10 @@ using .Training: Inference,
                  save_latents, load_latents, ensure_schema!, config_hash,
                  compress_draws, decompress_draws,
                  save_config, save_model, save_splitter, save_sampler,
-                 save_book_spec, save_policy_spec,
+                 save_book_spec, save_policy_spec, save_calibrator,
                  load_model, load_splitter, load_sampler, load_fit_config,
-                 load_book_spec, load_policy_spec, load_portfolio_spec, list_configs,
+                 load_book_spec, load_policy_spec, load_calibrator,
+                 load_portfolio_spec, list_configs,
                  explore_experiments, search_configs, show_config,
                  preview_extension, extend_fit,
                  merge_latents, extract_run_latents,
@@ -197,9 +203,10 @@ export save_fit, load_fit, load_fits, list_fits, read_fit_meta,
        save_latents, load_latents, ensure_schema!, config_hash,
        compress_draws, decompress_draws,
        save_config, save_model, save_splitter, save_sampler,
-       save_book_spec, save_policy_spec,
+       save_book_spec, save_policy_spec, save_calibrator,
        load_model, load_splitter, load_sampler, load_fit_config,
-       load_book_spec, load_policy_spec, load_portfolio_spec, list_configs,
+       load_book_spec, load_policy_spec, load_calibrator,
+       load_portfolio_spec, list_configs,
        explore_experiments, search_configs, show_config,
        preview_extension, extend_fit
 export merge_latents, extract_run_latents
@@ -309,6 +316,60 @@ export save_portfolio_db, load_portfolio_db, portfolio_spec_hash, extend_portfol
 export book_match_id, book_date, book_selections, book_grid, book_payoff, book_settle,
        book_alloc, book_shrink, book_kkt, book_converged
 export sel_name, sel_odds_close, sel_odds_settle, sel_prob_model, sel_prob_market, sel_edge
+
+# The Layer-2 calibrator tier (Calibration). Generative rate calibration: the tradeable
+# book is inverted back to (lambda_mkt_h, lambda_mkt_a), every posterior log-rate draw is
+# pooled with it, and the calibrated container is priced through the SAME score-grid
+# kernels, evaluator and portfolio the raw one goes through — so 1X2, every totals line
+# and BTTS are three partitions of one score tensor and cannot disagree.
+#
+# The legacy selection-level names (`BasicLogitShift`, `CalibrationConfig`,
+# `train_calibrators`, `apply_calibrators`) are still exported and still work; they warn
+# once per session. See `docs/architecture/rfc_layer2_calibration_v2.md`.
+using .Calibration: AbstractCalibrator, AbstractGenerativeRateCalibrator,
+                    AbstractCalibrationWeightLaw, StandardGaussianLaw, InverseGaussianLaw,
+                    StaticGeometricLaw, calibration_weight, is_identity_law, law_label,
+                    AbstractDispersionMap, PoolDispersion, PreservedDispersion,
+                    ConjugateDispersion, SupremacyDispersion, residual_map, is_pool_map,
+                    map_label,
+                    GenerativeRateCalibrator, CalibratedLatents, CalibratedFit,
+                    is_identity_calibrator, calibrator_label, calibrator_hash,
+                    calibrator_json,
+                    PointInTimeBookConfig, point_in_time_book, point_in_time_prices,
+                    devig_book!, assert_book_as_of, expected_selection_count,
+                    book_coverage, book_refusal_summary, book_drift, bet_clv, clv_summary,
+                    closing_book, drop_one_sided_markets,
+                    MarketInversionConfig, MarketRateFit, market_targets,
+                    invert_market_rates, inversion_frame, inversion_refusals,
+                    inversion_coverage, calibrate_latents, restrict_latents,
+                    weight_summary, dispersion_summary,
+                    calibrate_fit, calibrated_fit, calibration_context, calibration_scores,
+                    coherence_report, calibration_summary, l2_tradeable_markets,
+                    l2_full_direction_markets, l2_headline_selections,
+                    save_calibration_db, load_calibration_db, list_calibration_runs,
+                    link_portfolio_run, portfolio_runs_for_calibration,
+                    CalibrationConfig, CalibrationResults, BasicLogitShift,
+                    train_calibrators, apply_calibrators
+export AbstractCalibrator, AbstractGenerativeRateCalibrator
+export AbstractCalibrationWeightLaw, StandardGaussianLaw, InverseGaussianLaw,
+       StaticGeometricLaw, calibration_weight, is_identity_law, law_label
+export AbstractDispersionMap, PoolDispersion, PreservedDispersion, ConjugateDispersion,
+       SupremacyDispersion, residual_map, is_pool_map, map_label
+export GenerativeRateCalibrator, CalibratedLatents, CalibratedFit,
+       is_identity_calibrator, calibrator_label, calibrator_hash, calibrator_json
+export PointInTimeBookConfig, point_in_time_book, point_in_time_prices, devig_book!,
+       assert_book_as_of, expected_selection_count, book_coverage, book_refusal_summary,
+       book_drift, bet_clv, clv_summary, closing_book, drop_one_sided_markets
+export MarketInversionConfig, MarketRateFit, market_targets, invert_market_rates,
+       inversion_frame, inversion_refusals, inversion_coverage, calibrate_latents,
+       restrict_latents, weight_summary, dispersion_summary
+export calibrate_fit, calibrated_fit, calibration_context, calibration_scores
+export coherence_report, calibration_summary, l2_tradeable_markets,
+       l2_full_direction_markets, l2_headline_selections
+export save_calibration_db, load_calibration_db, list_calibration_runs,
+       link_portfolio_run, portfolio_runs_for_calibration
+export CalibrationConfig, CalibrationResults, BasicLogitShift,
+       train_calibrators, apply_calibrators
 
 # Maybe export core config types too?
 export NUTSConfig, ADVIConfig, MAPConfig # From Samplers

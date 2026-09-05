@@ -115,9 +115,9 @@ export save_fit, load_fit, load_fits, list_fits, read_fit_meta,
        save_latents, load_latents, atomic_write, fit_meta, fit_config_json,
        ensure_schema!, config_hash, compress_draws, decompress_draws,
        save_config, save_model, save_splitter, save_sampler,
-       save_book_spec, save_policy_spec,
+       save_book_spec, save_policy_spec, save_calibrator,
        load_model, load_splitter, load_sampler, load_fit_config,
-       load_book_spec, load_policy_spec, load_portfolio_spec, list_configs,
+       load_book_spec, load_policy_spec, load_calibrator, load_portfolio_spec, list_configs,
        explore_experiments, search_configs, show_config,
        preview_extension, extend_fit
 
